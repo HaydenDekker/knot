@@ -72,14 +72,14 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 2: Event Pipeline Wiring
 **Failing tests created:** `integration::tests::event_flows_through_pipeline`, `integration::tests::debounce_prevents_duplicate_processing`
 
-- [ ] Failing test: `integration::tests::event_flows_through_pipeline` — create a file in watched dir → raw event emitted → debounced → `ProcessStrand` invoked → knot-state updated to `processing` → `completed`
-- [ ] Failing test: `integration::tests::debounce_prevents_duplicate_processing` — rapid edits (3 writes in 50ms) → only one `ProcessStrand` invocation → one tie-off produced
-- [ ] Wire the event pipeline:
+- [x] Failing test: `integration::tests::event_flows_through_pipeline` — create a file in watched dir → raw event emitted → debounced → `ProcessStrand` invoked → knot-state updated to `processing` → `completed`
+- [x] Failing test: `integration::tests::debounce_prevents_duplicate_processing` — rapid edits (3 writes in 50ms) → only one `ProcessStrand` invocation → one tie-off produced
+- [x] Wire the event pipeline:
   ```
   NotifyEventSource → mpsc::Sender<StrandEvent> → DebounceEngine → mpsc::Sender<StrandEvent> → ProcessStrand loop
   ```
-- [ ] `ProcessStrand` loop runs as a `tokio::task`, reading from debounce output channel
-- [ ] Each event triggers the use case with real adapter instances
+- [x] `ProcessStrand` loop runs as a `tokio::task`, reading from debounce output channel
+- [x] Each event triggers the use case with real adapter instances
 
 ### Phase 3: End-to-End Integration Test
 **Failing tests created:** `integration::tests::full_pipeline_create_modify_delete`, `integration::tests::full_pipeline_http_observable`, `integration::tests::multiple_looms_independent`
