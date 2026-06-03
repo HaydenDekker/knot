@@ -80,10 +80,10 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 2: Discover Looms Use Case
 **Failing tests created:** `application::usecases::tests::discover_looms_success`, `application::usecases::tests::discover_looms_empty_workspace`, `application::usecases::tests::discover_looms_repository_error`
 
-- [ ] Failing test: `application::usecases::tests::discover_looms_success` — given a mock `LoomRepository` returning 2 looms, `DiscoverLooms` registers them in `LoomStore` and returns 2 looms
-- [ ] Failing test: `application::usecases::tests::discover_looms_empty_workspace` — repository returns empty vec; store remains empty; use case returns empty vec
-- [ ] Failing test: `application::usecases::tests::discover_looms_repository_error` — repository returns error; use case propagates error without modifying store
-- [ ] Implement `DiscoverLooms` use case: calls `LoomRepository::scan()`, iterates results, calls `KnotStatePort::create()` for each knot, calls `LoomLogPort::append(KnotRegistered)` for each knot, registers looms in `LoomStore`
+- [x] Failing test: `application::usecases::tests::discover_looms_success` — given a mock `LoomRepository` returning 2 looms, `DiscoverLooms` registers them in `LoomStore` and returns 2 looms
+- [x] Failing test: `application::usecases::tests::discover_looms_empty_workspace` — repository returns empty vec; store remains empty; use case returns empty vec
+- [x] Failing test: `application::usecases::tests::discover_looms_repository_error` — repository returns error; use case propagates error without modifying store
+- [x] Implement `DiscoverLooms` use case: calls `LoomRepository::scan()`, iterates results, calls `KnotStatePort::create()` for each knot, calls `LoomLogPort::append(KnotRegistered)` for each knot, registers looms in `LoomStore`
 
 ### Phase 3: Register and Unregister Loom Use Cases
 **Failing tests created:** `application::usecases::tests::register_loom_creates_state_files`, `application::usecases::tests::register_loom_duplicate_id_error`, `application::usecases::tests::unregister_loom_logs_stopped_event`
