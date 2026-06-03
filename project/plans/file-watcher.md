@@ -65,14 +65,14 @@ Each adapter implements a port trait. Depends on domain types and application po
 ### Phase 1: FileSystemKnotStateStore
 **Failing tests created:** `adapters::filesystem::tests::knot_state_create_new_file`, `adapters::filesystem::tests::knot_state_update_state`, `adapters::filesystem::tests::knot_state_read_current`, `adapters::filesystem::tests::knot_state_status_transitions`, `adapters::filesystem::tests::knot_state_get_nonexistent`
 
-- [ ] Failing test: `adapters::filesystem::tests::knot_state_create_new_file` — `create(knot_id)` writes a JSON file with `status: idle`; file exists on disk in `tempfile` dir
-- [ ] Failing test: `adapters::filesystem::tests::knot_state_update_state` — `update(state)` overwrites the file; read back matches new state
-- [ ] Failing test: `adapters::filesystem::tests::knot_state_read_current` — `get(knot_id)` reads the file and returns parsed `KnotState`
-- [ ] Failing test: `adapters::filesystem::tests::knot_state_status_transitions` — write `idle`, update to `processing`, update to `completed`; each read reflects latest
-- [ ] Failing test: `adapters::filesystem::tests::knot_state_get_nonexistent` — `get()` for unknown ID returns `Ok(None)`
-- [ ] Implement `FileSystemKnotStateStore` in `src/adapters/outbound/knot_state.rs`
-- [ ] Writes JSON to `<loom-dir>/.knots/<knot-name>.state`
-- [ ] Implements `KnotStatePort` trait
+- [x] Failing test: `adapters::filesystem::tests::knot_state_create_new_file` — `create(knot_id)` writes a JSON file with `status: idle`; file exists on disk in `tempfile` dir
+- [x] Failing test: `adapters::filesystem::tests::knot_state_update_state` — `update(state)` overwrites the file; read back matches new state
+- [x] Failing test: `adapters::filesystem::tests::knot_state_read_current` — `get(knot_id)` reads the file and returns parsed `KnotState`
+- [x] Failing test: `adapters::filesystem::tests::knot_state_status_transitions` — write `idle`, update to `processing`, update to `completed`; each read reflects latest
+- [x] Failing test: `adapters::filesystem::tests::knot_state_get_nonexistent` — `get()` for unknown ID returns `Ok(None)`
+- [x] Implement `FileSystemKnotStateStore` in `src/adapters/outbound/knot_state.rs`
+- [x] Writes JSON to `<loom-dir>/.knots/<knot-name>.state`
+- [x] Implements `KnotStatePort` trait
 - [ ] **Alert:** uses `std::fs` and `serde_json` — adapter layer, correct
 
 ### Phase 2: FileSystemLoomLog
