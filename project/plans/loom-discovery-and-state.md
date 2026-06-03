@@ -88,9 +88,9 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 3: Register and Unregister Loom Use Cases
 **Failing tests created:** `application::usecases::tests::register_loom_creates_state_files`, `application::usecases::tests::register_loom_duplicate_id_error`, `application::usecases::tests::unregister_loom_logs_stopped_event`
 
-- [ ] Failing test: `application::usecases::tests::register_loom_creates_state_files` — register loom calls `LoomLogPort::open()`, `KnotStatePort::create()` for each knot, `LoomLogPort::append(LoomStarted)`, then stores loom
-- [ ] Failing test: `application::usecases::tests::register_loom_duplicate_id_error` — register loom with existing ID returns error without side effects
-- [ ] Failing test: `application::usecases::tests::unregister_loom_logs_stopped_event` — unregister calls `LoomLogPort::append(LoomStopped)`, removes from store
+- [x] Failing test: `application::usecases::tests::register_loom_creates_state_files` — register loom calls `LoomLogPort::open()`, `KnotStatePort::create()` for each knot, `LoomLogPort::append(LoomStarted)`, then stores loom
+- [x] Failing test: `application::usecases::tests::register_loom_duplicate_id_error` — register loom with existing ID returns error without side effects
+- [x] Failing test: `application::usecases::tests::unregister_loom_logs_stopped_event` — unregister calls `LoomLogPort::append(LoomStopped)`, removes from store
 - [ ] Implement `RegisterLoom` and `UnregisterLoom` use cases
 
 ### Phase 4: Query Use Cases (ListLooms, GetLoom, GetLoomActivity, GetKnotStatus)
