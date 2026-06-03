@@ -50,14 +50,14 @@ Each adapter implements a port trait. Depends on domain types and application po
 ### Phase 0: FileSystemLoomRepository
 **Failing tests created:** `adapters::filesystem::tests::scan_empty_workspace`, `adapters::filesystem::tests::scan_workspace_with_one_loom`, `adapters::filesystem::tests::scan_workspace_with_multiple_looms`, `adapters::filesystem::tests::scan_skips_invalid_knot_files`, `adapters::filesystem::tests::scan_parses_knot_definition_files`, `adapters::filesystem::tests::get_nonexistent_loom`, `adapters::filesystem::tests::save_and_list_loom`
 
-- [ ] Failing test: `adapters::filesystem::tests::scan_empty_workspace` — scan a `tempfile` dir with no subdirs; returns empty `Vec<Loom>`
-- [ ] Failing test: `adapters::filesystem::tests::scan_workspace_with_one_loom` — create a subdir with one valid `.md` knot file; scan returns one loom with one knot
-- [ ] Failing test: `adapters::filesystem::tests::scan_workspace_with_multiple_looms` — create two subdirs each with knot files; scan returns two looms
-- [ ] Failing test: `adapters::filesystem::tests::scan_skips_invalid_knot_files` — knot file with malformed frontmatter; scan returns loom but skips the invalid knot (logs warning)
-- [ ] Failing test: `adapters::filesystem::tests::scan_parses_knot_definition_files` — verify knot name, agent config, and prompt template are parsed from file content
-- [ ] Failing test: `adapters::filesystem::tests::get_nonexistent_loom` — `get()` for unknown ID returns `Ok(None)`
-- [ ] Failing test: `adapters::filesystem::tests::save_and_list_loom` — `save()` a loom, `list()` returns it
-- [ ] Implement `FileSystemLoomRepository` in `src/adapters/outbound/loom_repository.rs`
+- [x] Failing test: `adapters::filesystem::tests::scan_empty_workspace` — scan a `tempfile` dir with no subdirs; returns empty `Vec<Loom>`
+- [x] Failing test: `adapters::filesystem::tests::scan_workspace_with_one_loom` — create a subdir with one valid `.md` knot file; scan returns one loom with one knot
+- [x] Failing test: `adapters::filesystem::tests::scan_workspace_with_multiple_looms` — create two subdirs each with knot files; scan returns two looms
+- [x] Failing test: `adapters::filesystem::tests::scan_skips_invalid_knot_files` — knot file with malformed frontmatter; scan returns loom but skips the invalid knot (logs warning)
+- [x] Failing test: `adapters::filesystem::tests::scan_parses_knot_definition_files` — verify knot name, agent config, and prompt template are parsed from file content
+- [x] Failing test: `adapters::filesystem::tests::get_nonexistent_loom` — `get()` for unknown ID returns `Ok(None)`
+- [x] Failing test: `adapters::filesystem::tests::save_and_list_loom` — `save()` a loom, `list()` returns it
+- [x] Implement `FileSystemLoomRepository` in `src/adapters/outbound/loom_repository.rs`
 - [ ] Uses `std::fs::read_dir` to scan workspace, `KnotFileParser` from Plan 1 to parse knot files
 - [ ] Implements `LoomRepository` port trait
 - [ ] **Alert:** `FileSystemLoomRepository` depends on `KnotFileParser` (domain layer) — this is correct, adapters depend inward
