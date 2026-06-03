@@ -20,7 +20,7 @@ Knot has domain types (Plan 1) and port interfaces (Plan 2) but no concrete adap
 - `FileSystemTieOffSink` — writes tie-off files to disk
 - All adapters implement their respective port traits from Plan 2
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-03)
 
 ## Hex Layer: Outbound Adapters
 
@@ -108,28 +108,28 @@ Each adapter implements a port trait. Depends on domain types and application po
 ### Phase 4: SubprocessAgentRunner
 **Failing tests created:** `adapters::subprocess::tests::execute_successful_command`, `adapters::subprocess::tests::execute_captures_stdout`, `adapters::subprocess::tests::execute_captures_stderr`, `adapters::subprocess::tests::execute_command_not_found`, `adapters::subprocess::tests::execute_nonzero_exit_error`, `adapters::subprocess::tests::execute_timeout`
 
-- [ ] Failing test: `adapters::subprocess::tests::execute_successful_command` — execute `echo "hello"`; returns `AgentOutput` with exit code 0
-- [ ] Failing test: `adapters::subprocess::tests::execute_captures_stdout` — execute `echo "test"`; stdout is `"test\n"`
-- [ ] Failing test: `adapters::subprocess::tests::execute_captures_stderr` — execute `sh -c 'echo err >&2'`; stderr captured, stdout empty
-- [ ] Failing test: `adapters::subprocess::tests::execute_command_not_found` — execute nonexistent binary; returns error with `PortError::CommandNotFound`
-- [ ] Failing test: `adapters::subprocess::tests::execute_nonzero_exit_error` — execute `sh -c 'exit 1'`; returns error with exit code 1
-- [ ] Failing test: `adapters::subprocess::tests::execute_timeout` — execute `sleep 30` with 100ms timeout; returns error with `PortError::Timeout`
-- [ ] Implement `SubprocessAgentRunner` in `src/adapters/outbound/agent_runner.rs`
-- [ ] Uses `tokio::process::Command` to spawn subprocess
-- [ ] Captures stdout and stderr, respects timeout (120s default, configurable)
-- [ ] Implements `AgentRunner` port trait
-- [ ] Takes `ExecutionContext` (cli_path, cli_args, prompt, strand_path), constructs command, runs it
+- [x] Failing test: `adapters::subprocess::tests::execute_successful_command` — execute `echo "hello"`; returns `AgentOutput` with exit code 0
+- [x] Failing test: `adapters::subprocess::tests::execute_captures_stdout` — execute `echo "test"`; stdout is `"test\n"`
+- [x] Failing test: `adapters::subprocess::tests::execute_captures_stderr` — execute `sh -c 'echo err >&2'`; stderr captured, stdout empty
+- [x] Failing test: `adapters::subprocess::tests::execute_command_not_found` — execute nonexistent binary; returns error with `PortError::CommandNotFound`
+- [x] Failing test: `adapters::subprocess::tests::execute_nonzero_exit_error` — execute `sh -c 'exit 1'`; returns error with exit code 1
+- [x] Failing test: `adapters::subprocess::tests::execute_timeout` — execute `sleep 30` with 100ms timeout; returns error with `PortError::Timeout`
+- [x] Implement `SubprocessAgentRunner` in `src/adapters/outbound/agent_runner.rs`
+- [x] Uses `tokio::process::Command` to spawn subprocess
+- [x] Captures stdout and stderr, respects timeout (120s default, configurable)
+- [x] Implements `AgentRunner` port trait
+- [x] Takes `ExecutionContext` (cli_path, cli_args, prompt, strand_path), constructs command, runs it
 
 ### Phase 5: FileSystemTieOffSink
 **Failing tests created:** `adapters::filesystem::tests::tieoff_write_new_file`, `adapters::filesystem::tests::tieoff_overwrite_existing`, `adapters::filesystem::tests::tieoff_filename_derived_from_strand`, `adapters::filesystem::tests::tieoff_create_parent_dirs`
 
-- [ ] Failing test: `adapters::filesystem::tests::tieoff_write_new_file` — write a `TieOff` with content; file created at tie-off path with correct content
-- [ ] Failing test: `adapters::filesystem::tests::tieoff_overwrite_existing` — write tie-off twice; file contains second write (overwritten, never deleted)
-- [ ] Failing test: `adapters::filesystem::tests::tieoff_filename_derived_from_strand` — strand `input.md` produces tie-off `input.tie-off.md`
-- [ ] Failing test: `adapters::filesystem::tests::tieoff_create_parent_dirs` — tie-off point directory does not exist; `write()` creates it
-- [ ] Implement `FileSystemTieOffSink` in `src/adapters/outbound/tieoff_sink.rs`
-- [ ] Derives tie-off filename from strand filename: `<name>.tie-off.<ext>`
-- [ ] Implements `TieOffSink` port trait
-- [ ] Uses `std::fs::create_dir_all` + `std::fs::write`
+- [x] Failing test: `adapters::filesystem::tests::tieoff_write_new_file` — write a `TieOff` with content; file created at tie-off path with correct content
+- [x] Failing test: `adapters::filesystem::tests::tieoff_overwrite_existing` — write tie-off twice; file contains second write (overwritten, never deleted)
+- [x] Failing test: `adapters::filesystem::tests::tieoff_filename_derived_from_strand` — strand `input.md` produces tie-off `input.tie-off.md`
+- [x] Failing test: `adapters::filesystem::tests::tieoff_create_parent_dirs` — tie-off point directory does not exist; `write()` creates it
+- [x] Implement `FileSystemTieOffSink` in `src/adapters/outbound/tieoff_sink.rs`
+- [x] Derives tie-off filename from strand filename: `<name>.tie-off.<ext>`
+- [x] Implements `TieOffSink` port trait
+- [x] Uses `std::fs::create_dir_all` + `std::fs::write`
 
 ## Notes
