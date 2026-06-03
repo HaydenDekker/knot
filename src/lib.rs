@@ -6,10 +6,11 @@ use axum::{
     extract::Path,
     http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::get,
-    Router,
 };
 use std::path::PathBuf;
+
+// Re-export inbound adapter types
+pub use adapters::inbound::{build_app, AppContext};
 
 /// HTTP handler — health check.
 pub async fn health() -> impl IntoResponse {
@@ -32,11 +33,4 @@ pub async fn list_agents(Path(dir): Path<String>) -> Response {
         )
             .into_response(),
     }
-}
-
-/// Build the application router.
-pub fn build_app() -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/agents/{dir}", get(list_agents))
 }

@@ -184,7 +184,7 @@ pub struct AgentOutput {
 ///
 /// An adapter must be able to scan a workspace for looms, retrieve individual
 /// looms, list all registered looms, and save loom definitions.
-pub trait LoomRepository {
+pub trait LoomRepository: Send + Sync {
     /// Scan a workspace directory and return all discovered looms.
     fn scan(&self, workspace: &Path) -> Result<Vec<Loom>, PortError>;
 
@@ -202,7 +202,7 @@ pub trait LoomRepository {
 ///
 /// Tracks the lifecycle of each knot as it processes strands: creation,
 /// state transitions, and error recording.
-pub trait KnotStatePort {
+pub trait KnotStatePort: Send + Sync {
     /// Create initial state for a knot.
     fn create(&self, knot_id: &KnotId) -> Result<(), PortError>;
 
@@ -217,7 +217,7 @@ pub trait KnotStatePort {
 ///
 /// Records high-level loom events such as knot registration, loom
 /// start/stop, and strand processing.
-pub trait LoomLogPort {
+pub trait LoomLogPort: Send + Sync {
     /// Open or create the activity log for a loom.
     fn open(&self, loom_id: &LoomId) -> Result<(), PortError>;
 
@@ -232,7 +232,7 @@ pub trait LoomLogPort {
 ///
 /// Events flow through a channel (managed by the adapter), not via this
 /// port. This port only registers and unregisters watched paths.
-pub trait EventSource {
+pub trait EventSource: Send + Sync {
     /// Start watching a directory for file events.
     fn watch(&self, path: &Path) -> Result<(), PortError>;
 
@@ -241,13 +241,13 @@ pub trait EventSource {
 }
 
 /// Port for executing the agent CLI and capturing its output.
-pub trait AgentRunner {
+pub trait AgentRunner: Send + Sync {
     /// Execute the agent CLI with the given context.
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError>;
 }
 
 /// Port for writing tie-off content to disk.
-pub trait TieOffSink {
+pub trait TieOffSink: Send + Sync {
     /// Write tie-off output to its target location.
     fn write(&self, tie_off: TieOff) -> Result<(), PortError>;
 }

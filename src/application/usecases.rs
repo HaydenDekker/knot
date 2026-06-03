@@ -4,6 +4,7 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::application::ports::{
     AgentRunner, ExecutionContext, KnotEventType, KnotState,
@@ -49,18 +50,18 @@ pub struct KnotStatus {
 /// - Appends `KnotRegistered` to the loom log via `LoomLogPort::append()`
 /// - Registers the loom in `LoomStore`
 pub struct DiscoverLooms {
-    repository: Box<dyn LoomRepository>,
-    state_port: Box<dyn KnotStatePort>,
-    log_port: Box<dyn LoomLogPort>,
+    repository: Arc<dyn LoomRepository>,
+    state_port: Arc<dyn KnotStatePort>,
+    log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
 }
 
 impl DiscoverLooms {
     /// Create a new `DiscoverLooms` use case.
     pub fn new(
-        repository: Box<dyn LoomRepository>,
-        state_port: Box<dyn KnotStatePort>,
-        log_port: Box<dyn LoomLogPort>,
+        repository: Arc<dyn LoomRepository>,
+        state_port: Arc<dyn KnotStatePort>,
+        log_port: Arc<dyn LoomLogPort>,
         store: LoomStore,
     ) -> Self {
         Self {
@@ -109,16 +110,16 @@ impl DiscoverLooms {
 ///
 /// Returns an error if a loom with the same ID already exists.
 pub struct RegisterLoom {
-    log_port: Box<dyn LoomLogPort>,
-    state_port: Box<dyn KnotStatePort>,
+    log_port: Arc<dyn LoomLogPort>,
+    state_port: Arc<dyn KnotStatePort>,
     store: LoomStore,
 }
 
 impl RegisterLoom {
     /// Create a new `RegisterLoom` use case.
     pub fn new(
-        log_port: Box<dyn LoomLogPort>,
-        state_port: Box<dyn KnotStatePort>,
+        log_port: Arc<dyn LoomLogPort>,
+        state_port: Arc<dyn KnotStatePort>,
         store: LoomStore,
     ) -> Self {
         Self {
@@ -169,13 +170,13 @@ impl RegisterLoom {
 ///
 /// Returns an error if the loom was not found.
 pub struct UnregisterLoom {
-    log_port: Box<dyn LoomLogPort>,
+    log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
 }
 
 impl UnregisterLoom {
     /// Create a new `UnregisterLoom` use case.
-    pub fn new(log_port: Box<dyn LoomLogPort>, store: LoomStore) -> Self {
+    pub fn new(log_port: Arc<dyn LoomLogPort>, store: LoomStore) -> Self {
         Self { log_port, store }
     }
 
@@ -259,12 +260,12 @@ impl GetLoom {
 ///
 /// Calls `LoomLogPort::read_all()` and returns all recorded events.
 pub struct GetLoomActivity {
-    log_port: Box<dyn LoomLogPort>,
+    log_port: Arc<dyn LoomLogPort>,
 }
 
 impl GetLoomActivity {
     /// Create a new `GetLoomActivity` use case.
-    pub fn new(log_port: Box<dyn LoomLogPort>) -> Self {
+    pub fn new(log_port: Arc<dyn LoomLogPort>) -> Self {
         Self { log_port }
     }
 
@@ -281,12 +282,12 @@ impl GetLoomActivity {
 /// Calls `KnotStatePort::get()` and returns a `KnotStatus` wrapping the
 /// state, or `PortError::KnotStateGetFailed` if the knot has no state.
 pub struct GetKnotStatus {
-    state_port: Box<dyn KnotStatePort>,
+    state_port: Arc<dyn KnotStatePort>,
 }
 
 impl GetKnotStatus {
     /// Create a new `GetKnotStatus` use case.
-    pub fn new(state_port: Box<dyn KnotStatePort>) -> Self {
+    pub fn new(state_port: Arc<dyn KnotStatePort>) -> Self {
         Self { state_port }
     }
 
@@ -323,10 +324,10 @@ impl GetKnotStatus {
 /// 7. Append `StrandProcessed` to loom-log
 pub struct ProcessStrand {
     store: LoomStore,
-    state_port: Box<dyn KnotStatePort>,
-    log_port: Box<dyn LoomLogPort>,
-    agent_runner: Box<dyn AgentRunner>,
-    tie_off_sink: Box<dyn TieOffSink>,
+    state_port: Arc<dyn KnotStatePort>,
+    log_port: Arc<dyn LoomLogPort>,
+    agent_runner: Arc<dyn AgentRunner>,
+    tie_off_sink: Arc<dyn TieOffSink>,
     workspace_config: WorkspaceAgentConfig,
 }
 
@@ -334,10 +335,10 @@ impl ProcessStrand {
     /// Create a new `ProcessStrand` use case.
     pub fn new(
         store: LoomStore,
-        state_port: Box<dyn KnotStatePort>,
-        log_port: Box<dyn LoomLogPort>,
-        agent_runner: Box<dyn AgentRunner>,
-        tie_off_sink: Box<dyn TieOffSink>,
+        state_port: Arc<dyn KnotStatePort>,
+        log_port: Arc<dyn LoomLogPort>,
+        agent_runner: Arc<dyn AgentRunner>,
+        tie_off_sink: Arc<dyn TieOffSink>,
         workspace_config: WorkspaceAgentConfig,
     ) -> Self {
         Self {
@@ -728,11 +729,11 @@ mod tests {
         let loom2 = build_loom("looms/b", vec![build_knot("k2"), build_knot("k3")]);
         let discovered = vec![loom1.clone(), loom2.clone()];
 
-        let repo = Box::new(MockLoomRepository {
+        let repo = Arc::new(MockLoomRepository {
             scan_result: Ok(discovered),
         });
-        let state_port = Box::new(MockKnotStatePort::default());
-        let log_port = Box::new(MockLoomLogPort::default());
+        let state_port = Arc::new(MockKnotStatePort::default());
+        let log_port = Arc::new(MockLoomLogPort::default());
         let store = LoomStore::new();
 
         let use_case =
@@ -754,11 +755,11 @@ mod tests {
 
     #[test]
     fn discover_looms_empty_workspace() {
-        let repo = Box::new(MockLoomRepository {
+        let repo = Arc::new(MockLoomRepository {
             scan_result: Ok(vec![]),
         });
-        let state_port = Box::new(MockKnotStatePort::default());
-        let log_port = Box::new(MockLoomLogPort::default());
+        let state_port = Arc::new(MockKnotStatePort::default());
+        let log_port = Arc::new(MockLoomLogPort::default());
         let store = LoomStore::new();
 
         let use_case =
@@ -773,13 +774,13 @@ mod tests {
 
     #[test]
     fn discover_looms_repository_error() {
-        let repo = Box::new(MockLoomRepository {
+        let repo = Arc::new(MockLoomRepository {
             scan_result: Err(PortError::WorkspaceScanFailed(
                 "permission denied".to_string(),
             )),
         });
-        let state_port = Box::new(MockKnotStatePort::default());
-        let log_port = Box::new(MockLoomLogPort::default());
+        let state_port = Arc::new(MockKnotStatePort::default());
+        let log_port = Arc::new(MockLoomLogPort::default());
         let store = LoomStore::new();
 
         let use_case =
@@ -808,7 +809,7 @@ mod tests {
         let store = LoomStore::new();
 
         let use_case =
-            RegisterLoom::new(Box::new(log_port), Box::new(state_port), store.clone());
+            RegisterLoom::new(Arc::new(log_port), Arc::new(state_port), store.clone());
         let result = use_case.execute(loom);
 
         // Should succeed
@@ -850,8 +851,8 @@ mod tests {
 
         // Register first loom
         let use_case = RegisterLoom::new(
-            Box::new(log_port),
-            Box::new(state_port),
+            Arc::new(log_port),
+            Arc::new(state_port),
             store.clone(),
         );
         assert!(use_case.execute(loom1).is_ok());
@@ -860,8 +861,8 @@ mod tests {
         let (log_port2, _, _) = TrackingLoomLogPort::new();
         let (state_port2, _) = TrackingKnotStatePort::new();
         let use_case = RegisterLoom::new(
-            Box::new(log_port2),
-            Box::new(state_port2),
+            Arc::new(log_port2),
+            Arc::new(state_port2),
             store.clone(),
         );
         let result = use_case.execute(loom2);
@@ -897,8 +898,8 @@ mod tests {
 
         // Register loom first
         let reg = RegisterLoom::new(
-            Box::new(log_port),
-            Box::new(state_port),
+            Arc::new(log_port),
+            Arc::new(state_port),
             store.clone(),
         );
         assert!(reg.execute(loom).is_ok());
@@ -906,7 +907,7 @@ mod tests {
         // Unregister with a fresh tracking log port
         let (unreg_log_port, _, unreg_append) = TrackingLoomLogPort::new();
         let use_case =
-            UnregisterLoom::new(Box::new(unreg_log_port), store.clone());
+            UnregisterLoom::new(Arc::new(unreg_log_port), store.clone());
         let result = use_case.execute(&loom_id);
 
         // Should succeed
@@ -1024,7 +1025,7 @@ mod tests {
             },
         ];
 
-        let log_port = Box::new(MockLoomLogPortWithEvents { events });
+        let log_port = Arc::new(MockLoomLogPortWithEvents { events });
         let use_case = GetLoomActivity::new(log_port);
         let result = use_case.execute(&LoomId("my-loom".to_string()));
 
@@ -1048,7 +1049,7 @@ mod tests {
 
     #[test]
     fn get_loom_activity_empty_log() {
-        let log_port = Box::new(MockLoomLogPortWithEvents { events: vec![] });
+        let log_port = Arc::new(MockLoomLogPortWithEvents { events: vec![] });
         let use_case = GetLoomActivity::new(log_port);
         let result = use_case.execute(&LoomId("empty".to_string()));
 
@@ -1093,7 +1094,7 @@ mod tests {
             last_updated: "2026-06-03T12:00:00Z".to_string(),
         };
 
-        let state_port = Box::new(MockKnotStatePortWithState {
+        let state_port = Arc::new(MockKnotStatePortWithState {
             state: Some(state.clone()),
         });
         let use_case = GetKnotStatus::new(state_port);
@@ -1112,7 +1113,7 @@ mod tests {
 
     #[test]
     fn get_knot_status_missing_returns_error() {
-        let state_port = Box::new(MockKnotStatePortWithState { state: None });
+        let state_port = Arc::new(MockKnotStatePortWithState { state: None });
         let use_case = GetKnotStatus::new(state_port);
         let result = use_case.execute(&KnotId("k1".to_string()));
 
@@ -1224,7 +1225,7 @@ mod tests {
         let (log_port, _, log_append) = TrackingLoomLogPort::new();
         let (sink, sink_writes) = TrackingTieOffSink::new();
 
-        let agent_runner = Box::new(ConfigurableAgentRunner {
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
             result: Ok(AgentOutput {
                 stdout: "agent output content".to_string(),
                 stderr: String::new(),
@@ -1234,10 +1235,10 @@ mod tests {
 
         let use_case = ProcessStrand::new(
             store,
-            Box::new(state_port),
-            Box::new(log_port),
+            Arc::new(state_port),
+            Arc::new(log_port),
             agent_runner,
-            Box::new(sink),
+            Arc::new(sink),
             WorkspaceAgentConfig::default_config(),
         );
 
@@ -1287,7 +1288,7 @@ mod tests {
         let (log_port, _, log_append) = TrackingLoomLogPort::new();
         let (sink, sink_writes) = TrackingTieOffSink::new();
 
-        let agent_runner = Box::new(ConfigurableAgentRunner {
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
             result: Err(PortError::AgentExecutionFailed(
                 "agent crashed".to_string(),
             )),
@@ -1295,10 +1296,10 @@ mod tests {
 
         let use_case = ProcessStrand::new(
             store,
-            Box::new(state_port),
-            Box::new(log_port),
+            Arc::new(state_port),
+            Arc::new(log_port),
             agent_runner,
-            Box::new(sink),
+            Arc::new(sink),
             WorkspaceAgentConfig::default_config(),
         );
 
@@ -1343,7 +1344,7 @@ mod tests {
         let (log_port, _, _) = TrackingLoomLogPort::new();
         let (sink, _) = TrackingTieOffSink::new();
 
-        let agent_runner = Box::new(ConfigurableAgentRunner {
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
             result: Ok(AgentOutput {
                 stdout: "ok".to_string(),
                 stderr: String::new(),
@@ -1353,10 +1354,10 @@ mod tests {
 
         let use_case = ProcessStrand::new(
             store,
-            Box::new(state_port),
-            Box::new(log_port),
+            Arc::new(state_port),
+            Arc::new(log_port),
             agent_runner,
-            Box::new(sink),
+            Arc::new(sink),
             WorkspaceAgentConfig::default_config(),
         );
 
@@ -1396,7 +1397,7 @@ mod tests {
         let (sink, sink_writes) = TrackingTieOffSink::new();
 
         // Agent runner should NOT be called for deleted events
-        let agent_runner = Box::new(ConfigurableAgentRunner {
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
             result: Err(PortError::AgentExecutionFailed(
                 "should not be called".to_string(),
             )),
@@ -1404,10 +1405,10 @@ mod tests {
 
         let use_case = ProcessStrand::new(
             store,
-            Box::new(state_port),
-            Box::new(log_port),
+            Arc::new(state_port),
+            Arc::new(log_port),
             agent_runner,
-            Box::new(sink),
+            Arc::new(sink),
             WorkspaceAgentConfig::default_config(),
         );
 
