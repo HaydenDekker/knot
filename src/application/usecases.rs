@@ -34,7 +34,7 @@ pub struct LoomSummary {
 }
 
 /// Result of the `GetKnotStatus` use case.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnotStatus {
     /// The knot whose status was retrieved.
     pub knot_id: KnotId,
