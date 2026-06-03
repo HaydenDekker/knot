@@ -760,4 +760,258 @@ mod tests {
 
         assert_eq!(resp.status(), 404);
     }
+
+    // ── Phase 4: Route Integration Tests ──────────────────────────────────
+
+    /// All 7 loom endpoints are accessible on a single router with shared
+    /// `AppContext`. Verifies GET returns 200/404, POST returns 201/400/409,
+    /// and DELETE returns 204/404.
+    #[tokio::test]
+    async fn full_route_wiring() {
+        // Pre-register a loom so read endpoints have data to return
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom("wired", &["k1", "k2"]));
+        let app = build_app(ctx);
+
+        // 1. GET /looms → 200 with non-empty array
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // 2. GET /looms/:id → 200 (found)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms/wired")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // 3. GET /looms/:id → 404 (not found)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms/missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        // 4. GET /looms/:id/activity → 200 (mock log port returns events)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms/wired/activity")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // 5. GET /looms/:id/knots → 200 (list of knot names)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms/wired/knots")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // 6. GET /looms/:id/knots/:knot_name → 404 (no state for this knot)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/looms/wired/knots/k1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        // 7. POST /looms → 201 (valid body)
+        let body = serde_json::json!({
+            "id": "post-wired",
+            "source_dir": "src/wired"
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/looms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+
+        // 8. POST /looms → 400 (missing source_dir)
+        let body = serde_json::json!({
+            "id": "bad-post"
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/looms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        // 9. POST /looms → 409 (duplicate ID)
+        let body = serde_json::json!({
+            "id": "wired",
+            "source_dir": "src/other"
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/looms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 409);
+
+        // 10. DELETE /looms/:id → 204 (found)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/looms/wired")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        // 11. DELETE /looms/:id → 404 (already deleted)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/looms/wired")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// Existing routes (`/health`, `/agents/{dir}`) still work alongside
+    /// loom routes on the same `Router` instance. No route conflicts.
+    #[tokio::test]
+    async fn existing_routes_preserved() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        // GET /health → 200 with body "ok"
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"ok");
+
+        // GET /agents/{dir} → 200 with directory listing
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_path = tmp.path().to_string_lossy().to_string();
+        std::fs::write(tmp.path().join("agent-a"), "{}")
+            .unwrap();
+        std::fs::write(tmp.path().join("agent-b"), "{}")
+            .unwrap();
+
+        let encoded = dir_path.replace('/', "%2F");
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/agents/{encoded}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let names: Vec<String> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"agent-a".to_string()));
+        assert!(names.contains(&"agent-b".to_string()));
+
+        // GET /agents/{dir} → 404 for nonexistent directory
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/nonexistent_xyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        // Verify no route conflict: loom routes coexist
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/looms")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }
