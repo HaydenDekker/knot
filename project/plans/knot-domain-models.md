@@ -19,7 +19,7 @@ Knot has no domain model for its core concepts. There are no types representing 
 - Domain validation logic (invariants, not IO)
 - All domain types in `src/domain/`, no dependencies on framework crates
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-03)
 
 ## Hex Layer: Domain
 
@@ -100,13 +100,13 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 ### Phase 3: Knot File Format Validation
 **Failing tests created:** `domain::knot_file::tests::valid_knot_file_parse`, `domain::knot_file::tests::missing_name_returns_error`, `domain::knot_file::tests::empty_goal_returns_error`, `domain::knot_file::tests::missing_prompt_template_returns_error`
 
-- [ ] Failing test: `domain::knot_file::tests::valid_knot_file_parse` — given a well-formed frontmatter string, produce a `KnotFile` with name, agent_config, prompt_template
-- [ ] Failing test: `domain::knot_file::tests::missing_name_returns_error` — frontmatter without `name` field returns `KnotFileError::MissingName`
-- [ ] Failing test: `domain::knot_file::tests::empty_goal_returns_error` — frontmatter with empty goal returns `KnotFileError::EmptyGoal`
-- [ ] Failing test: `domain::knot_file::tests::missing_prompt_template_returns_error` — frontmatter without prompt-template returns `KnotFileError::MissingPromptTemplate`
-- [ ] Failing test: `domain::knot_file::tests::malformed_yaml_returns_error` — invalid YAML in frontmatter returns `KnotFileError::InvalidFormat`
-- [ ] Implement `KnotFile` struct and `KnotFileError` in `src/domain/knot_file.rs`
-- [ ] Implement frontmatter parser (split on `---`, parse YAML portion into `serde_json` or `serde_yaml`)
-- [ ] The parser takes a `String` (file content) — it does not read from the filesystem. Reading is an adapter concern.
+- [x] Failing test: `domain::knot_file::tests::valid_knot_file_parse` — given a well-formed frontmatter string, produce a `KnotFile` with name, agent_config, prompt_template
+- [x] Failing test: `domain::knot_file::tests::missing_name_returns_error` — frontmatter without `name` field returns `KnotFileError::MissingName`
+- [x] Failing test: `domain::knot_file::tests::empty_goal_returns_error` — frontmatter with empty goal returns `KnotFileError::EmptyGoal`
+- [x] Failing test: `domain::knot_file::tests::missing_prompt_template_returns_error` — frontmatter without prompt-template returns `KnotFileError::MissingPromptTemplate`
+- [x] Failing test: `domain::knot_file::tests::malformed_yaml_returns_error` — invalid YAML in frontmatter returns `KnotFileError::InvalidFormat`
+- [x] Implement `KnotFile` struct and `KnotFileError` in `src/domain/knot_file.rs`
+- [x] Implement frontmatter parser (split on `---`, parse YAML portion into `serde_json` or `serde_yaml`)
+- [x] The parser takes a `String` (file content) — it does not read from the filesystem. Reading is an adapter concern.
 
 ## Notes
