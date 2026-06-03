@@ -56,12 +56,12 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 0: Port Traits
 **Failing tests created:** `application::ports::tests::loom_repository_contract`, `application::ports::tests::knot_state_port_contract`, `application::ports::tests::loom_log_port_contract`, `application::ports::tests::agent_runner_contract`, `application::ports::tests::tieoff_sink_contract`
 
-- [ ] Failing test: `application::ports::tests::loom_repository_contract` — mock `LoomRepository` implements all trait methods; verify trait is object-safe and all methods compile
-- [ ] Failing test: `application::ports::tests::knot_state_port_contract` — mock `KnotStatePort` implements `create`, `update`, `get`; verify trait compiles
-- [ ] Failing test: `application::ports::tests::loom_log_port_contract` — mock `LoomLogPort` implements `open`, `append`, `read_all`; verify trait compiles
-- [ ] Failing test: `application::ports::tests::agent_runner_contract` — mock `AgentRunner` implements `execute`; verify `ExecutionContext` and `AgentOutput` types exist
-- [ ] Failing test: `application::ports::tests::tieoff_sink_contract` — mock `TieOffSink` implements `write`; verify trait compiles
-- [ ] Define port traits in `src/application/ports.rs`
+- [x] Failing test: `application::ports::tests::loom_repository_contract` — mock `LoomRepository` implements all trait methods; verify trait is object-safe and all methods compile
+- [x] Failing test: `application::ports::tests::knot_state_port_contract` — mock `KnotStatePort` implements `create`, `update`, `get`; verify trait compiles
+- [x] Failing test: `application::ports::tests::loom_log_port_contract` — mock `LoomLogPort` implements `open`, `append`, `read_all`; verify trait compiles
+- [x] Failing test: `application::ports::tests::agent_runner_contract` — mock `AgentRunner` implements `execute`; verify `ExecutionContext` and `AgentOutput` types exist
+- [x] Failing test: `application::ports::tests::tieoff_sink_contract` — mock `TieOffSink` implements `write`; verify trait compiles
+- [x] Define port traits in `src/application/ports.rs`
 - [ ] Define supporting types: `KnotState` (event_type, strand_path, tie_off_path, status, error, last_updated), `ExecutionContext` (cli_path, cli_args, prompt, strand_path), `AgentOutput` (stdout, stderr, exit_code)
 - [ ] Define error types: `PortError` with variants for each operation
 
