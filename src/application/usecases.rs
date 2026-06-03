@@ -5,11 +5,15 @@
 
 use std::path::Path;
 
-use crate::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, PortError};
+use crate::application::ports::{
+    AgentRunner, ExecutionContext, KnotEventType, KnotState,
+    KnotStatePort, LoomLogPort, LoomRepository, ProcessingStatus, PortError,
+    TieOffSink,
+};
 use crate::application::store::LoomStore;
-use crate::application::ports::KnotState;
-use crate::domain::entities::{KnotId, Loom, LoomId};
-use crate::domain::events::LoomEvent;
+use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
+use crate::domain::events::{LoomEvent, StrandEvent};
+use crate::domain::value_objects::WorkspaceAgentConfig;
 use std::path::PathBuf;
 
 // ── Query Result Types ───────────────────────────────────────────────────
@@ -306,11 +310,234 @@ impl GetKnotStatus {
     }
 }
 
+// ── ProcessStrand ─────────────────────────────────────────────────────────
+
+/// Use case: process a single strand event through the agent pipeline.
+///
+/// 1. Receive `StrandEvent` (Created / Modified / Deleted)
+/// 2. Update knot-state to `processing`
+/// 3. Build execution context from `WorkspaceAgentConfig` + `Knot`
+/// 4. Call `AgentRunner::execute()` (skipped for Deleted events)
+/// 5. Call `TieOffSink::write()` with result
+/// 6. Update knot-state to `completed` or `failed`
+/// 7. Append `StrandProcessed` to loom-log
+pub struct ProcessStrand {
+    store: LoomStore,
+    state_port: Box<dyn KnotStatePort>,
+    log_port: Box<dyn LoomLogPort>,
+    agent_runner: Box<dyn AgentRunner>,
+    tie_off_sink: Box<dyn TieOffSink>,
+    workspace_config: WorkspaceAgentConfig,
+}
+
+impl ProcessStrand {
+    /// Create a new `ProcessStrand` use case.
+    pub fn new(
+        store: LoomStore,
+        state_port: Box<dyn KnotStatePort>,
+        log_port: Box<dyn LoomLogPort>,
+        agent_runner: Box<dyn AgentRunner>,
+        tie_off_sink: Box<dyn TieOffSink>,
+        workspace_config: WorkspaceAgentConfig,
+    ) -> Self {
+        Self {
+            store,
+            state_port,
+            log_port,
+            agent_runner,
+            tie_off_sink,
+            workspace_config,
+        }
+    }
+
+    /// Execute the strand processing pipeline.
+    ///
+    /// State transitions: `Idle → Processing → Completed | Failed`.
+    pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
+        let (loom_id, knot_id, strand_path) = Self::extract_event_fields(&event);
+        let is_deleted = matches!(event, StrandEvent::Deleted { .. });
+
+        // Look up the loom and knot
+        let loom = self
+            .store
+            .get(&loom_id)
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+        let knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == knot_id)
+            .ok_or_else(|| PortError::KnotStateGetFailed(format!(
+                "knot '{}' not found in loom '{}'",
+                knot_id.0, loom_id.0
+            )))?;
+
+        let event_type = match event {
+            StrandEvent::Created { .. } => KnotEventType::Created,
+            StrandEvent::Modified { .. } => KnotEventType::Modified,
+            StrandEvent::Deleted { .. } => KnotEventType::Deleted,
+        };
+
+        // Determine tie-off path
+        let tie_off_path = Self::compute_tie_off_path(&loom, &strand_path);
+
+        // 1. Update knot-state to processing
+        self.state_port.update(KnotState {
+            event_type: event_type.clone(),
+            strand_path: strand_path.clone(),
+            tie_off_path: Some(tie_off_path.clone()),
+            status: ProcessingStatus::Processing,
+            error: None,
+            last_updated: Self::now(),
+        })?;
+
+        if is_deleted {
+            // For deleted events, write a report tie-off without running agent
+            let tie_off = TieOff {
+                content: format!(
+                    "Strand deleted: {}\nPrevious output at: {}",
+                    strand_path.0.display(),
+                    tie_off_path.0.display()
+                ),
+                path: tie_off_path.clone(),
+                status: crate::domain::entities::TieOffStatus::Produced,
+            };
+            self.tie_off_sink.write(tie_off)?;
+
+            // Update to completed
+            self.state_port.update(KnotState {
+                event_type,
+                strand_path: strand_path.clone(),
+                tie_off_path: Some(tie_off_path.clone()),
+                status: ProcessingStatus::Completed,
+                error: None,
+                last_updated: Self::now(),
+            })?;
+
+            // Append to loom-log
+            self.log_port.append(LoomEvent::StrandProcessed {
+                loom_id,
+                strand_path,
+            })?;
+
+            return Ok(());
+        }
+
+        // 2. Build execution context
+        let ctx = ExecutionContext {
+            cli_path: self.workspace_config.cli_path.clone(),
+            cli_args: self.workspace_config.cli_args.clone(),
+            prompt: knot.prompt_template.instructions.clone(),
+            strand_path: strand_path.clone(),
+        };
+
+        // 3. Execute agent and handle result
+        let result = self.agent_runner.execute(ctx);
+
+        match result {
+            Ok(output) => {
+                // 4. Write successful tie-off
+                let tie_off = TieOff {
+                    content: output.stdout,
+                    path: tie_off_path.clone(),
+                    status: crate::domain::entities::TieOffStatus::Produced,
+                };
+                self.tie_off_sink.write(tie_off)?;
+
+                // 5. Update to completed
+                self.state_port.update(KnotState {
+                    event_type,
+                    strand_path: strand_path.clone(),
+                    tie_off_path: Some(tie_off_path.clone()),
+                    status: ProcessingStatus::Completed,
+                    error: None,
+                    last_updated: Self::now(),
+                })?;
+
+                // 6. Append to loom-log
+                self.log_port.append(LoomEvent::StrandProcessed {
+                    loom_id,
+                    strand_path,
+                })?;
+
+                Ok(())
+            }
+            Err(err) => {
+                let error_msg = err.to_string();
+
+                // 4. Write error tie-off
+                let tie_off = TieOff {
+                    content: format!("Processing failed: {}", error_msg),
+                    path: tie_off_path.clone(),
+                    status: crate::domain::entities::TieOffStatus::Failed,
+                };
+                self.tie_off_sink.write(tie_off)?;
+
+                // 5. Update to failed with error details
+                self.state_port.update(KnotState {
+                    event_type,
+                    strand_path: strand_path.clone(),
+                    tie_off_path: Some(tie_off_path.clone()),
+                    status: ProcessingStatus::Failed,
+                    error: Some(error_msg.clone()),
+                    last_updated: Self::now(),
+                })?;
+
+                // 6. Append to loom-log
+                self.log_port.append(LoomEvent::StrandProcessed {
+                    loom_id,
+                    strand_path,
+                })?;
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Extract common fields from any `StrandEvent` variant.
+    fn extract_event_fields(
+        event: &StrandEvent,
+    ) -> (LoomId, KnotId, StrandPath) {
+        match event {
+            StrandEvent::Created {
+                loom_id,
+                knot_id,
+                strand_path,
+            }
+            | StrandEvent::Modified {
+                loom_id,
+                knot_id,
+                strand_path,
+            }
+            | StrandEvent::Deleted {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => (loom_id.clone(), knot_id.clone(), strand_path.clone()),
+        }
+    }
+
+    /// Compute the tie-off output path from loom + strand path.
+    fn compute_tie_off_path(loom: &Loom, strand_path: &StrandPath) -> TieOffPath {
+        let filename = strand_path
+            .0
+            .file_name()
+            .map(|f| format!("{}.output", f.to_string_lossy()))
+            .unwrap_or_else(|| "output".to_string());
+        TieOffPath(loom.tie_off_dir.join(filename))
+    }
+
+    /// Return current ISO timestamp for test determinism.
+    fn now() -> String {
+        "2026-06-03T12:00:00Z".to_string()
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::ports::AgentOutput;
     use crate::domain::entities::{Knot, KnotId, LoomId};
     use crate::domain::value_objects::{AgentConfig, PromptTemplate};
     use std::collections::HashSet;
@@ -891,5 +1118,316 @@ mod tests {
             }
             other => panic!("Expected KnotStateGetFailed, got {other:?}"),
         }
+    }
+
+    // ── Tracking Mocks for ProcessStrand ────────────────────────────────
+
+    /// Tracking mock `KnotStatePort` that records `update` calls.
+    struct TrackingKnotStatePortForUpdates {
+        update_calls: Arc<RwLock<Vec<KnotState>>>,
+    }
+
+    impl TrackingKnotStatePortForUpdates {
+        fn new() -> (Self, Arc<RwLock<Vec<KnotState>>>) {
+            let update_calls = Arc::new(RwLock::new(vec![]));
+            let port = Self {
+                update_calls: update_calls.clone(),
+            };
+            (port, update_calls)
+        }
+    }
+
+    impl KnotStatePort for TrackingKnotStatePortForUpdates {
+        fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn update(&self, state: KnotState) -> Result<(), PortError> {
+            self.update_calls.write().unwrap().push(state);
+            Ok(())
+        }
+
+        fn get(
+            &self,
+            _knot_id: &KnotId,
+        ) -> Result<Option<KnotState>, PortError> {
+            Ok(None)
+        }
+    }
+
+    /// Tracking mock `TieOffSink` that records all `write` calls.
+    struct TrackingTieOffSink {
+        write_calls: Arc<RwLock<Vec<TieOff>>>,
+    }
+
+    impl TrackingTieOffSink {
+        fn new() -> (Self, Arc<RwLock<Vec<TieOff>>>) {
+            let write_calls = Arc::new(RwLock::new(vec![]));
+            let sink = Self {
+                write_calls: write_calls.clone(),
+            };
+            (sink, write_calls)
+        }
+    }
+
+    impl TieOffSink for TrackingTieOffSink {
+        fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.write_calls.write().unwrap().push(tie_off);
+            Ok(())
+        }
+    }
+
+    /// Configurable mock `AgentRunner` that can return success or error.
+    struct ConfigurableAgentRunner {
+        result: Result<AgentOutput, PortError>,
+    }
+
+    impl AgentRunner for ConfigurableAgentRunner {
+        fn execute(&self, _ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+            self.result.clone()
+        }
+    }
+
+    /// Build a Created StrandEvent for testing.
+    fn build_created_event(loom_id: &str, knot_id: &str, path: &str) -> StrandEvent {
+        StrandEvent::Created {
+            loom_id: LoomId(loom_id.to_string()),
+            knot_id: KnotId(knot_id.to_string()),
+            strand_path: StrandPath(PathBuf::from(path)),
+        }
+    }
+
+    /// Build a Deleted StrandEvent for testing.
+    fn build_deleted_event(loom_id: &str, knot_id: &str, path: &str) -> StrandEvent {
+        StrandEvent::Deleted {
+            loom_id: LoomId(loom_id.to_string()),
+            knot_id: KnotId(knot_id.to_string()),
+            strand_path: StrandPath(PathBuf::from(path)),
+        }
+    }
+
+    // ── ProcessStrand Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn process_strand_success() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, log_append) = TrackingLoomLogPort::new();
+        let (sink, sink_writes) = TrackingTieOffSink::new();
+
+        let agent_runner = Box::new(ConfigurableAgentRunner {
+            result: Ok(AgentOutput {
+                stdout: "agent output content".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            }),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Box::new(state_port),
+            Box::new(log_port),
+            agent_runner,
+            Box::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        let result = use_case.execute(event);
+
+        assert!(result.is_ok());
+
+        // Verify state transitions: processing -> completed
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].status, ProcessingStatus::Processing);
+        assert_eq!(updates[1].status, ProcessingStatus::Completed);
+
+        // Verify tie-off was written with agent content
+        let writes = sink_writes.read().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].content, "agent output content");
+        assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Produced);
+
+        // Verify loom-log got StrandProcessed
+        let appends = log_append.read().unwrap();
+        assert_eq!(appends.len(), 1);
+        match &appends[0] {
+            LoomEvent::StrandProcessed {
+                loom_id,
+                strand_path,
+            } => {
+                assert_eq!(*loom_id, LoomId("test-loom".to_string()));
+                assert_eq!(
+                    *strand_path,
+                    StrandPath(PathBuf::from("src/file.md"))
+                );
+            }
+            _ => panic!("Expected StrandProcessed event"),
+        }
+    }
+
+    #[test]
+    fn process_strand_agent_error() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, log_append) = TrackingLoomLogPort::new();
+        let (sink, sink_writes) = TrackingTieOffSink::new();
+
+        let agent_runner = Box::new(ConfigurableAgentRunner {
+            result: Err(PortError::AgentExecutionFailed(
+                "agent crashed".to_string(),
+            )),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Box::new(state_port),
+            Box::new(log_port),
+            agent_runner,
+            Box::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        let result = use_case.execute(event);
+
+        // ProcessStrand returns Ok even on agent error (it records the failure)
+        assert!(result.is_ok());
+
+        // State transitions: processing -> failed
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].status, ProcessingStatus::Processing);
+        assert_eq!(updates[1].status, ProcessingStatus::Failed);
+
+        // Final state has error details
+        assert_eq!(
+            updates[1].error,
+            Some("agent execution failed: agent crashed".to_string())
+        );
+
+        // Tie-off written with Failed status and error content
+        let writes = sink_writes.read().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Failed);
+        assert!(writes[0].content.contains("agent crashed"));
+
+        // Loom-log got StrandProcessed
+        let appends = log_append.read().unwrap();
+        assert_eq!(appends.len(), 1);
+        matches!(appends[0], LoomEvent::StrandProcessed { .. });
+    }
+
+    #[test]
+    fn process_strand_state_transitions() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, _) = TrackingLoomLogPort::new();
+        let (sink, _) = TrackingTieOffSink::new();
+
+        let agent_runner = Box::new(ConfigurableAgentRunner {
+            result: Ok(AgentOutput {
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            }),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Box::new(state_port),
+            Box::new(log_port),
+            agent_runner,
+            Box::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        use_case.execute(event).unwrap();
+
+        // Verify exact state sequence:
+        // 1. Initial state is implicitly Idle (before processing)
+        // 2. First update: Processing
+        // 3. Second update: Completed
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+
+        // First state: Processing (transition from implicit Idle)
+        assert_eq!(updates[0].status, ProcessingStatus::Processing);
+        assert_eq!(updates[0].event_type, KnotEventType::Created);
+        assert_eq!(updates[0].error, None);
+
+        // Second state: Completed
+        assert_eq!(updates[1].status, ProcessingStatus::Completed);
+        assert_eq!(updates[1].event_type, KnotEventType::Created);
+        assert_eq!(updates[1].error, None);
+
+        // Both states reference the same strand
+        assert_eq!(updates[0].strand_path, updates[1].strand_path);
+    }
+
+    #[test]
+    fn process_strand_deleted_event() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, log_append) = TrackingLoomLogPort::new();
+        let (sink, sink_writes) = TrackingTieOffSink::new();
+
+        // Agent runner should NOT be called for deleted events
+        let agent_runner = Box::new(ConfigurableAgentRunner {
+            result: Err(PortError::AgentExecutionFailed(
+                "should not be called".to_string(),
+            )),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Box::new(state_port),
+            Box::new(log_port),
+            agent_runner,
+            Box::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_deleted_event("test-loom", "k1", "src/file.md");
+        let result = use_case.execute(event);
+
+        // Should succeed (deleted events do not error)
+        assert!(result.is_ok());
+
+        // State transitions: processing -> completed
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].status, ProcessingStatus::Processing);
+        assert_eq!(updates[1].status, ProcessingStatus::Completed);
+        assert_eq!(updates[0].event_type, KnotEventType::Deleted);
+
+        // Tie-off still written (reports what was undone)
+        let writes = sink_writes.read().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].content.contains("deleted"));
+        assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Produced);
+
+        // Loom-log got StrandProcessed
+        let appends = log_append.read().unwrap();
+        assert_eq!(appends.len(), 1);
+        matches!(appends[0], LoomEvent::StrandProcessed { .. });
     }
 }
