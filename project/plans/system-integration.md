@@ -84,20 +84,20 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 3: End-to-End Integration Test
 **Failing tests created:** `integration::tests::full_pipeline_create_modify_delete`, `integration::tests::full_pipeline_http_observable`, `integration::tests::multiple_looms_independent`
 
-- [ ] Failing test: `integration::tests::full_pipeline_create_modify_delete` — using a mock agent CLI (`echo "processed"`):
+- [x] Failing test: `integration::tests::full_pipeline_create_modify_delete` — using a mock agent CLI (`echo "processed"`):
   1. Create strand → tie-off file created with content
   2. Modify strand → tie-off overwritten with new content
   3. Delete strand → tie-off reports deletion (file still exists, never deleted)
-- [ ] Failing test: `integration::tests::full_pipeline_http_observable` — same flow as above, but verify via HTTP:
+- [x] Failing test: `integration::tests::full_pipeline_http_observable` — same flow as above, but verify via HTTP:
   1. `GET /looms` → loom listed
   2. `GET /looms/:id/knots/:knot_name` → status is `idle` before event, `processing` during, `completed` after
   3. `GET /looms/:id/activity` → contains `StrandProcessed` entry
-- [ ] Failing test: `integration::tests::multiple_looms_independent` — two looms with different source dirs and tie-off points:
+- [x] Failing test: `integration::tests::multiple_looms_independent` — two looms with different source dirs and tie-off points:
   1. Create strand in loom A → tie-off in A's point only
   2. Create strand in loom B → tie-off in B's point only
   3. No cross-interference (A's knots don't process B's strands)
-- [ ] Mock agent CLI: a simple shell script or binary that echoes its input (avoid real `pi` calls in tests)
-- [ ] Tests use `tempfile` for workspace, loom dirs, source dirs, tie-off points
+- [x] Mock agent CLI: a simple shell script or binary that echoes its input (avoid real `pi` calls in tests)
+- [x] Tests use `tempfile` for workspace, loom dirs, source dirs, tie-off points
 
 ### Phase 4: Graceful Shutdown
 **Failing tests created:** `integration::tests::graceful_shutdown_stops_watchers`, `integration::tests::shutdown_logs_loom_stopped`
