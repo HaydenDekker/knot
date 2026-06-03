@@ -66,6 +66,8 @@ pub struct AppContext {
     pub agent_runner: Arc<dyn AgentRunner>,
     /// Workspace-level agent configuration.
     pub workspace_config: WorkspaceAgentConfig,
+    /// Discovered loom IDs (populated at startup, used for shutdown logging).
+    pub loom_ids: Vec<LoomId>,
 }
 
 // ── Handler stubs ──────────────────────────────────────────────────────────
@@ -369,6 +371,7 @@ mod tests {
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
             workspace_config: WorkspaceAgentConfig::default_config(),
+            loom_ids: Vec::new(),
         }
     }
 

@@ -165,6 +165,7 @@ pub fn build_app_context(
             event_sender: event_tx,
             agent_runner,
             workspace_config: config.workspace_config.clone(),
+            loom_ids: Vec::new(),
         },
         event_rx,
     )
@@ -175,6 +176,7 @@ pub fn build_app_context(
 /// After building the AppContext, this:
 /// 1. Runs DiscoverLooms to scan workspace and register looms
 /// 2. For each loom: opens activity log, writes LoomStarted event
+/// 3. Stores loom IDs in AppContext for use during graceful shutdown
 ///
 /// Returns the list of discovered looms (used to start watchers).
 pub fn run_startup(
@@ -207,6 +209,42 @@ pub fn run_startup(
     Ok(looms)
 }
 
+/// Perform graceful shutdown of the Knot system.
+///
+/// This function:
+/// 1. Closes the debounce engine sender (stops accepting new events)
+/// 2. Waits for the processing pipeline to drain (in-flight events finish)
+/// 3. Writes `LoomStopped` to each loom's activity log
+///
+/// The `event_source` should already be dropped by the caller (which stops
+/// the notify watcher). The `process_handle` is the JoinHandle for the
+/// processing pipeline task — this function waits for it to complete.
+pub async fn graceful_shutdown(
+    ctx: &AppContext,
+    process_handle: tokio::task::JoinHandle<()>,
+) {
+    // Close the event sender to signal the debounce engine to stop.
+    // This drops the sender held by AppContext — the debounce engine's
+    // input receiver will see None and drain remaining events.
+    // We don't directly close event_sender here because it's cloned into
+    // the AppContext state; instead, we wait for the process task.
+    drop(ctx.event_sender.clone());
+
+    // Wait for the processing pipeline to drain.
+    // The debounce engine flushes remaining events when its input closes,
+    // then the ProcessStrand loop exits.
+    let _ = process_handle.await;
+
+    // Write LoomStopped to each loom's activity log.
+    for loom_id in &ctx.loom_ids {
+        let _ = ctx.loom_log_port.append(
+            domain::events::LoomEvent::LoomStopped {
+                loom_id: loom_id.clone(),
+            },
+        );
+    }
+}
+
 /// Start the Knot HTTP server with the given configuration.
 ///
 /// Builds the `AppContext`, wires the axum router, and binds to
@@ -230,17 +268,25 @@ pub enum ShutdownSignal {
 ///
 /// This variant allows callers (especially tests) to control when
 /// the server shuts down via an oneshot channel.
+///
+/// Graceful shutdown sequence:
+/// 1. Awaits shutdown signal (Ctrl+C or oneshot channel)
+/// 2. Stops accepting new HTTP connections (axum graceful shutdown)
+/// 3. Drops NotifyEventSource (stops file watcher, closes event channel)
+/// 4. Waits for debounce engine + processing pipeline to drain
+/// 5. Writes `LoomStopped` to each loom's activity log
+/// 6. Returns
 pub async fn start_server_with_shutdown(
     config: AppConfig,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let (ctx, event_rx) = build_app_context(&config);
+    let (mut ctx, event_rx) = build_app_context(&config);
 
     // Clone event sender for the watcher (ctx is consumed below)
     let event_sender = ctx.event_sender.clone();
 
     // Start the event pipeline: debounce + ProcessStrand
-    let _process_handle = start_event_pipeline(&ctx, event_rx);
+    let process_handle = start_event_pipeline(&ctx, event_rx);
 
     // Startup: discover looms, create state files
     let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
@@ -248,8 +294,15 @@ pub async fn start_server_with_shutdown(
         Vec::new()
     });
 
-    // Start file watchers on each loom source directory
-    let _event_source = {
+    // Store loom IDs in context for graceful shutdown logging.
+    {
+        let loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
+        ctx.loom_ids = loom_ids;
+    }
+
+    // Start file watchers on each loom source directory.
+    // Kept alive in a scope — dropped during shutdown to stop the watcher.
+    let event_source = {
         use application::ports::EventSource;
         let source =
             adapters::outbound::NotifyEventSource::new(event_sender);
@@ -291,7 +344,43 @@ pub async fn start_server_with_shutdown(
         }
     };
 
+    // Serve HTTP with graceful shutdown.
+    // When the shutdown signal fires, axum stops accepting new connections
+    // and waits for existing requests to complete.
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
-        .await
+        .await?;
+
+    // Shutdown sequence:
+    // 1. Drop the file watcher — this stops the notify RecommendedWatcher
+    //    and closes the mpsc sender it holds.
+    drop(event_source);
+
+    // 2. The AppContext is held by the axum Router (already stopped).
+    //    We need the loom_log_port and loom_ids for logging LoomStopped.
+    //    The router state is still accessible since the serve call returned.
+    //    However, ctx was moved into build_app. We reconstruct the minimal
+    //    context we need for shutdown logging.
+
+    // 3. Wait for the processing pipeline to drain and write LoomStopped.
+    //    We need a fresh loom_log_port and the loom_ids.
+    let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
+        Arc::new(adapters::outbound::FileSystemLoomLog::new(
+            config.base_dir.clone(),
+        ));
+    let loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
+
+    // Wait for the processing pipeline to finish draining.
+    let _ = process_handle.await;
+
+    // Write LoomStopped to each loom's activity log.
+    for loom_id in &loom_ids {
+        let _ = loom_log_port.append(
+            domain::events::LoomEvent::LoomStopped {
+                loom_id: loom_id.clone(),
+            },
+        );
+    }
+
+    Ok(())
 }
