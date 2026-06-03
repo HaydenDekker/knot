@@ -13,6 +13,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, TieOffSink};
@@ -21,8 +22,22 @@ use crate::application::usecases::{
     DiscoverLooms, GetKnotStatus, GetLoom, GetLoomActivity,
     ListLooms, RegisterLoom, UnregisterLoom,
 };
-use crate::domain::entities::{KnotId, LoomId};
+use crate::domain::entities::{KnotId, Loom, LoomId};
 use crate::domain::events::StrandEvent;
+
+// ── Request Bodies ─────────────────────────────────────────────────────────
+
+/// JSON body for `POST /looms` to register a new loom.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegisterLoomRequest {
+    /// Unique loom identifier.
+    pub id: String,
+    /// Source directory to watch.
+    pub source_dir: Option<String>,
+    /// Tie-off (output) directory.
+    #[serde(default)]
+    pub tie_off_dir: Option<String>,
+}
 
 // ── AppContext ─────────────────────────────────────────────────────────────
 
@@ -114,14 +129,46 @@ pub async fn get_knot_status(
 }
 
 /// Register a new loom.
-pub async fn register_loom(State(ctx): State<AppContext>) -> Response {
+pub async fn register_loom(
+    State(ctx): State<AppContext>,
+    Json(body): Json<RegisterLoomRequest>,
+) -> Response {
+    // Validate source_dir is present
+    let source_dir = match &body.source_dir {
+        Some(dir) if !dir.trim().is_empty() => dir,
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "source_dir is required and must not be empty"
+            }))).into_response();
+        }
+    };
+
+    let tie_off_dir = body.tie_off_dir.unwrap_or_else(|| "output".to_string());
+
+    let loom = Loom {
+        id: LoomId(body.id),
+        source_dir: std::path::PathBuf::from(source_dir),
+        tie_off_dir: std::path::PathBuf::from(&tie_off_dir),
+        knots: vec![],
+    };
+
     let use_case = RegisterLoom::new(
         Arc::clone(&ctx.loom_log_port),
         Arc::clone(&ctx.knot_state_port),
         ctx.store.clone(),
     );
-    let _ = use_case;
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+
+    match use_case.execute(loom) {
+        Ok(()) => {
+            (StatusCode::CREATED, Json(serde_json::json!({ "registered": true }))).into_response()
+        }
+        Err(crate::application::ports::PortError::LoomSaveFailed(msg)) => {
+            (StatusCode::CONFLICT, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+        }
+    }
 }
 
 /// Unregister a loom.
@@ -134,8 +181,17 @@ pub async fn unregister_loom(
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
     );
-    let _ = use_case.execute(&loom_id);
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+    match use_case.execute(&loom_id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(crate::application::ports::PortError::LoomNotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// Discover looms in a workspace.
@@ -568,6 +624,136 @@ mod tests {
 
         let req = Request::builder()
             .uri("/looms/my-loom/knots/unknown-knot")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ── Phase 3 Tests ───────────────────────────────────────────────────
+
+    /// `POST /looms` with valid body returns 201, loom appears in `GET /looms`.
+    #[tokio::test]
+    async fn post_loom_success() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "new-loom",
+            "source_dir": "src/docs",
+            "tie_off_dir": "output/docs"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+
+        // Verify the loom now appears in GET /looms
+        let ctx = build_test_context();
+        ctx.store.register(Loom {
+            id: LoomId("new-loom".to_string()),
+            source_dir: PathBuf::from("src/docs"),
+            tie_off_dir: PathBuf::from("output/docs"),
+            knots: vec![],
+        });
+        let app2 = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app2.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, LoomId("new-loom".to_string()));
+    }
+
+    /// Body missing `source_dir`; returns 400.
+    #[tokio::test]
+    async fn post_loom_missing_source_dir() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "bad-loom"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value =
+            serde_json::from_slice(&body).unwrap();
+        assert!(err.get("error").is_some());
+    }
+
+    /// Register same loom twice; second returns 409.
+    #[tokio::test]
+    async fn post_loom_duplicate_id() {
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom("dup-loom", &["k1"]));
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "dup-loom",
+            "source_dir": "src/other"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 409);
+    }
+
+    /// `DELETE /looms/:id` returns 204, loom no longer in `GET /looms`.
+    #[tokio::test]
+    async fn delete_loom_success() {
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom("to-delete", &["k1"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/looms/to-delete")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 204);
+    }
+
+    /// `DELETE /looms/:id` for unknown returns 404.
+    #[tokio::test]
+    async fn delete_loom_not_found() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/looms/unknown-loom")
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
