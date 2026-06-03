@@ -105,12 +105,12 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 5: Debounce Logic
 **Failing tests created:** `application::debounce::tests::single_event_emits_after_window`, `application::debounce::tests::rapid_events_emit_only_last`, `application::debounce::tests::different_files_emit_independently`, `application::debounce::tests::delete_after_modify_emits_delete`
 
-- [ ] Failing test: `application::debounce::tests::single_event_emits_after_window` — feed one event; after 100ms it is emitted on the output channel
-- [ ] Failing test: `application::debounce::tests::rapid_events_emit_only_last` — feed 5 events for same file within 50ms; only the 5th is emitted after debounce window
-- [ ] Failing test: `application::debounce::tests::different_files_emit_independently` — feed events for file A and file B; both emit independently (not blocked on each other)
-- [ ] Failing test: `application::debounce::tests::delete_after_modify_emits_delete` — feed Modify then Delete for same file within window; only Delete is emitted
-- [ ] Implement `DebounceEngine` — per-file `tokio::time::Instant` tracker with 100ms window
-- [ ] Takes raw `StrandEvent`s on input channel, emits debounced events on output channel
+- [x] Failing test: `application::debounce::tests::single_event_emits_after_window` — feed one event; after 100ms it is emitted on the output channel
+- [x] Failing test: `application::debounce::tests::rapid_events_emit_only_last` — feed 5 events for same file within 50ms; only the 5th is emitted after debounce window
+- [x] Failing test: `application::debounce::tests::different_files_emit_independently` — feed events for file A and file B; both emit independently (not blocked on each other)
+- [x] Failing test: `application::debounce::tests::delete_after_modify_emits_delete` — feed Modify then Delete for same file within window; only Delete is emitted
+- [x] Implement `DebounceEngine` — per-file `tokio::time::Instant` tracker with 100ms window
+- [x] Takes raw `StrandEvent`s on input channel, emits debounced events on output channel
 - [ ] Runs as a `tokio::task`; provides `start() -> (Sender, Receiver, JoinHandle)`
 - [ ] **Design note:** debounce is an application concern (orchestration), not part of the `EventSource` adapter. The adapter emits raw events; the engine filters them.
 
