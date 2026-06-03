@@ -68,11 +68,11 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 1: Loom Store
 **Failing tests created:** `application::store::tests::register_loom`, `application::store::tests::list_looms`, `application::store::tests::get_loom_by_id`, `application::store::tests::get_nonexistent_returns_none`, `application::store::tests::unregister_loom`
 
-- [ ] Failing test: `application::store::tests::register_loom` — register a loom in the store; verify it appears in `list()`
-- [ ] Failing test: `application::store::tests::list_looms` — list returns all registered looms
-- [ ] Failing test: `application::store::tests::get_loom_by_id` — get existing loom returns `Some(loom)`
-- [ ] Failing test: `application::store::tests::get_nonexistent_returns_none` — get unknown ID returns `None`
-- [ ] Failing test: `application::store::tests::unregister_loom` — unregister removes loom from store; `get()` returns `None`
+- [x] Failing test: `application::store::tests::register_loom` — register a loom in the store; verify it appears in `list()`
+- [x] Failing test: `application::store::tests::list_looms` — list returns all registered looms
+- [x] Failing test: `application::store::tests::get_loom_by_id` — get existing loom returns `Some(loom)`
+- [x] Failing test: `application::store::tests::get_nonexistent_returns_none` — get unknown ID returns `None`
+- [x] Failing test: `application::store::tests::unregister_loom` — unregister removes loom from store; `get()` returns `None`
 - [ ] Implement `LoomStore` — in-memory registry using `Arc<RwLock<HashMap<LoomId, Loom>>>`
 - [ ] `LoomStore` depends on ports (traits), not concrete adapters
 - [ ] Methods: `register(loom: Loom)`, `unregister(id: &LoomId)`, `get(id: &LoomId)`, `list()`
