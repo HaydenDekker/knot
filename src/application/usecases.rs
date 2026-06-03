@@ -382,6 +382,7 @@ impl ProcessStrand {
 
         // 1. Update knot-state to processing
         self.state_port.update(KnotState {
+            knot_id: knot_id.clone(),
             event_type: event_type.clone(),
             strand_path: strand_path.clone(),
             tie_off_path: Some(tie_off_path.clone()),
@@ -405,6 +406,7 @@ impl ProcessStrand {
 
             // Update to completed
             self.state_port.update(KnotState {
+                knot_id: knot_id.clone(),
                 event_type,
                 strand_path: strand_path.clone(),
                 tie_off_path: Some(tie_off_path.clone()),
@@ -445,6 +447,7 @@ impl ProcessStrand {
 
                 // 5. Update to completed
                 self.state_port.update(KnotState {
+                    knot_id: knot_id.clone(),
                     event_type,
                     strand_path: strand_path.clone(),
                     tie_off_path: Some(tie_off_path.clone()),
@@ -474,6 +477,7 @@ impl ProcessStrand {
 
                 // 5. Update to failed with error details
                 self.state_port.update(KnotState {
+                    knot_id: knot_id.clone(),
                     event_type,
                     strand_path: strand_path.clone(),
                     tie_off_path: Some(tie_off_path.clone()),
@@ -1076,6 +1080,7 @@ mod tests {
     #[test]
     fn get_knot_status_from_state() {
         let state = KnotState {
+            knot_id: KnotId("k1".to_string()),
             event_type: crate::application::ports::KnotEventType::Modified,
             strand_path: crate::domain::entities::StrandPath(PathBuf::from(
                 "src/input.md",

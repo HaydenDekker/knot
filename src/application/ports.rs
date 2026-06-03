@@ -3,6 +3,7 @@
 //! Ports define the contracts that infrastructure adapters must satisfy.
 //! The application layer orchestrates domain entities through these ports.
 
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
@@ -97,7 +98,8 @@ impl std::error::Error for PortError {}
 // ── Supporting Types ──────────────────────────────────────────────────────
 
 /// Status of a knot's processing lifecycle.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProcessingStatus {
     /// The knot is registered but not yet processing.
     Idle,
@@ -110,7 +112,8 @@ pub enum ProcessingStatus {
 }
 
 /// The type of event recorded in knot state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum KnotEventType {
     /// A new strand was created.
     Created,
@@ -123,8 +126,10 @@ pub enum KnotEventType {
 /// Per-knot processing state.
 ///
 /// Records the current status of a knot as it processes strands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnotState {
+    /// The knot this state belongs to.
+    pub knot_id: KnotId,
     /// The type of event that triggered processing.
     pub event_type: KnotEventType,
     /// Path to the strand being processed.
@@ -396,6 +401,7 @@ mod tests {
         assert!(create_result.is_ok());
 
         let state = KnotState {
+            knot_id: knot_id.clone(),
             event_type: KnotEventType::Created,
             strand_path: StrandPath(PathBuf::from("input.md")),
             tie_off_path: Some(TieOffPath(PathBuf::from("output.md"))),
@@ -490,6 +496,7 @@ mod tests {
     #[test]
     fn knot_state_fields() {
         let state = KnotState {
+            knot_id: KnotId("k1".to_string()),
             event_type: KnotEventType::Modified,
             strand_path: StrandPath(PathBuf::from("input.md")),
             tie_off_path: None,
@@ -498,6 +505,7 @@ mod tests {
             last_updated: "2026-06-03T12:00:00Z".to_string(),
         };
 
+        assert_eq!(state.knot_id, KnotId("k1".to_string()));
         assert_eq!(state.event_type, KnotEventType::Modified);
         assert_eq!(state.status, ProcessingStatus::Processing);
         assert_eq!(state.error.as_deref(), Some("timeout"));
