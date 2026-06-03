@@ -96,10 +96,10 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 4: Query Use Cases (ListLooms, GetLoom, GetLoomActivity, GetKnotStatus)
 **Failing tests created:** `application::usecases::tests::list_looms_returns_summaries`, `application::usecases::tests::get_loom_by_id`, `application::usecases::tests::get_loom_activity_from_log`, `application::usecases::tests::get_knot_status_from_state`
 
-- [ ] Failing test: `application::usecases::tests::list_looms_returns_summaries` — `ListLooms` reads from `LoomStore::list()`; returns loom summaries
-- [ ] Failing test: `application::usecases::tests::get_loom_by_id` — `GetLoom` reads from store by ID; returns full loom or error if missing
-- [ ] Failing test: `application::usecases::tests::get_loom_activity_from_log` — `GetLoomActivity` calls `LoomLogPort::read_all()`; returns log entries
-- [ ] Failing test: `application::usecases::tests::get_knot_status_from_state` — `GetKnotStatus` calls `KnotStatePort::get()`; returns state or error
+- [x] Failing test: `application::usecases::tests::list_looms_returns_summaries` — `ListLooms` reads from `LoomStore::list()`; returns loom summaries
+- [x] Failing test: `application::usecases::tests::get_loom_by_id` — `GetLoom` reads from store by ID; returns full loom or error if missing
+- [x] Failing test: `application::usecases::tests::get_loom_activity_from_log` — `GetLoomActivity` calls `LoomLogPort::read_all()`; returns log entries
+- [x] Failing test: `application::usecases::tests::get_knot_status_from_state` — `GetKnotStatus` calls `KnotStatePort::get()`; returns state or error
 - [ ] Implement query use cases — all read through ports or store
 
 ### Phase 5: Debounce Logic
