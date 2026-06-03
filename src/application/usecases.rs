@@ -3,6 +3,7 @@
 //! Each use case orchestrates domain entities through port traits and the
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use std::path::PathBuf;
 // ── Query Result Types ───────────────────────────────────────────────────
 
 /// A summary of a loom (lightweight, for list responses).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoomSummary {
     /// The loom's unique ID.
     pub id: LoomId,

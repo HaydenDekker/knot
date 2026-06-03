@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
     Router,
 };
@@ -52,16 +52,17 @@ pub struct AppContext {
 pub async fn list_looms(State(ctx): State<AppContext>) -> Response {
     let use_case = ListLooms::new(ctx.store.clone());
     let summaries = use_case.execute();
-    let _ = summaries;
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+    (StatusCode::OK, Json(summaries)).into_response()
 }
 
 /// Get a loom by ID.
 pub async fn get_loom(Path(id): Path<String>, State(ctx): State<AppContext>) -> Response {
     let loom_id = LoomId(id);
     let use_case = GetLoom::new(ctx.store.clone());
-    let _ = use_case.execute(&loom_id);
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+    match use_case.execute(&loom_id) {
+        Ok(loom) => (StatusCode::OK, Json(loom)).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "loom not found").into_response(),
+    }
 }
 
 /// Get activity log for a loom.
@@ -82,8 +83,14 @@ pub async fn get_loom_knots(
 ) -> Response {
     let loom_id = LoomId(id);
     let use_case = GetLoom::new(ctx.store.clone());
-    let _ = use_case.execute(&loom_id);
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+    match use_case.execute(&loom_id) {
+        Ok(loom) => {
+            let knot_names: Vec<String> =
+                loom.knots.iter().map(|k| k.id.0.clone()).collect();
+            (StatusCode::OK, Json(knot_names)).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "loom not found").into_response(),
+    }
 }
 
 /// Get status of a specific knot.
@@ -162,16 +169,23 @@ pub fn build_app(ctx: AppContext) -> Router {
 mod tests {
     use super::*;
     use crate::application::ports::{KnotState, PortError};
-    use crate::domain::entities::{KnotId, Loom, LoomId, TieOff};
+    use crate::application::usecases::LoomSummary;
+    use crate::domain::entities::{Knot, KnotId, Loom, LoomId, TieOff};
     use crate::domain::events::LoomEvent;
-    use std::path::Path;
+    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use axum::{body::Body, http::Request};
+    use std::path::PathBuf;
+    use tower::util::ServiceExt;
 
     // ── Mock Port Implementations ──────────────────────────────────────
 
     struct MockLoomRepository;
 
     impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _workspace: &Path) -> Result<Vec<Loom>, PortError> {
+        fn scan(
+            &self,
+            _workspace: &std::path::Path,
+        ) -> Result<Vec<Loom>, PortError> {
             Ok(vec![])
         }
 
@@ -267,6 +281,144 @@ mod tests {
         // proves that `State<AppContext>` extractor is wired correctly.
         let layer = app.into_make_service();
         let _ = layer;
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    /// Build a test loom with the given ID and knot IDs.
+    fn build_test_loom(id: impl Into<String>, knot_ids: &[&str]) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            source_dir: PathBuf::from("src"),
+            tie_off_dir: PathBuf::from("out"),
+            knots: knot_ids
+                .iter()
+                .map(|k| Knot {
+                    id: KnotId(k.to_string()),
+                    agent_config: AgentConfig {
+                        goal: "review".to_string(),
+                    },
+                    prompt_template: PromptTemplate {
+                        input_bundling: "full-file".to_string(),
+                        instructions: "check it".to_string(),
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    // ── Phase 1 Tests ───────────────────────────────────────────────────
+
+    /// `GET /looms` returns 200 with JSON array of loom summaries.
+    #[tokio::test]
+    async fn get_looms_returns_json() {
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom("loom-a", &["k1"]));
+        ctx.store.register(build_test_loom("loom-b", &["k2", "k3"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(summaries.len(), 2);
+
+        let ids: Vec<_> = summaries.iter().map(|s| s.id.0.as_str()).collect();
+        assert!(ids.contains(&"loom-a"));
+        assert!(ids.contains(&"loom-b"));
+    }
+
+    /// No looms registered; `GET /looms` returns 200 with empty array `[]`.
+    #[tokio::test]
+    async fn get_looms_empty() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert!(summaries.is_empty());
+    }
+
+    /// `GET /looms/:id` for registered loom returns 200 with loom details.
+    #[tokio::test]
+    async fn get_loom_by_id() {
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom("my-loom", &["k1", "k2"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/my-loom")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let loom: Loom = serde_json::from_slice(&body).unwrap();
+        assert_eq!(loom.id, LoomId("my-loom".to_string()));
+        assert_eq!(loom.knots.len(), 2);
+    }
+
+    /// `GET /looms/:id` for unknown ID returns 404.
+    #[tokio::test]
+    async fn get_loom_not_found() {
+        let ctx = build_test_context();
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/unknown")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// `GET /looms/:id/knots` returns list of knot names from loom model.
+    #[tokio::test]
+    async fn get_loom_knots() {
+        let ctx = build_test_context();
+        ctx.store.register(build_test_loom(
+            "knot-loom",
+            &["alpha", "beta", "gamma"],
+        ));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/knot-loom/knots")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let names: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"alpha".to_string()));
+        assert!(names.contains(&"beta".to_string()));
+        assert!(names.contains(&"gamma".to_string()));
     }
 
     // Suppress unused mock warnings
