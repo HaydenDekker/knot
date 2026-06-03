@@ -78,13 +78,13 @@ Each adapter implements a port trait. Depends on domain types and application po
 ### Phase 2: FileSystemLoomLog
 **Failing tests created:** `adapters::filesystem::tests::loom_log_create_and_append`, `adapters::filesystem::tests::loom_log_read_all`, `adapters::filesystem::tests::loom_log_multiple_events`, `adapters::filesystem::tests::loom_log_concurrent_writes`
 
-- [ ] Failing test: `adapters::filesystem::tests::loom_log_create_and_append` — `open(loom_id)` creates file, `append(event)` writes one line; file has one JSONL entry
-- [ ] Failing test: `adapters::filesystem::tests::loom_log_read_all` — after appending 3 events, `read_all()` returns 3 entries in order
-- [ ] Failing test: `adapters::filesystem::tests::loom_log_multiple_events` — append events of different types (`KnotRegistered`, `LoomStarted`); all preserved
-- [ ] Failing test: `adapters::filesystem::tests::loom_log_concurrent_writes` — 10 concurrent `append()` calls; all 10 entries present (no data loss)
-- [ ] Implement `FileSystemLoomLog` in `src/adapters/outbound/loom_log.rs`
-- [ ] Writes JSONL (one JSON object per line) to `<loom-dir>/.loom-log`
-- [ ] Implements `LoomLogPort` trait
+- [x] Failing test: `adapters::filesystem::tests::loom_log_create_and_append` — `open(loom_id)` creates file, `append(event)` writes one line; file has one JSONL entry
+- [x] Failing test: `adapters::filesystem::tests::loom_log_read_all` — after appending 3 events, `read_all()` returns 3 entries in order
+- [x] Failing test: `adapters::filesystem::tests::loom_log_multiple_events` — append events of different types (`KnotRegistered`, `LoomStarted`); all preserved
+- [x] Failing test: `adapters::filesystem::tests::loom_log_concurrent_writes` — 10 concurrent `append()` calls; all 10 entries present (no data loss)
+- [x] Implement `FileSystemLoomLog` in `src/adapters/outbound/loom_log.rs`
+- [x] Writes JSONL (one JSON object per line) to `<loom-dir>/.loom-log`
+- [x] Implements `LoomLogPort` trait
 - [ ] Uses `Arc<Mutex<File>>` or similar for concurrent write safety
 - [ ] **Alert:** uses `std::fs::OpenOptions` with append mode — adapter layer, correct
 
