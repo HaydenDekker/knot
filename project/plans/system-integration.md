@@ -63,11 +63,11 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 1: Startup Discovery and Watcher Boot
 **Failing tests created:** `integration::tests::startup_discovers_looms`, `integration::tests::startup_starts_watchers`, `integration::tests::startup_creates_state_files`
 
-- [ ] Failing test: `integration::tests::startup_discovers_looms` — given a workspace with loom dirs, startup discovers them and registers in `LoomStore`
-- [ ] Failing test: `integration::tests::startup_starts_watchers` — after startup, `NotifyEventSource` is watching all loom source directories
-- [ ] Failing test: `integration::tests::startup_creates_state_files` — after startup, loom-log and knot-state files exist on disk for each loom/knot
-- [ ] Wire startup sequence: `DiscoverLooms` use case runs → looms registered → watchers started per loom → state files created
-- [ ] Loom-log entries: `LoomStarted`, `KnotRegistered` for each knot
+- [x] Failing test: `integration::tests::startup_discovers_looms` — given a workspace with loom dirs, startup discovers them and registers in `LoomStore`
+- [x] Failing test: `integration::tests::startup_starts_watchers` — after startup, `NotifyEventSource` is watching all loom source directories
+- [x] Failing test: `integration::tests::startup_creates_state_files` — after startup, loom-log and knot-state files exist on disk for each loom/knot
+- [x] Wire startup sequence: `DiscoverLooms` use case runs → looms registered → watchers started per loom → state files created
+- [x] Loom-log entries: `LoomStarted`, `KnotRegistered` for each knot
 
 ### Phase 2: Event Pipeline Wiring
 **Failing tests created:** `integration::tests::event_flows_through_pipeline`, `integration::tests::debounce_prevents_duplicate_processing`
