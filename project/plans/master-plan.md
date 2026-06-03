@@ -25,11 +25,11 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 **What to remove:**
 - The row from the **Master Progress Table**
-- Any overview section for that plan
+- Any overview section for this plan
 
 **What to keep:**
 - The plan file in `project/plans/` — historical documentation
-- **Do not renumber** — leave gaps in numbering to preserve historical references
+- **Do NOT renumber** — leave gaps in numbering to preserve historical references
 
 **What NOT to remove:**
 - Plans marked `🟡 In Progress`, `⬜ Planned`, or `❌ Blocked` — regardless of age
@@ -46,10 +46,10 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 5 | [Loom HTTP Interface](loom-http-interface.md) | ⬜ Planned | 2026-06-03 |
-| 4 | [Agent Execution and Tie-off Generation](agent-execution.md) | ⬜ Planned | 2026-06-03 |
-| 3 | [File Watcher with Debounce](file-watcher.md) | ⬜ Planned | 2026-06-03 |
-| 2 | [Loom Discovery and State Files](loom-discovery-and-state.md) | ⬜ Planned | 2026-06-03 |
+| 5 | [System Integration and Wiring](system-integration.md) | ⬜ Planned | 2026-06-03 |
+| 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ⬜ Planned | 2026-06-03 |
+| 3 | [Outbound Adapters](file-watcher.md) | ⬜ Planned | 2026-06-03 |
+| 2 | [Application Layer — Ports and Use Cases](loom-discovery-and-state.md) | ⬜ Planned | 2026-06-03 |
 | 1 | [Knot Domain Models](knot-domain-models.md) | ⬜ Planned | 2026-06-03 |
 
 ---
@@ -62,38 +62,43 @@ _Overview sections for active and recently completed plans go here._
 
 **Status:** ⬜ Planned
 **Created:** 2026-06-03
-**Goal:** Define core domain types and knot file parsing — the foundation all other plans build on.
+**Hex Layer:** Domain
+**Goal:** Domain entities, value objects, domain events, knot file format validation — zero IO, zero framework.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
-### 2. Loom Discovery and State Files
+### 2. Application Layer — Ports and Use Cases
 
 **Status:** ⬜ Planned
 **Created:** 2026-06-03
-**Goal:** Discover looms from the filesystem and maintain loom-log / knot-state files.
+**Hex Layer:** Application
+**Goal:** Port traits, use cases, debounce engine, processing state machine — all tests use mock ports.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
-### 3. File Watcher with Debounce
+### 3. Outbound Adapters
 
 **Status:** ⬜ Planned
 **Created:** 2026-06-03
-**Goal:** Watch source directories for strand events with per-file 100ms debouncing.
+**Hex Layer:** Outbound Adapters
+**Goal:** Concrete adapters for filesystem IO, notify watching, subprocess execution — all tests use `tempfile`.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
-### 4. Agent Execution and Tie-off Generation
+### 4. Loom HTTP Interface
 
 **Status:** ⬜ Planned
 **Created:** 2026-06-03
-**Goal:** Process strand events by invoking the agent CLI and writing tie-offs.
+**Hex Layer:** Inbound Adapter
+**Goal:** Axum handlers and routes that call use cases — never touch adapters directly.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
-### 5. Loom HTTP Interface
+### 5. System Integration and Wiring
 
 **Status:** ⬜ Planned
 **Created:** 2026-06-03
-**Goal:** HTTP endpoints for loom/knot observability and management, sourced from filesystem state.
+**Hex Layer:** Composition Root
+**Goal:** Bootstrap all layers, wire event pipeline, full end-to-end integration tests.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)

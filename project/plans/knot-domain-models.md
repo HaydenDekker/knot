@@ -4,21 +4,26 @@
 
 This plan contributes to [AI-Driven File Generation from Loom Events](../prds/prd-ai-driven-file-generation.md).
 
-This plan establishes the core domain types — `Knot`, `AgentProfile`, `PromptTemplate`, `Loom` — and the knot file format and parser. It is the foundation all other plans build on.
+This plan establishes the domain layer — entities, value objects, domain events, and validation logic. Zero IO, zero framework imports. Pure Rust.
 
 ## Problem
 
-Knot has no domain model for its core concepts. There are no types representing knots, looms, agent profiles, or prompt templates. Knot definition files have no specified format and no parser to read them. Without these, no loom discovery, file watching, or agent execution can be implemented.
+Knot has no domain model for its core concepts. There are no types representing knots, looms, strands, or tie-offs. Knot definition files have no specified format and no parser to read them. Without these, no loom discovery, file watching, or agent execution can be implemented.
 
 ## Target
 
-- Domain types (`Knot`, `AgentProfile`, `PromptTemplate`, `Loom`, `KnotFile`) exist in the domain layer with clear relationships.
-- A knot definition file format is proposed and a parser can read it into a `Knot` struct.
-- Agent config is workspace-level (one config for the whole workspace), not per-knot. The CLI path defaults to `pi` but is configurable.
-- Prompt template captures goal description and input bundling rules.
-- All types are serialisable and validated.
+- Domain entities: `Knot`, `Loom`, `Strand`, `TieOff`
+- Value objects: `AgentConfig`, `PromptTemplate`, `WorkspaceAgentConfig`, `KnotId`, `LoomId`, `StrandPath`, `TieOffPath`
+- Domain events: `KnotRegistered`, `StrandEvent`, `TieOffProduced`, `ProcessingFailed`, `LoomEvent`
+- Knot file format defined and validated (parser lives in adapters — not this plan)
+- Domain validation logic (invariants, not IO)
+- All domain types in `src/domain/`, no dependencies on framework crates
 
 ## Implementation Status: ⬜ Draft
+
+## Hex Layer: Domain
+
+No ports, no adapters, no IO. This layer depends on nothing except `std` and `serde` (for serialization).
 
 ## Existing Tests
 
@@ -29,10 +34,10 @@ Knot has no domain model for its core concepts. There are no types representing 
 
 ## Test Gaps
 
-- No tests for knot file parsing (format, valid/invalid files, missing fields).
-- No tests for loom model construction (valid/invalid configurations).
-- No tests for agent profile validation.
-- No tests for prompt template structure.
+- No domain entity tests (construction, validation, invariants).
+- No value object tests (parsing, defaults, validation).
+- No domain event tests (construction, serialization).
+- No knot file format validation tests.
 
 ## Proposed Knot File Format
 
@@ -57,34 +62,51 @@ prompt-template:
 This knot reviews the goals section of PRD documents.
 ```
 
-The `agent-config` block captures the *what* (goal description) and the `prompt-template` captures the *how* (input bundling + instructions). The CLI args (`--no-tools`, etc.) are workspace-level, not in the knot file.
+Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the whole workspace. The knot file carries only the goal and prompt template.
 
 ## Phases
 
-### Phase 0: Domain Types
-- [ ] Define `Knot` struct with `name`, `agent_config`, `prompt_template` fields
-- [ ] Define `AgentConfig` struct with `goal` field
-- [ ] Define `PromptTemplate` struct with `input_bundling` and `instructions` fields
-- [ ] Define `WorkspaceAgentConfig` (top-level) with `cli_path` (default: `"pi"`), `cli_args` (Vec<String>)
-- [ ] Define `Loom` struct with `id`, `source_dir`, `tie_off_point`, `knots`
-- [ ] Add `serde` derive for serialisation
-- [ ] Unit tests: construct valid instances, verify field defaults
+### Phase 0: Domain Entities
+**Failing tests created:** `domain::entities::tests::knot_construction`, `domain::entities::tests::loom_construction`
 
-### Phase 1: Knot File Format and Parser
-- [ ] Propose frontmatter format (see above) — codify in parser
-- [ ] Implement `KnotFileParser` that reads a `.md` file with YAML frontmatter
-- [ ] Parse frontmatter into `Knot` struct
-- [ ] Handle parse errors with descriptive error types
-- [ ] Unit tests: parse valid knot file, parse file with missing fields returns error, parse file with malformed YAML returns error
+- [ ] Failing test: `domain::entities::tests::knot_construction` — construct a `Knot` with a `KnotId`, `AgentConfig`, and `PromptTemplate`; verify fields
+- [ ] Failing test: `domain::entities::tests::loom_construction` — construct a `Loom` with `LoomId`, source dir, tie-off point, and `Vec<Knot>`; verify fields
+- [ ] Failing test: `domain::entities::tests::strand_construction` — construct a `Strand` from a path; verify path is stored
+- [ ] Failing test: `domain::entities::tests::tieoff_construction` — construct a `TieOff` with content, path, and status; verify fields
+- [ ] Implement `Knot`, `Loom`, `Strand`, `TieOff` structs in `src/domain/entities.rs`
+- [ ] Implement `KnotId`, `LoomId`, `StrandPath`, `TieOffPath` as newtype wrappers
+- [ ] Add `serde::Serialize + Deserialize` derives
 
-### Phase 2: Workspace Agent Config
-- [ ] Define workspace-level agent config struct (CLI path + args)
-- [ ] Default CLI path to `"pi"`, default args to empty
-- [ ] Unit tests: default values, custom CLI path, custom args
+### Phase 1: Value Objects
+**Failing tests created:** `domain::value_objects::tests::agent_config_defaults`, `domain::value_objects::tests::prompt_template_fields`, `domain::value_objects::tests::workspace_agent_config_defaults`
 
-### Phase 3: Loom Model
-- [ ] `Loom` struct with source directory, tie-off point, list of knots
-- [ ] Validation: source dir and tie-off point are non-empty paths
-- [ ] Unit tests: valid loom, loom with missing tie-off point fails validation
+- [ ] Failing test: `domain::value_objects::tests::agent_config_defaults` — `AgentConfig` with goal string; verify non-empty goal required
+- [ ] Failing test: `domain::value_objects::tests::prompt_template_fields` — `PromptTemplate` with `input_bundling` and `instructions`; verify both required
+- [ ] Failing test: `domain::value_objects::tests::workspace_agent_config_defaults` — `WorkspaceAgentConfig` defaults to `cli_path = "pi"`, `cli_args = []`; verify custom path and args accepted
+- [ ] Implement `AgentConfig` (goal), `PromptTemplate` (input_bundling, instructions), `WorkspaceAgentConfig` (cli_path, cli_args) in `src/domain/value_objects.rs`
+- [ ] Implement `try_from` or constructor with validation — empty goal returns error
+
+### Phase 2: Domain Events
+**Failing tests created:** `domain::events::tests::strand_event_types`, `domain::events::tests::tieoff_produced_event`, `domain::events::tests::processing_failed_event`, `domain::events::tests::loom_event_types`
+
+- [ ] Failing test: `domain::events::tests::strand_event_types` — construct `StrandEvent::Created`, `Modified`, `Deleted` with loom ID, knot ID, strand path; verify all variants
+- [ ] Failing test: `domain::events::tests::tieoff_produced_event` — `TieOffProduced` with knot ID, strand path, tie-off path; verify serialisation
+- [ ] Failing test: `domain::events::tests::processing_failed_event` — `ProcessingFailed` with knot ID, strand path, error message; verify error details preserved
+- [ ] Failing test: `domain::events::tests::loom_event_types` — `LoomEvent::KnotRegistered`, `LoomStarted`, `LoomStopped`, `StrandProcessed`; verify all variants
+- [ ] Failing test: `domain::events::tests::knot_registered_event` — `KnotRegistered` with loom ID and knot ID; verify construction
+- [ ] Implement domain event enums in `src/domain/events.rs`
+- [ ] Events are serialisable (for writing to loom-log / knot-state later)
+
+### Phase 3: Knot File Format Validation
+**Failing tests created:** `domain::knot_file::tests::valid_knot_file_parse`, `domain::knot_file::tests::missing_name_returns_error`, `domain::knot_file::tests::empty_goal_returns_error`, `domain::knot_file::tests::missing_prompt_template_returns_error`
+
+- [ ] Failing test: `domain::knot_file::tests::valid_knot_file_parse` — given a well-formed frontmatter string, produce a `KnotFile` with name, agent_config, prompt_template
+- [ ] Failing test: `domain::knot_file::tests::missing_name_returns_error` — frontmatter without `name` field returns `KnotFileError::MissingName`
+- [ ] Failing test: `domain::knot_file::tests::empty_goal_returns_error` — frontmatter with empty goal returns `KnotFileError::EmptyGoal`
+- [ ] Failing test: `domain::knot_file::tests::missing_prompt_template_returns_error` — frontmatter without prompt-template returns `KnotFileError::MissingPromptTemplate`
+- [ ] Failing test: `domain::knot_file::tests::malformed_yaml_returns_error` — invalid YAML in frontmatter returns `KnotFileError::InvalidFormat`
+- [ ] Implement `KnotFile` struct and `KnotFileError` in `src/domain/knot_file.rs`
+- [ ] Implement frontmatter parser (split on `---`, parse YAML portion into `serde_json` or `serde_yaml`)
+- [ ] The parser takes a `String` (file content) — it does not read from the filesystem. Reading is an adapter concern.
 
 ## Notes
