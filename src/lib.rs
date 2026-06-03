@@ -3,7 +3,7 @@ pub mod application;
 pub mod domain;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 // Re-export inbound adapter types
 pub use adapters::inbound::{build_app, AppContext};
+pub use domain::entities::Loom;
 pub use domain::value_objects::WorkspaceAgentConfig;
 
 /// HTTP handler — health check.
@@ -112,6 +113,43 @@ pub fn build_app_context(config: &AppConfig) -> AppContext {
     }
 }
 
+/// Run the startup discovery and registration sequence.
+///
+/// After building the AppContext, this:
+/// 1. Runs DiscoverLooms to scan workspace and register looms
+/// 2. For each loom: opens activity log, writes LoomStarted event
+///
+/// Returns the list of discovered looms (used to start watchers).
+pub fn run_startup(
+    ctx: &AppContext,
+    base_dir: &StdPath,
+) -> std::io::Result<Vec<Loom>> {
+    let discover = application::usecases::DiscoverLooms::new(
+        Arc::clone(&ctx.loom_repo),
+        Arc::clone(&ctx.knot_state_port),
+        Arc::clone(&ctx.loom_log_port),
+        ctx.store.clone(),
+    );
+
+    let looms = discover
+        .execute(base_dir)
+        .map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
+
+    // For each loom: open activity log and record LoomStarted
+    for loom in &looms {
+        let _ = ctx.loom_log_port.open(&loom.id);
+        let _ = ctx.loom_log_port.append(
+            domain::events::LoomEvent::LoomStarted {
+                loom_id: loom.id.clone(),
+            },
+        );
+    }
+
+    Ok(looms)
+}
+
 /// Start the Knot HTTP server with the given configuration.
 ///
 /// Builds the `AppContext`, wires the axum router, and binds to
@@ -140,6 +178,39 @@ pub async fn start_server_with_shutdown(
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
     let ctx = build_app_context(&config);
+
+    // Clone event sender for the watcher (ctx is consumed below)
+    let event_sender = ctx.event_sender.clone();
+
+    // Startup: discover looms, create state files
+    let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
+        eprintln!("WARNING: startup discovery failed: {e}");
+        Vec::new()
+    });
+
+    // Start file watchers on each loom source directory
+    let _event_source = {
+        use application::ports::EventSource;
+        let mut source =
+            adapters::outbound::NotifyEventSource::new(event_sender);
+        for loom in &looms {
+            let knot_id = loom.knots
+                .first()
+                .map(|k| k.id.clone())
+                .unwrap_or_else(|| {
+                    domain::entities::KnotId("default".to_string())
+                });
+            source = source.with_ids(loom.id.clone(), knot_id);
+            if let Err(e) = source.watch(&loom.source_dir) {
+                eprintln!(
+                    "WARNING: failed to watch {}: {e}",
+                    loom.source_dir.display()
+                );
+            }
+        }
+        source
+    };
+
     let app = build_app(ctx);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;

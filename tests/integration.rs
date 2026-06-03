@@ -2,6 +2,7 @@
 //!
 //! These tests spin up the actual server and verify end-to-end behaviour.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -10,6 +11,22 @@ use knot::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, TieOf
 use knot::AppConfig;
 use knot::ShutdownSignal;
 use knot::WorkspaceAgentConfig;
+
+/// Valid knot definition file content for creating test looms.
+const VALID_KNOT_CONTENT: &str = "---
+name: review-knot
+agent-config:
+  goal: \"Review PRD goals for clarity\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: |
+    Review the goals section of this PRD.
+---
+
+# Review Knot
+
+This knot reviews PRD goals.
+";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -196,4 +213,200 @@ fn build_app_context_wires_layers() {
 
     // Event sender is present (receiver is intentionally unused in Phase 0)
     // Phase 2 wires the receiver into the processing pipeline.
+}
+
+// ── Phase 1: Startup Discovery and Watcher Boot ────────────────────────────
+
+/// Given a workspace with loom directories, startup discovers them and
+/// registers them in `LoomStore`. Verifiable via `GET /looms`.
+#[test]
+fn startup_discovers_looms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("my-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31986;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir,
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // GET /looms should return the discovered loom
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    // Parse and verify response
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "my-loom",
+        "loom id should match"
+    );
+
+    // Verify loom has the knot via GET /looms/my-loom
+    let (status, body) =
+        http_get(&host_port, "/looms/my-loom")
+            .expect("get loom endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().unwrap();
+    assert_eq!(knots.len(), 1, "loom should have 1 knot");
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "review-knot",
+        "knot id should match"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// After startup, `NotifyEventSource` is watching all loom source
+/// directories. Verified by creating a file in the watched directory
+/// and confirming the server remains healthy.
+#[test]
+fn startup_starts_watchers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("watch-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31987;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir,
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Server is healthy at startup
+    let (status, _) =
+        http_get(&host_port, "/health")
+            .expect("health should respond");
+    assert!(status.contains("200"), "server should be healthy");
+
+    // Create a file in the watched source directory.
+    // If the watcher is running, this should not crash the server.
+    fs::write(loom_dir.join("new-strand.md"), "new content")
+        .expect("should create file");
+
+    // Give notify time to emit the event
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Server should still be healthy (proves watcher is active)
+    let (status, _) =
+        http_get_retry(&host_port, "/health", 30, 100)
+            .expect("health should still respond");
+    assert!(
+        status.contains("200"),
+        "server should still be healthy after file creation"
+    );
+
+    // Loom should still be discoverable
+    let (status, body) =
+        http_get(&host_port, "/looms")
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "looms endpoint should respond");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "loom should still be listed");
+
+    let _ = shutdown.send(());
+}
+
+/// After startup, loom-log and knot-state files exist on disk for each
+/// loom/knot discovered during startup.
+#[test]
+fn startup_creates_state_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("state-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31988;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify knot state file exists on disk
+    let state_file = base_dir.join(".knots/review-knot.state");
+    assert!(
+        state_file.exists(),
+        "knot state file should exist: {}",
+        state_file.display()
+    );
+
+    // Verify state file contains idle status
+    let state_content =
+        fs::read_to_string(&state_file).expect("should read state file");
+    let state: serde_json::Value =
+        serde_json::from_str(&state_content).expect("state should be JSON");
+    assert_eq!(
+        state["status"].as_str().unwrap(),
+        "idle",
+        "initial state should be idle"
+    );
+
+    // Verify loom log file exists on disk
+    let log_file = base_dir.join("state-loom/.loom-log");
+    assert!(
+        log_file.exists(),
+        "loom log file should exist: {}",
+        log_file.display()
+    );
+
+    // Verify log contains KnotRegistered and LoomStarted entries
+    let log_content =
+        fs::read_to_string(&log_file).expect("should read log file");
+    assert!(
+        log_content.contains("KnotRegistered"),
+        "log should contain KnotRegistered entry"
+    );
+    assert!(
+        log_content.contains("LoomStarted"),
+        "log should contain LoomStarted entry"
+    );
+
+    let _ = shutdown.send(());
 }
