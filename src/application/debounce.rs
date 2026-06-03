@@ -30,7 +30,7 @@ pub struct DebounceEngine;
 impl DebounceEngine {
     /// Start the debounce engine as a background tokio task.
     ///
-    /// Returns:
+    /// Creates its own input channel. Returns:
     /// - `Sender<StrandEvent>` — feed raw events into the engine
     /// - `Receiver<StrandEvent>` — receive debounced events
     /// - `JoinHandle<()>` — handle for the background task
@@ -45,6 +45,26 @@ impl DebounceEngine {
         let handle = tokio::spawn(Self::run(input_rx, output_tx));
 
         (input_tx, output_rx, handle)
+    }
+
+    /// Start the debounce engine using an external input channel.
+    ///
+    /// The provided `input_rx` is the receiver from the channel that
+    /// `NotifyEventSource` sends raw events into. The debounce engine
+    /// reads from this receiver and emits debounced events to its own
+    /// output channel.
+    ///
+    /// Returns:
+    /// - `Receiver<StrandEvent>` — receive debounced events
+    /// - `JoinHandle<()>` — handle for the background task
+    pub fn start_with_receiver(
+        input_rx: mpsc::Receiver<StrandEvent>,
+    ) -> (mpsc::Receiver<StrandEvent>, JoinHandle<()>) {
+        let (output_tx, output_rx) = mpsc::channel::<StrandEvent>(100);
+
+        let handle = tokio::spawn(Self::run(input_rx, output_tx));
+
+        (output_rx, handle)
     }
 
     /// Internal event loop: watch for incoming events and emit debounced ones.

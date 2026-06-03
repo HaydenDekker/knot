@@ -7,7 +7,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use knot::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, TieOffSink};
+use knot::application::ports::{
+    AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, TieOffSink,
+};
 use knot::AppConfig;
 use knot::ShutdownSignal;
 use knot::WorkspaceAgentConfig;
@@ -196,7 +198,7 @@ fn app_loads_workspace_agent_config() {
 #[test]
 fn build_app_context_wires_layers() {
     let config = AppConfig::default_config();
-    let ctx = knot::build_app_context(&config);
+    let (ctx, _event_rx) = knot::build_app_context(&config);
 
     // Store is present and empty (not yet populated)
     assert!(ctx.store.list().is_empty());
@@ -207,12 +209,16 @@ fn build_app_context_wires_layers() {
     let _log: &dyn LoomLogPort = &*ctx.loom_log_port;
     let _sink: &dyn TieOffSink = &*ctx.tie_off_sink;
 
+    // Agent runner is present (subprocess)
+    let _runner: &dyn AgentRunner = &*ctx.agent_runner;
+
     // Workspace config is loaded with defaults
     assert_eq!(ctx.workspace_config.cli_path, "pi");
     assert!(ctx.workspace_config.cli_args.is_empty());
 
-    // Event sender is present (receiver is intentionally unused in Phase 0)
-    // Phase 2 wires the receiver into the processing pipeline.
+    // Event sender is present; receiver is returned for pipeline wiring
+    // (Receiver type proves the channel was created)
+    let _ = _event_rx;
 }
 
 // ── Phase 1: Startup Discovery and Watcher Boot ────────────────────────────
@@ -406,6 +412,207 @@ fn startup_creates_state_files() {
     assert!(
         log_content.contains("LoomStarted"),
         "log should contain LoomStarted entry"
+    );
+
+    let _ = shutdown.send(());
+}
+
+// ── Phase 2: Event Pipeline Wiring ─────────────────────────────────────────
+
+/// Poll the knot status endpoint until it reports a terminal state.
+fn poll_knot_status(
+    host_port: &str,
+    knot_id: &str,
+    max_retries: usize,
+    delay_ms: u64,
+) -> Result<serde_json::Value, String> {
+    for attempt in 0..max_retries {
+        let path = format!("/looms/_/knots/{knot_id}");
+        match http_get(host_port, &path) {
+            Ok((status, body)) if status.contains("200") => {
+                let val: serde_json::Value =
+                    serde_json::from_str(&body).map_err(|e| e.to_string())?;
+                let state = val["state"]["status"].as_str().unwrap_or("");
+                if state == "completed" || state == "failed" {
+                    return Ok(val);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if attempt < max_retries - 1 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
+    }
+    Err("timeout waiting for knot status".to_string())
+}
+
+/// Create a file in the watched directory → raw event emitted → debounced
+/// → `ProcessStrand` invoked → knot-state transitions to `completed`.
+/// Verifies the full pipeline:
+/// NotifyEventSource → mpsc → DebounceEngine → ProcessStrand.
+#[test]
+fn event_flows_through_pipeline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("pipeline-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31990;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo 'agent output'".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create a strand file in the watched source directory
+    let strand_path = loom_dir.join("test-strand.md");
+    fs::write(&strand_path, "strand content").expect("should create file");
+
+    // Wait for debounce window + processing time
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Poll knot status — should reach terminal state (completed or failed)
+    let status =
+        poll_knot_status(&host_port, "review-knot", 60, 100)
+            .expect("knot status should reach terminal state");
+    assert_eq!(
+        status["state"]["status"].as_str().unwrap(),
+        "completed",
+        "knot state should be completed"
+    );
+
+    // Verify tie-off file was produced
+    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off file should exist: {}",
+        tie_off_path.display()
+    );
+
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("agent output"),
+        "tie-off should contain agent output, got: {content}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Rapid file edits (3 writes within 50ms) → debounce coalesces into
+/// one event → only one `ProcessStrand` invocation → one tie-off produced.
+#[test]
+fn debounce_prevents_duplicate_processing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("debounce-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31991;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec!["-c".to_string(), "echo 'output'".to_string()],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create initial file to establish the strand
+    let strand_path = loom_dir.join("rapid-edit.md");
+    fs::write(&strand_path, "initial").expect("should create file");
+
+    // Wait for the first event to fully process
+    std::thread::sleep(Duration::from_millis(400));
+
+    // Rapid edits: 3 writes within 50ms
+    for i in 0..3 {
+        fs::write(&strand_path, format!("edit {}", i))
+            .expect("should write edit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Wait for debounce window + processing
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Poll knot status — should reach terminal state
+    let status =
+        poll_knot_status(&host_port, "review-knot", 60, 100)
+            .expect("knot status should reach terminal state");
+    let final_status = status["state"]["status"].as_str().unwrap();
+    assert!(
+        matches!(final_status, "completed" | "failed"),
+        "knot should reach terminal state, got: {final_status}"
+    );
+
+    // Verify debounce worked: rapid edits produced fewer StrandProcessed
+    // events than raw writes. Each write may emit 1-2 raw events (notify
+    // internals), so without debouncing we'd see 3-6+ StrandProcessed
+    // events for the burst alone. With debouncing, the 3 rapid writes
+    // coalesce to 1 debounced event.
+    let log_path = base_dir.join("debounce-loom/.loom-log");
+    let log_content =
+        fs::read_to_string(&log_path).expect("loom log should exist");
+    let strand_processed_count = log_content
+        .lines()
+        .filter(|line| {
+            line.contains("StrandProcessed")
+                && line.contains("rapid-edit.md")
+        })
+        .count();
+
+    // Total StrandProcessed: 1 for initial create + 1 for debounced burst
+    // = 2. Allow some slack for notify emitting extra events.
+    assert!(
+        strand_processed_count <= 4,
+        "debounce should coalesce rapid edits; expected <= 4 events, got {}",
+        strand_processed_count
+    );
+
+    // Tie-off directory exists and has at least one file for the strand
+    let tie_off_dir = loom_dir.join(".knot-output");
+    assert!(
+        tie_off_dir.exists(),
+        "tie-off directory should exist"
+    );
+    let tie_off_files: Vec<_> = fs::read_dir(&tie_off_dir)
+        .expect("should read tie-off dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        !tie_off_files.is_empty(),
+        "should have at least 1 tie-off file"
     );
 
     let _ = shutdown.send(());

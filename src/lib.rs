@@ -12,10 +12,12 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
+use domain::events::StrandEvent;
 use tokio::sync::mpsc;
 
 // Re-export inbound adapter types
 pub use adapters::inbound::{build_app, AppContext};
+pub use adapters::subprocess::SubprocessAgentRunner;
 pub use domain::entities::Loom;
 pub use domain::value_objects::WorkspaceAgentConfig;
 
@@ -57,6 +59,49 @@ pub struct AppConfig {
     pub agent_timeout: Duration,
 }
 
+/// Start the event processing pipeline.
+///
+/// Wires:
+/// NotifyEventSource → event_sender → event_rx → DebounceEngine
+/// → ProcessStrand loop (tokio task)
+///
+/// The `event_rx` parameter is the receiver from the channel that
+/// `NotifyEventSource` sends raw events into.
+///
+/// Returns the process strand task handle.
+pub fn start_event_pipeline(
+    ctx: &AppContext,
+    event_rx: mpsc::Receiver<domain::events::StrandEvent>,
+) -> tokio::task::JoinHandle<()> {
+    // Wire event_rx directly into the debounce engine.
+    let (mut debounce_rx, _debounce_handle) =
+        application::debounce::DebounceEngine::start_with_receiver(event_rx);
+
+    // ProcessStrand loop: read debounced events and process them.
+    let store = ctx.store.clone();
+    let state_port = Arc::clone(&ctx.knot_state_port);
+    let log_port = Arc::clone(&ctx.loom_log_port);
+    let agent_runner = Arc::clone(&ctx.agent_runner);
+    let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
+    let workspace_config = ctx.workspace_config.clone();
+
+    tokio::spawn(async move {
+        let use_case = application::usecases::ProcessStrand::new(
+            store,
+            state_port,
+            log_port,
+            agent_runner,
+            tie_off_sink,
+            workspace_config,
+        );
+        while let Some(event) = debounce_rx.recv().await {
+            if let Err(e) = use_case.execute(event) {
+                eprintln!("ProcessStrand error: {e}");
+            }
+        }
+    })
+}
+
 impl AppConfig {
     /// Create default configuration: bind `127.0.0.1:3000`, workspace dir `.`.
     pub fn default_config() -> Self {
@@ -75,10 +120,15 @@ impl AppConfig {
 /// - Outbound adapter instances (filesystem adapters, notify watcher, subprocess)
 /// - `LoomStore` (in-memory loom registry)
 /// - `AppContext` holding store, ports, and workspace config
-/// - Debounce engine sender for the event pipeline
+/// - Event channel: sender goes into AppContext, receiver is returned
+///
+/// Returns `(AppContext, Receiver<StrandEvent>)` — the receiver is wired
+/// into the debounce engine by `start_event_pipeline`.
 ///
 /// This is the composition root — the only place where all layers meet.
-pub fn build_app_context(config: &AppConfig) -> AppContext {
+pub fn build_app_context(
+    config: &AppConfig,
+) -> (AppContext, mpsc::Receiver<StrandEvent>) {
     let store = application::store::LoomStore::new();
 
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
@@ -96,21 +146,28 @@ pub fn build_app_context(config: &AppConfig) -> AppContext {
         Arc::new(adapters::outbound::FileSystemTieOffSink::new(
             config.base_dir.clone(),
         ));
+    let agent_runner: Arc<dyn application::ports::AgentRunner> =
+        Arc::new(
+            SubprocessAgentRunner::with_timeout(config.agent_timeout),
+        );
 
-    // Event channel: adapters push raw StrandEvent into this sender.
-    // The debounce engine consumes from this channel (Phase 2 wiring).
-    let (event_tx, _event_rx) = mpsc::channel(100);
-    let _ = _event_rx; // Receiver drained in Phase 2
+    // Event channel: NotifyEventSource sends raw StrandEvents here.
+    // The receiver is wired into the debounce engine.
+    let (event_tx, event_rx) = mpsc::channel(100);
 
-    AppContext {
-        store,
-        loom_repo,
-        knot_state_port,
-        loom_log_port,
-        tie_off_sink,
-        event_sender: event_tx,
-        workspace_config: config.workspace_config.clone(),
-    }
+    (
+        AppContext {
+            store,
+            loom_repo,
+            knot_state_port,
+            loom_log_port,
+            tie_off_sink,
+            event_sender: event_tx,
+            agent_runner,
+            workspace_config: config.workspace_config.clone(),
+        },
+        event_rx,
+    )
 }
 
 /// Run the startup discovery and registration sequence.
@@ -177,10 +234,13 @@ pub async fn start_server_with_shutdown(
     config: AppConfig,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let ctx = build_app_context(&config);
+    let (ctx, event_rx) = build_app_context(&config);
 
     // Clone event sender for the watcher (ctx is consumed below)
     let event_sender = ctx.event_sender.clone();
+
+    // Start the event pipeline: debounce + ProcessStrand
+    let _process_handle = start_event_pipeline(&ctx, event_rx);
 
     // Startup: discover looms, create state files
     let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {

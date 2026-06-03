@@ -16,7 +16,9 @@ use axum::{
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, TieOffSink};
+use crate::application::ports::{
+    AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, TieOffSink,
+};
 use crate::application::store::LoomStore;
 use crate::application::usecases::{
     DiscoverLooms, GetKnotStatus, GetLoom, GetLoomActivity,
@@ -60,6 +62,8 @@ pub struct AppContext {
     pub tie_off_sink: Arc<dyn TieOffSink>,
     /// Debounce engine sender — feed raw strand events.
     pub event_sender: mpsc::Sender<StrandEvent>,
+    /// Agent runner for subprocess execution.
+    pub agent_runner: Arc<dyn AgentRunner>,
     /// Workspace-level agent configuration.
     pub workspace_config: WorkspaceAgentConfig,
 }
@@ -333,6 +337,22 @@ mod tests {
     }
 
     /// Build an `AppContext` with configurable mock port data.
+    /// No-op agent runner for HTTP handler tests.
+    struct MockAgentRunner;
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: crate::application::ports::ExecutionContext,
+        ) -> Result<crate::application::ports::AgentOutput, PortError> {
+            Ok(crate::application::ports::AgentOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
     fn build_test_context_with(
         knot_state: Option<KnotState>,
         log_events: Vec<LoomEvent>,
@@ -347,6 +367,7 @@ mod tests {
             loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_sender,
+            agent_runner: Arc::new(MockAgentRunner),
             workspace_config: WorkspaceAgentConfig::default_config(),
         }
     }
@@ -511,25 +532,6 @@ mod tests {
         assert!(names.contains(&"alpha".to_string()));
         assert!(names.contains(&"beta".to_string()));
         assert!(names.contains(&"gamma".to_string()));
-    }
-
-    // Suppress unused mock warnings
-    #[allow(dead_code)]
-    fn _verify_agent_runner_mock() {
-        struct MockAgentRunner;
-        use crate::application::ports::{AgentOutput, AgentRunner, ExecutionContext};
-        impl AgentRunner for MockAgentRunner {
-            fn execute(
-                &self,
-                _ctx: ExecutionContext,
-            ) -> Result<AgentOutput, PortError> {
-                Ok(AgentOutput {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: 0,
-                })
-            }
-        }
     }
 
     // ── Phase 2 Tests ───────────────────────────────────────────────────
