@@ -1,0 +1,192 @@
+=== Orchestrator run log (20260603-223026) ===
+
+--- stdout ---
+running 131 tests
+test adapters::inbound::tests::get_looms_empty ... ok
+test adapters::inbound::tests::get_knot_status_not_found ... ok
+test adapters::inbound::tests::handlers_module_compiles ... ok
+test adapters::inbound::tests::post_loom_missing_source_dir ... ok
+test adapters::inbound::tests::state_extractor_available ... ok
+test adapters::inbound::tests::get_loom_by_id ... ok
+test adapters::inbound::tests::delete_loom_not_found ... ok
+test adapters::inbound::tests::delete_loom_success ... ok
+test adapters::inbound::tests::get_loom_knots ... ok
+test adapters::inbound::tests::get_knot_status ... ok
+test adapters::inbound::tests::post_loom_duplicate_id ... ok
+test adapters::inbound::tests::get_loom_activity ... ok
+test adapters::inbound::tests::get_loom_not_found ... ok
+test adapters::inbound::tests::get_looms_returns_json ... ok
+test adapters::inbound::tests::full_route_wiring ... ok
+test adapters::outbound::knot_state::tests::knot_state_get_nonexistent ... ok
+test adapters::outbound::knot_state::tests::knot_state_create_new_file ... ok
+test adapters::outbound::knot_state::tests::knot_state_read_current ... ok
+test adapters::outbound::event_source::tests::watcher_starts ... ok
+test adapters::outbound::knot_state::tests::knot_state_update_state ... ok
+test adapters::outbound::loom_log::tests::loom_log_create_and_append ... ok
+test adapters::outbound::loom_log::tests::loom_log_multiple_events ... ok
+test adapters::outbound::loom_log::tests::loom_log_read_all_empty ... ok
+test adapters::outbound::loom_log::tests::loom_log_trait_object_safe ... ok
+test adapters::outbound::knot_state::tests::knot_state_status_transitions ... ok
+test adapters::outbound::loom_repository::tests::get_nonexistent_loom ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_create_parent_dirs ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_overwrite_existing ... ok
+test adapters::outbound::loom_repository::tests::scan_workspace_with_one_loom ... ok
+test adapters::outbound::loom_repository::tests::scan_skips_invalid_knot_files ... ok
+test adapters::outbound::loom_log::tests::loom_log_read_all ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_sink_trait_object_safe ... ok
+test adapters::outbound::loom_repository::tests::save_and_list_loom ... ok
+test application::ports::tests::agent_output_fields ... ok
+test application::ports::tests::agent_runner_contract ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_derived_from_strand ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_no_extension ... ok
+test application::ports::tests::event_source_contract ... ok
+test application::ports::tests::knot_event_type_variants ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_resolve_path ... ok
+test application::ports::tests::knot_state_fields ... ok
+test application::ports::tests::knot_state_port_contract ... ok
+test application::ports::tests::loom_log_port_contract ... ok
+test application::ports::tests::execution_context_fields ... ok
+test application::ports::tests::port_error_is_std_error ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_complex_extension ... ok
+test application::ports::tests::loom_repository_contract ... ok
+test adapters::subprocess::tests::execute_command_not_found ... ok
+test application::ports::tests::processing_status_variants ... ok
+test application::ports::tests::tieoff_sink_contract ... ok
+test application::store::tests::get_nonexistent_returns_none ... ok
+test application::store::tests::get_loom_by_id ... ok
+test application::store::tests::register_loom ... ok
+test adapters::outbound::loom_repository::tests::scan_workspace_with_multiple_looms ... ok
+test application::usecases::tests::discover_looms_success ... ok
+test application::ports::tests::port_error_display ... ok
+test application::usecases::tests::discover_looms_empty_workspace ... ok
+test application::usecases::tests::get_knot_status_from_state ... ok
+test application::store::tests::unregister_loom ... ok
+test application::usecases::tests::discover_looms_repository_error ... ok
+test application::store::tests::list_looms ... ok
+test application::usecases::tests::get_knot_status_missing_returns_error ... ok
+test application::usecases::tests::get_loom_activity_empty_log ... ok
+test application::usecases::tests::get_loom_activity_from_log ... ok
+test application::usecases::tests::get_loom_by_id ... ok
+test application::usecases::tests::get_loom_missing_returns_error ... ok
+test application::usecases::tests::list_looms_returns_summaries ... ok
+test adapters::outbound::loom_log::tests::loom_log_concurrent_writes ... ok
+test application::usecases::tests::process_strand_agent_error ... ok
+test application::usecases::tests::process_strand_deleted_event ... ok
+test application::usecases::tests::process_strand_success ... ok
+test application::usecases::tests::process_strand_state_transitions ... ok
+test adapters::subprocess::tests::execute_successful_command ... ok
+test adapters::subprocess::tests::execute_captures_stderr ... ok
+test application::usecases::tests::register_loom_creates_state_files ... ok
+test application::usecases::tests::register_loom_duplicate_id_error ... ok
+test domain::entities::tests::knot_construction ... ok
+test application::usecases::tests::unregister_loom_logs_stopped_event ... ok
+test domain::entities::tests::knot_id_newtype ... ok
+test domain::entities::tests::loom_construction ... ok
+test domain::entities::tests::loom_id_newtype ... ok
+test domain::entities::tests::knot_serialization ... ok
+test domain::entities::tests::strand_construction ... ok
+test domain::entities::tests::loom_serialization ... ok
+test domain::entities::tests::strand_path_newtype ... ok
+test domain::entities::tests::tieoff_construction ... ok
+test domain::entities::tests::strand_serialization ... ok
+test domain::entities::tests::tieoff_path_newtype ... ok
+test domain::entities::tests::tieoff_serialization ... ok
+test domain::entities::tests::tieoff_status_failed ... ok
+test domain::events::tests::knot_registered_event ... ok
+test domain::events::tests::loom_event_types ... ok
+test domain::events::tests::loom_event_serialisation ... ok
+test domain::events::tests::processing_failed_event ... ok
+test domain::events::tests::strand_event_types ... ok
+test domain::events::tests::tieoff_produced_event ... ok
+test domain::events::tests::strand_event_serialisation ... ok
+test domain::knot_file::tests::knot_file_error_display ... ok
+test domain::knot_file::tests::knot_file_serialization ... ok
+test domain::knot_file::tests::empty_goal_returns_error ... ok
+test domain::knot_file::tests::malformed_yaml_returns_error ... ok
+test domain::knot_file::tests::no_frontmatter_returns_error ... ok
+test domain::knot_file::tests::missing_agent_config_returns_error ... ok
+test domain::knot_file::tests::missing_prompt_template_returns_error ... ok
+test domain::value_objects::tests::agent_config_defaults ... ok
+test domain::knot_file::tests::missing_name_returns_error ... ok
+test domain::value_objects::tests::agent_config_serialization ... ok
+test domain::value_objects::tests::prompt_template_fields ... ok
+test domain::knot_file::tests::whitespace_only_goal_returns_error ... ok
+test domain::value_objects::tests::prompt_template_serialization ... ok
+test domain::value_objects::tests::workspace_agent_config_defaults ... ok
+test domain::knot_file::tests::valid_knot_file_parse ... ok
+test domain::value_objects::tests::workspace_agent_config_serialization ... ok
+test adapters::subprocess::tests::execute_captures_stdout ... ok
+test adapters::outbound::loom_repository::tests::scan_empty_workspace ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_write_new_file ... ok
+test adapters::inbound::tests::existing_routes_preserved ... ok
+test adapters::outbound::loom_repository::tests::scan_parses_knot_definition_files ... ok
+test adapters::subprocess::tests::execute_nonzero_exit_error ... ok
+test adapters::inbound::tests::post_loom_success ... ok
+test adapters::subprocess::tests::execute_timeout ... ok
+test application::debounce::tests::single_event_emits_after_window ... ok
+test application::debounce::tests::delete_after_modify_emits_delete ... ok
+test application::debounce::tests::different_files_emit_independently ... ok
+test application::debounce::tests::rapid_events_emit_only_last ... ok
+test adapters::outbound::event_source::tests::modify_event_emitted ... ok
+test adapters::outbound::event_source::tests::create_event_emitted ... ok
+test adapters::outbound::event_source::tests::delete_event_emitted ... ok
+test adapters::outbound::event_source::tests::event_outside_source_dir_filtered ... ok
+test adapters::outbound::event_source::tests::directory_events_filtered ... ok
+test adapters::outbound::event_source::tests::event_mapping_correct_types ... ok
+
+test result: ok. 131 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test missing_file_returns_error ... ok
+test roundtrip_write_and_read ... ok
+test create_and_list_files ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test health_returns_ok ... ok
+test list_agents_returns_404_for_missing_dir ... ok
+test list_agents_returns_directory_contents ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test build_app_context_wires_layers ... ok
+test startup_creates_state_files ... ok
+test startup_discovers_looms ... ok
+test app_loads_workspace_agent_config ... ok
+test app_starts_and_serves_health ... ok
+test event_flows_through_pipeline ... ok
+test startup_starts_watchers ... ok
+test debounce_prevents_duplicate_processing ... FAILED
+
+failures:
+
+---- debounce_prevents_duplicate_processing stdout ----
+
+thread 'debounce_prevents_duplicate_processing' (65223) panicked at tests/integration.rs:597:5:
+debounce should coalesce rapid edits; expected <= 4 events, got 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    debounce_prevents_duplicate_processing
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+--- stderr ---
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/knot-bee2f65bee3058f5)
+     Running unittests src/main.rs (target/debug/deps/knot-7bf4e4e3afd30621)
+     Running tests/filesystem_interface.rs (target/debug/deps/filesystem_interface-08cbfa2c39bb45a1)
+     Running tests/http_interface.rs (target/debug/deps/http_interface-1e335b1fdc995279)
+     Running tests/integration.rs (target/debug/deps/integration-3ae0ba879bbba6fd)
+error: test failed, to rerun pass `--test integration`
