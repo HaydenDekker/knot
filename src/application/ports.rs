@@ -40,6 +40,10 @@ pub enum PortError {
     EventUnwatchFailed(String),
     /// Agent execution failed.
     AgentExecutionFailed(String),
+    /// The agent CLI binary was not found.
+    CommandNotFound(String),
+    /// Agent execution exceeded the configured timeout.
+    Timeout(String),
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
 }
@@ -85,6 +89,12 @@ impl std::fmt::Display for PortError {
             }
             PortError::AgentExecutionFailed(msg) => {
                 write!(f, "agent execution failed: {msg}")
+            }
+            PortError::CommandNotFound(msg) => {
+                write!(f, "command not found: {msg}")
+            }
+            PortError::Timeout(msg) => {
+                write!(f, "timeout: {msg}")
             }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
