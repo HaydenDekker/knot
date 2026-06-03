@@ -19,7 +19,7 @@ Knot has all five hex layers implemented (domain, application, outbound adapters
 - Full end-to-end integration test: create strand → debounce → CLI → tie-off → HTTP status check
 - Graceful shutdown: abort watcher tasks, close channels
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Hex Layer: Wiring
 
@@ -102,9 +102,9 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 4: Graceful Shutdown
 **Failing tests created:** `integration::tests::graceful_shutdown_stops_watchers`, `integration::tests::shutdown_logs_loom_stopped`
 
-- [ ] Failing test: `integration::tests::graceful_shutdown_stops_watchers` — send shutdown signal; watcher tasks abort, channels close, no new events processed
-- [ ] Failing test: `integration::tests::shutdown_logs_loom_stopped` — shutdown writes `LoomStopped` to each loom-log
-- [ ] Implement graceful shutdown in `main.rs`:
+- [x] Failing test: `integration::tests::graceful_shutdown_stops_watchers` — send shutdown signal; watcher tasks abort, channels close, no new events processed
+- [x] Failing test: `integration::tests::shutdown_logs_loom_stopped` — shutdown writes `LoomStopped` to each loom-log
+- [x] Implement graceful shutdown in `main.rs`:
   - Listen for `Ctrl+C` via `tokio::signal`
   - Abort all watcher `JoinHandle`s
   - Close debounce engine sender

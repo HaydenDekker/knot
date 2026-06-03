@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-03
+> **Last Updated:** 2026-06-04
 
 ## How to Add a Plan
 
@@ -46,11 +46,11 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 5 | [System Integration and Wiring](system-integration.md) | ⬜ Planned | 2026-06-03 |
-| 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ⬜ Planned | 2026-06-03 |
-| 3 | [Outbound Adapters](file-watcher.md) | ⬜ Planned | 2026-06-03 |
-| 2 | [Application Layer — Ports and Use Cases](loom-discovery-and-state.md) | ⬜ Planned | 2026-06-03 |
-| 1 | [Knot Domain Models](knot-domain-models.md) | ⬜ Planned | 2026-06-03 |
+| 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
+| 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ✅ Complete | 2026-06-03 |
+| 3 | [Outbound Adapters](file-watcher.md) | ✅ Complete | 2026-06-03 |
+| 2 | [Application Layer — Ports and Use Cases](loom-discovery-and-state.md) | ✅ Complete | 2026-06-03 |
+| 1 | [Knot Domain Models](knot-domain-models.md) | ✅ Complete | 2026-06-03 |
 
 ---
 
@@ -60,8 +60,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 1. Knot Domain Models
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-03
 **Hex Layer:** Domain
 **Goal:** Domain entities, value objects, domain events, knot file format validation — zero IO, zero framework.
 
@@ -69,8 +70,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 2. Application Layer — Ports and Use Cases
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-03
 **Hex Layer:** Application
 **Goal:** Port traits, use cases, debounce engine, processing state machine — all tests use mock ports.
 
@@ -78,8 +80,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 3. Outbound Adapters
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-03
 **Hex Layer:** Outbound Adapters
 **Goal:** Concrete adapters for filesystem IO, notify watching, subprocess execution — all tests use `tempfile`.
 
@@ -87,8 +90,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 4. Loom HTTP Interface
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-03
 **Hex Layer:** Inbound Adapter
 **Goal:** Axum handlers and routes that call use cases — never touch adapters directly.
 
@@ -96,8 +100,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 5. System Integration and Wiring
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-04
 **Hex Layer:** Composition Root
 **Goal:** Bootstrap all layers, wire event pipeline, full end-to-end integration tests.
 
