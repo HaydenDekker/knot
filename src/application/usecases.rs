@@ -7,8 +7,34 @@ use std::path::Path;
 
 use crate::application::ports::{KnotStatePort, LoomLogPort, LoomRepository, PortError};
 use crate::application::store::LoomStore;
-use crate::domain::entities::{Loom, LoomId};
+use crate::application::ports::KnotState;
+use crate::domain::entities::{KnotId, Loom, LoomId};
 use crate::domain::events::LoomEvent;
+use std::path::PathBuf;
+
+// ── Query Result Types ───────────────────────────────────────────────────
+
+/// A summary of a loom (lightweight, for list responses).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoomSummary {
+    /// The loom's unique ID.
+    pub id: LoomId,
+    /// The source directory path.
+    pub source_dir: PathBuf,
+    /// The tie-off (output) directory path.
+    pub tie_off_dir: PathBuf,
+    /// Number of knots in this loom.
+    pub knot_count: usize,
+}
+
+/// Result of the `GetKnotStatus` use case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnotStatus {
+    /// The knot whose status was retrieved.
+    pub knot_id: KnotId,
+    /// The current processing state.
+    pub state: KnotState,
+}
 
 // ── DiscoverLooms ──────────────────────────────────────────────────────────
 
@@ -167,6 +193,116 @@ impl UnregisterLoom {
         self.store.unregister(id);
 
         Ok(())
+    }
+}
+
+// ── ListLooms ──────────────────────────────────────────────────────────────
+
+/// Use case: list all registered looms as summaries.
+///
+/// Reads from `LoomStore::list()` and maps each loom to a lightweight
+/// `LoomSummary`.
+pub struct ListLooms {
+    store: LoomStore,
+}
+
+impl ListLooms {
+    /// Create a new `ListLooms` use case.
+    pub fn new(store: LoomStore) -> Self {
+        Self { store }
+    }
+
+    /// Return summaries of all registered looms.
+    pub fn execute(&self) -> Vec<LoomSummary> {
+        self.store.list()
+            .into_iter()
+            .map(|loom| LoomSummary {
+                id: loom.id,
+                source_dir: loom.source_dir,
+                tie_off_dir: loom.tie_off_dir,
+                knot_count: loom.knots.len(),
+            })
+            .collect()
+    }
+}
+
+// ── GetLoom ────────────────────────────────────────────────────────────────
+
+/// Use case: retrieve a full loom by ID.
+///
+/// Reads from `LoomStore::get()`. Returns `PortError::LoomNotFound` if
+/// the loom does not exist.
+pub struct GetLoom {
+    store: LoomStore,
+}
+
+impl GetLoom {
+    /// Create a new `GetLoom` use case.
+    pub fn new(store: LoomStore) -> Self {
+        Self { store }
+    }
+
+    /// Return the full loom with the given ID.
+    pub fn execute(&self, id: &LoomId) -> Result<Loom, PortError> {
+        self.store.get(id)
+            .ok_or_else(|| PortError::LoomNotFound(id.clone()))
+    }
+}
+
+// ── GetLoomActivity ────────────────────────────────────────────────────────
+
+/// Use case: read the activity log for a loom.
+///
+/// Calls `LoomLogPort::read_all()` and returns all recorded events.
+pub struct GetLoomActivity {
+    log_port: Box<dyn LoomLogPort>,
+}
+
+impl GetLoomActivity {
+    /// Create a new `GetLoomActivity` use case.
+    pub fn new(log_port: Box<dyn LoomLogPort>) -> Self {
+        Self { log_port }
+    }
+
+    /// Return all log entries for the given loom.
+    pub fn execute(&self, loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
+        self.log_port.read_all(loom_id)
+    }
+}
+
+// ── GetKnotStatus ──────────────────────────────────────────────────────────
+
+/// Use case: get the current processing state of a knot.
+///
+/// Calls `KnotStatePort::get()` and returns a `KnotStatus` wrapping the
+/// state, or `PortError::KnotStateGetFailed` if the knot has no state.
+pub struct GetKnotStatus {
+    state_port: Box<dyn KnotStatePort>,
+}
+
+impl GetKnotStatus {
+    /// Create a new `GetKnotStatus` use case.
+    pub fn new(state_port: Box<dyn KnotStatePort>) -> Self {
+        Self { state_port }
+    }
+
+    /// Return the current state for the given knot.
+    pub fn execute(&self, knot_id: &KnotId) -> Result<KnotStatus, PortError> {
+        self.state_port
+            .get(knot_id)
+            .map_err(|_| {
+                PortError::KnotStateGetFailed(format!(
+                    "failed to get state for knot '{}'",
+                    knot_id.0
+                ))
+            })
+            .and_then(|opt| {
+                opt.map(|state| KnotStatus { knot_id: knot_id.clone(), state })
+                    .ok_or_else(|| PortError::KnotStateGetFailed(format!(
+                        "no state found for knot '{}'",
+                        knot_id.0
+                    )))
+            })
     }
 }
 
@@ -557,5 +693,203 @@ mod tests {
 
         // Loom is no longer in the store
         assert!(store.get(&loom_id).is_none());
+    }
+
+    // ── ListLooms Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn list_looms_returns_summaries() {
+        let store = LoomStore::new();
+        store.register(build_loom("loom-a", vec![build_knot("k1")]));
+        store.register(build_loom(
+            "loom-b",
+            vec![build_knot("k2"), build_knot("k3")],
+        ));
+
+        let use_case = ListLooms::new(store);
+        let summaries = use_case.execute();
+
+        assert_eq!(summaries.len(), 2);
+
+        // Find each summary by id
+        let summary_a = summaries
+            .iter()
+            .find(|s| s.id == LoomId("loom-a".to_string()))
+            .expect("loom-a summary missing");
+        assert_eq!(summary_a.knot_count, 1);
+        assert_eq!(summary_a.source_dir, PathBuf::from("src"));
+        assert_eq!(summary_a.tie_off_dir, PathBuf::from("out"));
+
+        let summary_b = summaries
+            .iter()
+            .find(|s| s.id == LoomId("loom-b".to_string()))
+            .expect("loom-b summary missing");
+        assert_eq!(summary_b.knot_count, 2);
+    }
+
+    // ── GetLoom Tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn get_loom_by_id() {
+        let store = LoomStore::new();
+        let loom = build_loom("my-loom", vec![build_knot("k1")]);
+        let loom_id = loom.id.clone();
+        store.register(loom.clone());
+
+        let use_case = GetLoom::new(store);
+        let result = use_case.execute(&loom_id);
+
+        assert!(result.is_ok());
+        let found = result.unwrap();
+        assert_eq!(found.id, loom_id);
+        assert_eq!(found.knots.len(), 1);
+    }
+
+    #[test]
+    fn get_loom_missing_returns_error() {
+        let store = LoomStore::new();
+        let use_case = GetLoom::new(store);
+        let result = use_case.execute(&LoomId("unknown".to_string()));
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomNotFound(id) => {
+                assert_eq!(id, LoomId("unknown".to_string()));
+            }
+            other => panic!("Expected LoomNotFound, got {other:?}"),
+        }
+    }
+
+    // ── GetLoomActivity Tests ───────────────────────────────────────────
+
+    /// Mock `LoomLogPort` that returns configurable events from `read_all`.
+    struct MockLoomLogPortWithEvents {
+        events: Vec<LoomEvent>,
+    }
+
+    impl LoomLogPort for MockLoomLogPortWithEvents {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.clone())
+        }
+    }
+
+    #[test]
+    fn get_loom_activity_from_log() {
+        let events = vec![
+            LoomEvent::LoomStarted {
+                loom_id: LoomId("my-loom".to_string()),
+            },
+            LoomEvent::KnotRegistered {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+            },
+        ];
+
+        let log_port = Box::new(MockLoomLogPortWithEvents { events });
+        let use_case = GetLoomActivity::new(log_port);
+        let result = use_case.execute(&LoomId("my-loom".to_string()));
+
+        assert!(result.is_ok());
+        let got = result.unwrap();
+        assert_eq!(got.len(), 2);
+        match &got[0] {
+            LoomEvent::LoomStarted { loom_id } => {
+                assert_eq!(*loom_id, LoomId("my-loom".to_string()));
+            }
+            _ => panic!("Expected LoomStarted"),
+        }
+        match &got[1] {
+            LoomEvent::KnotRegistered { loom_id, knot_id } => {
+                assert_eq!(*loom_id, LoomId("my-loom".to_string()));
+                assert_eq!(*knot_id, KnotId("k1".to_string()));
+            }
+            _ => panic!("Expected KnotRegistered"),
+        }
+    }
+
+    #[test]
+    fn get_loom_activity_empty_log() {
+        let log_port = Box::new(MockLoomLogPortWithEvents { events: vec![] });
+        let use_case = GetLoomActivity::new(log_port);
+        let result = use_case.execute(&LoomId("empty".to_string()));
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    // ── GetKnotStatus Tests ─────────────────────────────────────────────
+
+    /// Mock `KnotStatePort` that returns configurable state from `get`.
+    struct MockKnotStatePortWithState {
+        state: Option<KnotState>,
+    }
+
+    impl KnotStatePort for MockKnotStatePortWithState {
+        fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn update(&self, _state: KnotState) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn get(&self, _knot_id: &KnotId) -> Result<Option<KnotState>, PortError> {
+            Ok(self.state.clone())
+        }
+    }
+
+    #[test]
+    fn get_knot_status_from_state() {
+        let state = KnotState {
+            event_type: crate::application::ports::KnotEventType::Modified,
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from(
+                "src/input.md",
+            )),
+            tie_off_path: Some(crate::domain::entities::TieOffPath(PathBuf::from(
+                "out/output.md",
+            ))),
+            status: crate::application::ports::ProcessingStatus::Completed,
+            error: None,
+            last_updated: "2026-06-03T12:00:00Z".to_string(),
+        };
+
+        let state_port = Box::new(MockKnotStatePortWithState {
+            state: Some(state.clone()),
+        });
+        let use_case = GetKnotStatus::new(state_port);
+        let knot_id = KnotId("k1".to_string());
+        let result = use_case.execute(&knot_id);
+
+        assert!(result.is_ok());
+        let status = result.unwrap();
+        assert_eq!(status.knot_id, knot_id);
+        assert_eq!(
+            status.state.status,
+            crate::application::ports::ProcessingStatus::Completed,
+        );
+        assert_eq!(status.state.error, None);
+    }
+
+    #[test]
+    fn get_knot_status_missing_returns_error() {
+        let state_port = Box::new(MockKnotStatePortWithState { state: None });
+        let use_case = GetKnotStatus::new(state_port);
+        let result = use_case.execute(&KnotId("k1".to_string()));
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::KnotStateGetFailed(msg) => {
+                assert!(msg.contains("k1"));
+            }
+            other => panic!("Expected KnotStateGetFailed, got {other:?}"),
+        }
     }
 }
