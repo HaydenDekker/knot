@@ -91,19 +91,19 @@ Each adapter implements a port trait. Depends on domain types and application po
 ### Phase 3: NotifyEventSource
 **Failing tests created:** `adapters::notify::tests::watcher_starts`, `adapters::notify::tests::create_event_emitted`, `adapters::notify::tests::modify_event_emitted`, `adapters::notify::tests::delete_event_emitted`, `adapters::notify::tests::directory_events_filtered`, `adapters::notify::tests::event_outside_source_dir_filtered`, `adapters::notify::tests::event_mapping_correct_types`
 
-- [ ] Failing test: `adapters::notify::tests::watcher_starts` — create watcher, `watch(dir)` succeeds, watcher is active
-- [ ] Failing test: `adapters::notify::tests::create_event_emitted` — create a file in watched dir; event received on channel with `StrandEvent::Created`
-- [ ] Failing test: `adapters::notify::tests::modify_event_emitted` — modify a file; event received with `StrandEvent::Modified`
-- [ ] Failing test: `adapters::notify::tests::delete_event_emitted` — delete a file; event received with `StrandEvent::Deleted`
-- [ ] Failing test: `adapters::notify::tests::directory_events_filtered` — create a subdirectory; no event emitted (only files watched)
-- [ ] Failing test: `adapters::notify::tests::event_outside_source_dir_filtered` — event for file outside watched dir; no event emitted
-- [ ] Failing test: `adapters::notify::tests::event_mapping_correct_types` — `notify::EventKind::Create` maps to `StrandEvent::Created`, `Modify` → `Modified`, `Remove` → `Deleted`
-- [ ] Add `notify = "7"` to `Cargo.toml`
-- [ ] Implement `NotifyEventSource` in `src/adapters/outbound/event_source.rs`
-- [ ] Wraps `notify::RecommendedWatcher`, maps raw events to `StrandEvent` domain type
-- [ ] Implements `EventSource` port trait
-- [ ] Emits raw events to an `mpsc::Sender<StrandEvent>` — the debounce engine (application layer) subscribes to this
-- [ ] **Alert:** adapter emits raw events only; debounce is NOT part of this adapter (it's application layer, Plan 2 Phase 5)
+- [x] Failing test: `adapters::notify::tests::watcher_starts` — create watcher, `watch(dir)` succeeds, watcher is active
+- [x] Failing test: `adapters::notify::tests::create_event_emitted` — create a file in watched dir; event received on channel with `StrandEvent::Created`
+- [x] Failing test: `adapters::notify::tests::modify_event_emitted` — modify a file; event received with `StrandEvent::Modified`
+- [x] Failing test: `adapters::notify::tests::delete_event_emitted` — delete a file; event received with `StrandEvent::Deleted`
+- [x] Failing test: `adapters::notify::tests::directory_events_filtered` — create a subdirectory; no event emitted (only files watched)
+- [x] Failing test: `adapters::notify::tests::event_outside_source_dir_filtered` — event for file outside watched dir; no event emitted
+- [x] Failing test: `adapters::notify::tests::event_mapping_correct_types` — `notify::EventKind::Create` maps to `StrandEvent::Created`, `Modify` → `Modified`, `Remove` → `Deleted`
+- [x] Add `notify = "7"` to `Cargo.toml`
+- [x] Implement `NotifyEventSource` in `src/adapters/outbound/event_source.rs`
+- [x] Wraps `notify::RecommendedWatcher`, maps raw events to `StrandEvent` domain type
+- [x] Implements `EventSource` port trait
+- [x] Emits raw events to an `mpsc::Sender<StrandEvent>` — the debounce engine (application layer) subscribes to this
+- [x] **Alert:** adapter emits raw events only; debounce is NOT part of this adapter (it's application layer, Plan 2 Phase 5)
 
 ### Phase 4: SubprocessAgentRunner
 **Failing tests created:** `adapters::subprocess::tests::execute_successful_command`, `adapters::subprocess::tests::execute_captures_stdout`, `adapters::subprocess::tests::execute_captures_stderr`, `adapters::subprocess::tests::execute_command_not_found`, `adapters::subprocess::tests::execute_nonzero_exit_error`, `adapters::subprocess::tests::execute_timeout`
