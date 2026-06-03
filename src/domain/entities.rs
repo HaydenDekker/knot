@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-// ── Value Objects ──────────────────────────────────────────────────────────
+// Re-export value objects for convenient access through the entities module
+pub use crate::domain::value_objects::{AgentConfig, PromptTemplate, WorkspaceAgentConfig};
+
+// ── Value Objects (identifiers and paths) ──────────────────────────────────
 
 /// Unique identifier for a Knot.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -18,22 +21,6 @@ pub struct StrandPath(pub PathBuf);
 /// Path to a tie-off (output file produced).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TieOffPath(pub PathBuf);
-
-/// Configuration for the agent that runs a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// The goal this knot's agent should accomplish.
-    pub goal: String,
-}
-
-/// Prompt template used when executing a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PromptTemplate {
-    /// How input is bundled: e.g. "full-file", "diff", "chunked".
-    pub input_bundling: String,
-    /// The prompt instructions.
-    pub instructions: String,
-}
 
 /// Status of a TieOff output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
