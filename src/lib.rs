@@ -1,3 +1,5 @@
+pub mod domain;
+
 use axum::{
     extract::Path,
     http::StatusCode,
