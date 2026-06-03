@@ -75,7 +75,7 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 - [x] Failing test: `domain::entities::tests::tieoff_construction` — construct a `TieOff` with content, path, and status; verify fields
 - [x] Implement `Knot`, `Loom`, `Strand`, `TieOff` structs in `src/domain/entities.rs`
 - [x] Implement `KnotId`, `LoomId`, `StrandPath`, `TieOffPath` as newtype wrappers
-- [ ] Add `serde::Serialize + Deserialize` derives
+- [x] Add `serde::Serialize + Deserialize` derives
 
 ### Phase 1: Value Objects
 **Failing tests created:** `domain::value_objects::tests::agent_config_defaults`, `domain::value_objects::tests::prompt_template_fields`, `domain::value_objects::tests::workspace_agent_config_defaults`
@@ -95,7 +95,7 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 - [x] Failing test: `domain::events::tests::loom_event_types` — `LoomEvent::KnotRegistered`, `LoomStarted`, `LoomStopped`, `StrandProcessed`; verify all variants
 - [x] Failing test: `domain::events::tests::knot_registered_event` — `KnotRegistered` with loom ID and knot ID; verify construction
 - [x] Implement domain event enums in `src/domain/events.rs`
-- [ ] Events are serialisable (for writing to loom-log / knot-state later)
+- [x] Events are serialisable (for writing to loom-log / knot-state later)
 
 ### Phase 3: Knot File Format Validation
 **Failing tests created:** `domain::knot_file::tests::valid_knot_file_parse`, `domain::knot_file::tests::missing_name_returns_error`, `domain::knot_file::tests::empty_goal_returns_error`, `domain::knot_file::tests::missing_prompt_template_returns_error`

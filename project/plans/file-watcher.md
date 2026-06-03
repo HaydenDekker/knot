@@ -58,9 +58,9 @@ Each adapter implements a port trait. Depends on domain types and application po
 - [x] Failing test: `adapters::filesystem::tests::get_nonexistent_loom` — `get()` for unknown ID returns `Ok(None)`
 - [x] Failing test: `adapters::filesystem::tests::save_and_list_loom` — `save()` a loom, `list()` returns it
 - [x] Implement `FileSystemLoomRepository` in `src/adapters/outbound/loom_repository.rs`
-- [ ] Uses `std::fs::read_dir` to scan workspace, `KnotFileParser` from Plan 1 to parse knot files
-- [ ] Implements `LoomRepository` port trait
-- [ ] **Alert:** `FileSystemLoomRepository` depends on `KnotFileParser` (domain layer) — this is correct, adapters depend inward
+- [x] Uses `std::fs::read_dir` to scan workspace, `KnotFileParser` from Plan 1 to parse knot files
+- [x] Implements `LoomRepository` port trait
+- [x] **Alert:** `FileSystemLoomRepository` depends on `KnotFileParser` (domain layer) — this is correct, adapters depend inward
 
 ### Phase 1: FileSystemKnotStateStore
 **Failing tests created:** `adapters::filesystem::tests::knot_state_create_new_file`, `adapters::filesystem::tests::knot_state_update_state`, `adapters::filesystem::tests::knot_state_read_current`, `adapters::filesystem::tests::knot_state_status_transitions`, `adapters::filesystem::tests::knot_state_get_nonexistent`
@@ -73,7 +73,7 @@ Each adapter implements a port trait. Depends on domain types and application po
 - [x] Implement `FileSystemKnotStateStore` in `src/adapters/outbound/knot_state.rs`
 - [x] Writes JSON to `<loom-dir>/.knots/<knot-name>.state`
 - [x] Implements `KnotStatePort` trait
-- [ ] **Alert:** uses `std::fs` and `serde_json` — adapter layer, correct
+- [x] **Alert:** uses `std::fs` and `serde_json` — adapter layer, correct
 
 ### Phase 2: FileSystemLoomLog
 **Failing tests created:** `adapters::filesystem::tests::loom_log_create_and_append`, `adapters::filesystem::tests::loom_log_read_all`, `adapters::filesystem::tests::loom_log_multiple_events`, `adapters::filesystem::tests::loom_log_concurrent_writes`
@@ -85,8 +85,8 @@ Each adapter implements a port trait. Depends on domain types and application po
 - [x] Implement `FileSystemLoomLog` in `src/adapters/outbound/loom_log.rs`
 - [x] Writes JSONL (one JSON object per line) to `<loom-dir>/.loom-log`
 - [x] Implements `LoomLogPort` trait
-- [ ] Uses `Arc<Mutex<File>>` or similar for concurrent write safety
-- [ ] **Alert:** uses `std::fs::OpenOptions` with append mode — adapter layer, correct
+- [x] Uses `Arc<Mutex<File>>` or similar for concurrent write safety
+- [x] **Alert:** uses `std::fs::OpenOptions` with append mode — adapter layer, correct
 
 ### Phase 3: NotifyEventSource
 **Failing tests created:** `adapters::notify::tests::watcher_starts`, `adapters::notify::tests::create_event_emitted`, `adapters::notify::tests::modify_event_emitted`, `adapters::notify::tests::delete_event_emitted`, `adapters::notify::tests::directory_events_filtered`, `adapters::notify::tests::event_outside_source_dir_filtered`, `adapters::notify::tests::event_mapping_correct_types`
