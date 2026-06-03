@@ -24,6 +24,7 @@ use crate::application::usecases::{
 };
 use crate::domain::entities::{KnotId, Loom, LoomId};
 use crate::domain::events::StrandEvent;
+use crate::domain::value_objects::WorkspaceAgentConfig;
 
 // ── Request Bodies ─────────────────────────────────────────────────────────
 
@@ -59,6 +60,8 @@ pub struct AppContext {
     pub tie_off_sink: Arc<dyn TieOffSink>,
     /// Debounce engine sender — feed raw strand events.
     pub event_sender: mpsc::Sender<StrandEvent>,
+    /// Workspace-level agent configuration.
+    pub workspace_config: WorkspaceAgentConfig,
 }
 
 // ── Handler stubs ──────────────────────────────────────────────────────────
@@ -206,6 +209,13 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
     (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
 }
 
+/// Return the loaded workspace agent configuration.
+pub async fn get_workspace_config(
+    State(ctx): State<AppContext>,
+) -> Response {
+    (StatusCode::OK, Json(&ctx.workspace_config)).into_response()
+}
+
 // ── Router builder ─────────────────────────────────────────────────────────
 
 /// Build the application router with loom routes and existing endpoints.
@@ -216,6 +226,8 @@ pub fn build_app(ctx: AppContext) -> Router {
         // Existing endpoints
         .route("/health", get(crate::health))
         .route("/agents/{dir}", get(crate::list_agents))
+        // Config endpoints
+        .route("/config/workspace", get(get_workspace_config))
         // Loom endpoints
         .route("/looms", get(list_looms))
         .route("/looms", post(register_loom))
@@ -335,6 +347,7 @@ mod tests {
             loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_sender,
+            workspace_config: WorkspaceAgentConfig::default_config(),
         }
     }
 
