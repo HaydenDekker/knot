@@ -69,12 +69,12 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 ### Phase 0: Domain Entities
 **Failing tests created:** `domain::entities::tests::knot_construction`, `domain::entities::tests::loom_construction`
 
-- [ ] Failing test: `domain::entities::tests::knot_construction` — construct a `Knot` with a `KnotId`, `AgentConfig`, and `PromptTemplate`; verify fields
-- [ ] Failing test: `domain::entities::tests::loom_construction` — construct a `Loom` with `LoomId`, source dir, tie-off point, and `Vec<Knot>`; verify fields
-- [ ] Failing test: `domain::entities::tests::strand_construction` — construct a `Strand` from a path; verify path is stored
-- [ ] Failing test: `domain::entities::tests::tieoff_construction` — construct a `TieOff` with content, path, and status; verify fields
-- [ ] Implement `Knot`, `Loom`, `Strand`, `TieOff` structs in `src/domain/entities.rs`
-- [ ] Implement `KnotId`, `LoomId`, `StrandPath`, `TieOffPath` as newtype wrappers
+- [x] Failing test: `domain::entities::tests::knot_construction` — construct a `Knot` with a `KnotId`, `AgentConfig`, and `PromptTemplate`; verify fields
+- [x] Failing test: `domain::entities::tests::loom_construction` — construct a `Loom` with `LoomId`, source dir, tie-off point, and `Vec<Knot>`; verify fields
+- [x] Failing test: `domain::entities::tests::strand_construction` — construct a `Strand` from a path; verify path is stored
+- [x] Failing test: `domain::entities::tests::tieoff_construction` — construct a `TieOff` with content, path, and status; verify fields
+- [x] Implement `Knot`, `Loom`, `Strand`, `TieOff` structs in `src/domain/entities.rs`
+- [x] Implement `KnotId`, `LoomId`, `StrandPath`, `TieOffPath` as newtype wrappers
 - [ ] Add `serde::Serialize + Deserialize` derives
 
 ### Phase 1: Value Objects
