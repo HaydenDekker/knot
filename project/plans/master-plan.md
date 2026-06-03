@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** __YYYY-MM-DD__
+> **Last Updated:** 2026-06-03
 
 ## How to Add a Plan
 
@@ -46,10 +46,54 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| — | _No plans yet. Add plans using the project-planner skill._ | | |
+| 5 | [Loom HTTP Interface](loom-http-interface.md) | ⬜ Planned | 2026-06-03 |
+| 4 | [Agent Execution and Tie-off Generation](agent-execution.md) | ⬜ Planned | 2026-06-03 |
+| 3 | [File Watcher with Debounce](file-watcher.md) | ⬜ Planned | 2026-06-03 |
+| 2 | [Loom Discovery and State Files](loom-discovery-and-state.md) | ⬜ Planned | 2026-06-03 |
+| 1 | [Knot Domain Models](knot-domain-models.md) | ⬜ Planned | 2026-06-03 |
 
 ---
 
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 1. Knot Domain Models
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-03
+**Goal:** Define core domain types and knot file parsing — the foundation all other plans build on.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+### 2. Loom Discovery and State Files
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-03
+**Goal:** Discover looms from the filesystem and maintain loom-log / knot-state files.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+### 3. File Watcher with Debounce
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-03
+**Goal:** Watch source directories for strand events with per-file 100ms debouncing.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+### 4. Agent Execution and Tie-off Generation
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-03
+**Goal:** Process strand events by invoking the agent CLI and writing tie-offs.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+### 5. Loom HTTP Interface
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-03
+**Goal:** HTTP endpoints for loom/knot observability and management, sourced from filesystem state.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
