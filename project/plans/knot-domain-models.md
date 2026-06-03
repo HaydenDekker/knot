@@ -80,11 +80,11 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 ### Phase 1: Value Objects
 **Failing tests created:** `domain::value_objects::tests::agent_config_defaults`, `domain::value_objects::tests::prompt_template_fields`, `domain::value_objects::tests::workspace_agent_config_defaults`
 
-- [ ] Failing test: `domain::value_objects::tests::agent_config_defaults` — `AgentConfig` with goal string; verify non-empty goal required
-- [ ] Failing test: `domain::value_objects::tests::prompt_template_fields` — `PromptTemplate` with `input_bundling` and `instructions`; verify both required
-- [ ] Failing test: `domain::value_objects::tests::workspace_agent_config_defaults` — `WorkspaceAgentConfig` defaults to `cli_path = "pi"`, `cli_args = []`; verify custom path and args accepted
-- [ ] Implement `AgentConfig` (goal), `PromptTemplate` (input_bundling, instructions), `WorkspaceAgentConfig` (cli_path, cli_args) in `src/domain/value_objects.rs`
-- [ ] Implement `try_from` or constructor with validation — empty goal returns error
+- [x] Failing test: `domain::value_objects::tests::agent_config_defaults` — `AgentConfig` with goal string; verify non-empty goal required
+- [x] Failing test: `domain::value_objects::tests::prompt_template_fields` — `PromptTemplate` with `input_bundling` and `instructions`; verify both required
+- [x] Failing test: `domain::value_objects::tests::workspace_agent_config_defaults` — `WorkspaceAgentConfig` defaults to `cli_path = "pi"`, `cli_args = []`; verify custom path and args accepted
+- [x] Implement `AgentConfig` (goal), `PromptTemplate` (input_bundling, instructions), `WorkspaceAgentConfig` (cli_path, cli_args) in `src/domain/value_objects.rs`
+- [x] Implement `try_from` or constructor with validation — empty goal returns error
 
 ### Phase 2: Domain Events
 **Failing tests created:** `domain::events::tests::strand_event_types`, `domain::events::tests::tieoff_produced_event`, `domain::events::tests::processing_failed_event`, `domain::events::tests::loom_event_types`
