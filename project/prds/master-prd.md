@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** __YYYY-MM-DD__
+> **Last Updated:** 2026-06-03
 
 ## How to Add a PRD
 
@@ -19,10 +19,16 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
-| — | _No PRDs yet. Create PRDs using the product-requirement-document skill._ | |
+| [AI-Driven File Generation from Workspace Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
 
 ---
 
 ## PRD Summaries
 
-_Summary sections for active PRDs go here._
+### AI-Driven File Generation from Workspace Events
+
+**Status:** 🔵 Open
+**Created:** 2026-06-03
+**Summary:** Watch a configured workspace for file events and use AI to generate corresponding output files in a target directory based on a user-defined goal.
+
+Full details in [prd-ai-driven-file-generation.md](prd-ai-driven-file-generation.md).
