@@ -18,7 +18,7 @@ Knot has domain types but no application layer. There are no ports defining what
 - Processing state machine: `Idle → Processing → Completed | Failed`
 - Loom store (in-memory registry) backed by ports, not concrete adapters
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-03)
 
 ## Hex Layer: Application
 
@@ -117,9 +117,9 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 ### Phase 6: ProcessStrand Use Case and State Machine
 **Failing tests created:** `application::usecases::tests::process_strand_success`, `application::usecases::tests::process_strand_agent_error`, `application::usecases::tests::process_strand_state_transitions`, `application::usecases::tests::process_strand_deleted_event`
 
-- [ ] Failing test: `application::usecases::tests::process_strand_success` — given mock `AgentRunner` returning success, mock `TieOffSink`, mock `KnotStatePort`: verify state transitions `idle → processing → completed`, tie-off written, loom-log appended
-- [ ] Failing test: `application::usecases::tests::process_strand_agent_error` — mock `AgentRunner` returns error: verify state transitions `idle → processing → failed`, error tie-off written, knot-state has error details
-- [ ] Failing test: `application::usecases::tests::process_strand_state_transitions` — verify exact state sequence: initial `idle`, then `processing` before agent call, then `completed` or `failed` after
+- [x] Failing test: `application::usecases::tests::process_strand_success` — given mock `AgentRunner` returning success, mock `TieOffSink`, mock `KnotStatePort`: verify state transitions `idle → processing → completed`, tie-off written, loom-log appended
+- [x] Failing test: `application::usecases::tests::process_strand_agent_error` — mock `AgentRunner` returns error: verify state transitions `idle → processing → failed`, error tie-off written, knot-state has error details
+- [x] Failing test: `application::usecases::tests::process_strand_state_transitions` — verify exact state sequence: initial `idle`, then `processing` before agent call, then `completed` or `failed` after
 - [ ] Failing test: `application::usecases::tests::process_strand_deleted_event` — for `StrandEvent::Deleted`, tie-off still written (reports what was undone), previous tie-off never deleted
 - [ ] Implement `ProcessStrand` use case:
   1. Receive `StrandEvent`
