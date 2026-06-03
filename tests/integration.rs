@@ -617,3 +617,324 @@ fn debounce_prevents_duplicate_processing() {
 
     let _ = shutdown.send(());
 }
+
+// ── Phase 3: End-to-End Integration Tests ──────────────────────────────────
+
+/// Full pipeline test using mock agent CLI (`echo "processed"`).
+///
+/// 1. Create strand → tie-off file created with content
+/// 2. Modify strand → tie-off overwritten with new content
+/// 3. Delete strand → tie-off reports deletion (file still exists)
+#[test]
+fn full_pipeline_create_modify_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create loom directory with knot definition
+    let loom_dir = base_dir.join("pipeline-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31992;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo 'processed'".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Step 1: Create strand → tie-off file created
+    let strand_path = loom_dir.join("test-strand.md");
+    fs::write(&strand_path, "initial content").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist after create: {}",
+        tie_off_path.display()
+    );
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("processed"),
+        "tie-off should contain 'processed', got: {content}"
+    );
+
+    // Step 2: Modify strand → tie-off overwritten
+    fs::write(&strand_path, "modified content").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("processed"),
+        "tie-off should still contain 'processed' after modify, got: {content}"
+    );
+
+    // Step 3: Delete strand → tie-off reports deletion (file still exists)
+    fs::remove_file(&strand_path).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    assert!(
+        tie_off_path.exists(),
+        "tie-off file should still exist after delete"
+    );
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("deleted"),
+        "tie-off should report deletion, got: {content}"
+    );
+
+    // Strand file should not exist (it was deleted)
+    assert!(!strand_path.exists(), "strand file should be deleted");
+
+    let _ = shutdown.send(());
+}
+
+/// Same flow as above but observable via HTTP endpoints.
+///
+/// 1. `GET /looms` → loom listed
+/// 2. `GET /looms/:id/knots/:knot_name` → status is `idle` before event,
+///    `completed` after processing
+/// 3. `GET /looms/:id/activity` → contains `StrandProcessed` entry
+#[test]
+fn full_pipeline_http_observable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create loom directory with knot definition
+    let loom_dir = base_dir.join("http-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31993;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo 'processed'".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // 1. GET /looms → loom listed
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "http-loom",
+        "loom id should match"
+    );
+
+    // 2a. GET /looms/:id/knots/:knot_name → status is `idle` before event
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/http-loom/knots/review-knot",
+            30,
+            100,
+        )
+        .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "idle",
+        "knot status should be idle before any event"
+    );
+
+    // Create a strand file to trigger processing
+    let strand_path = loom_dir.join("http-strand.md");
+    fs::write(&strand_path, "http strand content").unwrap();
+
+    // 2b. Poll until status is `completed`
+    let status_result =
+        poll_knot_status(&host_port, "review-knot", 60, 100);
+    assert!(
+        status_result.is_ok(),
+        "knot status should reach terminal state"
+    );
+    let completed_status = status_result.unwrap();
+    assert_eq!(
+        completed_status["state"]["status"]
+            .as_str()
+            .unwrap(),
+        "completed",
+        "knot status should be completed after processing"
+    );
+
+    // 3. GET /looms/:id/activity → contains StrandProcessed entry
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/http-loom/activity", 30, 100)
+            .expect("activity endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+
+    // Find StrandProcessed event
+    let has_strand_processed = events.iter().any(|e| {
+        e.get("StrandProcessed").is_some()
+            || e.get("strand_path").is_some()
+    });
+    assert!(
+        has_strand_processed,
+        "activity log should contain StrandProcessed entry, got {events:?}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Two looms with different source dirs and tie-off points.
+///
+/// 1. Create strand in loom A → tie-off in A's point only
+/// 2. Create strand in loom B → tie-off in B's point only
+/// 3. No cross-interference (A's knots don't process B's strands)
+#[test]
+fn multiple_looms_independent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Loom A
+    let loom_a_dir = base_dir.join("loom-a");
+    fs::create_dir(&loom_a_dir).unwrap();
+    fs::write(
+        loom_a_dir.join("review.md"),
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+    )
+    .unwrap();
+
+    // Loom B
+    let loom_b_dir = base_dir.join("loom-b");
+    fs::create_dir(&loom_b_dir).unwrap();
+    fs::write(
+        loom_b_dir.join("review.md"),
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+    )
+    .unwrap();
+
+    let port = 31994;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo 'processed'".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify both looms are registered
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 2, "should have 2 looms");
+
+    // Collect loom IDs from the response
+    let loom_ids: Vec<_> =
+        summaries.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert!(
+        loom_ids.contains(&"loom-a"),
+        "loom-a should be registered"
+    );
+    assert!(
+        loom_ids.contains(&"loom-b"),
+        "loom-b should be registered"
+    );
+
+    // 1. Create strand in loom A
+    let strand_a_path = loom_a_dir.join("strand-a.md");
+    fs::write(&strand_a_path, "content for A").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Tie-off appears only in A's output directory
+    let tie_off_a = loom_a_dir.join(".knot-output/strand-a.md.output");
+    assert!(
+        tie_off_a.exists(),
+        "tie-off should exist in loom A: {}",
+        tie_off_a.display()
+    );
+
+    // 2. Create strand in loom B
+    let strand_b_path = loom_b_dir.join("strand-b.md");
+    fs::write(&strand_b_path, "content for B").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Tie-off appears only in B's output directory
+    let tie_off_b = loom_b_dir.join(".knot-output/strand-b.md.output");
+    assert!(
+        tie_off_b.exists(),
+        "tie-off should exist in loom B: {}",
+        tie_off_b.display()
+    );
+
+    // 3. No cross-interference
+    // A's tie-off dir should NOT contain B's strand output
+    let tie_off_dir_a = loom_a_dir.join(".knot-output");
+    let files_in_a: Vec<_> =
+        fs::read_dir(&tie_off_dir_a)
+            .expect("should read tie-off dir A")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+    assert!(
+        !files_in_a.iter().any(|f| f.contains("strand-b")),
+        "loom A should not contain loom B's strand output, got {files_in_a:?}"
+    );
+
+    // B's tie-off dir should NOT contain A's strand output
+    let tie_off_dir_b = loom_b_dir.join(".knot-output");
+    let files_in_b: Vec<_> =
+        fs::read_dir(&tie_off_dir_b)
+            .expect("should read tie-off dir B")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+    assert!(
+        !files_in_b.iter().any(|f| f.contains("strand-a")),
+        "loom B should not contain loom A's strand output, got {files_in_b:?}"
+    );
+
+    let _ = shutdown.send(());
+}

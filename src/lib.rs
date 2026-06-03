@@ -251,7 +251,7 @@ pub async fn start_server_with_shutdown(
     // Start file watchers on each loom source directory
     let _event_source = {
         use application::ports::EventSource;
-        let mut source =
+        let source =
             adapters::outbound::NotifyEventSource::new(event_sender);
         for loom in &looms {
             let knot_id = loom.knots
@@ -260,7 +260,12 @@ pub async fn start_server_with_shutdown(
                 .unwrap_or_else(|| {
                     domain::entities::KnotId("default".to_string())
                 });
-            source = source.with_ids(loom.id.clone(), knot_id);
+            // Register IDs for this loom's source directory
+            source.with_loom_ids(
+                loom.source_dir.clone(),
+                loom.id.clone(),
+                knot_id,
+            );
             if let Err(e) = source.watch(&loom.source_dir) {
                 eprintln!(
                     "WARNING: failed to watch {}: {e}",

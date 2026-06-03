@@ -144,7 +144,7 @@ impl NotifyEventSource {
     ///
     /// Call this before `watch()` so events can carry the correct
     /// `loom_id` and `knot_id`. The IDs apply to all subsequently
-    /// watched directories.
+    /// watched directories (used as a fallback).
     pub fn with_ids(self, loom_id: LoomId, knot_id: KnotId) -> Self {
         self.state
             .lock()
@@ -153,16 +153,42 @@ impl NotifyEventSource {
             .insert(PathBuf::from("__default_ids__"), (loom_id, knot_id));
         self
     }
+
+    /// Set the loom and knot IDs for a specific source directory.
+    ///
+    /// Call this for each loom's source directory before `watch()` so
+    /// events carry the correct `loom_id` and `knot_id` per directory.
+    /// This enables multiple looms to share a single event source.
+    pub fn with_loom_ids(
+        &self,
+        source_dir: PathBuf,
+        loom_id: LoomId,
+        knot_id: KnotId,
+    ) {
+        self.state
+            .lock()
+            .unwrap()
+            .watched_dirs
+            .insert(source_dir, (loom_id, knot_id));
+    }
 }
 
 impl EventSource for NotifyEventSource {
     fn watch(&self, path: &Path) -> Result<(), PortError> {
         {
             let mut inner = self.state.lock().unwrap();
+
+            // Check if IDs were registered for this specific directory
             let ids = inner
                 .watched_dirs
-                .get(&PathBuf::from("__default_ids__"))
+                .get(path)
                 .cloned()
+                // Fall back to default IDs if no per-directory mapping
+                .or_else(|| {
+                    inner.watched_dirs
+                        .get(&PathBuf::from("__default_ids__"))
+                        .cloned()
+                })
                 .unwrap_or_else(|| {
                     (
                         LoomId("unknown".to_string()),
@@ -171,7 +197,7 @@ impl EventSource for NotifyEventSource {
                 });
             inner
                 .watched_dirs
-                .insert(path.to_path_buf().clone(), ids);
+                .insert(path.to_path_buf(), ids);
         }
 
         self.watcher
