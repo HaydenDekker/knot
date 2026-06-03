@@ -12,8 +12,10 @@ use crate::domain::entities::{Loom, LoomId};
 
 /// In-memory registry of looms.
 ///
-/// Thread-safe via `Arc<RwLock<...>>`. Methods return clones to avoid
-/// holding locks across call boundaries.
+/// Thread-safe via `Arc<RwLock<...>>`. Cloning the store is cheap —
+/// it clones the `Arc`, not the inner data. Methods return clones to
+/// avoid holding locks across call boundaries.
+#[derive(Clone)]
 pub struct LoomStore {
     looms: Arc<RwLock<HashMap<LoomId, Loom>>>,
 }
