@@ -49,16 +49,16 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 0: Composition Root (main.rs)
 **Failing tests created:** `integration::tests::app_starts_and_serves_health`, `integration::tests::app_loads_workspace_agent_config`
 
-- [ ] Failing test: `integration::tests::app_starts_and_serves_health` — `main()` starts HTTP server, `GET /health` returns `200 ok`
-- [ ] Failing test: `integration::tests::app_loads_workspace_agent_config` — `WorkspaceAgentConfig` is loaded (defaults: `pi` CLI); accessible in `AppContext`
-- [ ] Refactor `main.rs` to:
+- [x] Failing test: `integration::tests::app_starts_and_serves_health` — `main()` starts HTTP server, `GET /health` returns `200 ok`
+- [x] Failing test: `integration::tests::app_loads_workspace_agent_config` — `WorkspaceAgentConfig` is loaded (defaults: `pi` CLI); accessible in `AppContext`
+- [x] Refactor `main.rs` to:
   1. Load `WorkspaceAgentConfig` (defaults or from a config file — keep simple for now)
   2. Create outbound adapter instances (`FileSystemLoomRepository`, `FileSystemKnotStateStore`, `FileSystemLoomLog`, `NotifyEventSource`, `SubprocessAgentRunner`, `FileSystemTieOffSink`)
   3. Create `LoomStore`, create use cases with port instances
   4. Create `AppContext` holding store + ports + use cases
   5. Build axum router with `build_app(AppContext)`
   6. Bind to `127.0.0.1:3000`, start server
-- [ ] **Alert:** `main.rs` is the composition root — it knows about all layers. This is the only place where all layers meet.
+- [x] **Alert:** `main.rs` is the composition root — it knows about all layers. This is the only place where all layers meet.
 
 ### Phase 1: Startup Discovery and Watcher Boot
 **Failing tests created:** `integration::tests::startup_discovers_looms`, `integration::tests::startup_starts_watchers`, `integration::tests::startup_creates_state_files`
