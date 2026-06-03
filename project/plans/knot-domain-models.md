@@ -89,12 +89,12 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 ### Phase 2: Domain Events
 **Failing tests created:** `domain::events::tests::strand_event_types`, `domain::events::tests::tieoff_produced_event`, `domain::events::tests::processing_failed_event`, `domain::events::tests::loom_event_types`
 
-- [ ] Failing test: `domain::events::tests::strand_event_types` — construct `StrandEvent::Created`, `Modified`, `Deleted` with loom ID, knot ID, strand path; verify all variants
-- [ ] Failing test: `domain::events::tests::tieoff_produced_event` — `TieOffProduced` with knot ID, strand path, tie-off path; verify serialisation
-- [ ] Failing test: `domain::events::tests::processing_failed_event` — `ProcessingFailed` with knot ID, strand path, error message; verify error details preserved
-- [ ] Failing test: `domain::events::tests::loom_event_types` — `LoomEvent::KnotRegistered`, `LoomStarted`, `LoomStopped`, `StrandProcessed`; verify all variants
-- [ ] Failing test: `domain::events::tests::knot_registered_event` — `KnotRegistered` with loom ID and knot ID; verify construction
-- [ ] Implement domain event enums in `src/domain/events.rs`
+- [x] Failing test: `domain::events::tests::strand_event_types` — construct `StrandEvent::Created`, `Modified`, `Deleted` with loom ID, knot ID, strand path; verify all variants
+- [x] Failing test: `domain::events::tests::tieoff_produced_event` — `TieOffProduced` with knot ID, strand path, tie-off path; verify serialisation
+- [x] Failing test: `domain::events::tests::processing_failed_event` — `ProcessingFailed` with knot ID, strand path, error message; verify error details preserved
+- [x] Failing test: `domain::events::tests::loom_event_types` — `LoomEvent::KnotRegistered`, `LoomStarted`, `LoomStopped`, `StrandProcessed`; verify all variants
+- [x] Failing test: `domain::events::tests::knot_registered_event` — `KnotRegistered` with loom ID and knot ID; verify construction
+- [x] Implement domain event enums in `src/domain/events.rs`
 - [ ] Events are serialisable (for writing to loom-log / knot-state later)
 
 ### Phase 3: Knot File Format Validation
