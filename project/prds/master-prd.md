@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-06-03
+> **Last Updated:** 2026-06-04
 
 ## How to Add a PRD
 
@@ -19,11 +19,20 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | 🔵 Open | 2026-06-04 |
 | [AI-Driven File Generation from Workspace Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
 
 ---
 
 ## PRD Summaries
+
+### Knot Skills — AI-Driven Configuration via Skills
+
+**Status:** 🔵 Open
+**Created:** 2026-06-04
+**Summary:** AI skills (knot-init, knots-and-looms, knot-inspect) that configure Knot through natural language via its HTTP API, backed by an auto-generated Swagger UI.
+
+Full details in [prd-knot-skills.md](prd-knot-skills.md).
 
 ### AI-Driven File Generation from Workspace Events
 

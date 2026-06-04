@@ -23,9 +23,7 @@ Three issues were discovered during test-project integration:
 - Agent CLI failures produce a `Failed` knot-state entry with the error message and a `StrandProcessed` event that includes the error details in the loom-log.
 - All changes are covered by unit tests (adapter layer) and integration tests (full pipeline).
 
-## Implementation Status: ✅ Complete
-
-**Completed:** 2026-06-04
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Hex Layer: Outbound Adapters + Application
 

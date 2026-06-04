@@ -27,11 +27,11 @@ Knot requires a mechanism to **react to file system events in a watched workspac
 >
 > - **Knot-state** — A per-knot file that records processing events and status for that knot. Contains event type, strand path, tie-off path, and any errors. All knot-level HTTP status is sourced from this file.
 
-- [ ] Users can configure one or more **looms**, each being a directory containing one or more knot definition files.
-- [ ] When a file is **created, modified, or deleted** in a watched source directory, Knot triggers the relevant loom knot(s) with the file content — no manual user invocation required.
-- [ ] The agent works in any directories it is configured to utilise, and at the end of its session produces a **tie-off** (final response or error) that is written to the configured target directory with the target name.
-- [ ] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service.
-- [ ] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors.
+- [x] Users can configure one or more **looms**, each being a directory containing one or more knot definition files. (*Plans 1–5*)
+- [x] When a file is **created, modified, or deleted** in a watched source directory, Knot triggers the relevant loom knot(s) with the file content — no manual user invocation required. (*Plans 2, 3, 5*)
+- [x] The agent works in any directories it is configured to utilise, and at the end of its session produces a **tie-off** (final response or error) that is written to the configured target directory with the target name. (*Plans 3, 5, 6, 7*)
+- [x] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. (*Plans 2, 4*)
+- [x] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors. (*Plans 2, 4*)
 
 ## Non-Goals
 
@@ -89,12 +89,12 @@ As a developer, I want to check the status of my loom and individual knots, so t
 
 ## Success Criteria
 
-- [ ] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
-- [ ] Strand events trigger the knot's agent, producing a **tie-off** in the configured tie-off point within a reasonable time (under 30 seconds for typical files).
-- [ ] A **loom-log** file records loom-level activity (knots detected, loom events) and is queryable via the HTTP interface.
-- [ ] Each knot maintains a **knot-state** file recording its processing events and status, queryable via the HTTP interface.
-- [ ] All HTTP-exposed state is sourced from the filesystem — the HTTP interface reflects loom-log and knot-state files.
-- [ ] Multiple configured looms operate independently without cross-interference.
+- [x] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
+- [x] Strand events trigger the knot's agent, producing a **tie-off** in the configured tie-off point within a reasonable time (under 30 seconds for typical files).
+- [x] A **loom-log** file records loom-level activity (knots detected, loom events) and is queryable via the HTTP interface.
+- [x] Each knot maintains a **knot-state** file recording its processing events and status, queryable via the HTTP interface.
+- [x] All HTTP-exposed state is sourced from the filesystem — the HTTP interface reflects loom-log and knot-state files.
+- [x] Multiple configured looms operate independently without cross-interference.
 
 ## Dependencies & Constraints
 
@@ -104,4 +104,25 @@ As a developer, I want to check the status of my loom and individual knots, so t
 - **External dependency:** Knot calls an external agent CLI to execute knots. Initially this is **pi** (`pi.dev` CLI). The user configures `agent-config` in the knot with CLI arguments (e.g. `--no-tools`), and Knot parses the knot config to construct the full CLI invocation (provider, model, skills, tools, system prompt).
 - **Configuration constraint:** Knot is started with respect to its workspace directory and discovers looms and knots by scanning downward from there. No separate top-level config file is required. The scanning rule may be constrained further in future.
 
-## Implementation Status: 🔵 Open
+## Implementation Status: ✅ Complete (2026-06-04)
+
+All 7 plans contributing to this PRD are complete.
+
+### Status Note — 2026-06-04
+
+All goals are achieved. Seven plans were executed across the domain, application, outbound adapter, inbound adapter, and composition root layers:
+
+1. **Knot Domain Models** (Plan 1) — Entities, value objects, events, knot file parser.
+2. **Application Layer — Ports and Use Cases** (Plan 2) — Port traits, use cases, debounce engine, processing state machine.
+3. **Outbound Adapters** (Plan 3) — Filesystem IO, `notify` watching, subprocess execution, tie-off writing.
+4. **Loom HTTP Interface** (Plan 4) — Axum handlers and routes for all loom/knot operations.
+5. **System Integration and Wiring** (Plan 5) — Composition root, event pipeline, end-to-end integration tests, graceful shutdown.
+6. **Loom Config, Path Resolution and Agent Error Logging** (Plan 6) — `.loom-config.yaml` for external source/tie-off directories, canonical path resolution, agent error visibility in knot-state and loom-log.
+7. **pi Agent Integration** (Plan 7) — `AgentConfig` extended with provider/model/tools; `pi` CLI invocation constructed from knot config; strand content passed to agent.
+
+**Exceptions:**
+
+- **Real `pi` integration test skipped** — Plan 7 Phase 3 used a stub script (`stub-pi.sh`) instead of calling the real `pi` CLI, as the integration test does not require an API key. A real `pi` call would need provider credentials and is not automated in CI. This is noted in Plan 7 as Option A (unselected).
+- **No real LLM calls in test suite** — All integration tests use mock or stub agents. The tie-off content reflects whatever the stub returns, not actual LLM output. End-to-end verification with a real LLM is manual.
+- **Debounce window fixed at 100ms** — The `DebounceEngine` uses a hardcoded 100ms window. Not yet configurable via loom config.
+- **`WorkspaceAgentConfig` loaded from defaults only** — The PRD envisions workspace-level config discovery; currently `main.rs` loads defaults (`cli_path = "pi"`, `cli_args = []`). Config file loading is not yet implemented.

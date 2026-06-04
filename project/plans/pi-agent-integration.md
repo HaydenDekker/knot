@@ -36,7 +36,7 @@ Concretely:
 - Tie-off files contain the agent's actual output
 - Tests verify the CLI invocation is constructed correctly (adapter-focused, no real `pi` call needed)
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Hex Layer: Domain → Application → Outbound Adapters
 

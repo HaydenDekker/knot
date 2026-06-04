@@ -114,6 +114,41 @@ impl AppConfig {
     }
 }
 
+/// Load the workspace agent configuration from `.workspace-agent-config.yaml`
+/// in the given directory. Falls back to `default` if the file does not
+/// exist or cannot be parsed.
+fn load_workspace_config(
+    base_dir: &std::path::Path,
+    default: WorkspaceAgentConfig,
+) -> WorkspaceAgentConfig {
+    let config_path = base_dir.join(".workspace-agent-config.yaml");
+    if !config_path.exists() {
+        return default;
+    }
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "WARNING: could not read {}: {}, using defaults",
+                config_path.display(),
+                e
+            );
+            return default;
+        }
+    };
+    match serde_yaml::from_str::<WorkspaceAgentConfig>(&content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "WARNING: malformed YAML in {}: {}, using defaults",
+                config_path.display(),
+                e
+            );
+            default
+        }
+    }
+}
+
 /// Build the `AppContext` by wiring together all hex layers.
 ///
 /// Creates:
@@ -130,6 +165,10 @@ pub fn build_app_context(
     config: &AppConfig,
 ) -> (AppContext, mpsc::Receiver<StrandEvent>) {
     let store = application::store::LoomStore::new();
+
+    // Load workspace config from .workspace-agent-config.yaml (falls back to defaults).
+    let workspace_config =
+        load_workspace_config(&config.base_dir, config.workspace_config.clone());
 
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
@@ -164,7 +203,7 @@ pub fn build_app_context(
             tie_off_sink,
             event_sender: event_tx,
             agent_runner,
-            workspace_config: config.workspace_config.clone(),
+            workspace_config,
             loom_ids: Vec::new(),
         },
         event_rx,
