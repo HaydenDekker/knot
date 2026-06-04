@@ -1276,3 +1276,316 @@ fn full_pipeline_agent_error_in_state_and_log() {
 
     let _ = shutdown.send(());
 }
+
+// ── Phase 3: Full Integration Verification ──────────────────────────────
+
+/// End-to-end test combining `.loom-config.yaml` external directories with
+/// a nonexistent agent CLI.
+///
+/// 1. Loom with `.loom-config.yaml` pointing `source_dir` to an external
+///    directory and `tie_off_dir` to a separate output directory.
+/// 2. Nonexistent agent CLI (`/no/such/agent`).
+/// 3. Create strand in external source → triggers processing → agent fails.
+/// 4. Verify:
+///    - Loom discovered with correct absolute `source_dir` and `tie_off_dir`.
+///    - Knot-state shows `Failed` with descriptive error.
+///    - Loom-log contains `StrandProcessed` with error details.
+///    - Tie-off file written at external `tie_off_dir` with `Failed` status.
+#[test]
+fn full_pipeline_external_source_with_agent_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // External source directory (outside the scanned workspace).
+    let external_source = root.join("external-source");
+    fs::create_dir(&external_source).unwrap();
+
+    // External tie-off directory (where output lands).
+    let external_tie_off = root.join("external-output");
+    fs::create_dir(&external_tie_off).unwrap();
+
+    // Workspace subdirectory (what the server scans for looms).
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+
+    // Loom directory with knot definition.
+    let loom_dir = workspace.join("error-external-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // .loom-config.yaml: point source and tie-off to external dirs.
+    let config_content = format!(
+        "source_dir: {}\ntie_off_dir: {}",
+        external_source.display(),
+        external_tie_off.display()
+    );
+    fs::write(loom_dir.join(".loom-config.yaml"), config_content).unwrap();
+
+    let port = 32001;
+    let host_port = format!("127.0.0.1:{port}");
+
+    // Use a nonexistent agent CLI path.
+    let config = AppConfig {
+        base_dir: workspace.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "/no/such/agent".to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // 1. Verify loom discovered with correct absolute source_dir and
+    //    tie_off_dir via HTTP endpoint.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/error-external-loom", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        loom["source_dir"].as_str().unwrap(),
+        external_source.to_string_lossy(),
+        "source_dir should point to external directory"
+    );
+    assert_eq!(
+        loom["tie_off_dir"].as_str().unwrap(),
+        external_tie_off.to_string_lossy(),
+        "tie_off_dir should point to external output directory"
+    );
+
+    // 2. Create strand in external source directory → triggers processing.
+    let strand_path = external_source.join("error-strand.md");
+    fs::write(&strand_path, "external error strand content").unwrap();
+
+    // Wait for debounce + processing.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 3. Verify knot-state shows `Failed` with descriptive error.
+    let (status, body) =
+        http_get(&host_port, "/looms/_/knots/review-knot")
+            .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "failed",
+        "knot state should be failed"
+    );
+    assert!(
+        knot_status["state"]["error"].is_string(),
+        "knot state should have error message"
+    );
+    let error_msg = knot_status["state"]["error"].as_str().unwrap();
+    assert!(
+        error_msg.contains("command not found"),
+        "error should mention command not found, got: {error_msg}"
+    );
+
+    // 4. Verify loom-log contains `StrandProcessed` with error details.
+    let log_path = workspace.join("error-external-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        log_content.contains("StrandProcessed"),
+        "loom log should contain StrandProcessed entry"
+    );
+    assert!(
+        log_content.contains("command not found"),
+        "loom log should contain error details, got: {log_content}"
+    );
+
+    // 5. Verify tie-off file written at external `tie_off_dir` with Failed
+    //    content.
+    let tie_off_path =
+        external_tie_off.join("error-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist in external output: {}",
+        tie_off_path.display()
+    );
+    let tie_off_content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        tie_off_content.contains("Processing failed"),
+        "tie-off should contain 'Processing failed', got: {tie_off_content}"
+    );
+    assert!(
+        tie_off_content.contains("command not found"),
+        "tie-off should contain error details, got: {tie_off_content}"
+    );
+
+    // Tie-off should NOT appear in the loom's default .knot-output.
+    let default_tie_off = loom_dir.join(".knot-output/error-strand.md.output");
+    assert!(
+        !default_tie_off.exists(),
+        "tie-off should NOT be in default .knot-output"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// End-to-end test combining `.loom-config.yaml` external directories with
+/// a mock agent CLI (`echo "summary"`). Verifies the full happy path with
+/// external source and output directories.
+///
+/// 1. Loom with `.loom-config.yaml` pointing `source_dir` to an external
+///    directory and `tie_off_dir` to a separate output directory.
+/// 2. Mock agent CLI (`sh -c 'echo summary'`).
+/// 3. Create strand in external source → triggers processing → agent succeeds.
+/// 4. Verify:
+///    - Loom discovered with correct absolute `source_dir` and `tie_off_dir`.
+///    - Knot-state shows `completed`.
+///    - Loom-log contains `StrandProcessed` with no error.
+///    - Tie-off file written at external `tie_off_dir` with agent output.
+///    - Tie-off NOT in default `.knot-output`.
+#[test]
+fn full_pipeline_external_source_with_mock_agent_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // External source directory (outside the scanned workspace).
+    let external_source = root.join("external-source");
+    fs::create_dir(&external_source).unwrap();
+
+    // External tie-off directory (where output lands).
+    let external_tie_off = root.join("external-output");
+    fs::create_dir(&external_tie_off).unwrap();
+
+    // Workspace subdirectory (what the server scans for looms).
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+
+    // Loom directory with knot definition.
+    let loom_dir = workspace.join("success-external-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // .loom-config.yaml: point source and tie-off to external dirs.
+    let config_content = format!(
+        "source_dir: {}\ntie_off_dir: {}",
+        external_source.display(),
+        external_tie_off.display()
+    );
+    fs::write(loom_dir.join(".loom-config.yaml"), config_content).unwrap();
+
+    let port = 32002;
+    let host_port = format!("127.0.0.1:{port}");
+
+    // Use a mock agent CLI that echoes "summary".
+    let config = AppConfig {
+        base_dir: workspace.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo summary".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // 1. Verify loom discovered with correct absolute source_dir and
+    //    tie_off_dir via HTTP endpoint.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/success-external-loom", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        loom["source_dir"].as_str().unwrap(),
+        external_source.to_string_lossy(),
+        "source_dir should point to external directory"
+    );
+    assert_eq!(
+        loom["tie_off_dir"].as_str().unwrap(),
+        external_tie_off.to_string_lossy(),
+        "tie_off_dir should point to external output directory"
+    );
+
+    // 2. Create strand in external source directory.
+    let strand_path = external_source.join("success-strand.md");
+    fs::write(&strand_path, "external success strand content").unwrap();
+
+    // Wait for debounce + processing.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 3. Verify knot-state shows `completed`.
+    let (status, body) =
+        http_get(&host_port, "/looms/_/knots/review-knot")
+            .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "completed",
+        "knot state should be completed"
+    );
+    assert!(
+        knot_status["state"]["error"].is_null(),
+        "knot state should have no error on success"
+    );
+
+    // 4. Verify loom-log contains `StrandProcessed` with no error.
+    let log_path = workspace.join("success-external-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        log_content.contains("StrandProcessed"),
+        "loom log should contain StrandProcessed entry"
+    );
+    // On success the error field is null/absent in the JSON.
+    assert!(
+        log_content.contains("success-strand.md"),
+        "loom log should reference the strand filename"
+    );
+
+    // 5. Verify tie-off file written at external `tie_off_dir` with agent
+    //    output.
+    let tie_off_path =
+        external_tie_off.join("success-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist in external output: {}",
+        tie_off_path.display()
+    );
+    let tie_off_content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        tie_off_content.contains("summary"),
+        "tie-off should contain agent output 'summary', got: \
+         {tie_off_content}"
+    );
+
+    // Tie-off should NOT appear in the loom's default .knot-output.
+    let default_tie_off =
+        loom_dir.join(".knot-output/success-strand.md.output");
+    assert!(
+        !default_tie_off.exists(),
+        "tie-off should NOT be in default .knot-output"
+    );
+
+    let _ = shutdown.send(());
+}
