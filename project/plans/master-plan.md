@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 10 | [Knot-Per-Strand Config and Loom-Log State](knot-per-strand-and-loom-log-state.md) | ⬜ Planned | 2026-06-04 |
 | 9 | [Knot Skills and Swagger UI](knot-skills-and-swagger.md) | ✅ Complete | 2026-06-04 |
 | 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ✅ Complete | 2026-06-04 |
 | 7 | [pi Agent Integration](pi-agent-integration.md) | ✅ Complete | 2026-06-04 |
@@ -61,6 +62,12 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 10. Knot-Per-Strand Config and Loom-Log State
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-04
+**Goal:** Move source/tie-off config into each knot (removing loom-level `.loom-config.yaml`), and consolidate knot-state events into the loom-log.
 
 ### 9. Knot Skills and Swagger UI
 
