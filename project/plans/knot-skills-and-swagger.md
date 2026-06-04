@@ -18,7 +18,7 @@ When this plan is done:
 2. Three skill files exist (`knot-init`, `knots-and-looms`, `knot-inspect`) that instruct an AI agent to configure Knot via its HTTP API.
 3. Integration tests verify the skills work end-to-end by calling `pi` in a test directory.
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Existing Tests
 
