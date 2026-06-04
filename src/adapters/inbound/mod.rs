@@ -573,6 +573,8 @@ mod tests {
                         input_bundling: "full-file".to_string(),
                         instructions: "check it".to_string(),
                     },
+                    source_dir: None,
+                    tie_off_dir: None,
                 })
                 .collect(),
         }

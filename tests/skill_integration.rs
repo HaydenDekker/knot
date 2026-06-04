@@ -138,6 +138,8 @@ fn build_context_with_loom() -> AppContext {
                 input_bundling: "full-file".to_string(),
                 instructions: "Review this document.".to_string(),
             },
+            source_dir: None,
+            tie_off_dir: None,
         }],
     };
     ctx.store.register(test_loom);
@@ -691,6 +693,8 @@ async fn knot_inspect_knot_status_with_state() {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
+            source_dir: None,
+            tie_off_dir: None,
         }],
     });
     let app = knot::adapters::inbound::build_app(ctx);

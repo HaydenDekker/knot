@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::domain::value_objects::{AgentConfig, PromptTemplate};
 
@@ -53,6 +54,10 @@ pub struct KnotFile {
     pub agent_config: AgentConfig,
     /// Prompt template extracted from frontmatter.
     pub prompt_template: PromptTemplate,
+    /// Optional per-knot source directory.
+    pub source_dir: Option<PathBuf>,
+    /// Optional per-knot tie-off directory.
+    pub tie_off_dir: Option<PathBuf>,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -63,6 +68,10 @@ struct RawFrontmatter {
     agent_config: Option<RawAgentConfig>,
     #[serde(rename = "prompt-template")]
     prompt_template: Option<RawPromptTemplate>,
+    #[serde(rename = "source-dir")]
+    source_dir: Option<String>,
+    #[serde(rename = "tie-off-dir")]
+    tie_off_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,10 +155,24 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     let prompt_template = PromptTemplate::new(input_bundling, instructions)
         .map_err(|_| KnotFileError::MissingPromptTemplate)?;
 
+    // Parse optional source-dir
+    let source_dir = raw
+        .source_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+
+    // Parse optional tie-off-dir
+    let tie_off_dir = raw
+        .tie_off_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+
     Ok(KnotFile {
         name,
         agent_config,
         prompt_template,
+        source_dir,
+        tie_off_dir,
     })
 }
 
@@ -207,6 +230,92 @@ This knot reviews the goals section of PRD documents.
         assert!(file.agent_config.tools.is_empty());
         assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
+        assert!(file.source_dir.is_none());
+        assert!(file.tie_off_dir.is_none());
+    }
+
+    #[test]
+    fn knot_file_with_source_and_tieoff_dirs() {
+        let content = "---
+name: custom-dirs-knot
+agent-config:
+  goal: \"Review with custom dirs\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"../custom-source\"
+tie-off-dir: \"../custom-output\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review the document\"
+---
+
+Body.
+";
+
+        let file = parse(content).unwrap();
+        assert_eq!(file.name, "custom-dirs-knot");
+        assert_eq!(
+            file.source_dir,
+            Some(PathBuf::from("../custom-source"))
+        );
+        assert_eq!(
+            file.tie_off_dir,
+            Some(PathBuf::from("../custom-output"))
+        );
+    }
+
+    #[test]
+    fn knot_file_with_only_source_dir() {
+        let content = "---
+name: source-only-knot
+agent-config:
+  goal: \"Review\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"../my-source\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review the document\"
+---
+
+Body.
+";
+
+        let file = parse(content).unwrap();
+        assert_eq!(
+            file.source_dir,
+            Some(PathBuf::from("../my-source"))
+        );
+        assert!(file.tie_off_dir.is_none());
+    }
+
+    #[test]
+    fn knot_file_empty_dir_values_treated_as_none() {
+        let content = "---
+name: empty-dirs-knot
+agent-config:
+  goal: \"Review\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"  \"
+tie-off-dir: \"\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review the document\"
+---
+
+Body.
+";
+
+        let file = parse(content).unwrap();
+        assert!(
+            file.source_dir.is_none(),
+            "whitespace-only source-dir should be None"
+        );
+        assert!(
+            file.tie_off_dir.is_none(),
+            "empty tie-off-dir should be None"
+        );
     }
 
     #[test]
@@ -345,6 +454,8 @@ No frontmatter at all.";
                 "do it".to_string(),
             )
             .unwrap(),
+            source_dir: Some(PathBuf::from("src/test")),
+            tie_off_dir: Some(PathBuf::from("out/test")),
         };
 
         let json = serde_json::to_string(&file).unwrap();

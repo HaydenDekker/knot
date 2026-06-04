@@ -50,6 +50,12 @@ pub struct Knot {
     pub id: KnotId,
     pub agent_config: AgentConfig,
     pub prompt_template: PromptTemplate,
+    /// Optional per-knot source directory. Falls back to loom-level config.
+    #[schema(value_type = Option<String>)]
+    pub source_dir: Option<PathBuf>,
+    /// Optional per-knot tie-off directory. Falls back to loom-level config.
+    #[schema(value_type = Option<String>)]
+    pub tie_off_dir: Option<PathBuf>,
 }
 
 /// A Loom orchestrates a collection of Knots over a source directory,
@@ -102,11 +108,43 @@ mod tests {
             id: id.clone(),
             agent_config: agent_config.clone(),
             prompt_template: prompt_template.clone(),
+            source_dir: None,
+            tie_off_dir: None,
         };
 
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_config, agent_config);
         assert_eq!(knot.prompt_template, prompt_template);
+        assert!(knot.source_dir.is_none());
+        assert!(knot.tie_off_dir.is_none());
+    }
+
+    #[test]
+    fn knot_construction_with_directories() {
+        let knot = Knot {
+            id: KnotId("custom-dirs".to_string()),
+            agent_config: AgentConfig {
+                goal: "Review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
+            },
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "Check it.".to_string(),
+            },
+            source_dir: Some(PathBuf::from("../custom-source")),
+            tie_off_dir: Some(PathBuf::from("../custom-output")),
+        };
+
+        assert_eq!(
+            knot.source_dir,
+            Some(PathBuf::from("../custom-source"))
+        );
+        assert_eq!(
+            knot.tie_off_dir,
+            Some(PathBuf::from("../custom-output"))
+        );
     }
 
     #[test]
@@ -126,6 +164,8 @@ mod tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
+            source_dir: None,
+            tie_off_dir: None,
         }];
 
         let loom = Loom {
@@ -204,6 +244,8 @@ mod tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
+            source_dir: Some(PathBuf::from("src")),
+            tie_off_dir: Some(PathBuf::from("out")),
         };
 
         let json = serde_json::to_string(&knot).unwrap();

@@ -201,6 +201,8 @@ impl FileSystemLoomRepository {
             id: KnotId(file.name.clone()),
             agent_config: file.agent_config,
             prompt_template: file.prompt_template,
+            source_dir: file.source_dir,
+            tie_off_dir: file.tie_off_dir,
         }
     }
 }
@@ -300,6 +302,24 @@ prompt-template:
 # Review Knot
 
 This knot reviews PRD goals.
+";
+
+    const KNOT_WITH_DIRS_CONTENT: &str = "---
+name: custom-dirs-knot
+agent-config:
+  goal: \"Review with custom dirs\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"../external-source\"
+tie-off-dir: \"../external-output\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review with custom dirs\"
+---
+
+# Custom Dirs Knot
+
+This knot has custom source and tie-off directories.
 ";
 
     /// Write a knot definition file with the given name and content.
@@ -876,6 +896,68 @@ broken: yaml: [
         assert_eq!(
             resolved, target,
             "absolute path should resolve to the target"
+        );
+    }
+
+    #[test]
+    fn scan_parses_per_knot_source_and_tieoff_dirs() {
+        let rig = tempfile::tempdir().unwrap();
+
+        let loom_dir = rig.path().join("per-knot-dirs-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // One knot with custom directories.
+        create_knot_file(
+            &loom_dir,
+            "custom-knot",
+            KNOT_WITH_DIRS_CONTENT,
+        )
+        .unwrap();
+
+        // One knot without custom directories.
+        create_knot_file(&loom_dir, "default-knot", VALID_KNOT_CONTENT)
+            .unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(rig.path());
+
+        assert!(result.is_ok());
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
+
+        let loom = &looms[0];
+        assert_eq!(loom.knots.len(), 2, "loom should have 2 knots");
+
+        // Find knots by name.
+        let custom_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("custom-dirs-knot".to_string()))
+            .expect("custom-dirs-knot should exist");
+        let default_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("review-knot".to_string()))
+            .expect("review-knot should exist");
+
+        // Custom knot should have directories set.
+        assert!(
+            custom_knot.source_dir.is_some(),
+            "custom knot should have source_dir"
+        );
+        assert!(
+            custom_knot.tie_off_dir.is_some(),
+            "custom knot should have tie_off_dir"
+        );
+
+        // Default knot should have None for both.
+        assert!(
+            default_knot.source_dir.is_none(),
+            "default knot should not have source_dir"
+        );
+        assert!(
+            default_knot.tie_off_dir.is_none(),
+            "default knot should not have tie_off_dir"
         );
     }
 }

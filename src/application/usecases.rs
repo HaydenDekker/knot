@@ -737,6 +737,8 @@ mod tests {
                 "check it".to_string(),
             )
             .unwrap(),
+            source_dir: None,
+            tie_off_dir: None,
         }
     }
 
