@@ -19,8 +19,8 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
-| [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | 🟡 In Progress | 2026-06-04 |
-| [AI-Driven File Generation from Rig Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
+| [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | ✅ Complete | 2026-06-04 |
+| [AI-Driven File Generation from Loom Events](prd-ai-driven-file-generation.md) | ✅ Complete | 2026-06-03 |
 
 ---
 
@@ -28,16 +28,18 @@ To add it to this index:
 
 ### Knot Skills — AI-Driven Configuration via Skills
 
-**Status:** 🟡 In Progress
+**Status:** ✅ Complete
 **Created:** 2026-06-04
+**Completed:** 2026-06-04
 **Summary:** AI skills (knot-init, knots-and-looms, knot-inspect) that configure Knot through natural language via its HTTP API, backed by an auto-generated Swagger UI.
 
 Full details in [prd-knot-skills.md](prd-knot-skills.md).
 
-### AI-Driven File Generation from Rig Events
+### AI-Driven File Generation from Loom Events
 
-**Status:** 🔵 Open
+**Status:** ✅ Complete
 **Created:** 2026-06-03
+**Completed:** 2026-06-04
 **Summary:** Watch a configured rig for file events and use AI to generate corresponding output files in a target directory based on a user-defined goal.
 
 Full details in [prd-ai-driven-file-generation.md](prd-ai-driven-file-generation.md).
