@@ -89,14 +89,14 @@ This plan touches all hexagonal layers:
 - [x] Update handler tests to use new `GetKnotStatus` signature
 - [x] **TDD**: Write handler tests that verify knot status is derived from loom-log
 
-### Phase 5: Composition Root — Re-wire
+### Phase 5: Composition Root — Re-wire ✅
 
-- [ ] Remove `KnotStatePort` from `AppContext`
-- [ ] Remove `FileSystemKnotStateStore` creation from `build_app_context`
-- [ ] Update `start_server_with_shutdown` — no knot-state cleanup needed
-- [ ] Update `run_startup` — no knot-state creation needed
-- [ ] Update `NotifyEventSource` wiring — watch per-knot source directories
-- [ ] **TDD**: Integration test verifies server starts with per-knot source dirs
+- [x] Remove `KnotStatePort` from `AppContext` (already removed in Phase 2)
+- [x] Remove `FileSystemKnotStateStore` creation from `build_app_context` (already removed in Phase 2)
+- [x] Update `start_server_with_shutdown` — no knot-state cleanup needed
+- [x] Update `run_startup` — no knot-state creation needed
+- [x] Update `NotifyEventSource` wiring — watch per-knot source directories
+- [x] **TDD**: Integration test verifies server starts with per-knot source dirs
 
 ### Phase 6: Integration Tests and Verification
 
