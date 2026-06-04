@@ -399,7 +399,7 @@ pub fn build_app(ctx: AppContext) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::{KnotState, PortError};
+    use crate::application::ports::PortError;
     use crate::application::usecases::LoomSummary;
     use crate::domain::entities::{Knot, KnotId, Loom, LoomId, TieOff};
     use crate::domain::events::LoomEvent;
@@ -464,7 +464,7 @@ mod tests {
 
     /// Build an `AppContext` with mock ports for testing.
     fn build_test_context() -> AppContext {
-        build_test_context_with(None, vec![])
+        build_test_context_with_events(vec![])
     }
 
     /// Build an `AppContext` with configurable mock port data.
@@ -484,8 +484,7 @@ mod tests {
         }
     }
 
-    fn build_test_context_with(
-        _knot_state: Option<KnotState>,
+    fn build_test_context_with_events(
         log_events: Vec<LoomEvent>,
     ) -> AppContext {
         let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
@@ -693,7 +692,7 @@ mod tests {
             },
         ];
 
-        let ctx = build_test_context_with(None, events);
+        let ctx = build_test_context_with_events(events);
         let app = build_app(ctx);
 
         let req = Request::builder()
@@ -724,28 +723,28 @@ mod tests {
         }
     }
 
-    /// `GET /looms/:id/knots/:knot_name` returns 200 with knot-state JSON.
-    // TODO: Phase 6 - update test to use loom-log events instead of KnotState
-    #[ignore]
+    /// `GET /looms/:id/knots/:knot_name` returns 200 with knot status
+    /// derived from the latest loom-log event for that knot.
     #[tokio::test]
-    async fn get_knot_status() {
-        let state = KnotState {
-            knot_id: KnotId("k1".to_string()),
-            event_type: crate::application::ports::KnotEventType::Modified,
-            strand_path: crate::domain::entities::StrandPath(
-                PathBuf::from("src/input.md"),
-            ),
-            tie_off_path: Some(
-                crate::domain::entities::TieOffPath(PathBuf::from(
-                    "out/output.md",
-                )),
-            ),
-            status: crate::application::ports::ProcessingStatus::Completed,
-            error: None,
-            last_updated: "2026-06-03T12:00:00Z".to_string(),
-        };
+    async fn get_knot_status_from_loom_log() {
+        let events = vec![
+            LoomEvent::KnotRegistered {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+            },
+            LoomEvent::KnotCompleted {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+                strand_path: crate::domain::entities::StrandPath(
+                    PathBuf::from("src/input.md"),
+                ),
+                tie_off_path: crate::domain::entities::TieOffPath(
+                    PathBuf::from("out/output.md"),
+                ),
+            },
+        ];
 
-        let ctx = build_test_context_with(Some(state), vec![]);
+        let ctx = build_test_context_with_events(events);
         ctx.store.register(build_test_loom("my-loom", &["k1"]));
         let app = build_app(ctx);
 
@@ -762,18 +761,156 @@ mod tests {
         let status: crate::application::usecases::KnotStatus =
             serde_json::from_slice(&body).unwrap();
         assert_eq!(status.knot_id, KnotId("k1".to_string()));
-        // KnotStatus now derived from loom-log, no .state field
+        assert_eq!(status.loom_id, LoomId("my-loom".to_string()));
         assert_eq!(
             status.status,
             crate::application::ports::ProcessingStatus::Completed,
         );
+        assert_eq!(
+            status.last_strand_path,
+            Some(crate::domain::entities::StrandPath(
+                PathBuf::from("src/input.md")
+            )),
+        );
+        assert_eq!(
+            status.last_tie_off_path,
+            Some(crate::domain::entities::TieOffPath(
+                PathBuf::from("out/output.md")
+            )),
+        );
+        assert_eq!(status.last_error, None);
+    }
+
+    /// Knot status derived from `KnotProcessing` loom-log event returns
+    /// `Processing` status with the strand path.
+    #[tokio::test]
+    async fn get_knot_status_processing_from_loom_log() {
+        let events = vec![
+            LoomEvent::KnotRegistered {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+            },
+            LoomEvent::KnotProcessing {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+                strand_path: crate::domain::entities::StrandPath(
+                    PathBuf::from("src/current.md"),
+                ),
+            },
+        ];
+
+        let ctx = build_test_context_with_events(events);
+        ctx.store.register(build_test_loom("my-loom", &["k1"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/my-loom/knots/k1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: crate::application::usecases::KnotStatus =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            status.status,
+            crate::application::ports::ProcessingStatus::Processing,
+        );
+        assert_eq!(
+            status.last_strand_path,
+            Some(crate::domain::entities::StrandPath(
+                PathBuf::from("src/current.md")
+            )),
+        );
+        assert_eq!(status.last_tie_off_path, None);
+        assert_eq!(status.last_error, None);
+    }
+
+    /// Knot status derived from `KnotFailed` loom-log event returns
+    /// `Failed` status with the error message.
+    #[tokio::test]
+    async fn get_knot_status_failed_from_loom_log() {
+        let events = vec![
+            LoomEvent::KnotRegistered {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+            },
+            LoomEvent::KnotFailed {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+                strand_path: crate::domain::entities::StrandPath(
+                    PathBuf::from("src/bad.md"),
+                ),
+                error: "agent timeout".to_string(),
+            },
+        ];
+
+        let ctx = build_test_context_with_events(events);
+        ctx.store.register(build_test_loom("my-loom", &["k1"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/my-loom/knots/k1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: crate::application::usecases::KnotStatus =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            status.status,
+            crate::application::ports::ProcessingStatus::Failed,
+        );
+        assert_eq!(status.last_error, Some("agent timeout".to_string()));
+    }
+
+    /// Knot status derived from only `KnotRegistered` event returns
+    /// `Idle` status.
+    #[tokio::test]
+    async fn get_knot_status_idle_from_loom_log() {
+        let events = vec![
+            LoomEvent::KnotRegistered {
+                loom_id: LoomId("my-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+            },
+        ];
+
+        let ctx = build_test_context_with_events(events);
+        ctx.store.register(build_test_loom("my-loom", &["k1"]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/looms/my-loom/knots/k1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: crate::application::usecases::KnotStatus =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            status.status,
+            crate::application::ports::ProcessingStatus::Idle,
+        );
+        assert_eq!(status.last_strand_path, None);
+        assert_eq!(status.last_tie_off_path, None);
         assert_eq!(status.last_error, None);
     }
 
     /// Unknown knot name returns 404.
     #[tokio::test]
     async fn get_knot_status_not_found() {
-        let ctx = build_test_context_with(None, vec![]);
+        let ctx = build_test_context_with_events(vec![]);
         ctx.store.register(build_test_loom("my-loom", &["k1"]));
         let app = build_app(ctx);
 

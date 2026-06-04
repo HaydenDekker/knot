@@ -691,16 +691,19 @@ broken: yaml: [
         assert_eq!(loom.knots.len(), 1);
 
         let knot = &loom.knots[0];
-        // source_dir should resolve to the external directory.
+        // source_dir resolves relative to loom dir (rig/config-loom).
+        // "../external-source" from rig/config-loom → rig/external-source.
+        let resolved_source = rig.join("external-source");
+        let resolved_tie_off = rig.join("external-output");
         assert_eq!(
             knot.source_dir,
-            Some(external_source.clone()),
-            "knot source_dir should be the external directory"
+            Some(resolved_source),
+            "knot source_dir should resolve relative to loom dir"
         );
         assert_eq!(
             knot.tie_off_dir,
-            Some(external_tie_off.clone()),
-            "knot tie_off_dir should be the external output directory"
+            Some(resolved_tie_off),
+            "knot tie_off_dir should resolve relative to loom dir"
         );
     }
 

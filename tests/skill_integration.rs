@@ -608,16 +608,51 @@ async fn knot_inspect_knot_status_not_found() {
     assert_eq!(resp.status(), 404);
 }
 
-/// knot-inspect: knot status with state returns 200.
+/// knot-inspect: knot status with loom-log events returns 200.
 #[tokio::test]
 async fn knot_inspect_knot_status_with_state() {
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
     let _ = _event_rx;
 
+    // Mock log port with knot events so GetKnotStatus can derive
+    // status from the loom-log.
+    let log_events = vec![
+        LoomEvent::KnotRegistered {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("review".to_string()),
+        },
+        LoomEvent::KnotCompleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("src/input.md")),
+            tie_off_path: TieOffPath(PathBuf::from("output/output.md")),
+        },
+    ];
+
+    struct MockLoomLogPortWithEvents {
+        events: Vec<LoomEvent>,
+    }
+    impl LoomLogPort for MockLoomLogPortWithEvents {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.clone())
+        }
+    }
+
     let ctx = AppContext {
         store: LoomStore::new(),
         loom_repo: Arc::new(MockLoomRepository),
-        loom_log_port: Arc::new(MockLoomLogPort),
+        loom_log_port: Arc::new(MockLoomLogPortWithEvents {
+            events: log_events,
+        }),
         tie_off_sink: Arc::new(MockTieOffSink),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),

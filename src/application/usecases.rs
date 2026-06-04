@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::application::ports::{
-    AgentRunner, ExecutionContext, KnotEventType, KnotState,
+    AgentRunner, ExecutionContext, KnotEventType,
     LoomLogPort, LoomRepository, ProcessingStatus, PortError,
     TieOffSink,
 };
