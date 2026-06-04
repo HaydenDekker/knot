@@ -50,13 +50,13 @@ This plan touches all hexagonal layers:
 
 ## Phases
 
-### Phase 0: Domain — Add source_dir and tie_off_dir to Knot
+### Phase 0: Domain — Add source_dir and tie_off_dir to Knot ✅
 
-- [ ] Add `source_dir: Option<PathBuf>` and `tie_off_dir: Option<PathBuf>` to the `Knot` entity
-- [ ] Add new frontmatter fields to `KnotFile` parser (`source-dir`, `tie-off-dir`) with validation
-- [ ] Update `Knot` construction tests in `entities.rs`
-- [ ] Update `KnotFile` parse tests in `knot_file.rs`
-- [ ] **TDD**: Write a failing test that parses a knot file with `source-dir`/`tie-off-dir` fields → implement parsing
+- [x] Add `source_dir: Option<PathBuf>` and `tie_off_dir: Option<PathBuf>` to the `Knot` entity
+- [x] Add new frontmatter fields to `KnotFile` parser (`source-dir`, `tie-off-dir`) with validation
+- [x] Update `Knot` construction tests in `entities.rs`
+- [x] Update `KnotFile` parse tests in `knot_file.rs`
+- [x] **TDD**: Write a failing test that parses a knot file with `source-dir`/`tie-off-dir` fields → implement parsing
 
 ### Phase 1: Domain — New LoomEvent variants for knot lifecycle
 
