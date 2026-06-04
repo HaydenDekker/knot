@@ -259,7 +259,7 @@ fn app_starts_and_serves_health() {
 /// `RigAgentConfig` is loaded with defaults (`pi` CLI); accessible
 /// in `AppContext` via the `/config/rig` HTTP endpoint.
 #[test]
-fn app_loads_workspace_agent_config() {
+fn app_loads_rig_agent_config() {
     let port = 31985;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -329,7 +329,7 @@ fn build_app_context_wires_layers() {
 
 // ── Phase 1: Startup Discovery and Watcher Boot ────────────────────────────
 
-/// Given a workspace with loom directories, startup discovers them and
+/// Given a rig with loom directories, startup discovers them and
 /// registers them in `LoomStore`. Verifiable via `GET /looms`.
 #[test]
 fn startup_discovers_looms() {
@@ -1193,7 +1193,7 @@ fn shutdown_logs_loom_stopped() {
 /// Full pipeline test with `.loom-config.yaml` pointing `source_dir` to an
 /// external directory.
 ///
-/// 1. Create workspace with a loom that has `.loom-config.yaml`
+/// 1. Create a rig with a loom that has `.loom-config.yaml`
 /// 2. Config sets `source_dir` to an external directory
 /// 3. Create a strand in the external source directory
 /// 4. Tie-off should be produced at the configured `tie_off_dir`
@@ -1202,7 +1202,7 @@ fn full_pipeline_external_source_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // External source directory (outside the scanned workspace).
+    // External source directory (outside the scanned rig).
     let external_source = root.join("external-source");
     fs::create_dir(&external_source).unwrap();
 
@@ -1210,12 +1210,12 @@ fn full_pipeline_external_source_dir() {
     let external_tie_off = root.join("external-output");
     fs::create_dir(&external_tie_off).unwrap();
 
-    // Workspace subdirectory (what the server scans).
-    let workspace = root.join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    // Rig subdirectory (what the server scans).
+    let rig = root.join("rig");
+    fs::create_dir(&rig).unwrap();
 
     // Loom directory with knot definition.
-    let loom_dir = workspace.join("config-loom");
+    let loom_dir = rig.join("config-loom");
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
@@ -1234,7 +1234,7 @@ fn full_pipeline_external_source_dir() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: workspace.clone(),
+        base_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -1301,7 +1301,7 @@ fn full_pipeline_external_source_dir() {
 
 /// Full pipeline test with a nonexistent agent CLI.
 ///
-/// 1. Create workspace with a loom
+/// 1. Create a rig with a loom
 /// 2. Configure `cli_path` to a nonexistent binary
 /// 3. Create a strand — agent will fail
 /// 4. Verify knot-state shows `Failed` with error message
@@ -1403,7 +1403,7 @@ fn full_pipeline_external_source_with_agent_error() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // External source directory (outside the scanned workspace).
+    // External source directory (outside the scanned rig).
     let external_source = root.join("external-source");
     fs::create_dir(&external_source).unwrap();
 
@@ -1411,12 +1411,12 @@ fn full_pipeline_external_source_with_agent_error() {
     let external_tie_off = root.join("external-output");
     fs::create_dir(&external_tie_off).unwrap();
 
-    // Workspace subdirectory (what the server scans for looms).
-    let workspace = root.join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    // Rig subdirectory (what the server scans for looms).
+    let rig = root.join("rig");
+    fs::create_dir(&rig).unwrap();
 
     // Loom directory with knot definition.
-    let loom_dir = workspace.join("error-external-loom");
+    let loom_dir = rig.join("error-external-loom");
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
@@ -1433,7 +1433,7 @@ fn full_pipeline_external_source_with_agent_error() {
 
     // Use a nonexistent agent CLI path.
     let config = AppConfig {
-        base_dir: workspace.clone(),
+        base_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "/no/such/agent".to_string(),
@@ -1495,7 +1495,7 @@ fn full_pipeline_external_source_with_agent_error() {
     );
 
     // 4. Verify loom-log contains `StrandProcessed` with error details.
-    let log_path = workspace.join("error-external-loom/.loom-log");
+    let log_path = rig.join("error-external-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -1561,7 +1561,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // External source directory (outside the scanned workspace).
+    // External source directory (outside the scanned rig).
     let external_source = root.join("external-source");
     fs::create_dir(&external_source).unwrap();
 
@@ -1569,12 +1569,12 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     let external_tie_off = root.join("external-output");
     fs::create_dir(&external_tie_off).unwrap();
 
-    // Workspace subdirectory (what the server scans for looms).
-    let workspace = root.join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    // Rig subdirectory (what the server scans for looms).
+    let rig = root.join("rig");
+    fs::create_dir(&rig).unwrap();
 
     // Loom directory with knot definition.
-    let loom_dir = workspace.join("success-external-loom");
+    let loom_dir = rig.join("success-external-loom");
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
@@ -1593,7 +1593,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: workspace.clone(),
+        base_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -1650,7 +1650,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     );
 
     // 4. Verify loom-log contains `StrandProcessed` with no error.
-    let log_path = workspace.join("success-external-loom/.loom-log");
+    let log_path = rig.join("success-external-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -1936,7 +1936,7 @@ This knot tests error handling.
 /// and the loom-log records successful processing.
 ///
 /// This test mirrors the demo workflow:
-/// 1. Create a workspace with a `knot-test` loom (provider + model in config)
+/// 1. Create a rig with a `knot-test` loom (provider + model in config)
 /// 2. Place `sample-document.md` in the source directory
 /// 3. Start Knot with stub-pi agent
 /// 4. Verify tie-off is populated (contains system prompt + strand content)
