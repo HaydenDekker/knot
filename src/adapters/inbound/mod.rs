@@ -556,6 +556,7 @@ mod tests {
                 strand_path: crate::domain::entities::StrandPath(
                     PathBuf::from("src/file.md"),
                 ),
+                error: None,
             },
         ];
 

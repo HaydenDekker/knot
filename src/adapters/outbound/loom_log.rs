@@ -254,6 +254,7 @@ mod tests {
         let strand_processed = LoomEvent::StrandProcessed {
             loom_id: loom_id.clone(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
+            error: None,
         };
 
         log.append(knot_registered.clone()).unwrap();

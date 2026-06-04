@@ -421,6 +421,7 @@ impl ProcessStrand {
             self.log_port.append(LoomEvent::StrandProcessed {
                 loom_id,
                 strand_path,
+                error: None,
             })?;
 
             return Ok(());
@@ -462,6 +463,7 @@ impl ProcessStrand {
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
                     strand_path,
+                    error: None,
                 })?;
 
                 Ok(())
@@ -488,10 +490,11 @@ impl ProcessStrand {
                     last_updated: Self::now(),
                 })?;
 
-                // 6. Append to loom-log
+                // 6. Append to loom-log with error details
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
                     strand_path,
+                    error: Some(error_msg),
                 })?;
 
                 Ok(())
@@ -1260,19 +1263,21 @@ mod tests {
         assert_eq!(writes[0].content, "agent output content");
         assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Produced);
 
-        // Verify loom-log got StrandProcessed
+        // Verify loom-log got StrandProcessed (no error on success)
         let appends = log_append.read().unwrap();
         assert_eq!(appends.len(), 1);
         match &appends[0] {
             LoomEvent::StrandProcessed {
                 loom_id,
                 strand_path,
+                error,
             } => {
                 assert_eq!(*loom_id, LoomId("test-loom".to_string()));
                 assert_eq!(
                     *strand_path,
                     StrandPath(PathBuf::from("src/file.md"))
                 );
+                assert!(error.is_none());
             }
             _ => panic!("Expected StrandProcessed event"),
         }
@@ -1328,10 +1333,141 @@ mod tests {
         assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Failed);
         assert!(writes[0].content.contains("agent crashed"));
 
-        // Loom-log got StrandProcessed
+        // Loom-log got StrandProcessed with error details
         let appends = log_append.read().unwrap();
         assert_eq!(appends.len(), 1);
-        matches!(appends[0], LoomEvent::StrandProcessed { .. });
+        match &appends[0] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert_eq!(
+                    error.as_deref(),
+                    Some("agent execution failed: agent crashed")
+                );
+            }
+            _ => panic!("Expected StrandProcessed event"),
+        }
+    }
+
+    /// AgentRunner returns `PortError::CommandNotFound`; verify knot-state
+    /// `error` field and loom-log event both contain the error message.
+    #[test]
+    fn process_strand_agent_not_found_logs_error() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, log_append) = TrackingLoomLogPort::new();
+        let (sink, sink_writes) = TrackingTieOffSink::new();
+
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
+            result: Err(PortError::CommandNotFound(
+                "pi: command not found".to_string(),
+            )),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(state_port),
+            Arc::new(log_port),
+            agent_runner,
+            Arc::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        let result = use_case.execute(event);
+
+        // ProcessStrand returns Ok (failure is recorded, not propagated)
+        assert!(result.is_ok());
+
+        // State: processing -> failed, with error message
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[1].status, ProcessingStatus::Failed);
+        assert_eq!(
+            updates[1].error,
+            Some("command not found: pi: command not found".to_string())
+        );
+
+        // Tie-off has Failed status
+        let writes = sink_writes.read().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Failed);
+
+        // Loom-log event contains error details
+        let appends = log_append.read().unwrap();
+        assert_eq!(appends.len(), 1);
+        match &appends[0] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert_eq!(
+                    error.as_deref(),
+                    Some("command not found: pi: command not found")
+                );
+            }
+            _ => panic!("Expected StrandProcessed event"),
+        }
+    }
+
+    /// AgentRunner returns `PortError::AgentExecutionFailed`; verify
+    /// knot-state `error` field and loom-log event contain the message.
+    #[test]
+    fn process_strand_agent_nonzero_exit_logs_error() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, state_updates) =
+            TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, log_append) = TrackingLoomLogPort::new();
+        let (sink, sink_writes) = TrackingTieOffSink::new();
+
+        let agent_runner = Arc::new(ConfigurableAgentRunner {
+            result: Err(PortError::AgentExecutionFailed(
+                "exit code 1".to_string(),
+            )),
+        });
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(state_port),
+            Arc::new(log_port),
+            agent_runner,
+            Arc::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        let result = use_case.execute(event);
+
+        assert!(result.is_ok());
+
+        // State: processing -> failed, with error message
+        let updates = state_updates.read().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[1].status, ProcessingStatus::Failed);
+        assert_eq!(
+            updates[1].error,
+            Some("agent execution failed: exit code 1".to_string())
+        );
+
+        // Tie-off has Failed status
+        let writes = sink_writes.read().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Failed);
+
+        // Loom-log event contains error details
+        let appends = log_append.read().unwrap();
+        assert_eq!(appends.len(), 1);
+        match &appends[0] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert_eq!(
+                    error.as_deref(),
+                    Some("agent execution failed: exit code 1")
+                );
+            }
+            _ => panic!("Expected StrandProcessed event"),
+        }
     }
 
     #[test]
@@ -1432,9 +1568,14 @@ mod tests {
         assert!(writes[0].content.contains("deleted"));
         assert_eq!(writes[0].status, crate::domain::entities::TieOffStatus::Produced);
 
-        // Loom-log got StrandProcessed
+        // Loom-log got StrandProcessed (no error for deleted)
         let appends = log_append.read().unwrap();
         assert_eq!(appends.len(), 1);
-        matches!(appends[0], LoomEvent::StrandProcessed { .. });
+        match &appends[0] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_none());
+            }
+            _ => panic!("Expected StrandProcessed event"),
+        }
     }
 }

@@ -63,6 +63,8 @@ pub enum LoomEvent {
     StrandProcessed {
         loom_id: LoomId,
         strand_path: StrandPath,
+        /// Error message if processing failed. `None` on success.
+        error: Option<String>,
     },
 }
 
@@ -207,6 +209,7 @@ mod tests {
         let strand_processed = LoomEvent::StrandProcessed {
             loom_id: loom_id.clone(),
             strand_path: strand_path.clone(),
+            error: None,
         };
 
         // Verify KnotRegistered
@@ -242,9 +245,11 @@ mod tests {
             LoomEvent::StrandProcessed {
                 loom_id: ref lid,
                 strand_path: ref sp,
+                error,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*sp, strand_path);
+                assert!(error.is_none());
             }
             _ => panic!("Expected StrandProcessed variant"),
         }
@@ -328,9 +333,32 @@ mod tests {
         let strand_processed = LoomEvent::StrandProcessed {
             loom_id: LoomId("prds".to_string()),
             strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
+            error: None,
         };
         let json = serde_json::to_string(&strand_processed).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, strand_processed);
+    }
+
+    #[test]
+    fn loom_event_strand_processed_with_error() {
+        let event = LoomEvent::StrandProcessed {
+            loom_id: LoomId("prds".to_string()),
+            strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
+            error: Some("agent crashed".to_string()),
+        };
+
+        // Verify error field is present
+        match &event {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert_eq!(error.as_deref(), Some("agent crashed"));
+            }
+            _ => panic!("Expected StrandProcessed"),
+        }
+
+        // Verify error survives serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
     }
 }

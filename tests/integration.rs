@@ -1189,3 +1189,90 @@ fn full_pipeline_external_source_dir() {
 
     let _ = shutdown.send(());
 }
+
+// ── Phase 2: Agent Error Logging in Knot-State and Loom-Log ────────────
+
+/// Full pipeline test with a nonexistent agent CLI.
+///
+/// 1. Create workspace with a loom
+/// 2. Configure `cli_path` to a nonexistent binary
+/// 3. Create a strand — agent will fail
+/// 4. Verify knot-state shows `Failed` with error message
+/// 5. Verify loom-log contains `StrandProcessed` with error field
+#[test]
+fn full_pipeline_agent_error_in_state_and_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("error-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31998;
+    let host_port = format!("127.0.0.1:{port}");
+
+    // Use a nonexistent CLI path
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "/nonexistent/path/to/fake-agent".to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create a strand to trigger processing
+    let strand_path = loom_dir.join("error-strand.md");
+    fs::write(&strand_path, "error strand content").unwrap();
+
+    // Wait for debounce + processing
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 1. Verify knot-state shows `Failed` with error message
+    let (status, body) =
+        http_get(&host_port, "/looms/_/knots/review-knot")
+            .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "failed",
+        "knot state should be failed"
+    );
+    assert!(
+        knot_status["state"]["error"].is_string(),
+        "knot state should have error message"
+    );
+    let error_msg = knot_status["state"]["error"].as_str().unwrap();
+    assert!(
+        error_msg.contains("command not found"),
+        "error should mention command not found, got: {error_msg}"
+    );
+
+    // 2. Verify loom-log contains StrandProcessed with error field
+    let log_path = base_dir.join("error-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        log_content.contains("StrandProcessed"),
+        "loom log should contain StrandProcessed entry"
+    );
+    assert!(
+        log_content.contains("command not found"),
+        "loom log should contain error details, got: {log_content}"
+    );
+
+    let _ = shutdown.send(());
+}
