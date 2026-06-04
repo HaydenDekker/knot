@@ -73,13 +73,13 @@ This plan touches all hexagonal layers:
 - [x] Update `RegisterLoom` use case: remove `KnotStatePort::create()` calls
 - [x] **TDD**: Write tests for `GetKnotStatus` deriving status from loom-log entries (deferred to Phase 6)
 
-### Phase 3: Outbound Adapters — Per-knot config, remove knot-state adapter
+### Phase 3: Outbound Adapters — Per-knot config, remove knot-state adapter ✅
 
-- [ ] Remove `FileSystemKnotStateStore` adapter (`knot_state.rs`)
-- [ ] Remove `.loom-config.yaml` parsing from `FileSystemLoomRepository`; resolve `source_dir`/`tie_off_dir` per-knot (from knot definition, defaulting to loom directory)
-- [ ] Update `FileSystemLoomRepository::scan()` — each knot gets its own paths
-- [ ] Update `NotifyEventSource` — support watching multiple source directories with per-directory knot ID mapping (already partially supported via `with_loom_ids`)
-- [ ] **TDD**: Tests verify that `FileSystemLoomRepository::scan()` produces knots with correct per-knot paths
+- [x] Remove `FileSystemKnotStateStore` adapter (`knot_state.rs`)
+- [x] Remove `.loom-config.yaml` parsing from `FileSystemLoomRepository`; resolve `source_dir`/`tie_off_dir` per-knot (from knot definition, defaulting to loom directory)
+- [x] Update `FileSystemLoomRepository::scan()` — each knot gets its own paths
+- [x] Update `NotifyEventSource` — support watching multiple source directories with per-directory knot ID mapping (already partially supported via `with_loom_ids`)
+- [x] **TDD**: Tests verify that `FileSystemLoomRepository::scan()` produces knots with correct per-knot paths
 
 ### Phase 4: Inbound Adapter — Update handlers
 
