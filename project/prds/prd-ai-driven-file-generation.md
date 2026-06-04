@@ -94,6 +94,7 @@ As a developer, I want to check the status of my loom and individual knots, so t
 - [x] A **loom-log** file records loom-level activity (knots detected, loom events) and is queryable via the HTTP interface.
 - [x] Each knot maintains a **knot-state** file recording its processing events and status, queryable via the HTTP interface.
 - [x] All HTTP-exposed state is sourced from the filesystem — the HTTP interface reflects loom-log and knot-state files.
+- [ ] Knot discovers the rig directory automatically: `./rig/` in the current working directory. If it doesn't exist, Knot creates it on first run.
 - [x] Multiple configured looms operate independently without cross-interference.
 
 ## Dependencies & Constraints
@@ -110,7 +111,7 @@ All 7 plans contributing to this PRD are complete.
 
 ### Status Note — 2026-06-04
 
-All goals are achieved. Seven plans were executed across the domain, application, outbound adapter, inbound adapter, and composition root layers:
+All goals were achieved except rig directory scoping (see Plan 11). Seven plans were executed across the domain, application, outbound adapter, inbound adapter, and composition root layers:
 
 1. **Knot Domain Models** (Plan 1) — Entities, value objects, events, knot file parser.
 2. **Application Layer — Ports and Use Cases** (Plan 2) — Port traits, use cases, debounce engine, processing state machine.

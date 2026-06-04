@@ -55,7 +55,22 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 ## Phases
 
-### Phase 0: Tracking Mock EventSource and AppContext Extension
+### Phase 0: Rig Directory Discovery
+
+**Failing tests created:** `integration::tests::rig_directory_auto_created`, `integration::tests::rig_directory_scanned`
+
+- [ ] Failing test: `integration::tests::rig_directory_auto_created` — start Knot in empty dir; `./rig/` created automatically
+- [ ] Failing test: `integration::tests::rig_directory_scanned` — start Knot in dir with `./rig/` containing loom subdirectories; looms discovered and registered
+- [ ] Change `AppConfig::default_config()` to set `base_dir: PathBuf::from("./rig")`
+- [ ] In `run_startup()` or `build_app_context()`: if `./rig/` doesn't exist, create it with `std::fs::create_dir_all()`
+- [ ] `FileSystemLoomLog`, `FileSystemTieOffSink`, `load_rig_config` all operate relative to `./rig/`
+- [ ] `POST /looms/discover` uses `./rig/` as its scan root
+- [ ] `POST /looms` validates that source/tie-off paths are within or explicitly outside the rig
+- [ ] Update existing integration tests that use `.` as base dir to use `./rig/`
+- [ ] Update OpenAPI spec: `/config/rig` returns rig path info
+- [ ] **Alert:** this changes the rig root from `.` to `./rig/`. Any existing loom directories in the project root will need to be moved or discovered via `POST /looms/discover` pointing to the correct path.
+
+### Phase 1: Tracking Mock EventSource and AppContext Extension
 
 **Failing tests created:** `adapters::inbound::tests::mock_event_source_tracks_watches`, `adapters::inbound::tests::app_context_has_event_source`
 
@@ -66,7 +81,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - [ ] Update `build_test_context()` to provide tracking mock
 - [ ] In composition root (`lib.rs` `build_app_context`): create `NotifyEventSource` and store reference in `AppContext`
 
-### Phase 1: RegisterLoom Starts Watchers
+### Phase 2: RegisterLoom Starts Watchers
 
 **Failing tests created:** `application::usecases::tests::register_loom_starts_watchers`, `adapters::inbound::tests::post_loom_starts_watcher`
 
@@ -78,7 +93,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - [ ] Update startup (`run_startup` in `lib.rs`): for each discovered loom, start watchers via the same path
 - [ ] Update existing tests that construct `RegisterLoom` (add `Arc::new(MockEventSource)`)
 
-### Phase 2: UnregisterLoom Stops Watchers
+### Phase 3: UnregisterLoom Stops Watchers
 
 **Failing tests created:** `application::usecases::tests::unregister_loom_stops_watchers`, `adapters::inbound::tests::delete_loom_stops_watcher`
 
@@ -89,7 +104,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - [ ] Update handler wiring: pass `ctx.event_source` to `UnregisterLoom`
 - [ ] Update existing tests that construct `UnregisterLoom`
 
-### Phase 3: POST /looms/discover Implementation
+### Phase 4: POST /looms/discover Implementation
 
 **Failing tests created:** `adapters::inbound::tests::discover_looms_scans_and_registers`, `adapters::inbound::tests::discover_looms_skips_existing`, `application::usecases::tests::discover_looms_runtime_skips_registered`
 
@@ -103,7 +118,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - [ ] Register route: `POST /looms/discover` already wired, update handler body
 - [ ] Update OpenAPI schema to remove 501 response, add 200 response
 
-### Phase 4: Integration Test — Full Lifecycle
+### Phase 5: Integration Test — Full Lifecycle
 
 **Failing tests created:** `integration::tests::http_register_then_process_strand`, `integration::tests::discover_then_process_strand`, `integration::tests::unregister_stops_processing`
 
