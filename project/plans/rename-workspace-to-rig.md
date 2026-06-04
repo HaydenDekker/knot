@@ -58,29 +58,29 @@ Rename the type everywhere it appears. This is the core domain type, so it touch
 
 Rename the structural identifiers that reference the workspace concept.
 
-- [ ] `src/application/ports.rs`:
+- [x] `src/application/ports.rs`:
   - `PortError::WorkspaceScanFailed` → `PortError::RigScanFailed`
   - Display impl: `"workspace scan failed"` → `"rig scan failed"`
   - `LoomRepository::scan(workspace: &Path)` → `scan(rig: &Path)`
   - Trait doc comments: "scan a workspace" → "scan a rig"
   - Inline mock impl and tests
-- [ ] `src/application/usecases.rs`:
+- [x] `src/application/usecases.rs`:
   - `ProcessStrand` struct: `workspace_config` → `rig_config`
   - Constructor params: `workspace_config` → `rig_config`
   - Method params and local variables
   - Doc comments and string literals
-- [ ] `src/adapters/outbound/loom_repository.rs`:
+- [x] `src/adapters/outbound/loom_repository.rs`:
   - `scan(workspace: &Path)` → `scan(rig: &Path)`
   - Local variable `workspace` → `rig` throughout
   - Test function names: `scan_empty_workspace` → `scan_empty_rig`, `scan_workspace_with_one_loom` → `scan_rig_with_one_loom`, `scan_workspace_with_multiple_looms` → `scan_rig_with_multiple_looms`, `scan_workspace_with_relative_path` → `scan_rig_with_relative_path`, `scan_workspace_with_absolute_path` → `scan_rig_with_absolute_path`
   - Test variable names and comments
-- [ ] `src/adapters/inbound/mod.rs`:
+- [x] `src/adapters/inbound/mod.rs`:
   - `AppContext.workspace_config` → `rig_config`
   - `get_workspace_config()` → `get_rig_config()`
   - Route: `/config/workspace` → `/config/rig`
   - Route registration and doc comments
   - Mock repository test param name
-- [ ] `src/lib.rs`:
+- [x] `src/lib.rs`:
   - `AppConfig.workspace_config` → `rig_config`
   - `load_workspace_config()` → `load_rig_config()`
   - Config file: `.workspace-agent-config.yaml` → `.rig-agent-config.yaml`
@@ -89,7 +89,7 @@ Rename the structural identifiers that reference the workspace concept.
   - `start_event_pipeline()`: local variable names
   - `run_startup()` comments: "scan workspace" → "scan rig"
   - Doc comments throughout
-- [ ] `cargo build` — verify compilation
+- [x] `cargo build` — verify compilation
 
 ### Phase 2: Integration Tests
 
