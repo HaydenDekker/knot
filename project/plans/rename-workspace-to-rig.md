@@ -18,7 +18,7 @@ This affects:
 
 All occurrences of "workspace" as a domain concept are replaced with "rig". The codebase compiles, all tests pass, and documentation is consistent. The rope/textile theme is now fully coherent: **rig → loom → knot → strand → tie-off**.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -111,21 +111,21 @@ Rename all references in the integration test file.
 
 Update all documentation files to use "rig" terminology.
 
-- [ ] `project/domain-glossary.md`:
+- [x] `project/domain-glossary.md`:
   - Add new `Rig` term (top-level container, aggregation of looms)
   - Update term relationships diagram: `Rig → Loom → Knot → ...`
   - Update any inline references to "workspace"
   - Update `Last Updated` date
-- [ ] `project/plans/master-plan.md` — update `Last Updated` date
-- [ ] `project/plans/file-watcher.md` — update references in notes (e.g. "scans workspace" → "scans rig", test name references)
-- [ ] `project/plans/knot-domain-models.md` — update `WorkspaceAgentConfig` → `RigAgentConfig` references in notes
-- [ ] `project/plans/loom-config-and-path-resolve.md` — update "workspace" references in test name notes and descriptions
-- [ ] `project/plans/loom-discovery-and-state.md` — update `scan(workspace: &Path)` → `scan(rig: &Path)` in port table
-- [ ] `project/plans/pi-agent-integration.md` — update `WorkspaceAgentConfig` references
-- [ ] `project/plans/system-integration.md` — update `WorkspaceAgentConfig` references
-- [ ] `project/prds/prd-knot-skills.md` — "initialise a Knot workspace" → "initialise a Knot rig", story titles and acceptance criteria
-- [ ] `project/prds/prd-ai-driven-file-generation.md` — "workspace" references in problem statement and notes
-- [ ] `project/prds/master-prd.md` — "workspace" references in overview
+- [x] `project/plans/master-plan.md` — update `Last Updated` date
+- [x] `project/plans/file-watcher.md` — update references in notes (e.g. "scans workspace" → "scans rig", test name references)
+- [x] `project/plans/knot-domain-models.md` — update `WorkspaceAgentConfig` → `RigAgentConfig` references in notes
+- [x] `project/plans/loom-config-and-path-resolve.md` — update "workspace" references in test name notes and descriptions
+- [x] `project/plans/loom-discovery-and-state.md` — update `scan(workspace: &Path)` → `scan(rig: &Path)` in port table
+- [x] `project/plans/pi-agent-integration.md` — update `WorkspaceAgentConfig` references
+- [x] `project/plans/system-integration.md` — update `WorkspaceAgentConfig` references
+- [x] `project/prds/prd-knot-skills.md` — "initialise a Knot workspace" → "initialise a Knot rig", story titles and acceptance criteria
+- [x] `project/prds/prd-ai-driven-file-generation.md` — "workspace" references in problem statement and notes
+- [x] `project/prds/master-prd.md` — "workspace" references in overview
 
 ## Notes
 
