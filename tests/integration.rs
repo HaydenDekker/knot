@@ -8,7 +8,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use knot::application::ports::{
-    AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, TieOffSink,
+    AgentRunner, LoomLogPort, LoomRepository, TieOffSink,
 };
 use knot::AppConfig;
 use knot::ShutdownSignal;
@@ -311,7 +311,6 @@ fn build_app_context_wires_layers() {
 
     // Ports are present (trait objects)
     let _repo: &dyn LoomRepository = &*ctx.loom_repo;
-    let _state: &dyn KnotStatePort = &*ctx.knot_state_port;
     let _log: &dyn LoomLogPort = &*ctx.loom_log_port;
     let _sink: &dyn TieOffSink = &*ctx.tie_off_sink;
 

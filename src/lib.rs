@@ -97,7 +97,6 @@ pub fn start_event_pipeline(
 
     // ProcessStrand loop: read debounced events and process them.
     let store = ctx.store.clone();
-    let state_port = Arc::clone(&ctx.knot_state_port);
     let log_port = Arc::clone(&ctx.loom_log_port);
     let agent_runner = Arc::clone(&ctx.agent_runner);
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
@@ -106,7 +105,6 @@ pub fn start_event_pipeline(
     tokio::spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
             store,
-            state_port,
             log_port,
             agent_runner,
             tie_off_sink,
@@ -191,10 +189,6 @@ pub fn build_app_context(
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
         Arc::new(adapters::outbound::FileSystemLoomRepository::new());
-    let knot_state_port: Arc<dyn application::ports::KnotStatePort> =
-        Arc::new(adapters::outbound::FileSystemKnotStateStore::new(
-            config.base_dir.clone(),
-        ));
     let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
         Arc::new(adapters::outbound::FileSystemLoomLog::new(
             config.base_dir.clone(),
@@ -216,7 +210,6 @@ pub fn build_app_context(
         AppContext {
             store,
             loom_repo,
-            knot_state_port,
             loom_log_port,
             tie_off_sink,
             event_sender: event_tx,
@@ -242,7 +235,6 @@ pub fn run_startup(
 ) -> std::io::Result<Vec<Loom>> {
     let discover = application::usecases::DiscoverLooms::new(
         Arc::clone(&ctx.loom_repo),
-        Arc::clone(&ctx.knot_state_port),
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
     );

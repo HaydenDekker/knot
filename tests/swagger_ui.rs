@@ -5,7 +5,7 @@
 
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
-use knot::application::ports::{AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, PortError, TieOffSink};
+use knot::application::ports::{AgentRunner, LoomLogPort, LoomRepository, PortError, TieOffSink};
 use knot::application::store::LoomStore;
 use knot::domain::entities::{KnotId, Loom, LoomId};
 use knot::domain::events::StrandEvent;
@@ -31,23 +31,6 @@ impl LoomRepository for MockLoomRepository {
     }
     fn save(&self, _loom: Loom) -> Result<(), PortError> {
         Ok(())
-    }
-}
-
-struct MockKnotStatePort;
-
-impl KnotStatePort for MockKnotStatePort {
-    fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
-        Ok(())
-    }
-    fn update(&self, _state: knot::application::ports::KnotState) -> Result<(), PortError> {
-        Ok(())
-    }
-    fn get(
-        &self,
-        _knot_id: &KnotId,
-    ) -> Result<Option<knot::application::ports::KnotState>, PortError> {
-        Ok(None)
     }
 }
 
@@ -101,7 +84,6 @@ fn build_test_context() -> AppContext {
     AppContext {
         store: LoomStore::new(),
         loom_repo: Arc::new(MockLoomRepository),
-        knot_state_port: Arc::new(MockKnotStatePort),
         loom_log_port: Arc::new(MockLoomLogPort),
         tie_off_sink: Arc::new(MockTieOffSink),
         event_sender,

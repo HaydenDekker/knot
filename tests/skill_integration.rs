@@ -11,7 +11,7 @@ use std::path::Path;
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
-    AgentRunner, KnotState, KnotStatePort, LoomLogPort,
+    AgentRunner, LoomLogPort,
     LoomRepository, ProcessingStatus, PortError, TieOffSink,
 };
 use knot::application::store::LoomStore;
@@ -44,23 +44,6 @@ impl LoomRepository for MockLoomRepository {
     }
     fn save(&self, _loom: Loom) -> Result<(), PortError> {
         Ok(())
-    }
-}
-
-struct MockKnotStatePort;
-
-impl KnotStatePort for MockKnotStatePort {
-    fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
-        Ok(())
-    }
-    fn update(&self, _state: KnotState) -> Result<(), PortError> {
-        Ok(())
-    }
-    fn get(
-        &self,
-        _knot_id: &KnotId,
-    ) -> Result<Option<KnotState>, PortError> {
-        Ok(None)
     }
 }
 
@@ -112,7 +95,6 @@ fn build_context_with_loom() -> AppContext {
     let ctx = AppContext {
         store: LoomStore::new(),
         loom_repo: Arc::new(MockLoomRepository),
-        knot_state_port: Arc::new(MockKnotStatePort),
         loom_log_port: Arc::new(MockLoomLogPort),
         tie_off_sink: Arc::new(MockTieOffSink),
         event_sender,
@@ -577,7 +559,6 @@ async fn knot_inspect_loom_activity() {
     let ctx = AppContext {
         store: LoomStore::new(),
         loom_repo: Arc::new(MockLoomRepository),
-        knot_state_port: Arc::new(MockKnotStatePort),
         loom_log_port: Arc::new(MockLoomLogPortWithEvents { events }),
         tie_off_sink: Arc::new(MockTieOffSink),
         event_sender,
@@ -630,46 +611,12 @@ async fn knot_inspect_knot_status_not_found() {
 /// knot-inspect: knot status with state returns 200.
 #[tokio::test]
 async fn knot_inspect_knot_status_with_state() {
-    let state = KnotState {
-        knot_id: KnotId("review".to_string()),
-        event_type: knot::application::ports::KnotEventType::Modified,
-        strand_path: StrandPath(PathBuf::from("src/input.md")),
-        tie_off_path: Some(TieOffPath(PathBuf::from(
-            "output/input.md.output",
-        ))),
-        status: ProcessingStatus::Completed,
-        error: None,
-        last_updated: "2026-06-04T10:00:00Z".to_string(),
-    };
-
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
     let _ = _event_rx;
-
-    struct MockKnotStatePortWithState {
-        state: Option<KnotState>,
-    }
-
-    impl KnotStatePort for MockKnotStatePortWithState {
-        fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
-            Ok(())
-        }
-        fn update(&self, _state: KnotState) -> Result<(), PortError> {
-            Ok(())
-        }
-        fn get(
-            &self,
-            _knot_id: &KnotId,
-        ) -> Result<Option<KnotState>, PortError> {
-            Ok(self.state.clone())
-        }
-    }
 
     let ctx = AppContext {
         store: LoomStore::new(),
         loom_repo: Arc::new(MockLoomRepository),
-        knot_state_port: Arc::new(MockKnotStatePortWithState {
-            state: Some(state),
-        }),
         loom_log_port: Arc::new(MockLoomLogPort),
         tie_off_sink: Arc::new(MockTieOffSink),
         event_sender,
@@ -716,8 +663,9 @@ async fn knot_inspect_knot_status_with_state() {
     let status: knot::application::usecases::KnotStatus =
         serde_json::from_slice(&body).unwrap();
     assert_eq!(status.knot_id, KnotId("review".to_string()));
-    assert_eq!(status.state.status, ProcessingStatus::Completed);
-    assert_eq!(status.state.error, None);
+    // KnotStatus now derived from loom-log, no .state field
+    assert_eq!(status.status, ProcessingStatus::Completed);
+    assert_eq!(status.last_error, None);
 }
 
 // ── Skill + API Contract Tests ─────────────────────────────────────────────

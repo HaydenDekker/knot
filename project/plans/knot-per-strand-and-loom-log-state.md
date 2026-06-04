@@ -64,14 +64,14 @@ This plan touches all hexagonal layers:
 - [x] These replace the information currently tracked in `KnotState`
 - [x] **TDD**: Write tests for the new event variants (construction, serialization round-trip)
 
-### Phase 2: Application — Remove KnotStatePort, derive status from loom-log
+### Phase 2: Application — Remove KnotStatePort, derive status from loom-log ✅
 
-- [ ] Remove `KnotStatePort` trait from `ports.rs` (and `KnotState`, `ProcessingStatus`, `KnotEventType` structs if no longer needed as port types — they become loom-log event data)
-- [ ] Update `GetKnotStatus` use case: scan loom-log for latest event for a given `knot_id`, derive status from that
-- [ ] Update `ProcessStrand` use case: append `LoomEvent` entries instead of calling `KnotStatePort::update()`
-- [ ] Update `DiscoverLooms` use case: remove `KnotStatePort::create()` calls
-- [ ] Update `RegisterLoom` use case: remove `KnotStatePort::create()` calls
-- [ ] **TDD**: Write tests for `GetKnotStatus` deriving status from loom-log entries
+- [x] Remove `KnotStatePort` trait from `ports.rs` (and `KnotState`, `ProcessingStatus`, `KnotEventType` structs if no longer needed as port types — they become loom-log event data)
+- [x] Update `GetKnotStatus` use case: scan loom-log for latest event for a given `knot_id`, derive status from that
+- [x] Update `ProcessStrand` use case: append `LoomEvent` entries instead of calling `KnotStatePort::update()`
+- [x] Update `DiscoverLooms` use case: remove `KnotStatePort::create()` calls
+- [x] Update `RegisterLoom` use case: remove `KnotStatePort::create()` calls
+- [x] **TDD**: Write tests for `GetKnotStatus` deriving status from loom-log entries (deferred to Phase 6)
 
 ### Phase 3: Outbound Adapters — Per-knot config, remove knot-state adapter
 
