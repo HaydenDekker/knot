@@ -59,15 +59,15 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `integration::tests::rig_directory_auto_created`, `integration::tests::rig_directory_scanned`
 
-- [ ] Failing test: `integration::tests::rig_directory_auto_created` — start Knot in empty dir; `./rig/` created automatically
-- [ ] Failing test: `integration::tests::rig_directory_scanned` — start Knot in dir with `./rig/` containing loom subdirectories; looms discovered and registered
-- [ ] Change `AppConfig::default_config()` to set `base_dir: PathBuf::from("./rig")`
-- [ ] In `run_startup()` or `build_app_context()`: if `./rig/` doesn't exist, create it with `std::fs::create_dir_all()`
-- [ ] `FileSystemLoomLog`, `FileSystemTieOffSink`, `load_rig_config` all operate relative to `./rig/`
-- [ ] `POST /looms/discover` uses `./rig/` as its scan root
-- [ ] `POST /looms` validates that source/tie-off paths are within or explicitly outside the rig
-- [ ] Update existing integration tests that use `.` as base dir to use `./rig/`
-- [ ] Update OpenAPI spec: `/config/rig` returns rig path info
+- [x] Failing test: `integration::tests::rig_directory_auto_created` — start Knot in empty dir; `./rig/` created automatically
+- [x] Failing test: `integration::tests::rig_directory_scanned` — start Knot in dir with `./rig/` containing loom subdirectories; looms discovered and registered
+- [x] Change `AppConfig::default_config()` to set `base_dir: PathBuf::from("./rig")`
+- [x] In `run_startup()` or `build_app_context()`: if `./rig/` doesn't exist, create it with `std::fs::create_dir_all()`
+- [x] `FileSystemLoomLog`, `FileSystemTieOffSink`, `load_rig_config` all operate relative to `./rig/`
+- [x] `POST /looms/discover` uses `./rig/` as its scan root
+- [ ] `POST /looms` validates that source/tie-off paths are within or explicitly outside the rig (deferred)
+- [x] Update existing integration tests that use `.` as base dir to use `./rig/`
+- [x] Update OpenAPI spec: `/config/rig` returns rig path info
 - [ ] **Alert:** this changes the rig root from `.` to `./rig/`. Any existing loom directories in the project root will need to be moved or discovered via `POST /looms/discover` pointing to the correct path.
 
 ### Phase 1: Tracking Mock EventSource and AppContext Extension
