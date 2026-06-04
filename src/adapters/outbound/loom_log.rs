@@ -59,6 +59,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::LoomStarted { loom_id } => loom_id.clone(),
             LoomEvent::LoomStopped { loom_id } => loom_id.clone(),
             LoomEvent::StrandProcessed { loom_id, .. } => loom_id.clone(),
+            LoomEvent::KnotProcessing { loom_id, .. } => loom_id.clone(),
+            LoomEvent::KnotCompleted { loom_id, .. } => loom_id.clone(),
+            LoomEvent::KnotFailed { loom_id, .. } => loom_id.clone(),
         };
 
         let line = serde_json::to_string(&event)

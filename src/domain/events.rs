@@ -66,6 +66,26 @@ pub enum LoomEvent {
         /// Error message if processing failed. `None` on success.
         error: Option<String>,
     },
+    /// A knot started processing a strand.
+    KnotProcessing {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+    },
+    /// A knot completed processing a strand successfully.
+    KnotCompleted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        tie_off_path: TieOffPath,
+    },
+    /// A knot failed while processing a strand.
+    KnotFailed {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        error: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -360,5 +380,159 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn loom_event_knot_processing() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+
+        let event = LoomEvent::KnotProcessing {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotProcessing {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+            }
+            _ => panic!("Expected KnotProcessing variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn loom_event_knot_completed() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let tie_off_path = TieOffPath(PathBuf::from("output/review.md"));
+
+        let event = LoomEvent::KnotCompleted {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            tie_off_path: tie_off_path.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotCompleted {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                tie_off_path: tp,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(*tp, tie_off_path);
+            }
+            _ => panic!("Expected KnotCompleted variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn loom_event_knot_failed() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let error = "Agent returned non-zero exit code".to_string();
+
+        let event = LoomEvent::KnotFailed {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            error: error.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotFailed {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                error: msg,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(msg.as_str(), error);
+            }
+            _ => panic!("Expected KnotFailed variant"),
+        }
+
+        // Verify error survives serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn loom_event_serialisation_all_variants() {
+        // Verify all 7 variants round-trip through JSON
+        let loom_id = LoomId("all".to_string());
+        let knot_id = KnotId("k1".to_string());
+        let strand_path = StrandPath(PathBuf::from("in.md"));
+        let tie_off_path = TieOffPath(PathBuf::from("out.md"));
+
+        let events: Vec<LoomEvent> = vec![
+            LoomEvent::KnotRegistered {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+            },
+            LoomEvent::LoomStarted {
+                loom_id: loom_id.clone(),
+            },
+            LoomEvent::LoomStopped {
+                loom_id: loom_id.clone(),
+            },
+            LoomEvent::StrandProcessed {
+                loom_id: loom_id.clone(),
+                strand_path: strand_path.clone(),
+                error: None,
+            },
+            LoomEvent::KnotProcessing {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+            },
+            LoomEvent::KnotCompleted {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                tie_off_path: tie_off_path.clone(),
+            },
+            LoomEvent::KnotFailed {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                error: "boom".to_string(),
+            },
+        ];
+
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, *event, "round-trip failed for variant");
+        }
     }
 }
