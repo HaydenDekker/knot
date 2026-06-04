@@ -81,13 +81,13 @@ This plan touches all hexagonal layers:
 - [x] Update `NotifyEventSource` — support watching multiple source directories with per-directory knot ID mapping (already partially supported via `with_loom_ids`)
 - [x] **TDD**: Tests verify that `FileSystemLoomRepository::scan()` produces knots with correct per-knot paths
 
-### Phase 4: Inbound Adapter — Update handlers
+### Phase 4: Inbound Adapter — Update handlers ✅
 
-- [ ] Remove `knot_state_port` from `AppContext`
-- [ ] Update `get_knot_status` handler to use `GetKnotStatus` backed by `LoomLogPort`
-- [ ] Update `get_loom_activity` handler (no change needed — already uses `LoomLogPort`)
-- [ ] Update handler tests to use new `GetKnotStatus` signature
-- [ ] **TDD**: Write handler tests that verify knot status is derived from loom-log
+- [x] Remove `knot_state_port` from `AppContext`
+- [x] Update `get_knot_status` handler to use `GetKnotStatus` backed by `LoomLogPort`
+- [x] Update `get_loom_activity` handler (no change needed — already uses `LoomLogPort`)
+- [x] Update handler tests to use new `GetKnotStatus` signature
+- [x] **TDD**: Write handler tests that verify knot status is derived from loom-log
 
 ### Phase 5: Composition Root — Re-wire
 
