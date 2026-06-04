@@ -95,7 +95,7 @@ Rename the structural identifiers that reference the workspace concept.
 
 Rename all references in the integration test file.
 
-- [ ] `tests/integration.rs`:
+- [x] `tests/integration.rs`:
   - Import: `WorkspaceAgentConfig` → `RigAgentConfig` (already renamed in Phase 0, but verify)
   - `AppConfig` constructor: `workspace_config` → `rig_config` field
   - Test function: `app_loads_workspace_agent_config` → `app_loads_rig_agent_config`
@@ -105,7 +105,7 @@ Rename all references in the integration test file.
   - `ctx.workspace_config` → `ctx.rig_config` assertions
   - Comments: "workspace" → "rig" in doc comments and inline comments
   - `assert_eq!` on `ctx.rig_config.cli_path` and `ctx.rig_config.cli_args`
-- [ ] `cargo test` — verify all tests pass
+- [x] `cargo test` — verify all tests pass
 
 ### Phase 3: Documentation
 
