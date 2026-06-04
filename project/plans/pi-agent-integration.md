@@ -36,7 +36,7 @@ Concretely:
 - Tie-off files contain the agent's actual output
 - Tests verify the CLI invocation is constructed correctly (adapter-focused, no real `pi` call needed)
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Hex Layer: Domain → Application → Outbound Adapters
 
@@ -71,29 +71,29 @@ Work flows inward-out:
 ### Phase 0: Extend AgentConfig Domain Model
 **Failing tests created:** `domain::value_objects::tests::agent_config_with_provider_and_model`, `domain::knot_file::tests::knot_file_with_provider_model_tools`
 
-- [ ] Add `provider`, `model`, `tools` (optional `Vec<String>`) fields to `AgentConfig`
-- [ ] Update `AgentConfig::new()` to accept and validate new fields (provider and model required, tools optional)
-- [ ] Update `Knot::new()` / construction to carry new fields
-- [ ] Update `KnotFile` and `RawAgentConfig` YAML parsing to read `provider`, `model`, `tools` from frontmatter
-- [ ] Update existing knot file fixtures in tests to include provider/model
-- [ ] Add `AgentConfig::build_cli_args()` helper — constructs `Vec<String>` of pi CLI flags from the config + prompt template
+- [x] Add `provider`, `model`, `tools` (optional `Vec<String>`) fields to `AgentConfig`
+- [x] Update `AgentConfig::new()` to accept and validate new fields (provider and model required, tools optional)
+- [x] Update `Knot::new()` / construction to carry new fields
+- [x] Update `KnotFile` and `RawAgentConfig` YAML parsing to read `provider`, `model`, `tools` from frontmatter
+- [x] Update existing knot file fixtures in tests to include provider/model
+- [x] Add `AgentConfig::build_cli_args()` helper — constructs `Vec<String>` of pi CLI flags from the config + prompt template
 
 ### Phase 1: ProcessStrand Builds CLI Invocation
 **Failing tests created:** `application::usecases::tests::process_strand_builds_pi_cli_args`, `application::usecases::tests::process_strand_passes_prompt_and_strand_to_context`
 
-- [ ] `ProcessStrand::execute()` builds CLI args from `knot.agent_config.build_cli_args(knot.prompt_template)` instead of using raw `workspace_config.cli_args`
-- [ ] `ExecutionContext` carries the strand content (read from file) so the runner can pass it
-- [ ] CLI invocation pattern: `pi -p --model <model> --system-prompt "<instructions>" --no-session --no-tools "@<strand_path>"`
-- [ ] Update use case tests to verify constructed args via mock AgentRunner that records ExecutionContext
+- [x] `ProcessStrand::execute()` builds CLI args from `knot.agent_config.build_cli_args(knot.prompt_template)` instead of using raw `workspace_config.cli_args`
+- [x] `ExecutionContext` carries the strand content (read from file) so the runner can pass it
+- [x] CLI invocation pattern: `pi -p --model <model> --system-prompt "<instructions>" --no-session --no-tools "@<strand_path>"`
+- [x] Update use case tests to verify constructed args via mock AgentRunner that records ExecutionContext
 
 ### Phase 2: Subprocess Runner Passes Prompt to Agent
 **Failing tests created:** `adapters::subprocess::tests::runner_passes_prompt_via_stdin`, `adapters::subprocess::tests::runner_passes_strand_via_at_syntax`
 
-- [ ] SubprocessAgentRunner passes `cli_args` as constructed (now includes `@<strand_path>`)
-- [ ] SubprocessAgentRunner passes the prompt via stdin (pipe `ctx.prompt` to child's stdin)
-- [ ] Test with `sh -c "cat"` to verify stdin is received
-- [ ] Test with `cat /dev/stdin` to verify content round-trips
-- [ ] Keep existing tests green (they use `echo` which doesn't read stdin — should still work)
+- [x] SubprocessAgentRunner passes `cli_args` as constructed (now includes `@<strand_path>`)
+- [x] SubprocessAgentRunner passes the prompt via stdin (pipe `ctx.prompt` to child's stdin)
+- [x] Test with `sh -c "cat"` to verify stdin is received
+- [x] Test with `cat /dev/stdin` to verify content round-trips
+- [x] Keep existing tests green (they use `echo` which doesn't read stdin — should still work)
 
 ### Phase 3: Integration Test with Real pi CLI (or Stub)
 **Failing tests created:** `integration::tests::full_pipeline_with_pi_agent`, `integration::tests::pi_agent_receives_system_prompt_and_strand`
@@ -107,13 +107,13 @@ Two approaches — pick one:
 - [ ] Requires API key for the chosen provider
 
 **Option B: Stub script that mimics `pi -p`**
-- [ ] Create a shell script `stub-pi.sh` that reads `--system-prompt` and `@<file>` args and echoes them back
-- [ ] Integration test uses `stub-pi.sh` as `cli_path`
-- [ ] Verifies the invocation pattern (args received) without needing a real LLM
-- [ ] Lighter weight — no API key needed
+- [x] Create a shell script `stub-pi.sh` that reads `--system-prompt` and `@<file>` args and echoes them back
+- [x] Integration test uses `stub-pi.sh` as `cli_path`
+- [x] Verifies the invocation pattern (args received) without needing a real LLM
+- [x] Lighter weight — no API key needed
 
-- [ ] Verify the full happy path: strand created → pi invoked with correct args → tie-off contains agent output
-- [ ] Verify the error path: nonexistent model → pi exits non-zero → knot-state shows `failed` with error
+- [x] Verify the full happy path: strand created → pi invoked with correct args → tie-off contains agent output
+- [x] Verify the error path: nonexistent model → pi exits non-zero → knot-state shows `failed` with error
 
 ### Phase 4: Demo Verification
 - [x] Update `knot-test` demo loom config with provider/model fields
