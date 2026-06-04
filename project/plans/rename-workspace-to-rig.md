@@ -46,13 +46,13 @@ None — this is a rename refactor with no behavioural change. All existing test
 
 Rename the type everywhere it appears. This is the core domain type, so it touches every layer.
 
-- [ ] `src/domain/value_objects.rs` — struct name, impl blocks, doc comments, test function names (`workspace_agent_config_defaults` → `rig_agent_config_defaults`, `workspace_agent_config_serialization` → `rig_agent_config_serialization`), test assertions
-- [ ] `src/domain/entities.rs` — re-export line
-- [ ] `src/application/usecases.rs` — import, type annotations, `ProcessStrand` struct field and constructor
-- [ ] `src/adapters/inbound/mod.rs` — import, `AppContext` field type
-- [ ] `src/lib.rs` — pub use re-export, `AppConfig` field type, `load_workspace_config()` return/param types, `build_app_context()` calls
-- [ ] `tests/integration.rs` — import, all `WorkspaceAgentConfig` constructor calls and type annotations
-- [ ] `cargo build` — verify compilation
+- [x] `src/domain/value_objects.rs` — struct name, impl blocks, doc comments, test function names (`workspace_agent_config_defaults` → `rig_agent_config_defaults`, `workspace_agent_config_serialization` → `rig_agent_config_serialization`), test assertions
+- [x] `src/domain/entities.rs` — re-export line
+- [x] `src/application/usecases.rs` — import, type annotations, `ProcessStrand` struct field and constructor
+- [x] `src/adapters/inbound/mod.rs` — import, `AppContext` field type
+- [x] `src/lib.rs` — pub use re-export, `AppConfig` field type, `load_workspace_config()` return/param types, `build_app_context()` calls
+- [x] `tests/integration.rs` — import, all `WorkspaceAgentConfig` constructor calls and type annotations
+- [x] `cargo build` — verify compilation
 
 ### Phase 1: Structural Renames — fields, parameters, errors, routes, config file
 
