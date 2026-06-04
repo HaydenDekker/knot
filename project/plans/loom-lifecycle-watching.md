@@ -74,12 +74,12 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `adapters::inbound::tests::mock_event_source_tracks_watches`, `adapters::inbound::tests::app_context_has_event_source`
 
-- [ ] Failing test: `adapters::inbound::tests::mock_event_source_tracks_watches` — tracking mock `EventSource` records `watch()` and `unwatch()` calls; verify lists are accessible after calls
-- [ ] Failing test: `adapters::inbound::tests::app_context_has_event_source` — `AppContext` has an `event_source: Arc<dyn EventSource>` field; `build_test_context()` provides a tracking mock
-- [ ] Add `TrackingEventSource` mock to handler tests (records `watch`/`unwatch` paths)
-- [ ] Add `event_source: Arc<dyn EventSource>` field to `AppContext`
-- [ ] Update `build_test_context()` to provide tracking mock
-- [ ] In composition root (`lib.rs` `build_app_context`): create `NotifyEventSource` and store reference in `AppContext`
+- [x] Failing test: `adapters::inbound::tests::mock_event_source_tracks_watches` — tracking mock `EventSource` records `watch()` and `unwatch()` calls; verify lists are accessible after calls
+- [x] Failing test: `adapters::inbound::tests::app_context_has_event_source` — `AppContext` has an `event_source: Arc<dyn EventSource>` field; `build_test_context()` provides a tracking mock
+- [x] Add `TrackingEventSource` mock to handler tests (records `watch`/`unwatch` paths)
+- [x] Add `event_source: Arc<dyn EventSource>` field to `AppContext`
+- [x] Update `build_test_context()` to provide tracking mock
+- [x] In composition root (`lib.rs` `build_app_context`): create `NotifyEventSource` and store reference in `AppContext`
 
 ### Phase 2: RegisterLoom Starts Watchers
 
