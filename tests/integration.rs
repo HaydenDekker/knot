@@ -2074,3 +2074,180 @@ prompt-template:
     let _ = shutdown.send(());
 }
 
+// ── Phase 5: Per-Knot Source Directory Integration Test ────────────────────
+
+/// Two knots in one loom, each with its own source directory.
+///
+/// 1. Create a rig with a loom containing two knot files.
+/// 2. Each knot defines its own `source-dir` pointing to a separate dir.
+/// 3. Start the server with a mock agent.
+/// 4. Create a strand in knot A's source → processed by knot A only.
+/// 5. Create a strand in knot B's source → processed by knot B only.
+/// 6. Verify both knots reach `completed` status independently.
+#[test]
+fn server_starts_with_per_knot_source_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Rig subdirectory (what the server scans).
+    let rig = root.join("rig");
+    fs::create_dir(&rig).unwrap();
+
+    // Loom directory (contains knot definitions).
+    let loom_dir = rig.join("multi-knot-loom");
+    fs::create_dir(&loom_dir).unwrap();
+
+    // External source directories for each knot.
+    let source_a = root.join("source-a");
+    fs::create_dir(&source_a).unwrap();
+    let source_b = root.join("source-b");
+    fs::create_dir(&source_b).unwrap();
+
+    // Knot A — watches source-a.
+    let knot_a_content = format!(
+        "---
+name: knot-a
+agent-config:
+  goal: \"Review A\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"{}\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review A\"
+---
+",
+        source_a.display()
+    );
+    fs::write(loom_dir.join("knot-a.md"), knot_a_content).unwrap();
+
+    // Knot B — watches source-b.
+    let knot_b_content = format!(
+        "---
+name: knot-b
+agent-config:
+  goal: \"Review B\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+source-dir: \"{}\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review B\"
+---
+",
+        source_b.display()
+    );
+    fs::write(loom_dir.join("knot-b.md"), knot_b_content).unwrap();
+
+    // Mock agent script — ignores all CLI args built by ProcessStrand.
+    let mock_agent = create_mock_agent(&root, "processed");
+
+    let port = 32010;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: rig.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify loom is discovered with 2 knots.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/multi-knot-loom", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().expect("knots should be array");
+    assert_eq!(knots.len(), 2, "loom should have 2 knots");
+
+    // Verify both knots are present.
+    let knot_ids: Vec<_> = knots
+        .iter()
+        .map(|k| k["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        knot_ids.contains(&"knot-a"),
+        "knot-a should be present"
+    );
+    assert!(
+        knot_ids.contains(&"knot-b"),
+        "knot-b should be present"
+    );
+
+    // 1. Create a strand in source-a → should trigger knot-a.
+    let strand_a_path = source_a.join("strand-a.md");
+    fs::write(&strand_a_path, "content for A").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Verify knot-a reaches completed status.
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/multi-knot-loom/knots/knot-a",
+            30,
+            100,
+        )
+        .expect("knot-a status should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_a_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_a_status["status"].as_str().unwrap(),
+        "completed",
+        "knot-a status should be completed"
+    );
+
+    // 2. Create a strand in source-b → should trigger knot-b.
+    let strand_b_path = source_b.join("strand-b.md");
+    fs::write(&strand_b_path, "content for B").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Verify knot-b reaches completed status.
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/multi-knot-loom/knots/knot-b",
+            30,
+            100,
+        )
+        .expect("knot-b status should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_b_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_b_status["status"].as_str().unwrap(),
+        "completed",
+        "knot-b status should be completed"
+    );
+
+    // Verify knot-a strand_path references source-a file.
+    assert!(
+        knot_a_status["last_strand_path"]
+            .as_str()
+            .unwrap_or("")
+            .contains("strand-a.md"),
+        "knot-a should reference strand-a.md, got: {knot_a_status:?}"
+    );
+
+    // Verify knot-b strand_path references source-b file.
+    assert!(
+        knot_b_status["last_strand_path"]
+            .as_str()
+            .unwrap_or("")
+            .contains("strand-b.md"),
+        "knot-b should reference strand-b.md, got: {knot_b_status:?}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+

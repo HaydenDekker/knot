@@ -349,30 +349,32 @@ pub async fn start_server_with_shutdown(
         ctx.loom_ids = loom_ids;
     }
 
-    // Start file watchers on each loom source directory.
+    // Start file watchers on each knot's source directory.
+    // Each knot may define its own source_dir (from knot frontmatter).
+    // If a knot has no custom source_dir, it falls back to the loom's.
     // Kept alive in a scope — dropped during shutdown to stop the watcher.
     let event_source = {
         use application::ports::EventSource;
         let source =
             adapters::outbound::NotifyEventSource::new(event_sender);
         for loom in &looms {
-            let knot_id = loom.knots
-                .first()
-                .map(|k| k.id.clone())
-                .unwrap_or_else(|| {
-                    domain::entities::KnotId("default".to_string())
-                });
-            // Register IDs for this loom's source directory
-            source.with_loom_ids(
-                loom.source_dir.clone(),
-                loom.id.clone(),
-                knot_id,
-            );
-            if let Err(e) = source.watch(&loom.source_dir) {
-                eprintln!(
-                    "WARNING: failed to watch {}: {e}",
-                    loom.source_dir.display()
+            for knot in &loom.knots {
+                // Resolve effective source directory for this knot.
+                let source_dir = knot
+                    .source_dir
+                    .clone()
+                    .unwrap_or_else(|| loom.source_dir.clone());
+                source.with_loom_ids(
+                    source_dir.clone(),
+                    loom.id.clone(),
+                    knot.id.clone(),
                 );
+                if let Err(e) = source.watch(&source_dir) {
+                    eprintln!(
+                        "WARNING: failed to watch {}: {e}",
+                        source_dir.display()
+                    );
+                }
             }
         }
         source
