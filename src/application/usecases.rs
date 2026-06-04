@@ -427,15 +427,23 @@ impl ProcessStrand {
             return Ok(());
         }
 
-        // 2. Build execution context
+        // 2. Build CLI args from knot's agent config + prompt template
+        let mut cli_args =
+            knot.agent_config.build_cli_args(&knot.prompt_template);
+        // Append strand content reference using pi's @file syntax
+        cli_args.push(
+            format!("@{}", strand_path.0.display()),
+        );
+
+        // 3. Build execution context
         let ctx = ExecutionContext {
             cli_path: self.workspace_config.cli_path.clone(),
-            cli_args: self.workspace_config.cli_args.clone(),
+            cli_args,
             prompt: knot.prompt_template.instructions.clone(),
             strand_path: strand_path.clone(),
         };
 
-        // 3. Execute agent and handle result
+        // 4. Execute agent and handle result
         let result = self.agent_runner.execute(ctx);
 
         match result {
@@ -1582,5 +1590,170 @@ mod tests {
             }
             _ => panic!("Expected StrandProcessed event"),
         }
+    }
+
+    /// Tracking mock `AgentRunner` that records the `ExecutionContext` it
+    /// receives, then returns a configurable result.
+    struct TrackingAgentRunner {
+        captured_ctx: Arc<RwLock<Option<ExecutionContext>>>,
+        result: Result<AgentOutput, PortError>,
+    }
+
+    impl TrackingAgentRunner {
+        fn new(
+            result: Result<AgentOutput, PortError>,
+        ) -> (
+            Self,
+            Arc<RwLock<Option<ExecutionContext>>>,
+        ) {
+            let captured_ctx = Arc::new(RwLock::new(None));
+            let runner = Self {
+                captured_ctx: captured_ctx.clone(),
+                result,
+            };
+            (runner, captured_ctx)
+        }
+    }
+
+    impl AgentRunner for TrackingAgentRunner {
+        fn execute(
+            &self,
+            ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            self.captured_ctx.write().unwrap().replace(ctx);
+            self.result.clone()
+        }
+    }
+
+    /// Verify that `ProcessStrand` constructs CLI args from the knot's
+    /// `AgentConfig` + `PromptTemplate` instead of using raw
+    /// `WorkspaceAgentConfig.cli_args`.
+    #[test]
+    fn process_strand_builds_pi_cli_args() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, _) = TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, _) = TrackingLoomLogPort::new();
+        let (sink, _) = TrackingTieOffSink::new();
+
+        let (agent_runner, captured_ctx) = TrackingAgentRunner::new(Ok(
+            AgentOutput {
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        ));
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(state_port),
+            Arc::new(log_port),
+            Arc::new(agent_runner),
+            Arc::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        use_case.execute(event).unwrap();
+
+        // Verify the captured ExecutionContext has the correct args
+        let ctx = captured_ctx.read().unwrap();
+        let ctx = ctx.as_ref().expect("agent runner should have been called");
+
+        // cli_path should come from workspace config (default: "pi")
+        assert_eq!(ctx.cli_path, "pi");
+
+        // cli_args should be built from knot config, NOT workspace cli_args
+        // Expected: -p --model gpt-4o --system-prompt check it --no-session
+        //           --no-tools @src/file.md
+        let args = &ctx.cli_args;
+        assert!(
+            args.contains(&"-p".to_string()),
+            "args should contain -p flag"
+        );
+        assert!(
+            args.contains(&"--model".to_string()),
+            "args should contain --model flag"
+        );
+        assert!(
+            args.contains(&"gpt-4o".to_string()),
+            "args should contain model name from knot config"
+        );
+        assert!(
+            args.contains(&"--system-prompt".to_string()),
+            "args should contain --system-prompt flag"
+        );
+        assert!(
+            args.contains(&"check it".to_string()),
+            "args should contain instructions from prompt template"
+        );
+        assert!(
+            args.contains(&"--no-session".to_string()),
+            "args should contain --no-session flag"
+        );
+        assert!(
+            args.contains(&"--no-tools".to_string()),
+            "args should contain --no-tools flag (no tools configured)"
+        );
+        // Strand path appended with @ prefix
+        let has_strand_ref = args
+            .iter()
+            .any(|a| a.starts_with("@src/file.md"));
+        assert!(
+            has_strand_ref,
+            "args should contain @strand_path reference"
+        );
+    }
+
+    /// Verify that `ProcessStrand` passes the prompt (from
+    /// `prompt_template.instructions`) and strand path into the
+    /// `ExecutionContext`.
+    #[test]
+    fn process_strand_passes_prompt_and_strand_to_context() {
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (state_port, _) = TrackingKnotStatePortForUpdates::new();
+        let (log_port, _, _) = TrackingLoomLogPort::new();
+        let (sink, _) = TrackingTieOffSink::new();
+
+        let (agent_runner, captured_ctx) = TrackingAgentRunner::new(Ok(
+            AgentOutput {
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        ));
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(state_port),
+            Arc::new(log_port),
+            Arc::new(agent_runner),
+            Arc::new(sink),
+            WorkspaceAgentConfig::default_config(),
+        );
+
+        let event = build_created_event("test-loom", "k1", "src/file.md");
+        use_case.execute(event).unwrap();
+
+        let ctx = captured_ctx.read().unwrap();
+        let ctx = ctx.as_ref().expect("agent runner should have been called");
+
+        // Prompt comes from knot's prompt_template.instructions
+        assert_eq!(
+            ctx.prompt, "check it",
+            "prompt should be from prompt template instructions"
+        );
+
+        // Strand path is carried in the context
+        assert_eq!(
+            ctx.strand_path,
+            StrandPath(PathBuf::from("src/file.md")),
+            "strand_path should match the event strand"
+        );
     }
 }

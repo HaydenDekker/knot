@@ -32,6 +32,27 @@ prompt-template:
 This knot reviews PRD goals.
 ";
 
+/// Create a mock agent script in the given directory.
+/// The script echoes the given message and ignores all CLI arguments.
+/// Returns the absolute path to the script.
+fn create_mock_agent(
+    dir: &std::path::Path,
+    output: &str,
+) -> std::path::PathBuf {
+    let script_path = dir.join("mock-agent");
+    fs::write(
+        &script_path,
+        format!("#!/bin/sh\necho '{}'\n", output),
+    )
+    .expect("should write mock agent script");
+    fs::set_permissions(
+        &script_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("should set script as executable");
+    script_path
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Simple synchronous HTTP GET using raw TCP.
@@ -463,6 +484,10 @@ fn event_flows_through_pipeline() {
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
+    // Mock agent script — ignores all CLI args built by ProcessStrand
+    let mock_agent =
+        create_mock_agent(&base_dir, "agent output");
+
     let port = 31990;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -470,11 +495,8 @@ fn event_flows_through_pipeline() {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         workspace_config: WorkspaceAgentConfig {
-            cli_path: "sh".to_string(),
-            cli_args: vec![
-                "-c".to_string(),
-                "echo 'agent output'".to_string(),
-            ],
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
         },
         ..AppConfig::default_config()
     };
@@ -637,6 +659,9 @@ fn full_pipeline_create_modify_delete() {
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
+    // Mock agent script — ignores all CLI args built by ProcessStrand
+    let mock_agent = create_mock_agent(&base_dir, "processed");
+
     let port = 31992;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -644,11 +669,8 @@ fn full_pipeline_create_modify_delete() {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         workspace_config: WorkspaceAgentConfig {
-            cli_path: "sh".to_string(),
-            cli_args: vec![
-                "-c".to_string(),
-                "echo 'processed'".to_string(),
-            ],
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
         },
         ..AppConfig::default_config()
     };
@@ -723,6 +745,9 @@ fn full_pipeline_http_observable() {
     fs::create_dir(&loom_dir).unwrap();
     fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
 
+    // Mock agent script — ignores all CLI args built by ProcessStrand
+    let mock_agent = create_mock_agent(&base_dir, "processed");
+
     let port = 31993;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -730,11 +755,8 @@ fn full_pipeline_http_observable() {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         workspace_config: WorkspaceAgentConfig {
-            cli_path: "sh".to_string(),
-            cli_args: vec![
-                "-c".to_string(),
-                "echo 'processed'".to_string(),
-            ],
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
         },
         ..AppConfig::default_config()
     };
@@ -1122,6 +1144,9 @@ fn full_pipeline_external_source_dir() {
     );
     fs::write(loom_dir.join(".loom-config.yaml"), config_content).unwrap();
 
+    // Mock agent script — ignores all CLI args built by ProcessStrand
+    let mock_agent = create_mock_agent(&root, "processed external");
+
     let port = 31997;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -1129,11 +1154,8 @@ fn full_pipeline_external_source_dir() {
         base_dir: workspace.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         workspace_config: WorkspaceAgentConfig {
-            cli_path: "sh".to_string(),
-            cli_args: vec![
-                "-c".to_string(),
-                "echo 'processed external'".to_string(),
-            ],
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
         },
         ..AppConfig::default_config()
     };
@@ -1481,19 +1503,18 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     );
     fs::write(loom_dir.join(".loom-config.yaml"), config_content).unwrap();
 
+    // Mock agent script — ignores all CLI args built by ProcessStrand
+    let mock_agent = create_mock_agent(&root, "summary");
+
     let port = 32002;
     let host_port = format!("127.0.0.1:{port}");
 
-    // Use a mock agent CLI that echoes "summary".
     let config = AppConfig {
         base_dir: workspace.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         workspace_config: WorkspaceAgentConfig {
-            cli_path: "sh".to_string(),
-            cli_args: vec![
-                "-c".to_string(),
-                "echo summary".to_string(),
-            ],
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
         },
         ..AppConfig::default_config()
     };
