@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-04 (plan 7 added)
+> **Last Updated:** 2026-06-04 (plan 7 completed)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 7 | [pi Agent Integration](pi-agent-integration.md) | ⬜ Planned | 2026-06-04 |
+| 7 | [pi Agent Integration](pi-agent-integration.md) | ✅ Complete | 2026-06-04 |
 | 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
 | 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
 | 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ✅ Complete | 2026-06-03 |
@@ -120,8 +120,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 7. pi Agent Integration
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-04
+**Completed:** 2026-06-04
 **Hex Layer:** Domain → Application → Outbound Adapters
 **Goal:** Extend AgentConfig with provider/model/tools, construct `pi` CLI invocation from knot config, and pass strand content to the agent.
 
