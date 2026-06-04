@@ -257,7 +257,7 @@ fn app_starts_and_serves_health() {
 }
 
 /// `RigAgentConfig` is loaded with defaults (`pi` CLI); accessible
-/// in `AppContext` via the `/config/workspace` HTTP endpoint.
+/// in `AppContext` via the `/config/rig` HTTP endpoint.
 #[test]
 fn app_loads_workspace_agent_config() {
     let port = 31985;
@@ -265,7 +265,7 @@ fn app_loads_workspace_agent_config() {
 
     let config = AppConfig {
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig::default_config(),
+        rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
     };
 
@@ -275,9 +275,9 @@ fn app_loads_workspace_agent_config() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    // GET /config/workspace → 200 with JSON
+    // GET /config/rig → 200 with JSON
     let (status, body) =
-        http_get_retry(&host_port, "/config/workspace", 30, 100)
+        http_get_retry(&host_port, "/config/rig", 30, 100)
             .expect("config endpoint should respond");
 
     assert!(status.contains("200"), "expected 200 OK, got: {status}");
@@ -319,8 +319,8 @@ fn build_app_context_wires_layers() {
     let _runner: &dyn AgentRunner = &*ctx.agent_runner;
 
     // Workspace config is loaded with defaults
-    assert_eq!(ctx.workspace_config.cli_path, "pi");
-    assert!(ctx.workspace_config.cli_args.is_empty());
+    assert_eq!(ctx.rig_config.cli_path, "pi");
+    assert!(ctx.rig_config.cli_args.is_empty());
 
     // Event sender is present; receiver is returned for pipeline wiring
     // (Receiver type proves the channel was created)
@@ -577,7 +577,7 @@ fn event_flows_through_pipeline() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -643,7 +643,7 @@ fn debounce_prevents_duplicate_processing() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "echo 'output'".to_string()],
         },
@@ -751,7 +751,7 @@ fn full_pipeline_create_modify_delete() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -837,7 +837,7 @@ fn full_pipeline_http_observable() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -955,7 +955,7 @@ fn multiple_looms_independent() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
             cli_args: vec![
                 "-c".to_string(),
@@ -1073,7 +1073,7 @@ fn graceful_shutdown_stops_watchers() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
             cli_args: vec![
                 "-c".to_string(),
@@ -1236,7 +1236,7 @@ fn full_pipeline_external_source_dir() {
     let config = AppConfig {
         base_dir: workspace.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -1323,7 +1323,7 @@ fn full_pipeline_agent_error_in_state_and_log() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: "/nonexistent/path/to/fake-agent".to_string(),
             cli_args: vec![],
         },
@@ -1435,7 +1435,7 @@ fn full_pipeline_external_source_with_agent_error() {
     let config = AppConfig {
         base_dir: workspace.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: "/no/such/agent".to_string(),
             cli_args: vec![],
         },
@@ -1595,7 +1595,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     let config = AppConfig {
         base_dir: workspace.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -1729,7 +1729,7 @@ fn full_pipeline_with_pi_agent() {
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -1850,7 +1850,7 @@ This knot tests error handling.
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -2007,7 +2007,7 @@ processing pipeline.
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),
             cli_args: vec![],
         },
@@ -2141,7 +2141,7 @@ prompt-template:
     let config = AppConfig {
         base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        workspace_config: RigAgentConfig {
+        rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),
             cli_args: vec![],
         },

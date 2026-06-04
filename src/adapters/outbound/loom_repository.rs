@@ -11,7 +11,7 @@ use crate::domain::knot_file::{self as knot_file_parser, KnotFile};
 
 /// Filesystem-backed implementation of `LoomRepository`.
 ///
-/// Scans a workspace directory for looms (subdirectories) and parses
+/// Scans a rig directory for looms (subdirectories) and parses
 /// `.md` knot definition files using `KnotFileParser` from the domain layer.
 ///
 /// Also maintains an in-memory registry of saved looms for `get()`,
@@ -44,18 +44,18 @@ impl FileSystemLoomRepository {
 }
 
 impl LoomRepository for FileSystemLoomRepository {
-    fn scan(&self, workspace: &Path) -> Result<Vec<Loom>, PortError> {
+    fn scan(&self, rig: &Path) -> Result<Vec<Loom>, PortError> {
         let entries =
-            fs::read_dir(workspace)
-                .map_err(|e| PortError::WorkspaceScanFailed(e.to_string()))?;
+            fs::read_dir(rig)
+                .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
         for entry_result in entries {
             let entry = entry_result
-                .map_err(|e| PortError::WorkspaceScanFailed(e.to_string()))?;
+                .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
             let file_type = entry
                 .file_type()
-                .map_err(|e| PortError::WorkspaceScanFailed(e.to_string()))?;
+                .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
             if !file_type.is_dir() {
                 continue;
@@ -66,7 +66,7 @@ impl LoomRepository for FileSystemLoomRepository {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| {
-                    PortError::WorkspaceScanFailed(
+                    PortError::RigScanFailed(
                         "invalid loom directory name".to_string(),
                     )
                 })?
@@ -77,7 +77,7 @@ impl LoomRepository for FileSystemLoomRepository {
             // Canonicalise the loom directory to an absolute path.
             let canonical_loom_dir = fs::canonicalize(&loom_dir)
                 .map_err(|e| {
-                    PortError::WorkspaceScanFailed(format!(
+                    PortError::RigScanFailed(format!(
                         "failed to canonicalise {}: {}",
                         loom_dir.display(),
                         e
@@ -148,13 +148,13 @@ impl FileSystemLoomRepository {
         loom_dir: &Path,
     ) -> Result<Vec<Knot>, PortError> {
         let entries = fs::read_dir(loom_dir)
-            .map_err(|e| PortError::WorkspaceScanFailed(e.to_string()))?;
+            .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
         let mut knots = Vec::new();
 
         for entry_result in entries {
             let entry = entry_result
-                .map_err(|e| PortError::WorkspaceScanFailed(e.to_string()))?;
+                .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
             let path = entry.path();
 
@@ -169,7 +169,7 @@ impl FileSystemLoomRepository {
 
             let content =
                 fs::read_to_string(&path).map_err(|e| {
-                    PortError::WorkspaceScanFailed(format!(
+                    PortError::RigScanFailed(format!(
                         "failed to read {}: {}",
                         path.display(),
                         e
@@ -320,39 +320,39 @@ This knot reviews PRD goals.
     }
 
     #[test]
-    fn scan_empty_workspace() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn scan_empty_rig() {
+        let rig = tempfile::tempdir().unwrap();
         let repo = FileSystemLoomRepository::new();
 
         let result =
-            repo.scan(workspace.path());
+            repo.scan(rig.path());
 
         assert!(result.is_ok());
         let looms = result.unwrap();
         assert!(
             looms.is_empty(),
-            "empty workspace should return no looms"
+            "empty rig should return no looms"
         );
     }
 
     #[test]
-    fn scan_workspace_with_one_loom() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn scan_rig_with_one_loom() {
+        let rig = tempfile::tempdir().unwrap();
 
         // Create one loom directory with one valid knot file.
-        let loom_dir = workspace.path().join("my-loom");
+        let loom_dir = rig.path().join("my-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         assert!(result.is_ok());
         let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             1,
-            "workspace with one loom directory should return one loom"
+            "rig with one loom directory should return one loom"
         );
 
         let loom = &looms[0];
@@ -363,28 +363,28 @@ This knot reviews PRD goals.
     }
 
     #[test]
-    fn scan_workspace_with_multiple_looms() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn scan_rig_with_multiple_looms() {
+        let rig = tempfile::tempdir().unwrap();
 
         // Loom 1.
-        let loom1_dir = workspace.path().join("loom-a");
+        let loom1_dir = rig.path().join("loom-a");
         fs::create_dir(&loom1_dir).unwrap();
         create_knot_file(&loom1_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         // Loom 2.
-        let loom2_dir = workspace.path().join("loom-b");
+        let loom2_dir = rig.path().join("loom-b");
         fs::create_dir(&loom2_dir).unwrap();
         create_knot_file(&loom2_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         assert!(result.is_ok());
         let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             2,
-            "workspace with two loom directories should return two looms"
+            "rig with two loom directories should return two looms"
         );
 
         // Verify both looms are present.
@@ -400,9 +400,9 @@ This knot reviews PRD goals.
 
     #[test]
     fn scan_skips_invalid_knot_files() {
-        let workspace = tempfile::tempdir().unwrap();
+        let rig = tempfile::tempdir().unwrap();
 
-        let loom_dir = workspace.path().join("my-loom");
+        let loom_dir = rig.path().join("my-loom");
         fs::create_dir(&loom_dir).unwrap();
 
         // One valid knot file.
@@ -416,7 +416,7 @@ broken: yaml: [
         create_knot_file(&loom_dir, "invalid", invalid_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         assert!(result.is_ok(), "scan should succeed even with invalid files");
         let looms = result.unwrap();
@@ -430,14 +430,14 @@ broken: yaml: [
 
     #[test]
     fn scan_parses_knot_definition_files() {
-        let workspace = tempfile::tempdir().unwrap();
+        let rig = tempfile::tempdir().unwrap();
 
-        let loom_dir = workspace.path().join("test-loom");
+        let loom_dir = rig.path().join("test-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "goals-review", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         assert!(result.is_ok());
         let looms = result.unwrap();
@@ -503,14 +503,14 @@ broken: yaml: [
     }
 
     #[test]
-    fn scan_workspace_with_relative_path() {
+    fn scan_rig_with_relative_path() {
         let temp_root = tempfile::tempdir().unwrap();
 
-        // Create a workspace subdirectory.
+        // Create a rig subdirectory.
         let ws_dir = temp_root.path().join("test-ws");
         fs::create_dir(&ws_dir).unwrap();
 
-        // Create a loom directory inside the workspace.
+        // Create a loom directory inside the rig.
         let loom_dir = ws_dir.join("relative-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
@@ -559,16 +559,16 @@ broken: yaml: [
     }
 
     #[test]
-    fn scan_workspace_with_absolute_path() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn scan_rig_with_absolute_path() {
+        let rig = tempfile::tempdir().unwrap();
 
-        // Create a loom directory inside the temp workspace.
-        let loom_dir = workspace.path().join("abs-loom");
+        // Create a loom directory inside the temp rig.
+        let loom_dir = rig.path().join("abs-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let abs_path = workspace.path().to_path_buf();
+        let abs_path = rig.path().to_path_buf();
         assert!(abs_path.is_absolute(), "test path should be absolute");
 
         let result = repo.scan(&abs_path);
@@ -600,16 +600,16 @@ broken: yaml: [
     fn scan_uses_loom_config_source_dir() {
         let temp_root = tempfile::tempdir().unwrap();
 
-        // External source directory outside the scanned workspace.
+        // External source directory outside the scanned rig.
         let external_source = temp_root.path().join("external-source");
         fs::create_dir(&external_source).unwrap();
 
-        // Workspace is a subdirectory (scan only sees loom inside it).
-        let workspace = temp_root.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
+        // Rig is a subdirectory (scan only sees loom inside it).
+        let rig = temp_root.path().join("rig");
+        fs::create_dir(&rig).unwrap();
 
         // Loom directory (contains knot definitions and config).
-        let loom_dir = workspace.join("config-loom");
+        let loom_dir = rig.join("config-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
@@ -621,7 +621,7 @@ broken: yaml: [
         .unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&workspace);
+        let result = repo.scan(&rig);
 
         assert!(result.is_ok(), "scan should succeed with config");
         let looms = result.unwrap();
@@ -641,16 +641,16 @@ broken: yaml: [
     fn scan_uses_loom_config_tie_off_dir() {
         let temp_root = tempfile::tempdir().unwrap();
 
-        // External tie-off directory outside the scanned workspace.
+        // External tie-off directory outside the scanned rig.
         let external_tie_off = temp_root.path().join("external-output");
         fs::create_dir(&external_tie_off).unwrap();
 
-        // Workspace is a subdirectory.
-        let workspace = temp_root.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
+        // Rig is a subdirectory.
+        let rig = temp_root.path().join("rig");
+        fs::create_dir(&rig).unwrap();
 
         // Loom directory.
-        let loom_dir = workspace.join("config-loom");
+        let loom_dir = rig.join("config-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
@@ -662,7 +662,7 @@ broken: yaml: [
         .unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&workspace);
+        let result = repo.scan(&rig);
 
         assert!(result.is_ok(), "scan should succeed with config");
         let looms = result.unwrap();
@@ -678,15 +678,15 @@ broken: yaml: [
 
     #[test]
     fn scan_fallback_defaults_without_config() {
-        let workspace = tempfile::tempdir().unwrap();
+        let rig = tempfile::tempdir().unwrap();
 
         // Loom directory with NO .loom-config.yaml.
-        let loom_dir = workspace.path().join("default-loom");
+        let loom_dir = rig.path().join("default-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         assert!(result.is_ok());
         let looms = result.unwrap();
@@ -710,18 +710,18 @@ broken: yaml: [
     fn scan_loom_config_absolute_paths() {
         let temp_root = tempfile::tempdir().unwrap();
 
-        // External directories with absolute paths (outside scanned workspace).
+        // External directories with absolute paths (outside scanned rig).
         let abs_source = temp_root.path().join("abs-source");
         fs::create_dir(&abs_source).unwrap();
         let abs_tie_off = temp_root.path().join("abs-output");
         fs::create_dir(&abs_tie_off).unwrap();
 
-        // Workspace is a subdirectory.
-        let workspace = temp_root.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
+        // Rig is a subdirectory.
+        let rig = temp_root.path().join("rig");
+        fs::create_dir(&rig).unwrap();
 
         // Loom directory.
-        let loom_dir = workspace.join("abs-loom");
+        let loom_dir = rig.join("abs-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
@@ -734,7 +734,7 @@ broken: yaml: [
         write_loom_config(&loom_dir, &config_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&workspace);
+        let result = repo.scan(&rig);
 
         assert!(result.is_ok(), "scan should succeed with absolute paths");
         let looms = result.unwrap();
@@ -753,10 +753,10 @@ broken: yaml: [
 
     #[test]
     fn scan_loom_config_malformed_yaml() {
-        let workspace = tempfile::tempdir().unwrap();
+        let rig = tempfile::tempdir().unwrap();
 
         // Loom directory with a malformed .loom-config.yaml.
-        let loom_dir = workspace.path().join("malformed-loom");
+        let loom_dir = rig.path().join("malformed-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
@@ -764,7 +764,7 @@ broken: yaml: [
         write_loom_config(&loom_dir, "broken: yaml: [\n  unclosed").unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(workspace.path());
+        let result = repo.scan(rig.path());
 
         // Should succeed — falls back to defaults.
         assert!(
@@ -821,11 +821,11 @@ broken: yaml: [
 
     #[test]
     fn resolve_config_path_relative_joins_to_loom_dir() {
-        let workspace = tempfile::tempdir().unwrap();
-        let loom_dir = workspace.path().join("my-loom");
+        let rig = tempfile::tempdir().unwrap();
+        let loom_dir = rig.path().join("my-loom");
         fs::create_dir(&loom_dir).unwrap();
 
-        let external = workspace.path().join("external");
+        let external = rig.path().join("external");
         fs::create_dir(&external).unwrap();
 
         let default_dir = loom_dir.clone();
@@ -844,8 +844,8 @@ broken: yaml: [
 
     #[test]
     fn resolve_config_path_none_returns_default() {
-        let workspace = tempfile::tempdir().unwrap();
-        let loom_dir = workspace.path().join("my-loom");
+        let rig = tempfile::tempdir().unwrap();
+        let loom_dir = rig.path().join("my-loom");
         fs::create_dir(&loom_dir).unwrap();
 
         let default_dir = fs::canonicalize(&loom_dir).unwrap();
@@ -859,11 +859,11 @@ broken: yaml: [
 
     #[test]
     fn resolve_config_path_absolute_uses_as_is() {
-        let workspace = tempfile::tempdir().unwrap();
-        let target = workspace.path().join("target");
+        let rig = tempfile::tempdir().unwrap();
+        let target = rig.path().join("target");
         fs::create_dir(&target).unwrap();
 
-        let loom_dir = workspace.path().join("loom");
+        let loom_dir = rig.path().join("loom");
         fs::create_dir(&loom_dir).unwrap();
 
         let default_dir = fs::canonicalize(&loom_dir).unwrap();

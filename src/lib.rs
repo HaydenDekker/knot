@@ -53,8 +53,8 @@ pub struct AppConfig {
     pub base_dir: PathBuf,
     /// Address to bind the HTTP server on.
     pub bind_addr: SocketAddr,
-    /// Workspace-level agent configuration.
-    pub workspace_config: RigAgentConfig,
+    /// Rig-level agent configuration.
+    pub rig_config: RigAgentConfig,
     /// Timeout for subprocess agent runner.
     pub agent_timeout: Duration,
 }
@@ -83,7 +83,7 @@ pub fn start_event_pipeline(
     let log_port = Arc::clone(&ctx.loom_log_port);
     let agent_runner = Arc::clone(&ctx.agent_runner);
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
-    let workspace_config = ctx.workspace_config.clone();
+    let rig_config = ctx.rig_config.clone();
 
     tokio::spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
@@ -92,7 +92,7 @@ pub fn start_event_pipeline(
             log_port,
             agent_runner,
             tie_off_sink,
-            workspace_config,
+            rig_config,
         );
         while let Some(event) = debounce_rx.recv().await {
             if let Err(e) = use_case.execute(event) {
@@ -103,21 +103,21 @@ pub fn start_event_pipeline(
 }
 
 impl AppConfig {
-    /// Create default configuration: bind `127.0.0.1:3000`, workspace dir `.`.
+    /// Create default configuration: bind `127.0.0.1:3000`, rig dir `.`.
     pub fn default_config() -> Self {
         Self {
             base_dir: PathBuf::from("."),
             bind_addr: "127.0.0.1:3000".parse().unwrap(),
-            workspace_config: RigAgentConfig::default_config(),
+            rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(120),
         }
     }
 }
 
-/// Load the workspace agent configuration from `.workspace-agent-config.yaml`
+/// Load the rig agent configuration from `.rig-agent-config.yaml`
 /// in the given directory. Falls back to `default` if the file does not
 /// exist or cannot be parsed.
-fn load_workspace_config(
+fn load_rig_config(
     base_dir: &std::path::Path,
     default: RigAgentConfig,
 ) -> RigAgentConfig {
@@ -154,7 +154,7 @@ fn load_workspace_config(
 /// Creates:
 /// - Outbound adapter instances (filesystem adapters, notify watcher, subprocess)
 /// - `LoomStore` (in-memory loom registry)
-/// - `AppContext` holding store, ports, and workspace config
+/// - `AppContext` holding store, ports, and rig config
 /// - Event channel: sender goes into AppContext, receiver is returned
 ///
 /// Returns `(AppContext, Receiver<StrandEvent>)` — the receiver is wired
@@ -166,9 +166,9 @@ pub fn build_app_context(
 ) -> (AppContext, mpsc::Receiver<StrandEvent>) {
     let store = application::store::LoomStore::new();
 
-    // Load workspace config from .workspace-agent-config.yaml (falls back to defaults).
-    let workspace_config =
-        load_workspace_config(&config.base_dir, config.workspace_config.clone());
+    // Load rig config from .rig-agent-config.yaml (falls back to defaults).
+    let rig_config =
+        load_rig_config(&config.base_dir, config.rig_config.clone());
 
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
@@ -203,7 +203,7 @@ pub fn build_app_context(
             tie_off_sink,
             event_sender: event_tx,
             agent_runner,
-            workspace_config,
+            rig_config,
             loom_ids: Vec::new(),
         },
         event_rx,
@@ -213,7 +213,7 @@ pub fn build_app_context(
 /// Run the startup discovery and registration sequence.
 ///
 /// After building the AppContext, this:
-/// 1. Runs DiscoverLooms to scan workspace and register looms
+/// 1. Runs DiscoverLooms to scan rig and register looms
 /// 2. For each loom: opens activity log, writes LoomStarted event
 /// 3. Stores loom IDs in AppContext for use during graceful shutdown
 ///

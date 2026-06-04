@@ -329,7 +329,7 @@ pub struct ProcessStrand {
     log_port: Arc<dyn LoomLogPort>,
     agent_runner: Arc<dyn AgentRunner>,
     tie_off_sink: Arc<dyn TieOffSink>,
-    workspace_config: RigAgentConfig,
+    rig_config: RigAgentConfig,
 }
 
 impl ProcessStrand {
@@ -340,7 +340,7 @@ impl ProcessStrand {
         log_port: Arc<dyn LoomLogPort>,
         agent_runner: Arc<dyn AgentRunner>,
         tie_off_sink: Arc<dyn TieOffSink>,
-        workspace_config: RigAgentConfig,
+        rig_config: RigAgentConfig,
     ) -> Self {
         Self {
             store,
@@ -348,7 +348,7 @@ impl ProcessStrand {
             log_port,
             agent_runner,
             tie_off_sink,
-            workspace_config,
+            rig_config,
         }
     }
 
@@ -437,7 +437,7 @@ impl ProcessStrand {
 
         // 3. Build execution context
         let ctx = ExecutionContext {
-            cli_path: self.workspace_config.cli_path.clone(),
+            cli_path: self.rig_config.cli_path.clone(),
             cli_args,
             prompt: knot.prompt_template.instructions.clone(),
             strand_path: strand_path.clone(),
@@ -568,7 +568,7 @@ mod tests {
     }
 
     impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _workspace: &Path) -> Result<Vec<Loom>, PortError> {
+        fn scan(&self, _rig: &Path) -> Result<Vec<Loom>, PortError> {
             self.scan_result.clone()
         }
 
@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn discover_looms_repository_error() {
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Err(PortError::WorkspaceScanFailed(
+            scan_result: Err(PortError::RigScanFailed(
                 "permission denied".to_string(),
             )),
         });
@@ -808,7 +808,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            PortError::WorkspaceScanFailed("permission denied".to_string())
+            PortError::RigScanFailed("permission denied".to_string())
         );
         // Store should be untouched
         assert!(store.list().is_empty());
@@ -1662,7 +1662,7 @@ mod tests {
         let ctx = captured_ctx.read().unwrap();
         let ctx = ctx.as_ref().expect("agent runner should have been called");
 
-        // cli_path should come from workspace config (default: "pi")
+        // cli_path should come from rig config (default: "pi")
         assert_eq!(ctx.cli_path, "pi");
 
         // cli_args should be built from knot config, NOT workspace cli_args

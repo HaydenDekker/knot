@@ -64,8 +64,8 @@ pub struct AppContext {
     pub event_sender: mpsc::Sender<StrandEvent>,
     /// Agent runner for subprocess execution.
     pub agent_runner: Arc<dyn AgentRunner>,
-    /// Workspace-level agent configuration.
-    pub workspace_config: RigAgentConfig,
+    /// Rig-level agent configuration.
+    pub rig_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
     pub loom_ids: Vec<LoomId>,
 }
@@ -215,11 +215,11 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
     (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
 }
 
-/// Return the loaded workspace agent configuration.
-pub async fn get_workspace_config(
+/// Return the loaded rig agent configuration.
+pub async fn get_rig_config(
     State(ctx): State<AppContext>,
 ) -> Response {
-    (StatusCode::OK, Json(&ctx.workspace_config)).into_response()
+    (StatusCode::OK, Json(&ctx.rig_config)).into_response()
 }
 
 // ── Router builder ─────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ pub fn build_app(ctx: AppContext) -> Router {
         .route("/health", get(crate::health))
         .route("/agents/{dir}", get(crate::list_agents))
         // Config endpoints
-        .route("/config/workspace", get(get_workspace_config))
+        .route("/config/rig", get(get_rig_config))
         // Loom endpoints
         .route("/looms", get(list_looms))
         .route("/looms", post(register_loom))
@@ -267,7 +267,7 @@ mod tests {
     impl LoomRepository for MockLoomRepository {
         fn scan(
             &self,
-            _workspace: &std::path::Path,
+            _rig: &std::path::Path,
         ) -> Result<Vec<Loom>, PortError> {
             Ok(vec![])
         }
@@ -370,7 +370,7 @@ mod tests {
             tie_off_sink: Arc::new(MockTieOffSink),
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
-            workspace_config: RigAgentConfig::default_config(),
+            rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
         }
     }

@@ -16,8 +16,8 @@ use crate::domain::events::LoomEvent;
 pub enum PortError {
     /// A loom was not found in the repository.
     LoomNotFound(LoomId),
-    /// Failed to scan a workspace directory.
-    WorkspaceScanFailed(String),
+    /// Failed to scan a rig directory.
+    RigScanFailed(String),
     /// Failed to save a loom to the repository.
     LoomSaveFailed(String),
     /// Failed to list registered looms.
@@ -54,8 +54,8 @@ impl std::fmt::Display for PortError {
             PortError::LoomNotFound(id) => {
                 write!(f, "loom '{}' not found", id.0)
             }
-            PortError::WorkspaceScanFailed(msg) => {
-                write!(f, "workspace scan failed: {msg}")
+            PortError::RigScanFailed(msg) => {
+                write!(f, "rig scan failed: {msg}")
             }
             PortError::LoomSaveFailed(msg) => {
                 write!(f, "loom save failed: {msg}")
@@ -182,11 +182,11 @@ pub struct AgentOutput {
 
 /// Port for discovering and persisting looms.
 ///
-/// An adapter must be able to scan a workspace for looms, retrieve individual
+/// An adapter must be able to scan a rig for looms, retrieve individual
 /// looms, list all registered looms, and save loom definitions.
 pub trait LoomRepository: Send + Sync {
-    /// Scan a workspace directory and return all discovered looms.
-    fn scan(&self, workspace: &Path) -> Result<Vec<Loom>, PortError>;
+    /// Scan a rig directory and return all discovered looms.
+    fn scan(&self, rig: &Path) -> Result<Vec<Loom>, PortError>;
 
     /// Get a single loom by its ID.
     fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError>;
@@ -269,7 +269,7 @@ mod tests {
     }
 
     impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _workspace: &Path) -> Result<Vec<Loom>, PortError> {
+        fn scan(&self, _rig: &Path) -> Result<Vec<Loom>, PortError> {
             Ok(self.looms.values().cloned().collect())
         }
 
@@ -374,8 +374,8 @@ mod tests {
         let _obj: &dyn LoomRepository = &repo;
 
         // Verify all trait methods compile and are callable
-        let workspace = Path::new("/tmp/workspace");
-        let scan_result = repo.scan(workspace);
+        let rig = Path::new("/tmp/rig");
+        let scan_result = repo.scan(rig);
         assert!(scan_result.is_ok());
 
         let loom_id = LoomId("test".to_string());
@@ -555,8 +555,8 @@ mod tests {
         let err = PortError::LoomNotFound(loom_id);
         assert_eq!(err.to_string(), "loom 'missing' not found");
 
-        let err = PortError::WorkspaceScanFailed("permission denied".to_string());
-        assert_eq!(err.to_string(), "workspace scan failed: permission denied");
+        let err = PortError::RigScanFailed("permission denied".to_string());
+        assert_eq!(err.to_string(), "rig scan failed: permission denied");
 
         let err = PortError::KnotStateCreateFailed("db error".to_string());
         assert_eq!(err.to_string(), "knot state create failed: db error");
