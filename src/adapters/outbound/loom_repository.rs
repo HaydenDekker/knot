@@ -71,7 +71,16 @@ impl LoomRepository for FileSystemLoomRepository {
                 .to_string();
 
             let loom_id = LoomId(loom_name.clone());
-            let source_dir = loom_dir.clone();
+            // Canonicalise the source directory to an absolute path.
+        // This prevents watcher mismatches when base_dir is relative.
+        let source_dir = fs::canonicalize(&loom_dir)
+            .map_err(|e| {
+                PortError::WorkspaceScanFailed(format!(
+                    "failed to canonicalise {}: {}",
+                    loom_dir.display(),
+                    e
+                ))
+            })?;
 
             // Parse .md knot definition files from the loom directory.
             let knots = Self::scan_knot_files(&source_dir)?;
@@ -386,4 +395,97 @@ broken: yaml: [
         assert!(loom.is_some());
         assert_eq!(loom.unwrap().id, LoomId("saved-loom".to_string()));
     }
+
+    #[test]
+    fn scan_workspace_with_relative_path() {
+        let temp_root = tempfile::tempdir().unwrap();
+
+        // Create a workspace subdirectory.
+        let ws_dir = temp_root.path().join("test-ws");
+        fs::create_dir(&ws_dir).unwrap();
+
+        // Create a loom directory inside the workspace.
+        let loom_dir = ws_dir.join("relative-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // Build a relative path: "./test-ws" from the temp root.
+        let rel_path =
+            Path::new("./").join(ws_dir.file_name().unwrap());
+        assert!(
+            rel_path.to_string_lossy().contains("./"),
+            "test path should contain ./ component"
+        );
+
+        // Change current dir to temp root so the relative path resolves.
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_root.path()).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(&rel_path);
+
+        // Restore original directory (even on test failure).
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_ok(), "scan should succeed with relative path");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1, "should find one loom");
+
+        // Every loom's source_dir must be absolute.
+        for loom in &looms {
+            let source_str = loom.source_dir.to_string_lossy();
+            assert!(
+                loom.source_dir.is_absolute(),
+                "source_dir should be absolute, got: {}",
+                source_str
+            );
+            assert!(
+                !source_str.contains("./"),
+                "source_dir should not contain . component, got: {}",
+                source_str
+            );
+            assert!(
+                !source_str.contains("../"),
+                "source_dir should not contain .. component, got: {}",
+                source_str
+            );
+        }
+    }
+
+    #[test]
+    fn scan_workspace_with_absolute_path() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        // Create a loom directory inside the temp workspace.
+        let loom_dir = workspace.path().join("abs-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let abs_path = workspace.path().to_path_buf();
+        assert!(abs_path.is_absolute(), "test path should be absolute");
+
+        let result = repo.scan(&abs_path);
+        assert!(result.is_ok(), "scan should succeed with absolute path");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1, "should find one loom");
+
+        let loom = &looms[0];
+        let source_str = loom.source_dir.to_string_lossy();
+
+        // source_dir must be absolute.
+        assert!(
+            loom.source_dir.is_absolute(),
+            "source_dir should be absolute, got: {}",
+            source_str
+        );
+
+        // No double-slashes in the canonicalised path.
+        assert!(
+            !source_str.contains("//"),
+            "source_dir should not contain double-slashes, got: {}",
+            source_str
+        );
+    }
 }
+
