@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 pub use adapters::inbound::{build_app, AppContext};
 pub use adapters::subprocess::SubprocessAgentRunner;
 pub use domain::entities::Loom;
-pub use domain::value_objects::WorkspaceAgentConfig;
+pub use domain::value_objects::RigAgentConfig;
 
 /// HTTP handler — health check.
 pub async fn health() -> impl IntoResponse {
@@ -54,7 +54,7 @@ pub struct AppConfig {
     /// Address to bind the HTTP server on.
     pub bind_addr: SocketAddr,
     /// Workspace-level agent configuration.
-    pub workspace_config: WorkspaceAgentConfig,
+    pub workspace_config: RigAgentConfig,
     /// Timeout for subprocess agent runner.
     pub agent_timeout: Duration,
 }
@@ -108,7 +108,7 @@ impl AppConfig {
         Self {
             base_dir: PathBuf::from("."),
             bind_addr: "127.0.0.1:3000".parse().unwrap(),
-            workspace_config: WorkspaceAgentConfig::default_config(),
+            workspace_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(120),
         }
     }
@@ -119,8 +119,8 @@ impl AppConfig {
 /// exist or cannot be parsed.
 fn load_workspace_config(
     base_dir: &std::path::Path,
-    default: WorkspaceAgentConfig,
-) -> WorkspaceAgentConfig {
+    default: RigAgentConfig,
+) -> RigAgentConfig {
     let config_path = base_dir.join(".workspace-agent-config.yaml");
     if !config_path.exists() {
         return default;
@@ -136,7 +136,7 @@ fn load_workspace_config(
             return default;
         }
     };
-    match serde_yaml::from_str::<WorkspaceAgentConfig>(&content) {
+    match serde_yaml::from_str::<RigAgentConfig>(&content) {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!(

@@ -15,7 +15,7 @@ use crate::application::ports::{
 use crate::application::store::LoomStore;
 use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
 use crate::domain::events::{LoomEvent, StrandEvent};
-use crate::domain::value_objects::WorkspaceAgentConfig;
+use crate::domain::value_objects::RigAgentConfig;
 use std::path::PathBuf;
 
 // ── Query Result Types ───────────────────────────────────────────────────
@@ -318,7 +318,7 @@ impl GetKnotStatus {
 ///
 /// 1. Receive `StrandEvent` (Created / Modified / Deleted)
 /// 2. Update knot-state to `processing`
-/// 3. Build execution context from `WorkspaceAgentConfig` + `Knot`
+/// 3. Build execution context from `RigAgentConfig` + `Knot`
 /// 4. Call `AgentRunner::execute()` (skipped for Deleted events)
 /// 5. Call `TieOffSink::write()` with result
 /// 6. Update knot-state to `completed` or `failed`
@@ -329,7 +329,7 @@ pub struct ProcessStrand {
     log_port: Arc<dyn LoomLogPort>,
     agent_runner: Arc<dyn AgentRunner>,
     tie_off_sink: Arc<dyn TieOffSink>,
-    workspace_config: WorkspaceAgentConfig,
+    workspace_config: RigAgentConfig,
 }
 
 impl ProcessStrand {
@@ -340,7 +340,7 @@ impl ProcessStrand {
         log_port: Arc<dyn LoomLogPort>,
         agent_runner: Arc<dyn AgentRunner>,
         tie_off_sink: Arc<dyn TieOffSink>,
-        workspace_config: WorkspaceAgentConfig,
+        workspace_config: RigAgentConfig,
     ) -> Self {
         Self {
             store,
@@ -1256,7 +1256,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1319,7 +1319,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1385,7 +1385,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1447,7 +1447,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1508,7 +1508,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1559,7 +1559,7 @@ mod tests {
             Arc::new(log_port),
             agent_runner,
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_deleted_event("test-loom", "k1", "src/file.md");
@@ -1627,7 +1627,7 @@ mod tests {
 
     /// Verify that `ProcessStrand` constructs CLI args from the knot's
     /// `AgentConfig` + `PromptTemplate` instead of using raw
-    /// `WorkspaceAgentConfig.cli_args`.
+    /// `RigAgentConfig.cli_args`.
     #[test]
     fn process_strand_builds_pi_cli_args() {
         let loom = build_loom("test-loom", vec![build_knot("k1")]);
@@ -1652,7 +1652,7 @@ mod tests {
             Arc::new(log_port),
             Arc::new(agent_runner),
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");
@@ -1734,7 +1734,7 @@ mod tests {
             Arc::new(log_port),
             Arc::new(agent_runner),
             Arc::new(sink),
-            WorkspaceAgentConfig::default_config(),
+            RigAgentConfig::default_config(),
         );
 
         let event = build_created_event("test-loom", "k1", "src/file.md");

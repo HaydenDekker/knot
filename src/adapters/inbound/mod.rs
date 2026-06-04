@@ -26,7 +26,7 @@ use crate::application::usecases::{
 };
 use crate::domain::entities::{KnotId, Loom, LoomId};
 use crate::domain::events::StrandEvent;
-use crate::domain::value_objects::WorkspaceAgentConfig;
+use crate::domain::value_objects::RigAgentConfig;
 
 // ── Request Bodies ─────────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ pub struct AppContext {
     /// Agent runner for subprocess execution.
     pub agent_runner: Arc<dyn AgentRunner>,
     /// Workspace-level agent configuration.
-    pub workspace_config: WorkspaceAgentConfig,
+    pub workspace_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
     pub loom_ids: Vec<LoomId>,
 }
@@ -370,7 +370,7 @@ mod tests {
             tie_off_sink: Arc::new(MockTieOffSink),
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
-            workspace_config: WorkspaceAgentConfig::default_config(),
+            workspace_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
         }
     }

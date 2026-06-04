@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // Re-export value objects for convenient access through the entities module
-pub use crate::domain::value_objects::{AgentConfig, PromptTemplate, WorkspaceAgentConfig};
+pub use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
 
 // ── Value Objects (identifiers and paths) ──────────────────────────────────
 

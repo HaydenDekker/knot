@@ -128,17 +128,17 @@ impl PromptTemplate {
     }
 }
 
-/// Workspace-level agent configuration. One config per workspace,
-/// shared by all knots in that workspace.
+/// Rig-level agent configuration. One config per rig,
+/// shared by all knots in that rig.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceAgentConfig {
+pub struct RigAgentConfig {
     /// Path to the agent CLI binary.
     pub cli_path: String,
     /// Arguments passed to the CLI.
     pub cli_args: Vec<String>,
 }
 
-impl WorkspaceAgentConfig {
+impl RigAgentConfig {
     /// Create a default workspace config (`cli_path = "pi"`, `cli_args = []`).
     pub fn default_config() -> Self {
         Self {
@@ -302,14 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn workspace_agent_config_defaults() {
+    fn rig_agent_config_defaults() {
         // Default config uses "pi" and empty args
-        let config = WorkspaceAgentConfig::default_config();
+        let config = RigAgentConfig::default_config();
         assert_eq!(config.cli_path, "pi");
         assert!(config.cli_args.is_empty());
 
         // Custom path and args accepted
-        let config = WorkspaceAgentConfig::new(
+        let config = RigAgentConfig::new(
             "custom-agent".to_string(),
             vec!["--verbose".to_string()],
         );
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(config.cli_args, vec!["--verbose"]);
 
         // Empty cli_path returns error
-        let err = WorkspaceAgentConfig::new("".to_string(), vec![]);
+        let err = RigAgentConfig::new("".to_string(), vec![]);
         assert!(err.is_err());
         assert_eq!(
             err.unwrap_err(),
@@ -350,11 +350,11 @@ mod tests {
     }
 
     #[test]
-    fn workspace_agent_config_serialization() {
+    fn rig_agent_config_serialization() {
         let config =
-            WorkspaceAgentConfig::new("pi".to_string(), vec!["--verbose".to_string()]).unwrap();
+            RigAgentConfig::new("pi".to_string(), vec!["--verbose".to_string()]).unwrap();
         let json = serde_json::to_string(&config).unwrap();
-        let deserialized: WorkspaceAgentConfig = serde_json::from_str(&json).unwrap();
+        let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
     }
 }
