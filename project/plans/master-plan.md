@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ⬜ Planned | 2026-06-04 |
+| 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
 | 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
 | 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ✅ Complete | 2026-06-03 |
 | 3 | [Outbound Adapters](file-watcher.md) | ✅ Complete | 2026-06-03 |
@@ -111,7 +111,8 @@ _Overview sections for active and recently completed plans go here._
 
 ### 6. Loom Config, Path Resolution and Agent Error Logging
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-04
+**Completed:** 2026-06-04
 **Hex Layer:** Outbound Adapters + Application
 **Goal:** Canonical path resolution, `.loom-config.yaml` for external source/tie-off directories, and agent error logging in knot-state and loom-log.
