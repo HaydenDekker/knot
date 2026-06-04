@@ -20,7 +20,7 @@ use utoipa::OpenApi;
 use std::path::PathBuf;
 
 use crate::application::ports::{
-    AgentRunner, LoomLogPort, LoomRepository, TieOffSink,
+    AgentRunner, EventSource, LoomLogPort, LoomRepository, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::application::usecases::{
@@ -131,6 +131,8 @@ pub struct AppContext {
     pub loom_log_port: Arc<dyn LoomLogPort>,
     /// Tie-off sink port.
     pub tie_off_sink: Arc<dyn TieOffSink>,
+    /// File-system event source — used to watch/unwatch source dirs.
+    pub event_source: Arc<dyn EventSource>,
     /// Debounce engine sender — feed raw strand events.
     pub event_sender: mpsc::Sender<StrandEvent>,
     /// Agent runner for subprocess execution.
@@ -445,8 +447,55 @@ mod tests {
     use crate::domain::events::LoomEvent;
     use crate::domain::value_objects::{AgentConfig, PromptTemplate};
     use axum::{body::Body, http::Request};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tower::util::ServiceExt;
+
+    use std::sync::{Arc as StdArc, Mutex};
+
+    // ── Tracking EventSource Mock ──────────────────────────────────────
+
+    /// A mock `EventSource` that records all `watch()` and `unwatch()` calls.
+    ///
+    /// Thread-safe via `Arc<Mutex<...>>` so the recorded paths survive
+    /// across the `Arc<dyn EventSource>` boundary.
+    struct TrackingEventSource {
+        watch_calls: StdArc<Mutex<Vec<PathBuf>>>,
+        unwatch_calls: StdArc<Mutex<Vec<PathBuf>>>,
+    }
+
+    impl TrackingEventSource {
+        fn new() -> (
+            Self,
+            StdArc<Mutex<Vec<PathBuf>>>,
+            StdArc<Mutex<Vec<PathBuf>>>,
+        ) {
+            let watch_calls = StdArc::new(Mutex::new(vec![]));
+            let unwatch_calls = StdArc::new(Mutex::new(vec![]));
+            let source = Self {
+                watch_calls: watch_calls.clone(),
+                unwatch_calls: unwatch_calls.clone(),
+            };
+            (source, watch_calls, unwatch_calls)
+        }
+    }
+
+    impl EventSource for TrackingEventSource {
+        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.watch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.unwatch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+    }
 
     // ── Mock Port Implementations ──────────────────────────────────────
 
@@ -529,18 +578,53 @@ mod tests {
     ) -> AppContext {
         let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
         let _ = _event_rx;
+        let (event_source, _watch, _unwatch) = TrackingEventSource::new();
+        let _ = (_watch, _unwatch);
 
         AppContext {
             store: LoomStore::new(),
             loom_repo: Arc::new(MockLoomRepository),
             loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
             tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(event_source),
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),
         }
+    }
+
+    /// Build an `AppContext` with a tracking mock `EventSource`, returning
+    /// the context plus handles to inspect watch/unwatch call history.
+    fn build_test_context_with_tracking(
+        log_events: Vec<LoomEvent>,
+    ) -> (
+        AppContext,
+        StdArc<Mutex<Vec<PathBuf>>>,
+        StdArc<Mutex<Vec<PathBuf>>>,
+    ) {
+        let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
+        let _ = _event_rx;
+        let (event_source, watch_calls, unwatch_calls) =
+            TrackingEventSource::new();
+
+        (
+            AppContext {
+                store: LoomStore::new(),
+                loom_repo: Arc::new(MockLoomRepository),
+                loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
+                tie_off_sink: Arc::new(MockTieOffSink),
+                event_source: Arc::new(event_source),
+                event_sender,
+                agent_runner: Arc::new(MockAgentRunner),
+                rig_config: RigAgentConfig::default_config(),
+                loom_ids: Vec::new(),
+                base_dir: PathBuf::from("./rig"),
+            },
+            watch_calls,
+            unwatch_calls,
+        )
     }
 
     // ── Phase 0 Tests ─────────────────────────────────────────────────
@@ -1346,5 +1430,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
+    }
+
+    // ── Phase 1: Tracking Mock EventSource and AppContext Extension ─────
+
+    /// Tracking mock `EventSource` records `watch()` and `unwatch()` calls;
+    /// verify lists are accessible after calls.
+    #[test]
+    fn mock_event_source_tracks_watches() {
+        let (source, watch_calls, unwatch_calls) = TrackingEventSource::new();
+        let source: Arc<dyn EventSource> = Arc::new(source);
+
+        source.watch(Path::new("/src/docs")).unwrap();
+        source.watch(Path::new("/src/lib")).unwrap();
+        source.watch(Path::new("/src/test")).unwrap();
+
+        {
+            let watches = watch_calls.lock().unwrap();
+            assert_eq!(watches.len(), 3);
+            assert_eq!(watches[0], PathBuf::from("/src/docs"));
+            assert_eq!(watches[1], PathBuf::from("/src/lib"));
+            assert_eq!(watches[2], PathBuf::from("/src/test"));
+        }
+
+        // Call unwatch with some paths
+        source.unwatch(Path::new("/src/docs")).unwrap();
+        source.unwatch(Path::new("/src/test")).unwrap();
+
+        // Verify unwatch calls are recorded
+        let unwatch = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatch.len(), 2);
+        assert_eq!(unwatch[0], PathBuf::from("/src/docs"));
+        assert_eq!(unwatch[1], PathBuf::from("/src/test"));
+
+        // Watch calls are unaffected by unwatch
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 3);
+    }
+
+    /// `AppContext` has an `event_source: Arc<dyn EventSource>` field;
+    /// `build_test_context()` provides a tracking mock.
+    #[test]
+    fn app_context_has_event_source() {
+        let ctx = build_test_context();
+
+        // Verify event_source field exists and is an Arc<dyn EventSource>
+        let _source: &Arc<dyn EventSource> = &ctx.event_source;
+
+        // Verify it implements EventSource by calling watch/unwatch
+        let path = Path::new("/test/path");
+        assert!(ctx.event_source.watch(path).is_ok());
+        assert!(ctx.event_source.unwatch(path).is_ok());
+    }
+
+    /// `build_test_context_with_tracking()` returns call-history handles
+    /// that track through `AppContext`'s `event_source`.
+    #[test]
+    fn build_test_context_with_tracking_records_calls() {
+        let (ctx, watch_calls, unwatch_calls) =
+            build_test_context_with_tracking(vec![]);
+
+        // Use event_source through AppContext
+        ctx.event_source.watch(Path::new("/loom1/src")).unwrap();
+        ctx.event_source.watch(Path::new("/loom2/src")).unwrap();
+        ctx.event_source
+            .unwatch(Path::new("/loom1/src"))
+            .unwrap();
+
+        // Verify tracking through AppContext
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 2);
+        assert_eq!(watches[0], PathBuf::from("/loom1/src"));
+        assert_eq!(watches[1], PathBuf::from("/loom2/src"));
+
+        let unwatch = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatch.len(), 1);
+        assert_eq!(unwatch[0], PathBuf::from("/loom1/src"));
     }
 }

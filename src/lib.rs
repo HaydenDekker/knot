@@ -209,12 +209,20 @@ pub fn build_app_context(
     // The receiver is wired into the debounce engine.
     let (event_tx, event_rx) = mpsc::channel(100);
 
+    // File-system event source — created once, shared via AppContext.
+    // Handlers can pass this to use cases for watch/unwatch.
+    let event_source: Arc<dyn application::ports::EventSource> =
+        Arc::new(
+            adapters::outbound::NotifyEventSource::new(event_tx.clone()),
+        );
+
     (
         AppContext {
             store,
             loom_repo,
             loom_log_port,
             tie_off_sink,
+            event_source,
             event_sender: event_tx,
             agent_runner,
             rig_config,

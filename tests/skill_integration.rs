@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
-    AgentRunner, LoomLogPort,
+    AgentRunner, EventSource, LoomLogPort,
     LoomRepository, ProcessingStatus, PortError, TieOffSink,
 };
 use knot::application::store::LoomStore;
@@ -86,6 +86,17 @@ impl AgentRunner for MockAgentRunner {
     }
 }
 
+struct MockEventSource;
+
+impl EventSource for MockEventSource {
+    fn watch(&self, _path: &Path) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn unwatch(&self, _path: &Path) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
 /// Build an AppContext with mock ports and a pre-registered loom.
 fn build_context_with_loom() -> AppContext {
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
@@ -96,6 +107,7 @@ fn build_context_with_loom() -> AppContext {
         loom_repo: Arc::new(MockLoomRepository),
         loom_log_port: Arc::new(MockLoomLogPort),
         tie_off_sink: Arc::new(MockTieOffSink),
+        event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
@@ -561,6 +573,7 @@ async fn knot_inspect_loom_activity() {
         loom_repo: Arc::new(MockLoomRepository),
         loom_log_port: Arc::new(MockLoomLogPortWithEvents { events }),
         tie_off_sink: Arc::new(MockTieOffSink),
+        event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
@@ -655,6 +668,7 @@ async fn knot_inspect_knot_status_with_state() {
             events: log_events,
         }),
         tie_off_sink: Arc::new(MockTieOffSink),
+        event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
