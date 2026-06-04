@@ -18,7 +18,7 @@ When this plan is done:
 2. Three skill files exist (`knot-init`, `knots-and-looms`, `knot-inspect`) that instruct an AI agent to configure Knot via its HTTP API.
 3. Integration tests verify the skills work end-to-end by calling `pi` in a test directory.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -52,18 +52,18 @@ Add `utoipa` and `utoipa-swagger-ui` to Knot so the API is self-documenting.
 
 Create the three skill files and verify them by calling `pi` in a test directory.
 
-- [ ] Create skill file `knot-init` — instructs agent to: detect if rig exists, start Knot if not running, create rig directory structure, verify via `GET /config/rig`
-- [ ] Create skill file `knots-and-looms` — instructs agent to: create/modify/delete looms and knots via `POST /looms`, `DELETE /looms/{id}`, and loom config file manipulation
-- [ ] Create skill file `knot-inspect` — instructs agent to: inspect rig state via `GET /config/rig`, `GET /looms`, `GET /looms/{id}`, `GET /looms/{id}/activity`, `GET /looms/{id}/knots`, `GET /looms/{id}/knots/{knot_name}`
-- [ ] Each skill references the OpenAPI spec URL (`http://localhost:3000/swagger-ui/openapi.json`) so the agent can validate API shapes before calling
-- [ ] Create integration test harness:
+- [x] Create skill file `knot-init` — instructs agent to: detect if rig exists, start Knot if not running, create rig directory structure, verify via `GET /config/rig`
+- [x] Create skill file `knots-and-looms` — instructs agent to: create/modify/delete looms and knots via `POST /looms`, `DELETE /looms/{id}`, and loom config file manipulation
+- [x] Create skill file `knot-inspect` — instructs agent to: inspect rig state via `GET /config/rig`, `GET /looms`, `GET /looms/{id}`, `GET /looms/{id}/activity`, `GET /looms/{id}/knots`, `GET /looms/{id}/knots/{knot_name}`
+- [x] Each skill references the OpenAPI spec URL (`http://localhost:3000/swagger-ui/openapi.json`) so the agent can validate API shapes before calling
+- [x] Create integration test harness:
   - Test directory: `~/workspace/ai/knot-test-skill`
   - Start Knot server in background (via `cargo run` or binary)
   - Execute `pi` in the test directory with `--skill knot-init` (and similar for other skills)
   - Capture `pi` output, verify expected API calls were made (e.g. rig config created, loom registered)
   - Kill Knot process after each test
-- [ ] Add the integration test as a new test file (e.g. `tests/skill_integration.rs`) or within `tests/integration.rs`
-- [ ] Run full test suite — all tests pass
+- [x] Add the integration test as a new test file (e.g. `tests/skill_integration.rs`) or within `tests/integration.rs`
+- [x] Run full test suite — all tests pass
 
 ## Notes
 
