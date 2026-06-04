@@ -54,8 +54,8 @@ Three issues were discovered during test-project integration:
 ### Phase 0: Canonical Path Tests for `FileSystemLoomRepository::scan()`
 **Goal:** Verify the existing canonicalisation patch is correct and covered by tests.
 
-- [x] Unit test: `scan_workspace_with_relative_path` — pass a relative path (`"./workspace"`) to `scan()`; assert every loom's `source_dir` is absolute (contains no `..` or `.` components).
-- [x] Unit test: `scan_workspace_with_absolute_path` — pass an absolute path; assert `source_dir` is canonicalised (no double-slashes, symlinks resolved).
+- [x] Unit test: `scan_rig_with_relative_path` — pass a relative path (`"./rig"`) to `scan()`; assert every loom's `source_dir` is absolute (contains no `..` or `.` components).
+- [x] Unit test: `scan_rig_with_absolute_path` — pass an absolute path; assert `source_dir` is canonicalised (no double-slashes, symlinks resolved).
 - [x] Verify existing `loom_repository.rs` tests still pass.
 
 ### Phase 1: `.loom-config.yaml` for External Source and Tie-off Directories
@@ -76,7 +76,7 @@ Three issues were discovered during test-project integration:
   - `scan_fallback_defaults_without_config` — no `.loom-config.yaml`; uses loom dir for source, `.knot-output` for tie-off.
   - `scan_loom_config_absolute_paths` — absolute paths in config; used as-is (canonicalised).
   - `scan_loom_config_malformed_yaml` — invalid YAML; falls back to defaults with a warning.
-- [x] Integration test: `full_pipeline_external_source_dir` — workspace loom with `.loom-config.yaml` pointing `source_dir` to an external directory; create a strand in that external directory; verify tie-off is produced at the configured `tie_off_dir`.
+- [x] Integration test: `full_pipeline_external_source_dir` — rig loom with `.loom-config.yaml` pointing `source_dir` to an external directory; create a strand in that external directory; verify tie-off is produced at the configured `tie_off_dir`.
 
 ### Phase 2: Agent Error Logging in Knot-State and Loom-Log
 **Goal:** When the agent CLI fails, the error is visible in knot-state and loom-log.
@@ -88,7 +88,7 @@ Three issues were discovered during test-project integration:
 - [x] Failing tests first:
   - Unit test (usecases): `process_strand_agent_not_found_logs_error` — `AgentRunner` returns `PortError::CommandNotFound`; verify knot-state `error` field is set and loom-log event contains the error message.
   - Unit test (usecases): `process_strand_agent_nonzero_exit_logs_error` — `AgentRunner` returns `PortError::AgentExecutionFailed`; same verification.
-  - Integration test: `full_pipeline_agent_error_in_state_and_log` — use `WorkspaceAgentConfig` with a nonexistent `cli_path`; create a strand; verify knot-state shows `Failed` with error message and loom-log contains the error.
+  - Integration test: `full_pipeline_agent_error_in_state_and_log` — use `RigAgentConfig` with a nonexistent `cli_path`; create a strand; verify knot-state shows `Failed` with error message and loom-log contains the error.
 
 ### Phase 3: Full Integration Verification
 **Goal:** End-to-end test that ties all three phases together.

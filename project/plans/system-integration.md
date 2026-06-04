@@ -47,12 +47,12 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ## Phases
 
 ### Phase 0: Composition Root (main.rs)
-**Failing tests created:** `integration::tests::app_starts_and_serves_health`, `integration::tests::app_loads_workspace_agent_config`
+**Failing tests created:** `integration::tests::app_starts_and_serves_health`, `integration::tests::app_loads_rig_agent_config`
 
 - [x] Failing test: `integration::tests::app_starts_and_serves_health` — `main()` starts HTTP server, `GET /health` returns `200 ok`
-- [x] Failing test: `integration::tests::app_loads_workspace_agent_config` — `WorkspaceAgentConfig` is loaded (defaults: `pi` CLI); accessible in `AppContext`
+- [x] Failing test: `integration::tests::app_loads_rig_agent_config` — `RigAgentConfig` is loaded (defaults: `pi` CLI); accessible in `AppContext`
 - [x] Refactor `main.rs` to:
-  1. Load `WorkspaceAgentConfig` (defaults or from a config file — keep simple for now)
+  1. Load `RigAgentConfig` (defaults or from a config file — keep simple for now)
   2. Create outbound adapter instances (`FileSystemLoomRepository`, `FileSystemKnotStateStore`, `FileSystemLoomLog`, `NotifyEventSource`, `SubprocessAgentRunner`, `FileSystemTieOffSink`)
   3. Create `LoomStore`, create use cases with port instances
   4. Create `AppContext` holding store + ports + use cases
@@ -63,7 +63,7 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
 ### Phase 1: Startup Discovery and Watcher Boot
 **Failing tests created:** `integration::tests::startup_discovers_looms`, `integration::tests::startup_starts_watchers`, `integration::tests::startup_creates_state_files`
 
-- [x] Failing test: `integration::tests::startup_discovers_looms` — given a workspace with loom dirs, startup discovers them and registers in `LoomStore`
+- [x] Failing test: `integration::tests::startup_discovers_looms` — given a rig with loom dirs, startup discovers them and registers in `LoomStore`
 - [x] Failing test: `integration::tests::startup_starts_watchers` — after startup, `NotifyEventSource` is watching all loom source directories
 - [x] Failing test: `integration::tests::startup_creates_state_files` — after startup, loom-log and knot-state files exist on disk for each loom/knot
 - [x] Wire startup sequence: `DiscoverLooms` use case runs → looms registered → watchers started per loom → state files created
@@ -97,7 +97,7 @@ Not a hex layer itself — this plan connects all layers. `main.rs` is the compo
   2. Create strand in loom B → tie-off in B's point only
   3. No cross-interference (A's knots don't process B's strands)
 - [x] Mock agent CLI: a simple shell script or binary that echoes its input (avoid real `pi` calls in tests)
-- [x] Tests use `tempfile` for workspace, loom dirs, source dirs, tie-off points
+- [x] Tests use `tempfile` for rig, loom dirs, source dirs, tie-off points
 
 ### Phase 4: Graceful Shutdown
 **Failing tests created:** `integration::tests::graceful_shutdown_stops_watchers`, `integration::tests::shutdown_logs_loom_stopped`

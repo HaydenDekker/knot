@@ -1,12 +1,18 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-03
+> **Last Updated:** 2026-06-04
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
 ---
 
 ## Terms
+
+### Rig
+
+The top-level container — an aggregation of one or more looms. A **rig** is the ship's complete interconnected system of ropes, lines, and running rigging; the place where looms live and knots are defined.
+
+---
 
 ### Agent Profile
 
@@ -85,16 +91,17 @@ The final response or error produced by a knot at the end of its session. This i
 ## Term Relationships
 
 ```
-Loom (directory of knot definitions)
- ├── Knot (Agent Profile + Prompt Template)
- │     ├── Agent Profile
- │     │     ├── LLM Provider
- │     │     ├── Skills
- │     │     ├── Tools
- │     │     └── System Prompt
- │     └── Prompt Template
- │           ├── Goal Description
- │           └── Input Bundling Rules
- └── Target (output directory)
-      └── Tie-off (final response or error)
+Rig (aggregation of looms)
+ └── Loom (directory of knot definitions)
+      ├── Knot (Agent Profile + Prompt Template)
+      │     ├── Agent Profile
+      │     │     ├── LLM Provider
+      │     │     ├── Skills
+      │     │     ├── Tools
+      │     │     └── System Prompt
+      │     └── Prompt Template
+      │           ├── Goal Description
+      │           └── Input Bundling Rules
+      └── Target (output directory)
+            └── Tie-off (final response or error)
 ```

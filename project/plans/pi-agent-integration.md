@@ -41,7 +41,7 @@ Concretely:
 ## Hex Layer: Domain → Application → Outbound Adapters
 
 Work flows inward-out:
-1. **Domain** — extend `AgentConfig` with provider, model, tools; extend `WorkspaceAgentConfig` with pi-specific fields
+1. **Domain** — extend `AgentConfig` with provider, model, tools; extend `RigAgentConfig` with pi-specific fields
 2. **Domain** — update knot file parser to read new fields
 3. **Application** — `ProcessStrand` builds CLI invocation from knot config (new helper function)
 4. **Outbound adapters** — subprocess runner passes prompt/strand data to the CLI
@@ -51,7 +51,7 @@ Work flows inward-out:
 
 | Test Class | What it covers | Status |
 |------------|---------------|--------|
-| `domain::value_objects::tests` | AgentConfig, PromptTemplate, WorkspaceAgentConfig validation + serialization | ✅ Green — only `goal` field |
+| `domain::value_objects::tests` | AgentConfig, PromptTemplate, RigAgentConfig validation + serialization | ✅ Green — only `goal` field |
 | `domain::knot_file::tests` | Knot file parsing (name, goal, input-bundling, instructions) | ✅ Green — no provider/model/tools |
 | `application::usecases::tests` | ProcessStrand with mock AgentRunner — state transitions, error handling | ✅ Green — mock ignores CLI args |
 | `adapters::subprocess::tests` | SubprocessAgentRunner spawn/timeout/error handling | ✅ Green — uses `echo`/`sh -c` |
@@ -101,7 +101,7 @@ Work flows inward-out:
 Two approaches — pick one:
 
 **Option A: Real `pi -p` call (if `pi` is available on CI/dev machine)**
-- [ ] Integration test: start Knot with `WorkspaceAgentConfig { cli_path: "pi", ... }`
+- [ ] Integration test: start Knot with `RigAgentConfig { cli_path: "pi", ... }`
 - [ ] Create knot with provider/model in config
 - [ ] Create strand → verify tie-off contains LLM-generated content
 - [ ] Requires API key for the chosen provider

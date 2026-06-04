@@ -44,7 +44,7 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 
 | Port | Method Signature | Purpose |
 |------|------------------|---------|
-| `LoomRepository` | `scan(workspace: &Path) -> Result<Vec<Loom>>`, `get(id: &LoomId) -> Result<Option<Loom>>`, `list() -> Result<Vec<Loom>>`, `save(loom: Loom) -> Result<()>` | Discover and persist looms |
+| `LoomRepository` | `scan(rig: &Path) -> Result<Vec<Loom>>`, `get(id: &LoomId) -> Result<Option<Loom>>`, `list() -> Result<Vec<Loom>>`, `save(loom: Loom) -> Result<()>` | Discover and persist looms |
 | `KnotStatePort` | `create(knot_id: &KnotId) -> Result<()>`, `update(state: KnotState) -> Result<()>`, `get(knot_id: &KnotId) -> Result<Option<KnotState>>` | CRUD knot processing state |
 | `LoomLogPort` | `open(loom_id: &LoomId) -> Result<()>`, `append(event: LoomEvent) -> Result<()>`, `read_all(loom_id: &LoomId) -> Result<Vec<LoomEvent>>` | Append/query loom activity log |
 | `EventSource` | `watch(path: &Path) -> Result<()>`, `unwatch(path: &Path) -> Result<()>` | Register/unregister watched directories (events flow through a channel, not via this port) |
@@ -81,7 +81,7 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 **Failing tests created:** `application::usecases::tests::discover_looms_success`, `application::usecases::tests::discover_looms_empty_workspace`, `application::usecases::tests::discover_looms_repository_error`
 
 - [x] Failing test: `application::usecases::tests::discover_looms_success` — given a mock `LoomRepository` returning 2 looms, `DiscoverLooms` registers them in `LoomStore` and returns 2 looms
-- [x] Failing test: `application::usecases::tests::discover_looms_empty_workspace` — repository returns empty vec; store remains empty; use case returns empty vec
+- [x] Failing test: `application::usecases::tests::discover_looms_empty_rig` — repository returns empty vec; store remains empty; use case returns empty vec
 - [x] Failing test: `application::usecases::tests::discover_looms_repository_error` — repository returns error; use case propagates error without modifying store
 - [x] Implement `DiscoverLooms` use case: calls `LoomRepository::scan()`, iterates results, calls `KnotStatePort::create()` for each knot, calls `LoomLogPort::append(KnotRegistered)` for each knot, registers looms in `LoomStore`
 
@@ -124,7 +124,7 @@ Defines ports (traits). Orchestrates domain entities. Tests use mock implementat
 - [x] Implement `ProcessStrand` use case:
   1. Receive `StrandEvent`
   2. Update knot-state to `processing`
-  3. Build execution context from `WorkspaceAgentConfig` + `Knot`
+  3. Build execution context from `RigAgentConfig` + `Knot`
   4. Call `AgentRunner::execute()`
   5. Call `TieOffSink::write()` with result
   6. Update knot-state to `completed` or `failed`

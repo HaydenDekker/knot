@@ -20,7 +20,7 @@ To add it to this index:
 | PRD | Status | Created |
 |-----|--------|---------|
 | [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | 🔵 Open | 2026-06-04 |
-| [AI-Driven File Generation from Workspace Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
+| [AI-Driven File Generation from Rig Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
 
 ---
 
@@ -34,10 +34,10 @@ To add it to this index:
 
 Full details in [prd-knot-skills.md](prd-knot-skills.md).
 
-### AI-Driven File Generation from Workspace Events
+### AI-Driven File Generation from Rig Events
 
 **Status:** 🔵 Open
 **Created:** 2026-06-03
-**Summary:** Watch a configured workspace for file events and use AI to generate corresponding output files in a target directory based on a user-defined goal.
+**Summary:** Watch a configured rig for file events and use AI to generate corresponding output files in a target directory based on a user-defined goal.
 
 Full details in [prd-ai-driven-file-generation.md](prd-ai-driven-file-generation.md).

@@ -2,9 +2,9 @@
 
 ## Problem
 
-Developers work in a source workspace with raw input files (drafts, notes, data, code sketches) that need to be transformed into structured output files in a target directory. Currently, this transformation requires manual effort — the developer must read each input, understand the desired output, and manually trigger an LLM to produce it. When the same agent profile and prompt template must be applied across many files — for example, reviewing every PRD dropped into a folder, or generating docs from every spec file — the developer ends up repeating the same manual loop over and over. This becomes tedious and error-prone as the file count grows.
+Developers work in a source rig with raw input files (drafts, notes, data, code sketches) that need to be transformed into structured output files in a target directory. Currently, this transformation requires manual effort — the developer must read each input, understand the desired output, and manually trigger an LLM to produce it. When the same agent profile and prompt template must be applied across many files — for example, reviewing every PRD dropped into a folder, or generating docs from every spec file — the developer ends up repeating the same manual loop over and over. This becomes tedious and error-prone as the file count grows.
 
-Knot requires a mechanism to **react to file system events in a watched workspace and automatically generate output files using AI**. The goal is to remove the need for the user to repeatedly control the agent: instead, the agent runs as a continuous workflow triggered by file events. Drop files into a watched folder and the configured output appears in a target directory — no manual invocation required.
+Knot requires a mechanism to **react to file system events in a watched rig and automatically generate output files using AI**. The goal is to remove the need for the user to repeatedly control the agent: instead, the agent runs as a continuous workflow triggered by file events. Drop files into a watched folder and the configured output appears in a target directory — no manual invocation required.
 
 ## Goals
 
@@ -102,7 +102,7 @@ As a developer, I want to check the status of my loom and individual knots, so t
 - **Technical constraint:** Knot uses axum for its HTTP server; any new endpoints follow the existing routing pattern.
 - **Technical dependency:** Knot uses the `notify` crate for file system watching.
 - **External dependency:** Knot calls an external agent CLI to execute knots. Initially this is **pi** (`pi.dev` CLI). The user configures `agent-config` in the knot with CLI arguments (e.g. `--no-tools`), and Knot parses the knot config to construct the full CLI invocation (provider, model, skills, tools, system prompt).
-- **Configuration constraint:** Knot is started with respect to its workspace directory and discovers looms and knots by scanning downward from there. No separate top-level config file is required. The scanning rule may be constrained further in future.
+- **Configuration constraint:** Knot is started with respect to its rig directory and discovers looms and knots by scanning downward from there. No separate top-level config file is required. The scanning rule may be constrained further in future.
 
 ## Implementation Status: ✅ Complete (2026-06-04)
 
@@ -125,4 +125,4 @@ All goals are achieved. Seven plans were executed across the domain, application
 - **Real `pi` integration test skipped** — Plan 7 Phase 3 used a stub script (`stub-pi.sh`) instead of calling the real `pi` CLI, as the integration test does not require an API key. A real `pi` call would need provider credentials and is not automated in CI. This is noted in Plan 7 as Option A (unselected).
 - **No real LLM calls in test suite** — All integration tests use mock or stub agents. The tie-off content reflects whatever the stub returns, not actual LLM output. End-to-end verification with a real LLM is manual.
 - **Debounce window fixed at 100ms** — The `DebounceEngine` uses a hardcoded 100ms window. Not yet configurable via loom config.
-- **`WorkspaceAgentConfig` loaded from defaults only** — The PRD envisions workspace-level config discovery; currently `main.rs` loads defaults (`cli_path = "pi"`, `cli_args = []`). Config file loading is not yet implemented.
+- **`RigAgentConfig` loaded from defaults only** — The PRD envisions rig-level config discovery; currently `main.rs` loads defaults (`cli_path = "pi"`, `cli_args = []`). Config file loading is not yet implemented.

@@ -12,7 +12,7 @@ Knot has domain types (Plan 1) and port interfaces (Plan 2) but no concrete adap
 
 ## Target
 
-- `FileSystemLoomRepository` — scans workspace, discovers looms and knot files
+- `FileSystemLoomRepository` — scans rig, discovers looms and knot files
 - `FileSystemKnotStateStore` — reads/writes knot-state JSON files
 - `FileSystemLoomLog` — appends/reads loom-log JSONL files
 - `NotifyEventSource` — wraps `notify::Watcher`, emits raw events to a channel

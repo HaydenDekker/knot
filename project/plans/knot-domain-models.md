@@ -13,7 +13,7 @@ Knot has no domain model for its core concepts. There are no types representing 
 ## Target
 
 - Domain entities: `Knot`, `Loom`, `Strand`, `TieOff`
-- Value objects: `AgentConfig`, `PromptTemplate`, `WorkspaceAgentConfig`, `KnotId`, `LoomId`, `StrandPath`, `TieOffPath`
+- Value objects: `AgentConfig`, `PromptTemplate`, `RigAgentConfig`, `KnotId`, `LoomId`, `StrandPath`, `TieOffPath`
 - Domain events: `KnotRegistered`, `StrandEvent`, `TieOffProduced`, `ProcessingFailed`, `LoomEvent`
 - Knot file format defined and validated (parser lives in adapters — not this plan)
 - Domain validation logic (invariants, not IO)
@@ -62,7 +62,7 @@ prompt-template:
 This knot reviews the goals section of PRD documents.
 ```
 
-Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the whole workspace. The knot file carries only the goal and prompt template.
+Agent config (`cli_path`, `cli_args`) is rig-level — one config for the whole rig. The knot file carries only the goal and prompt template.
 
 ## Phases
 
@@ -78,12 +78,12 @@ Agent config (`cli_path`, `cli_args`) is workspace-level — one config for the 
 - [x] Add `serde::Serialize + Deserialize` derives
 
 ### Phase 1: Value Objects
-**Failing tests created:** `domain::value_objects::tests::agent_config_defaults`, `domain::value_objects::tests::prompt_template_fields`, `domain::value_objects::tests::workspace_agent_config_defaults`
+**Failing tests created:** `domain::value_objects::tests::agent_config_defaults`, `domain::value_objects::tests::prompt_template_fields`, `domain::value_objects::tests::rig_agent_config_defaults`
 
 - [x] Failing test: `domain::value_objects::tests::agent_config_defaults` — `AgentConfig` with goal string; verify non-empty goal required
 - [x] Failing test: `domain::value_objects::tests::prompt_template_fields` — `PromptTemplate` with `input_bundling` and `instructions`; verify both required
-- [x] Failing test: `domain::value_objects::tests::workspace_agent_config_defaults` — `WorkspaceAgentConfig` defaults to `cli_path = "pi"`, `cli_args = []`; verify custom path and args accepted
-- [x] Implement `AgentConfig` (goal), `PromptTemplate` (input_bundling, instructions), `WorkspaceAgentConfig` (cli_path, cli_args) in `src/domain/value_objects.rs`
+- [x] Failing test: `domain::value_objects::tests::rig_agent_config_defaults` — `RigAgentConfig` defaults to `cli_path = "pi"`, `cli_args = []`; verify custom path and args accepted
+- [x] Implement `AgentConfig` (goal), `PromptTemplate` (input_bundling, instructions), `RigAgentConfig` (cli_path, cli_args) in `src/domain/value_objects.rs`
 - [x] Implement `try_from` or constructor with validation — empty goal returns error
 
 ### Phase 2: Domain Events
