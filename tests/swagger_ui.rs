@@ -1,0 +1,195 @@
+//! Integration tests for Swagger UI and OpenAPI spec endpoints.
+//!
+//! Verifies that the auto-generated OpenAPI spec is served at the expected
+//! URL and that the Swagger UI HTML is accessible.
+
+use axum::{body::Body, http::Request};
+use knot::adapters::inbound::AppContext;
+use knot::application::ports::{AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, PortError, TieOffSink};
+use knot::application::store::LoomStore;
+use knot::domain::entities::{KnotId, Loom, LoomId};
+use knot::domain::events::StrandEvent;
+use knot::domain::value_objects::RigAgentConfig;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tower::util::ServiceExt;
+
+// ── Mock Ports ─────────────────────────────────────────────────────────────
+
+struct MockLoomRepository;
+
+impl LoomRepository for MockLoomRepository {
+    fn scan(&self, _rig: &Path) -> Result<Vec<Loom>, PortError> {
+        Ok(vec![])
+    }
+    fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
+        Ok(None)
+    }
+    fn list(&self) -> Result<Vec<Loom>, PortError> {
+        Ok(vec![])
+    }
+    fn save(&self, _loom: Loom) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
+struct MockKnotStatePort;
+
+impl KnotStatePort for MockKnotStatePort {
+    fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn update(&self, _state: knot::application::ports::KnotState) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn get(
+        &self,
+        _knot_id: &KnotId,
+    ) -> Result<Option<knot::application::ports::KnotState>, PortError> {
+        Ok(None)
+    }
+}
+
+struct MockLoomLogPort;
+
+impl LoomLogPort for MockLoomLogPort {
+    fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn append(&self, _event: knot::domain::events::LoomEvent) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn read_all(
+        &self,
+        _loom_id: &LoomId,
+    ) -> Result<Vec<knot::domain::events::LoomEvent>, PortError> {
+        Ok(vec![])
+    }
+}
+
+struct MockTieOffSink;
+
+impl TieOffSink for MockTieOffSink {
+    fn write(
+        &self,
+        _tie_off: knot::domain::entities::TieOff,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
+struct MockAgentRunner;
+
+impl AgentRunner for MockAgentRunner {
+    fn execute(
+        &self,
+        _ctx: knot::application::ports::ExecutionContext,
+    ) -> Result<knot::application::ports::AgentOutput, PortError> {
+        Ok(knot::application::ports::AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        })
+    }
+}
+
+fn build_test_context() -> AppContext {
+    let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
+    let _ = _event_rx;
+
+    AppContext {
+        store: LoomStore::new(),
+        loom_repo: Arc::new(MockLoomRepository),
+        knot_state_port: Arc::new(MockKnotStatePort),
+        loom_log_port: Arc::new(MockLoomLogPort),
+        tie_off_sink: Arc::new(MockTieOffSink),
+        event_sender,
+        agent_runner: Arc::new(MockAgentRunner),
+        rig_config: RigAgentConfig::default_config(),
+        loom_ids: Vec::new(),
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+/// `GET /swagger-ui/` returns 200 with HTML content.
+#[tokio::test]
+async fn swagger_ui_returns_200() {
+    let ctx = build_test_context();
+    let app = knot::adapters::inbound::build_app(ctx);
+
+    let req = Request::builder()
+        .uri("/swagger-ui/")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&body);
+    // The Swagger UI should return HTML
+    assert!(
+        text.contains("<!DOCTYPE") || text.contains("<html") || text.contains("</html>"),
+        "Expected HTML content, got: {}",
+        &text[..text.len().min(200)]
+    );
+}
+
+/// `GET /swagger-ui/openapi.json` returns 200 with valid OpenAPI JSON.
+#[tokio::test]
+async fn openapi_json_returns_valid_spec() {
+    let ctx = build_test_context();
+    let app = knot::adapters::inbound::build_app(ctx);
+
+    let req = Request::builder()
+        .uri("/swagger-ui/openapi.json")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Verify it is a valid OpenAPI 3.x document
+    assert_eq!(spec.get("openapi").and_then(|v| v.as_str()), Some("3.1.0"));
+    assert!(spec.get("info").unwrap().is_object());
+    assert!(spec.get("paths").unwrap().is_object());
+    assert!(spec.get("components").unwrap().is_object());
+
+    // Verify key paths are present
+    let paths = spec.get("paths").unwrap().as_object().unwrap();
+    assert!(paths.contains_key("/health"));
+    assert!(paths.contains_key("/agents/{dir}"));
+    assert!(paths.contains_key("/config/rig"));
+    assert!(paths.contains_key("/looms"));
+    assert!(paths.contains_key("/looms/discover"));
+    assert!(paths.contains_key("/looms/{id}"));
+    assert!(paths.contains_key("/looms/{id}/activity"));
+    assert!(paths.contains_key("/looms/{id}/knots"));
+    assert!(paths.contains_key("/looms/{loom_id}/knots/{knot_name}"));
+
+    // Verify key schemas are present
+    let schemas = spec
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .unwrap();
+    assert!(schemas.contains_key("RigAgentConfig"));
+    assert!(schemas.contains_key("Loom"));
+    assert!(schemas.contains_key("LoomId"));
+    assert!(schemas.contains_key("KnotId"));
+    assert!(schemas.contains_key("LoomSummary"));
+    assert!(schemas.contains_key("KnotStatus"));
+    assert!(schemas.contains_key("LoomEvent"));
+    assert!(schemas.contains_key("KnotState"));
+    assert!(schemas.contains_key("ProcessingStatus"));
+    assert!(schemas.contains_key("AgentConfig"));
+    assert!(schemas.contains_key("PromptTemplate"));
+    assert!(schemas.contains_key("RegisterLoomRequest"));
+}

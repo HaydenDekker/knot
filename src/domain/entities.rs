@@ -7,23 +7,34 @@ pub use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConf
 // ── Value Objects (identifiers and paths) ──────────────────────────────────
 
 /// Unique identifier for a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+)]
 pub struct KnotId(pub String);
 
 /// Unique identifier for a Loom.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+)]
 pub struct LoomId(pub String);
 
 /// Path to a strand (input file being processed).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+)]
+#[schema(value_type = String)]
 pub struct StrandPath(pub PathBuf);
 
 /// Path to a tie-off (output file produced).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+)]
+#[schema(value_type = String)]
 pub struct TieOffPath(pub PathBuf);
 
 /// Status of a TieOff output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum TieOffStatus {
     /// Output has been produced and written.
     Produced,
@@ -34,7 +45,7 @@ pub enum TieOffStatus {
 // ── Entities ───────────────────────────────────────────────────────────────
 
 /// A Knot is the core unit of work: an agent goal paired with a prompt template.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Knot {
     pub id: KnotId,
     pub agent_config: AgentConfig,
@@ -43,22 +54,24 @@ pub struct Knot {
 
 /// A Loom orchestrates a collection of Knots over a source directory,
 /// writing output to a tie-off directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Loom {
     pub id: LoomId,
+    #[schema(value_type = String)]
     pub source_dir: PathBuf,
+    #[schema(value_type = String)]
     pub tie_off_dir: PathBuf,
     pub knots: Vec<Knot>,
 }
 
 /// A Strand is an input file being processed by a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Strand {
     pub path: StrandPath,
 }
 
 /// A TieOff is the output produced from processing a Strand with a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TieOff {
     pub content: String,
     pub path: TieOffPath,

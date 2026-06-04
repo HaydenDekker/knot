@@ -22,11 +22,29 @@ pub use domain::entities::Loom;
 pub use domain::value_objects::RigAgentConfig;
 
 /// HTTP handler — health check.
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Health check ok"),
+    ),
+)]
 pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
 /// HTTP handler — list agents in a directory.
+#[utoipa::path(
+    get,
+    path = "/agents/{dir}",
+    params(
+        ("dir" = String, Path, description = "Directory to list agents in"),
+    ),
+    responses(
+        (status = 200, body = Vec<String>, description = "List of agent names"),
+        (status = 404, description = "Directory not found"),
+    ),
+)]
 pub async fn list_agents(Path(dir): Path<String>) -> Response {
     let path = PathBuf::from(dir);
     match std::fs::read_dir(&path) {

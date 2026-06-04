@@ -5,7 +5,7 @@ use crate::domain::entities::{KnotId, LoomId, StrandPath, TieOffPath};
 // ── Domain Events ──────────────────────────────────────────────────────────
 
 /// An event that describes the lifecycle of a Strand.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum StrandEvent {
     /// A new strand (input file) was detected.
     Created {
@@ -28,7 +28,7 @@ pub enum StrandEvent {
 }
 
 /// A TieOff (output file) was successfully produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TieOffProduced {
     pub knot_id: KnotId,
     pub strand_path: StrandPath,
@@ -36,7 +36,7 @@ pub struct TieOffProduced {
 }
 
 /// Processing of a strand failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProcessingFailed {
     pub knot_id: KnotId,
     pub strand_path: StrandPath,
@@ -44,7 +44,7 @@ pub struct ProcessingFailed {
 }
 
 /// An event that describes the lifecycle of a Loom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum LoomEvent {
     /// A new Knot was registered with the Loom.
     KnotRegistered {
@@ -69,7 +69,7 @@ pub enum LoomEvent {
 }
 
 /// A Knot was registered with a Loom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct KnotRegistered {
     pub loom_id: LoomId,
     pub knot_id: KnotId,

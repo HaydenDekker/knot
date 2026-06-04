@@ -15,6 +15,7 @@ use axum::{
 };
 use serde::Deserialize;
 use tokio::sync::mpsc;
+use utoipa::OpenApi;
 
 use crate::application::ports::{
     AgentRunner, KnotStatePort, LoomLogPort, LoomRepository, TieOffSink,
@@ -22,16 +23,73 @@ use crate::application::ports::{
 use crate::application::store::LoomStore;
 use crate::application::usecases::{
     DiscoverLooms, GetKnotStatus, GetLoom, GetLoomActivity,
-    ListLooms, RegisterLoom, UnregisterLoom,
+    KnotStatus as KnotStatusDto, ListLooms, LoomSummary, RegisterLoom,
+    UnregisterLoom,
 };
-use crate::domain::entities::{KnotId, Loom, LoomId};
-use crate::domain::events::StrandEvent;
-use crate::domain::value_objects::RigAgentConfig;
+use crate::domain::entities::{Knot, KnotId, Loom, LoomId, Strand, StrandPath, TieOff, TieOffPath, TieOffStatus};
+use crate::domain::events::{KnotRegistered, LoomEvent, ProcessingFailed, StrandEvent, TieOffProduced};
+use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+
+// ── OpenAPI / Swagger ─────────────────────────────────────────────────────
+
+/// OpenAPI document for the Knot API.
+#[derive(utoipa::OpenApi, Clone)]
+#[openapi(
+    info(
+        title = "Knot API",
+        description = "Knot — local AI agent orchestration service",
+        version = "0.1.0",
+    ),
+    paths(
+        crate::health,
+        crate::list_agents,
+        get_rig_config,
+        list_looms,
+        register_loom,
+        unregister_loom,
+        discover_looms,
+        get_loom,
+        get_loom_activity,
+        get_loom_knots,
+        get_knot_status,
+    ),
+    components(schemas(
+        // Domain value objects
+        RigAgentConfig,
+        AgentConfig,
+        PromptTemplate,
+        // Domain entities
+        LoomId,
+        KnotId,
+        StrandPath,
+        TieOffPath,
+        TieOffStatus,
+        Knot,
+        Loom,
+        Strand,
+        TieOff,
+        // Domain events
+        StrandEvent,
+        LoomEvent,
+        TieOffProduced,
+        ProcessingFailed,
+        KnotRegistered,
+        // Application types
+        LoomSummary,
+        KnotStatusDto,
+        crate::application::ports::ProcessingStatus,
+        crate::application::ports::KnotEventType,
+        crate::application::ports::KnotState,
+        // Inbound types
+        RegisterLoomRequest,
+    )),
+)]
+struct ApiDoc;
 
 // ── Request Bodies ─────────────────────────────────────────────────────────
 
 /// JSON body for `POST /looms` to register a new loom.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct RegisterLoomRequest {
     /// Unique loom identifier.
     pub id: String,
@@ -73,6 +131,13 @@ pub struct AppContext {
 // ── Handler stubs ──────────────────────────────────────────────────────────
 
 /// List all registered looms.
+#[utoipa::path(
+    get,
+    path = "/looms",
+    responses(
+        (status = 200, body = Vec<LoomSummary>, description = "List of loom summaries"),
+    ),
+)]
 pub async fn list_looms(State(ctx): State<AppContext>) -> Response {
     let use_case = ListLooms::new(ctx.store.clone());
     let summaries = use_case.execute();
@@ -80,6 +145,17 @@ pub async fn list_looms(State(ctx): State<AppContext>) -> Response {
 }
 
 /// Get a loom by ID.
+#[utoipa::path(
+    get,
+    path = "/looms/{id}",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+    ),
+    responses(
+        (status = 200, body = Loom, description = "Loom details"),
+        (status = 404, description = "Loom not found"),
+    ),
+)]
 pub async fn get_loom(Path(id): Path<String>, State(ctx): State<AppContext>) -> Response {
     let loom_id = LoomId(id);
     let use_case = GetLoom::new(ctx.store.clone());
@@ -90,6 +166,17 @@ pub async fn get_loom(Path(id): Path<String>, State(ctx): State<AppContext>) -> 
 }
 
 /// Get activity log for a loom.
+#[utoipa::path(
+    get,
+    path = "/looms/{id}/activity",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+    ),
+    responses(
+        (status = 200, body = Vec<LoomEvent>, description = "Loom activity log"),
+        (status = 404, description = "Activity not found"),
+    ),
+)]
 pub async fn get_loom_activity(
     Path(id): Path<String>,
     State(ctx): State<AppContext>,
@@ -107,6 +194,17 @@ pub async fn get_loom_activity(
 }
 
 /// Get knots for a loom (derived from GetLoom).
+#[utoipa::path(
+    get,
+    path = "/looms/{id}/knots",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+    ),
+    responses(
+        (status = 200, body = Vec<String>, description = "List of knot names"),
+        (status = 404, description = "Loom not found"),
+    ),
+)]
 pub async fn get_loom_knots(
     Path(id): Path<String>,
     State(ctx): State<AppContext>,
@@ -124,6 +222,18 @@ pub async fn get_loom_knots(
 }
 
 /// Get status of a specific knot.
+#[utoipa::path(
+    get,
+    path = "/looms/{loom_id}/knots/{knot_name}",
+    params(
+        ("loom_id" = String, Path, description = "Loom identifier"),
+        ("knot_name" = String, Path, description = "Knot identifier"),
+    ),
+    responses(
+        (status = 200, body = KnotStatusDto, description = "Knot status"),
+        (status = 404, description = "Knot not found"),
+    ),
+)]
 pub async fn get_knot_status(
     Path((loom_id, knot_name)): Path<(String, String)>,
     State(ctx): State<AppContext>,
@@ -138,6 +248,17 @@ pub async fn get_knot_status(
 }
 
 /// Register a new loom.
+#[utoipa::path(
+    post,
+    path = "/looms",
+    request_body = RegisterLoomRequest,
+    responses(
+        (status = 201, description = "Loom registered successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 409, description = "Loom already exists"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
 pub async fn register_loom(
     State(ctx): State<AppContext>,
     Json(body): Json<RegisterLoomRequest>,
@@ -181,6 +302,18 @@ pub async fn register_loom(
 }
 
 /// Unregister a loom.
+#[utoipa::path(
+    delete,
+    path = "/looms/{id}",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+    ),
+    responses(
+        (status = 204, description = "Loom unregistered"),
+        (status = 404, description = "Loom not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
 pub async fn unregister_loom(
     Path(id): Path<String>,
     State(ctx): State<AppContext>,
@@ -204,6 +337,13 @@ pub async fn unregister_loom(
 }
 
 /// Discover looms in a workspace.
+#[utoipa::path(
+    post,
+    path = "/looms/discover",
+    responses(
+        (status = 501, description = "Not yet implemented"),
+    ),
+)]
 pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
     let use_case = DiscoverLooms::new(
         Arc::clone(&ctx.loom_repo),
@@ -216,6 +356,13 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
 }
 
 /// Return the loaded rig agent configuration.
+#[utoipa::path(
+    get,
+    path = "/config/rig",
+    responses(
+        (status = 200, body = RigAgentConfig, description = "Rig agent configuration"),
+    ),
+)]
 pub async fn get_rig_config(
     State(ctx): State<AppContext>,
 ) -> Response {
@@ -228,7 +375,12 @@ pub async fn get_rig_config(
 ///
 /// Accepts `AppContext` as shared state for all loom handlers.
 pub fn build_app(ctx: AppContext) -> Router {
+    let api_doc = ApiDoc::openapi();
+    let swagger = utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
+        .url("/swagger-ui/openapi.json", api_doc);
+
     Router::new()
+        .merge(swagger)
         // Existing endpoints
         .route("/health", get(crate::health))
         .route("/agents/{dir}", get(crate::list_agents))

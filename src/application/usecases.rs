@@ -21,20 +21,22 @@ use std::path::PathBuf;
 // ── Query Result Types ───────────────────────────────────────────────────
 
 /// A summary of a loom (lightweight, for list responses).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoomSummary {
     /// The loom's unique ID.
     pub id: LoomId,
     /// The source directory path.
+    #[schema(value_type = String)]
     pub source_dir: PathBuf,
     /// The tie-off (output) directory path.
+    #[schema(value_type = String)]
     pub tie_off_dir: PathBuf,
     /// Number of knots in this loom.
     pub knot_count: usize,
 }
 
 /// Result of the `GetKnotStatus` use case.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct KnotStatus {
     /// The knot whose status was retrieved.
     pub knot_id: KnotId,
