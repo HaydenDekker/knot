@@ -116,9 +116,9 @@ Two approaches — pick one:
 - [ ] Verify the error path: nonexistent model → pi exits non-zero → knot-state shows `failed` with error
 
 ### Phase 4: Demo Verification
-- [ ] Update `knot-test` demo loom config with provider/model fields
-- [ ] Verify Knot processes `sample-document.md` and produces a populated tie-off
-- [ ] Verify loom-log records successful processing
+- [x] Update `knot-test` demo loom config with provider/model fields
+- [x] Verify Knot processes `sample-document.md` and produces a populated tie-off
+- [x] Verify loom-log records successful processing
 
 ## Notes
 
