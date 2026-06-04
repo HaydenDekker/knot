@@ -226,6 +226,122 @@ fn spawn_server(config: AppConfig) -> tokio::sync::oneshot::Sender<()> {
     shutdown_tx
 }
 
+// ── Phase 0: Rig Directory Discovery ───────────────────────────────────────
+
+/// Start Knot in empty dir; `./rig/` created automatically.
+///
+/// 1. Start Knot in a temp directory with no `./rig/` subdirectory
+/// 2. Verify health endpoint responds
+/// 3. Verify `./rig/` directory was created
+#[test]
+fn rig_directory_auto_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_path = tmp.path().join("rig");
+
+    let port = 31980;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: rig_path.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify health endpoint responds
+    let (status, body) = http_get_retry(&host_port, "/health", 30, 100)
+        .expect("health endpoint should respond");
+    assert!(status.contains("200"), "expected 200 OK, got: {status}");
+    assert_eq!(body, "ok");
+
+    // Verify ./rig/ directory was created
+    assert!(
+        rig_path.exists(),
+        "rig directory should have been auto-created at {}",
+        rig_path.display()
+    );
+    assert!(
+        rig_path.is_dir(),
+        "rig path should be a directory"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Start Knot in dir with `./rig/` containing loom subdirectories;
+/// looms discovered and registered.
+///
+/// 1. Create a temp dir with a `./rig/` subdirectory containing a loom
+/// 2. Start Knot with base_dir pointing to the rig
+/// 3. Verify looms are discovered via `GET /looms`
+#[test]
+fn rig_directory_scanned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_path = tmp.path().join("rig");
+
+    // Create rig directory with a loom subdirectory
+    fs::create_dir(&rig_path).unwrap();
+    let loom_dir = rig_path.join("docs-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    let port = 31981;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: rig_path.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+
+    // Wait for server to start listening
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify rig directory exists (already existed, but verify)
+    assert!(rig_path.exists(), "rig directory should exist");
+
+    // GET /looms should return the discovered loom
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "docs-loom",
+        "loom id should match"
+    );
+
+    // Verify rig config endpoint returns rig path
+    let (status, body) =
+        http_get_retry(&host_port, "/config/rig", 30, 100)
+            .expect("config endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let config_json: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert!(
+        config_json["rig_path"].is_string(),
+        "config should have rig_path field"
+    );
+    assert!(
+        config_json["rig_path"].as_str().unwrap().contains("rig"),
+        "rig_path should contain 'rig'"
+    );
+
+    let _ = shutdown.send(());
+}
+
 // ── Integration Tests ─────────────────────────────────────────────────────
 
 /// `main()` starts HTTP server, `GET /health` returns `200 ok`.

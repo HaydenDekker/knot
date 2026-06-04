@@ -13,9 +13,11 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use utoipa::OpenApi;
+
+use std::path::PathBuf;
 
 use crate::application::ports::{
     AgentRunner, LoomLogPort, LoomRepository, TieOffSink,
@@ -82,6 +84,7 @@ use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
         crate::application::ports::KnotState,
         // Inbound types
         RegisterLoomRequest,
+        RigConfigResponse,
     )),
 )]
 struct ApiDoc;
@@ -98,6 +101,18 @@ pub struct RegisterLoomRequest {
     /// Tie-off (output) directory.
     #[serde(default)]
     pub tie_off_dir: Option<String>,
+}
+
+/// Response for `GET /config/rig` — rig path info plus agent config.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct RigConfigResponse {
+    /// Absolute path to the rig directory.
+    #[schema(value_type = String)]
+    pub rig_path: PathBuf,
+    /// Path to the agent CLI binary.
+    pub cli_path: String,
+    /// Arguments passed to the agent CLI.
+    pub cli_args: Vec<String>,
 }
 
 // ── AppContext ─────────────────────────────────────────────────────────────
@@ -124,6 +139,8 @@ pub struct AppContext {
     pub rig_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
     pub loom_ids: Vec<LoomId>,
+    /// Base (rig) directory path — used by discover and config endpoints.
+    pub base_dir: PathBuf,
 }
 
 // ── Handler stubs ──────────────────────────────────────────────────────────
@@ -333,12 +350,13 @@ pub async fn unregister_loom(
     }
 }
 
-/// Discover looms in a workspace.
+/// Discover looms in the rig directory and register any new ones.
 #[utoipa::path(
     post,
     path = "/looms/discover",
     responses(
-        (status = 501, description = "Not yet implemented"),
+        (status = 200, body = Vec<LoomSummary>, description = "Discovered looms"),
+        (status = 500, description = "Discovery failed"),
     ),
 )]
 pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
@@ -347,22 +365,44 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
     );
-    let _ = use_case;
-    (StatusCode::NOT_IMPLEMENTED, "todo").into_response()
+    match use_case.execute(&ctx.base_dir) {
+        Ok(looms) => {
+            let summaries: Vec<LoomSummary> = looms
+                .into_iter()
+                .map(|loom| LoomSummary {
+                    id: loom.id,
+                    source_dir: loom.source_dir,
+                    tie_off_dir: loom.tie_off_dir,
+                    knot_count: loom.knots.len(),
+                })
+                .collect();
+            (StatusCode::OK, Json(summaries)).into_response()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": e.to_string()
+            }))).into_response()
+        }
+    }
 }
 
-/// Return the loaded rig agent configuration.
+/// Return the loaded rig configuration (path + agent config).
 #[utoipa::path(
     get,
     path = "/config/rig",
     responses(
-        (status = 200, body = RigAgentConfig, description = "Rig agent configuration"),
+        (status = 200, body = RigConfigResponse, description = "Rig configuration"),
     ),
 )]
 pub async fn get_rig_config(
     State(ctx): State<AppContext>,
 ) -> Response {
-    (StatusCode::OK, Json(&ctx.rig_config)).into_response()
+    let response = RigConfigResponse {
+        rig_path: ctx.base_dir.clone(),
+        cli_path: ctx.rig_config.cli_path.clone(),
+        cli_args: ctx.rig_config.cli_args.clone(),
+    };
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 // ── Router builder ─────────────────────────────────────────────────────────
@@ -499,6 +539,7 @@ mod tests {
             agent_runner: Arc::new(MockAgentRunner),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
+            base_dir: PathBuf::from("./rig"),
         }
     }
 

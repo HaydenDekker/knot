@@ -7,10 +7,10 @@ use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{AgentRunner, LoomLogPort, LoomRepository, PortError, TieOffSink};
 use knot::application::store::LoomStore;
-use knot::domain::entities::{KnotId, Loom, LoomId};
+use knot::domain::entities::{Loom, LoomId};
 use knot::domain::events::StrandEvent;
 use knot::domain::value_objects::RigAgentConfig;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::util::ServiceExt;
@@ -90,6 +90,7 @@ fn build_test_context() -> AppContext {
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
+        base_dir: PathBuf::from("./rig"),
     }
 }
 

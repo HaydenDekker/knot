@@ -6,7 +6,7 @@
 //! 3. The API endpoints documented in each skill are accessible and return
 //!    expected shapes against a live Knot server
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
@@ -20,7 +20,6 @@ use knot::domain::entities::{
 };
 use knot::domain::events::{LoomEvent, StrandEvent};
 use knot::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::util::ServiceExt;
@@ -101,6 +100,7 @@ fn build_context_with_loom() -> AppContext {
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
+        base_dir: PathBuf::from("./rig"),
     };
 
     // Register a test loom with a knot
@@ -565,6 +565,7 @@ async fn knot_inspect_loom_activity() {
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
+        base_dir: PathBuf::from("./rig"),
     };
     let app = knot::adapters::inbound::build_app(ctx);
 
@@ -658,6 +659,7 @@ async fn knot_inspect_knot_status_with_state() {
         agent_runner: Arc::new(MockAgentRunner),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
+        base_dir: PathBuf::from("./rig"),
     };
     ctx.store.register(Loom {
         id: LoomId("test-loom".to_string()),

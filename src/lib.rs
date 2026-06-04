@@ -119,10 +119,13 @@ pub fn start_event_pipeline(
 }
 
 impl AppConfig {
-    /// Create default configuration: bind `127.0.0.1:3000`, rig dir `.`.
+    /// Create default configuration: bind `127.0.0.1:3000`, rig dir `./rig`.
     pub fn default_config() -> Self {
+        let base_dir = std::env::current_dir()
+            .map(|cwd| cwd.join("rig"))
+            .unwrap_or_else(|_| PathBuf::from("./rig"));
         Self {
-            base_dir: PathBuf::from("."),
+            base_dir,
             bind_addr: "127.0.0.1:3000".parse().unwrap(),
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(120),
@@ -216,6 +219,7 @@ pub fn build_app_context(
             agent_runner,
             rig_config,
             loom_ids: Vec::new(),
+            base_dir: config.base_dir.clone(),
         },
         event_rx,
     )
@@ -233,6 +237,12 @@ pub fn run_startup(
     ctx: &AppContext,
     base_dir: &StdPath,
 ) -> std::io::Result<Vec<Loom>> {
+    // Auto-create the rig directory if it doesn't exist.
+    std::fs::create_dir_all(base_dir).map_err(|e| {
+        eprintln!("WARNING: failed to create rig dir {}: {e}", base_dir.display());
+        e
+    })?;
+
     let discover = application::usecases::DiscoverLooms::new(
         Arc::clone(&ctx.loom_repo),
         Arc::clone(&ctx.loom_log_port),
