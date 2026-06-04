@@ -716,7 +716,12 @@ mod tests {
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig::new("review".to_string()).unwrap(),
+            agent_config: AgentConfig::new(
+                "review".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )
+            .unwrap(),
             prompt_template: PromptTemplate::new(
                 "full-file".to_string(),
                 "check it".to_string(),

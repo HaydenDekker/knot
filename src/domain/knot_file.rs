@@ -11,6 +11,10 @@ pub enum KnotFileError {
     MissingName,
     /// The `goal` field is empty or whitespace-only.
     EmptyGoal,
+    /// The `provider` field is empty or whitespace-only.
+    EmptyProvider,
+    /// The `model` field is empty or whitespace-only.
+    EmptyModel,
     /// The `prompt-template` section is missing from frontmatter.
     MissingPromptTemplate,
     /// The frontmatter YAML could not be parsed.
@@ -22,6 +26,8 @@ impl std::fmt::Display for KnotFileError {
         match self {
             KnotFileError::MissingName => write!(f, "knot file is missing 'name' field"),
             KnotFileError::EmptyGoal => write!(f, "knot file 'goal' field is empty"),
+            KnotFileError::EmptyProvider => write!(f, "knot file 'provider' field is empty"),
+            KnotFileError::EmptyModel => write!(f, "knot file 'model' field is empty"),
             KnotFileError::MissingPromptTemplate => {
                 write!(f, "knot file is missing 'prompt-template' section")
             }
@@ -62,6 +68,10 @@ struct RawFrontmatter {
 #[derive(Debug, Deserialize)]
 struct RawAgentConfig {
     goal: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    #[serde(default)]
+    tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,14 +97,37 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
         .filter(|n| !n.trim().is_empty())
         .ok_or(KnotFileError::MissingName)?;
 
-    // Validate agent-config.goal
-    let goal = raw
+    // Validate agent-config fields
+    let ac = raw
         .agent_config
-        .and_then(|ac| ac.goal)
+        .as_ref()
+        .ok_or(KnotFileError::EmptyGoal)?;
+    let goal = ac
+        .goal
+        .as_ref()
         .filter(|g| !g.trim().is_empty())
         .ok_or(KnotFileError::EmptyGoal)?;
-    let agent_config = AgentConfig::new(goal)
-        .map_err(|_| KnotFileError::EmptyGoal)?;
+    let provider = ac
+        .provider
+        .as_ref()
+        .filter(|p| !p.trim().is_empty())
+        .ok_or(KnotFileError::EmptyProvider)?;
+    let model = ac
+        .model
+        .as_ref()
+        .filter(|m| !m.trim().is_empty())
+        .ok_or(KnotFileError::EmptyModel)?;
+
+    let mut agent_config = AgentConfig::new(
+        goal.clone(),
+        provider.clone(),
+        model.clone(),
+    )
+    .map_err(|_| KnotFileError::EmptyGoal)?;
+    // Apply optional tools
+    if let Some(tools) = &ac.tools {
+        agent_config.tools = tools.clone();
+    }
 
     // Validate prompt-template
     let raw_template = raw
@@ -146,6 +179,8 @@ mod tests {
 name: prd-goals-review
 agent-config:
   goal: \"Review PRD goals for clarity, completeness, and alignment\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -167,8 +202,37 @@ This knot reviews the goals section of PRD documents.
         let file = result.unwrap();
         assert_eq!(file.name, "prd-goals-review");
         assert_eq!(file.agent_config.goal, "Review PRD goals for clarity, completeness, and alignment");
+        assert_eq!(file.agent_config.provider, "openai");
+        assert_eq!(file.agent_config.model, "gpt-4o");
+        assert!(file.agent_config.tools.is_empty());
         assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
+    }
+
+    #[test]
+    fn knot_file_with_provider_model_tools() {
+        let content = "---
+name: review-knot
+agent-config:
+  goal: \"Review document\"
+  provider: \"anthropic\"
+  model: \"claude-sonnet-4-20250514\"
+  tools:
+    - fs
+    - web
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review the document\"
+---
+
+Body.
+";
+
+        let file = parse(content).unwrap();
+        assert_eq!(file.name, "review-knot");
+        assert_eq!(file.agent_config.provider, "anthropic");
+        assert_eq!(file.agent_config.model, "claude-sonnet-4-20250514");
+        assert_eq!(file.agent_config.tools, vec!["fs", "web"]);
     }
 
     #[test]
@@ -176,6 +240,8 @@ This knot reviews the goals section of PRD documents.
         let content = "---
 agent-config:
   goal: \"Some goal\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Do something\"
@@ -195,6 +261,8 @@ No name here.
 name: test-knot
 agent-config:
   goal: \"\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Do something\"
@@ -214,6 +282,8 @@ Body.
 name: test-knot
 agent-config:
   goal: \"Some goal\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 ---
 
 No prompt template.
@@ -234,6 +304,8 @@ name: test-knot
   broken: yaml: [
 agent-config:
   goal: \"Some goal\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Do something\"
@@ -262,7 +334,12 @@ No frontmatter at all.";
     fn knot_file_serialization() {
         let file = KnotFile {
             name: "test".to_string(),
-            agent_config: AgentConfig::new("test goal".to_string()).unwrap(),
+            agent_config: AgentConfig::new(
+                "test goal".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )
+            .unwrap(),
             prompt_template: PromptTemplate::new(
                 "full-file".to_string(),
                 "do it".to_string(),
@@ -281,6 +358,8 @@ No frontmatter at all.";
 name: test-knot
 agent-config:
   goal: \"   \"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Do something\"
@@ -312,6 +391,46 @@ Body.
     }
 
     #[test]
+    fn missing_provider_returns_error() {
+        let content = "---
+name: test-knot
+agent-config:
+  goal: \"Some goal\"
+  model: \"gpt-4o\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Do something\"
+---
+
+Body.
+";
+
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::EmptyProvider);
+    }
+
+    #[test]
+    fn missing_model_returns_error() {
+        let content = "---
+name: test-knot
+agent-config:
+  goal: \"Some goal\"
+  provider: \"openai\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Do something\"
+---
+
+Body.
+";
+
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::EmptyModel);
+    }
+
+    #[test]
     fn knot_file_error_display() {
         assert_eq!(
             KnotFileError::MissingName.to_string(),
@@ -320,6 +439,14 @@ Body.
         assert_eq!(
             KnotFileError::EmptyGoal.to_string(),
             "knot file 'goal' field is empty"
+        );
+        assert_eq!(
+            KnotFileError::EmptyProvider.to_string(),
+            "knot file 'provider' field is empty"
+        );
+        assert_eq!(
+            KnotFileError::EmptyModel.to_string(),
+            "knot file 'model' field is empty"
         );
         assert_eq!(
             KnotFileError::MissingPromptTemplate.to_string(),

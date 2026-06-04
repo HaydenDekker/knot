@@ -413,6 +413,9 @@ mod tests {
                     id: KnotId(k.to_string()),
                     agent_config: AgentConfig {
                         goal: "review".to_string(),
+                        provider: "openai".to_string(),
+                        model: "gpt-4o".to_string(),
+                        tools: Vec::new(),
                     },
                     prompt_template: PromptTemplate {
                         input_bundling: "full-file".to_string(),

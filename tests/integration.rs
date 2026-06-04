@@ -19,6 +19,8 @@ const VALID_KNOT_CONTENT: &str = "---
 name: review-knot
 agent-config:
   goal: \"Review PRD goals for clarity\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -829,7 +831,7 @@ fn multiple_looms_independent() {
     fs::create_dir(&loom_a_dir).unwrap();
     fs::write(
         loom_a_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
     )
     .unwrap();
 
@@ -838,7 +840,7 @@ fn multiple_looms_independent() {
     fs::create_dir(&loom_b_dir).unwrap();
     fs::write(
         loom_b_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
     )
     .unwrap();
 

@@ -76,6 +76,9 @@ mod tests {
         let id = KnotId("prd-goals-review".to_string());
         let agent_config = AgentConfig {
             goal: "Review PRD goals for clarity".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            tools: Vec::new(),
         };
         let prompt_template = PromptTemplate {
             input_bundling: "full-file".to_string(),
@@ -102,6 +105,9 @@ mod tests {
             id: KnotId("review".to_string()),
             agent_config: AgentConfig {
                 goal: "Review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
             },
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
@@ -177,6 +183,9 @@ mod tests {
             id: KnotId("test".to_string()),
             agent_config: AgentConfig {
                 goal: "test goal".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
             },
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),

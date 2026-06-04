@@ -289,6 +289,8 @@ mod tests {
 name: review-knot
 agent-config:
   goal: \"Review PRD goals for clarity\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
