@@ -48,7 +48,7 @@ impl AgentRunner for SubprocessAgentRunner {
             .stderr(Stdio::piped())
             .spawn();
 
-        let child = match child {
+        let mut child = match child {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(PortError::CommandNotFound(format!(
@@ -86,6 +86,19 @@ impl AgentRunner for SubprocessAgentRunner {
                     "failed to spawn timeout thread: {e}"
                 ))
             })?;
+
+        // Write the prompt to the child's stdin.
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        use std::io::Write;
+        stdin
+            .write_all(ctx.prompt.as_bytes())
+            .map_err(|e| {
+                PortError::AgentExecutionFailed(format!(
+                    "failed to write prompt to stdin: {e}"
+                ))
+            })?;
+        // Drop stdin to close the pipe (signals EOF to the child).
+        drop(stdin);
 
         // Wait for the child and capture output.
         let output = child.wait_with_output().map_err(|e| {
@@ -224,6 +237,53 @@ mod tests {
         assert!(
             matches!(err, PortError::Timeout(_)),
             "expected Timeout, got {err:?}"
+        );
+    }
+
+    /// Verify that `SubprocessAgentRunner` writes `ctx.prompt` to the child
+    /// process's stdin. Use `sh -c cat` which reads stdin and writes to stdout.
+    #[test]
+    fn runner_passes_prompt_via_stdin() {
+        let runner = SubprocessAgentRunner::new();
+        let prompt = "hello from knot\n";
+        let ctx = ExecutionContext {
+            cli_path: "sh".to_string(),
+            cli_args: vec!["-c".to_string(), "cat".to_string()],
+            prompt: prompt.to_string(),
+            strand_path: crate::domain::entities::StrandPath(
+                std::path::PathBuf::from("test.md"),
+            ),
+        };
+
+        let result = runner.execute(ctx);
+        assert!(result.is_ok(), "should succeed: {result:?}");
+
+        let output = result.unwrap();
+        assert_eq!(output.stdout, prompt, "stdout should contain prompt");
+    }
+
+    /// Verify that the full prompt content round-trips through stdin
+    /// using `cat /dev/stdin` (alternative way to read stdin).
+    #[test]
+    fn runner_passes_strand_via_at_syntax() {
+        let runner = SubprocessAgentRunner::new();
+        let prompt = "strand content from file";
+        let ctx = ExecutionContext {
+            cli_path: "cat".to_string(),
+            cli_args: vec![],
+            prompt: prompt.to_string(),
+            strand_path: crate::domain::entities::StrandPath(
+                std::path::PathBuf::from("strand.md"),
+            ),
+        };
+
+        let result = runner.execute(ctx);
+        assert!(result.is_ok(), "should succeed: {result:?}");
+
+        let output = result.unwrap();
+        assert_eq!(
+            output.stdout, prompt,
+            "cat should echo stdin content exactly"
         );
     }
 }
