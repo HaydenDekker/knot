@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::application::ports::{
     AgentRunner, ExecutionContext, KnotEventType, KnotState,
-    KnotStatePort, LoomLogPort, LoomRepository, ProcessingStatus, PortError,
+    LoomLogPort, LoomRepository, ProcessingStatus, PortError,
     TieOffSink,
 };
 use crate::application::store::LoomStore;
@@ -36,12 +36,22 @@ pub struct LoomSummary {
 }
 
 /// Result of the `GetKnotStatus` use case.
+///
+/// Derived from the latest loom-log entries for a knot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct KnotStatus {
     /// The knot whose status was retrieved.
     pub knot_id: KnotId,
-    /// The current processing state.
-    pub state: KnotState,
+    /// The loom this knot belongs to.
+    pub loom_id: LoomId,
+    /// The current processing status derived from loom-log events.
+    pub status: ProcessingStatus,
+    /// Path to the last strand processed (if any).
+    pub last_strand_path: Option<StrandPath>,
+    /// Path to the last tie-off produced (if any).
+    pub last_tie_off_path: Option<TieOffPath>,
+    /// Error message from the last failed processing (if any).
+    pub last_error: Option<String>,
 }
 
 // ── DiscoverLooms ──────────────────────────────────────────────────────────
@@ -49,12 +59,10 @@ pub struct KnotStatus {
 /// Use case: discover looms in a workspace and register them.
 ///
 /// Calls `LoomRepository::scan()` to find looms, then for each loom:
-/// - Creates knot state via `KnotStatePort::create()`
 /// - Appends `KnotRegistered` to the loom log via `LoomLogPort::append()`
 /// - Registers the loom in `LoomStore`
 pub struct DiscoverLooms {
     repository: Arc<dyn LoomRepository>,
-    state_port: Arc<dyn KnotStatePort>,
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
 }
@@ -63,13 +71,11 @@ impl DiscoverLooms {
     /// Create a new `DiscoverLooms` use case.
     pub fn new(
         repository: Arc<dyn LoomRepository>,
-        state_port: Arc<dyn KnotStatePort>,
         log_port: Arc<dyn LoomLogPort>,
         store: LoomStore,
     ) -> Self {
         Self {
             repository,
-            state_port,
             log_port,
             store,
         }
@@ -89,10 +95,9 @@ impl DiscoverLooms {
         Ok(looms)
     }
 
-    /// Create state and log events for every knot in a loom.
+    /// Append `KnotRegistered` event for every knot in a loom.
     fn register_knots(&self, loom: &Loom) -> Result<(), PortError> {
         for knot in &loom.knots {
-            self.state_port.create(&knot.id)?;
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
@@ -107,14 +112,13 @@ impl DiscoverLooms {
 /// Use case: register a single loom.
 ///
 /// 1. Opens the loom activity log via `LoomLogPort::open()`
-/// 2. Creates knot state for each knot via `KnotStatePort::create()`
+/// 2. Appends `KnotRegistered` for each knot via `LoomLogPort::append()`
 /// 3. Appends `LoomStarted` event via `LoomLogPort::append()`
 /// 4. Stores the loom in `LoomStore`
 ///
 /// Returns an error if a loom with the same ID already exists.
 pub struct RegisterLoom {
     log_port: Arc<dyn LoomLogPort>,
-    state_port: Arc<dyn KnotStatePort>,
     store: LoomStore,
 }
 
@@ -122,12 +126,10 @@ impl RegisterLoom {
     /// Create a new `RegisterLoom` use case.
     pub fn new(
         log_port: Arc<dyn LoomLogPort>,
-        state_port: Arc<dyn KnotStatePort>,
         store: LoomStore,
     ) -> Self {
         Self {
             log_port,
-            state_port,
             store,
         }
     }
@@ -147,9 +149,12 @@ impl RegisterLoom {
         // Open the loom activity log
         self.log_port.open(&loom.id)?;
 
-        // Create state for each knot
+        // Append KnotRegistered for each knot
         for knot in &loom.knots {
-            self.state_port.create(&knot.id)?;
+            self.log_port.append(LoomEvent::KnotRegistered {
+                loom_id: loom.id.clone(),
+                knot_id: knot.id.clone(),
+            })?;
         }
 
         // Append LoomStarted event
@@ -282,35 +287,133 @@ impl GetLoomActivity {
 
 /// Use case: get the current processing state of a knot.
 ///
-/// Calls `KnotStatePort::get()` and returns a `KnotStatus` wrapping the
-/// state, or `PortError::KnotStateGetFailed` if the knot has no state.
+/// Reads the loom-log via `LoomLogPort::read_all()` and derives the
+/// current status from the latest knot-related event for the given
+/// `knot_id` in the given `loom_id`.
+///
+/// Returns `PortError::KnotStatusDeriveFailed` if the loom is not found
+/// or no events exist for the knot.
 pub struct GetKnotStatus {
-    state_port: Arc<dyn KnotStatePort>,
+    store: LoomStore,
+    log_port: Arc<dyn LoomLogPort>,
 }
 
 impl GetKnotStatus {
     /// Create a new `GetKnotStatus` use case.
-    pub fn new(state_port: Arc<dyn KnotStatePort>) -> Self {
-        Self { state_port }
+    pub fn new(store: LoomStore, log_port: Arc<dyn LoomLogPort>) -> Self {
+        Self { store, log_port }
     }
 
-    /// Return the current state for the given knot.
-    pub fn execute(&self, knot_id: &KnotId) -> Result<KnotStatus, PortError> {
-        self.state_port
-            .get(knot_id)
+    /// Derive the current status for the given knot from loom-log events.
+    pub fn execute(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+    ) -> Result<KnotStatus, PortError> {
+        // Verify the loom exists
+        if self.store.get(loom_id).is_none() {
+            return Err(PortError::KnotStatusDeriveFailed(format!(
+                "loom '{}' not found",
+                loom_id.0
+            )));
+        }
+
+        // Read all events from the loom log
+        let events = self.log_port
+            .read_all(loom_id)
             .map_err(|_| {
-                PortError::KnotStateGetFailed(format!(
-                    "failed to get state for knot '{}'",
-                    knot_id.0
+                PortError::KnotStatusDeriveFailed(format!(
+                    "failed to read loom-log for loom '{}'",
+                    loom_id.0
                 ))
-            })
-            .and_then(|opt| {
-                opt.map(|state| KnotStatus { knot_id: knot_id.clone(), state })
-                    .ok_or_else(|| PortError::KnotStateGetFailed(format!(
-                        "no state found for knot '{}'",
-                        knot_id.0
-                    )))
-            })
+            })?;
+
+        // Find the latest knot-specific event
+        let latest = Self::find_latest_knot_event(&events, knot_id);
+
+        match latest {
+            Some(event) => Ok(Self::derive_status(
+                loom_id,
+                knot_id,
+                event,
+            )),
+            None => Err(PortError::KnotStatusDeriveFailed(format!(
+                "no events found for knot '{}' in loom '{}'",
+                knot_id.0,
+                loom_id.0
+            ))),
+        }
+    }
+
+    /// Find the latest loom event that references the given knot.
+    fn find_latest_knot_event(
+        events: &[LoomEvent],
+        knot_id: &KnotId,
+    ) -> Option<&LoomEvent> {
+        events.iter().rev().find(|event| match event {
+            LoomEvent::KnotRegistered { knot_id: kid, .. }
+            | LoomEvent::KnotProcessing { knot_id: kid, .. }
+            | LoomEvent::KnotCompleted { knot_id: kid, .. }
+            | LoomEvent::KnotFailed { knot_id: kid, .. } => kid == knot_id,
+            _ => false,
+        })
+    }
+
+    /// Derive a `KnotStatus` from a single loom event.
+    fn derive_status(
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        event: &LoomEvent,
+    ) -> KnotStatus {
+        match event {
+            LoomEvent::KnotRegistered { .. } => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Idle,
+                last_strand_path: None,
+                last_tie_off_path: None,
+                last_error: None,
+            },
+            LoomEvent::KnotProcessing {
+                strand_path, ..
+            } => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Processing,
+                last_strand_path: Some(strand_path.clone()),
+                last_tie_off_path: None,
+                last_error: None,
+            },
+            LoomEvent::KnotCompleted {
+                strand_path,
+                tie_off_path,
+                ..
+            } => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Completed,
+                last_strand_path: Some(strand_path.clone()),
+                last_tie_off_path: Some(tie_off_path.clone()),
+                last_error: None,
+            },
+            LoomEvent::KnotFailed { strand_path, error, .. } => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Failed,
+                last_strand_path: Some(strand_path.clone()),
+                last_tie_off_path: None,
+                last_error: Some(error.clone()),
+            },
+            // Fallback for non-knot-specific events
+            _ => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Idle,
+                last_strand_path: None,
+                last_tie_off_path: None,
+                last_error: None,
+            },
+        }
     }
 }
 
@@ -319,15 +422,14 @@ impl GetKnotStatus {
 /// Use case: process a single strand event through the agent pipeline.
 ///
 /// 1. Receive `StrandEvent` (Created / Modified / Deleted)
-/// 2. Update knot-state to `processing`
+/// 2. Append `KnotProcessing` to loom-log
 /// 3. Build execution context from `RigAgentConfig` + `Knot`
 /// 4. Call `AgentRunner::execute()` (skipped for Deleted events)
 /// 5. Call `TieOffSink::write()` with result
-/// 6. Update knot-state to `completed` or `failed`
+/// 6. Append `KnotCompleted` or `KnotFailed` to loom-log
 /// 7. Append `StrandProcessed` to loom-log
 pub struct ProcessStrand {
     store: LoomStore,
-    state_port: Arc<dyn KnotStatePort>,
     log_port: Arc<dyn LoomLogPort>,
     agent_runner: Arc<dyn AgentRunner>,
     tie_off_sink: Arc<dyn TieOffSink>,
@@ -338,7 +440,6 @@ impl ProcessStrand {
     /// Create a new `ProcessStrand` use case.
     pub fn new(
         store: LoomStore,
-        state_port: Arc<dyn KnotStatePort>,
         log_port: Arc<dyn LoomLogPort>,
         agent_runner: Arc<dyn AgentRunner>,
         tie_off_sink: Arc<dyn TieOffSink>,
@@ -346,7 +447,6 @@ impl ProcessStrand {
     ) -> Self {
         Self {
             store,
-            state_port,
             log_port,
             agent_runner,
             tie_off_sink,
@@ -356,7 +456,8 @@ impl ProcessStrand {
 
     /// Execute the strand processing pipeline.
     ///
-    /// State transitions: `Idle → Processing → Completed | Failed`.
+    /// Appends lifecycle events to loom-log: KnotProcessing, then
+    /// KnotCompleted or KnotFailed, then StrandProcessed.
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
         let (loom_id, knot_id, strand_path) = Self::extract_event_fields(&event);
         let is_deleted = matches!(event, StrandEvent::Deleted { .. });
@@ -370,12 +471,12 @@ impl ProcessStrand {
             .knots
             .iter()
             .find(|k| k.id == knot_id)
-            .ok_or_else(|| PortError::KnotStateGetFailed(format!(
+            .ok_or_else(|| PortError::KnotStatusDeriveFailed(format!(
                 "knot '{}' not found in loom '{}'",
                 knot_id.0, loom_id.0
             )))?;
 
-        let event_type = match event {
+        let _event_type = match event {
             StrandEvent::Created { .. } => KnotEventType::Created,
             StrandEvent::Modified { .. } => KnotEventType::Modified,
             StrandEvent::Deleted { .. } => KnotEventType::Deleted,
@@ -384,15 +485,11 @@ impl ProcessStrand {
         // Determine tie-off path
         let tie_off_path = Self::compute_tie_off_path(&loom, &strand_path);
 
-        // 1. Update knot-state to processing
-        self.state_port.update(KnotState {
+        // 1. Append KnotProcessing to loom-log
+        self.log_port.append(LoomEvent::KnotProcessing {
+            loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
-            event_type: event_type.clone(),
             strand_path: strand_path.clone(),
-            tie_off_path: Some(tie_off_path.clone()),
-            status: ProcessingStatus::Processing,
-            error: None,
-            last_updated: Self::now(),
         })?;
 
         if is_deleted {
@@ -408,18 +505,15 @@ impl ProcessStrand {
             };
             self.tie_off_sink.write(tie_off)?;
 
-            // Update to completed
-            self.state_port.update(KnotState {
+            // Append KnotCompleted to loom-log
+            self.log_port.append(LoomEvent::KnotCompleted {
+                loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
-                event_type,
                 strand_path: strand_path.clone(),
-                tie_off_path: Some(tie_off_path.clone()),
-                status: ProcessingStatus::Completed,
-                error: None,
-                last_updated: Self::now(),
+                tie_off_path: tie_off_path.clone(),
             })?;
 
-            // Append to loom-log
+            // Append StrandProcessed
             self.log_port.append(LoomEvent::StrandProcessed {
                 loom_id,
                 strand_path,
@@ -458,18 +552,15 @@ impl ProcessStrand {
                 };
                 self.tie_off_sink.write(tie_off)?;
 
-                // 5. Update to completed
-                self.state_port.update(KnotState {
+                // 5. Append KnotCompleted to loom-log
+                self.log_port.append(LoomEvent::KnotCompleted {
+                    loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
-                    event_type,
                     strand_path: strand_path.clone(),
-                    tie_off_path: Some(tie_off_path.clone()),
-                    status: ProcessingStatus::Completed,
-                    error: None,
-                    last_updated: Self::now(),
+                    tie_off_path: tie_off_path.clone(),
                 })?;
 
-                // 6. Append to loom-log
+                // 6. Append StrandProcessed
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
                     strand_path,
@@ -489,18 +580,15 @@ impl ProcessStrand {
                 };
                 self.tie_off_sink.write(tie_off)?;
 
-                // 5. Update to failed with error details
-                self.state_port.update(KnotState {
+                // 5. Append KnotFailed to loom-log
+                self.log_port.append(LoomEvent::KnotFailed {
+                    loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
-                    event_type,
                     strand_path: strand_path.clone(),
-                    tie_off_path: Some(tie_off_path.clone()),
-                    status: ProcessingStatus::Failed,
-                    error: Some(error_msg.clone()),
-                    last_updated: Self::now(),
+                    error: error_msg.clone(),
                 })?;
 
-                // 6. Append to loom-log with error details
+                // 6. Append StrandProcessed with error details
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
                     strand_path,
@@ -545,10 +633,6 @@ impl ProcessStrand {
         TieOffPath(loom.tie_off_dir.join(filename))
     }
 
-    /// Return current ISO timestamp for test determinism.
-    fn now() -> String {
-        "2026-06-03T12:00:00Z".to_string()
-    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

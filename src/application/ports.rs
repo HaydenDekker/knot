@@ -22,12 +22,8 @@ pub enum PortError {
     LoomSaveFailed(String),
     /// Failed to list registered looms.
     LoomListFailed(String),
-    /// Failed to create knot processing state.
-    KnotStateCreateFailed(String),
-    /// Failed to update knot processing state.
-    KnotStateUpdateFailed(String),
-    /// Failed to read knot processing state.
-    KnotStateGetFailed(String),
+    /// Failed to derive knot status from loom-log.
+    KnotStatusDeriveFailed(String),
     /// Failed to open the loom activity log.
     LoomLogOpenFailed(String),
     /// Failed to append an event to the loom log.
@@ -63,14 +59,8 @@ impl std::fmt::Display for PortError {
             PortError::LoomListFailed(msg) => {
                 write!(f, "loom list failed: {msg}")
             }
-            PortError::KnotStateCreateFailed(msg) => {
-                write!(f, "knot state create failed: {msg}")
-            }
-            PortError::KnotStateUpdateFailed(msg) => {
-                write!(f, "knot state update failed: {msg}")
-            }
-            PortError::KnotStateGetFailed(msg) => {
-                write!(f, "knot state get failed: {msg}")
+            PortError::KnotStatusDeriveFailed(msg) => {
+                write!(f, "knot status derive failed: {msg}")
             }
             PortError::LoomLogOpenFailed(msg) => {
                 write!(f, "loom log open failed: {msg}")
@@ -198,20 +188,7 @@ pub trait LoomRepository: Send + Sync {
     fn save(&self, loom: Loom) -> Result<(), PortError>;
 }
 
-/// Port for managing per-knot processing state.
-///
-/// Tracks the lifecycle of each knot as it processes strands: creation,
-/// state transitions, and error recording.
-pub trait KnotStatePort: Send + Sync {
-    /// Create initial state for a knot.
-    fn create(&self, knot_id: &KnotId) -> Result<(), PortError>;
 
-    /// Update the processing state of an existing knot.
-    fn update(&self, state: KnotState) -> Result<(), PortError>;
-
-    /// Get the current state for a knot.
-    fn get(&self, knot_id: &KnotId) -> Result<Option<KnotState>, PortError>;
-}
 
 /// Port for appending and querying loom activity logs.
 ///
@@ -286,25 +263,7 @@ mod tests {
         }
     }
 
-    /// In-memory mock of `KnotStatePort`.
-    #[derive(Default)]
-    struct MockKnotStatePort {
-        _states: HashMap<KnotId, KnotState>,
-    }
 
-    impl KnotStatePort for MockKnotStatePort {
-        fn create(&self, _knot_id: &KnotId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn update(&self, _state: KnotState) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn get(&self, _knot_id: &KnotId) -> Result<Option<KnotState>, PortError> {
-            Ok(None)
-        }
-    }
 
     /// In-memory mock of `LoomLogPort`.
     #[derive(Default)]
@@ -397,34 +356,7 @@ mod tests {
         assert!(save_result.is_ok());
     }
 
-    #[test]
-    fn knot_state_port_contract() {
-        let port = MockKnotStatePort::default();
 
-        // Verify trait is object-safe
-        let _obj: &dyn KnotStatePort = &port;
-
-        // Verify all trait methods compile and are callable
-        let knot_id = KnotId("k1".to_string());
-
-        let create_result = port.create(&knot_id);
-        assert!(create_result.is_ok());
-
-        let state = KnotState {
-            knot_id: knot_id.clone(),
-            event_type: KnotEventType::Created,
-            strand_path: StrandPath(PathBuf::from("input.md")),
-            tie_off_path: Some(TieOffPath(PathBuf::from("output.md"))),
-            status: ProcessingStatus::Idle,
-            error: None,
-            last_updated: "2026-01-01T00:00:00Z".to_string(),
-        };
-        let update_result = port.update(state);
-        assert!(update_result.is_ok());
-
-        let get_result = port.get(&knot_id);
-        assert!(get_result.is_ok());
-    }
 
     #[test]
     fn loom_log_port_contract() {
@@ -558,8 +490,8 @@ mod tests {
         let err = PortError::RigScanFailed("permission denied".to_string());
         assert_eq!(err.to_string(), "rig scan failed: permission denied");
 
-        let err = PortError::KnotStateCreateFailed("db error".to_string());
-        assert_eq!(err.to_string(), "knot state create failed: db error");
+        let err = PortError::KnotStatusDeriveFailed("log empty".to_string());
+        assert_eq!(err.to_string(), "knot status derive failed: log empty");
 
         let err = PortError::AgentExecutionFailed("crash".to_string());
         assert_eq!(err.to_string(), "agent execution failed: crash");
