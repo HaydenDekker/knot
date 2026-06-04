@@ -1080,3 +1080,112 @@ fn shutdown_logs_loom_stopped() {
         "log should still contain KnotRegistered entry"
     );
 }
+
+// ── Phase 1: .loom-config.yaml External Source/Tie-off ───────────────────
+
+/// Full pipeline test with `.loom-config.yaml` pointing `source_dir` to an
+/// external directory.
+///
+/// 1. Create workspace with a loom that has `.loom-config.yaml`
+/// 2. Config sets `source_dir` to an external directory
+/// 3. Create a strand in the external source directory
+/// 4. Tie-off should be produced at the configured `tie_off_dir`
+#[test]
+fn full_pipeline_external_source_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // External source directory (outside the scanned workspace).
+    let external_source = root.join("external-source");
+    fs::create_dir(&external_source).unwrap();
+
+    // External tie-off directory.
+    let external_tie_off = root.join("external-output");
+    fs::create_dir(&external_tie_off).unwrap();
+
+    // Workspace subdirectory (what the server scans).
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+
+    // Loom directory with knot definition.
+    let loom_dir = workspace.join("config-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // .loom-config.yaml: point source and tie-off to external dirs.
+    let config_content = format!(
+        "source_dir: {}\ntie_off_dir: {}",
+        external_source.display(),
+        external_tie_off.display()
+    );
+    fs::write(loom_dir.join(".loom-config.yaml"), config_content).unwrap();
+
+    let port = 31997;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: workspace.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "echo 'processed external'".to_string(),
+            ],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Verify loom is registered with the correct source_dir.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/config-loom", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        loom["source_dir"].as_str().unwrap(),
+        external_source.to_string_lossy(),
+        "source_dir should point to external directory"
+    );
+    assert_eq!(
+        loom["tie_off_dir"].as_str().unwrap(),
+        external_tie_off.to_string_lossy(),
+        "tie_off_dir should point to external output directory"
+    );
+
+    // Create a strand in the external source directory.
+    let strand_path = external_source.join("external-strand.md");
+    fs::write(&strand_path, "external strand content").unwrap();
+
+    // Wait for debounce + processing.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Tie-off should appear in the external output directory.
+    let tie_off_path = external_tie_off.join("external-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist in external output: {}",
+        tie_off_path.display()
+    );
+
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("processed external"),
+        "tie-off should contain agent output, got: {content}"
+    );
+
+    // Tie-off should NOT appear in the loom's default .knot-output.
+    let default_tie_off = loom_dir.join(".knot-output/external-strand.md.output");
+    assert!(
+        !default_tie_off.exists(),
+        "tie-off should NOT be in default .knot-output"
+    );
+
+    let _ = shutdown.send(());
+}

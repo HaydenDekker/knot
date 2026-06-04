@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use serde::Deserialize;
 
 use crate::application::ports::{LoomRepository, PortError};
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
@@ -71,24 +73,45 @@ impl LoomRepository for FileSystemLoomRepository {
                 .to_string();
 
             let loom_id = LoomId(loom_name.clone());
-            // Canonicalise the source directory to an absolute path.
-        // This prevents watcher mismatches when base_dir is relative.
-        let source_dir = fs::canonicalize(&loom_dir)
-            .map_err(|e| {
-                PortError::WorkspaceScanFailed(format!(
-                    "failed to canonicalise {}: {}",
-                    loom_dir.display(),
-                    e
-                ))
-            })?;
+
+            // Canonicalise the loom directory to an absolute path.
+            let canonical_loom_dir = fs::canonicalize(&loom_dir)
+                .map_err(|e| {
+                    PortError::WorkspaceScanFailed(format!(
+                        "failed to canonicalise {}: {}",
+                        loom_dir.display(),
+                        e
+                    ))
+                })?;
+
+            // Read .loom-config.yaml (falls back to defaults if absent/invalid).
+            let config = read_loom_config(&canonical_loom_dir);
+
+            // Resolve source_dir: config value → loom dir (default).
+            let source_dir = resolve_config_path(
+                &canonical_loom_dir,
+                config.source_dir.as_ref(),
+                &canonical_loom_dir,
+            );
+
+            // Resolve tie_off_dir: config value → <loom>/.knot-output (default).
+            let default_tie_off_dir = canonical_loom_dir.join(".knot-output");
+            let tie_off_dir = resolve_config_path(
+                &canonical_loom_dir,
+                config.tie_off_dir.as_ref(),
+                &default_tie_off_dir,
+            );
 
             // Parse .md knot definition files from the loom directory.
-            let knots = Self::scan_knot_files(&source_dir)?;
+            // (Knot definitions always live in the loom dir alongside
+            // `.loom-config.yaml` — `source_dir` points to where strands
+            // come from, which may be external.)
+            let knots = Self::scan_knot_files(&canonical_loom_dir)?;
 
             let loom = Loom {
                 id: loom_id,
-                source_dir: source_dir.clone(),
-                tie_off_dir: source_dir.join(".knot-output"),
+                source_dir,
+                tie_off_dir,
                 knots,
             };
 
@@ -182,6 +205,79 @@ impl FileSystemLoomRepository {
     }
 }
 
+/// Configuration loaded from `.loom-config.yaml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LoomConfig {
+    source_dir: Option<String>,
+    tie_off_dir: Option<String>,
+}
+
+/// Resolve a path value from `.loom-config.yaml`.
+///
+/// - If the value is `None`, return the `default_dir`.
+/// - If the value is an absolute path, canonicalise it.
+/// - If the value is a relative path, join it to `loom_dir` then canonicalise.
+///
+/// On canonicalisation failure, falls back to `default_dir` (already canonical).
+fn resolve_config_path(
+    loom_dir: &Path,
+    value: Option<&String>,
+    default_dir: &Path,
+) -> PathBuf {
+    let Some(val) = value else {
+        return default_dir.to_path_buf();
+    };
+
+    let path = if Path::new(val).is_absolute() {
+        PathBuf::from(val)
+    } else {
+        loom_dir.join(val)
+    };
+
+    fs::canonicalize(&path).unwrap_or_else(|_| {
+        eprintln!(
+            "WARNING: could not canonicalise config path '{}', \
+             using default",
+            path.display()
+        );
+        default_dir.to_path_buf()
+    })
+}
+
+/// Read and parse `.loom-config.yaml` from a loom directory.
+///
+/// Returns `Ok(LoomConfig)` with defaults filled in, or logs a warning
+/// and returns the default config on parse failure.
+fn read_loom_config(loom_dir: &Path) -> LoomConfig {
+    let config_path = loom_dir.join(".loom-config.yaml");
+
+    // File does not exist — return defaults
+    if !config_path.exists() {
+        return LoomConfig::default();
+    }
+
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "WARNING: could not read {}: {}, using defaults",
+                config_path.display(),
+                e
+            );
+            return LoomConfig::default();
+        }
+    };
+
+    serde_yaml::from_str(&content).unwrap_or_else(|e| {
+        eprintln!(
+            "WARNING: malformed YAML in {}: {}, using defaults",
+            config_path.display(),
+            e
+        );
+        LoomConfig::default()
+    })
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -211,6 +307,14 @@ This knot reviews PRD goals.
         content: &str,
     ) -> std::io::Result<()> {
         fs::write(dir.join(format!("{name}.md")), content)
+    }
+
+    /// Write a `.loom-config.yaml` file with the given content.
+    fn write_loom_config(
+        dir: &Path,
+        content: &str,
+    ) -> std::io::Result<()> {
+        fs::write(dir.join(".loom-config.yaml"), content)
     }
 
     #[test]
@@ -485,6 +589,291 @@ broken: yaml: [
             !source_str.contains("//"),
             "source_dir should not contain double-slashes, got: {}",
             source_str
+        );
+    }
+
+    // ── .loom-config.yaml Tests ─────────────────────────────────────────
+
+    #[test]
+    fn scan_uses_loom_config_source_dir() {
+        let temp_root = tempfile::tempdir().unwrap();
+
+        // External source directory outside the scanned workspace.
+        let external_source = temp_root.path().join("external-source");
+        fs::create_dir(&external_source).unwrap();
+
+        // Workspace is a subdirectory (scan only sees loom inside it).
+        let workspace = temp_root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+
+        // Loom directory (contains knot definitions and config).
+        let loom_dir = workspace.join("config-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // .loom-config.yaml pointing source_dir to the external directory.
+        write_loom_config(
+            &loom_dir,
+            "source_dir: ../../external-source",
+        )
+        .unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(&workspace);
+
+        assert!(result.is_ok(), "scan should succeed with config");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1, "should find one loom");
+
+        let loom = &looms[0];
+        // source_dir should resolve to the external directory.
+        assert_eq!(
+            loom.source_dir, external_source,
+            "source_dir should be the external directory"
+        );
+        // source_dir must be absolute.
+        assert!(loom.source_dir.is_absolute());
+    }
+
+    #[test]
+    fn scan_uses_loom_config_tie_off_dir() {
+        let temp_root = tempfile::tempdir().unwrap();
+
+        // External tie-off directory outside the scanned workspace.
+        let external_tie_off = temp_root.path().join("external-output");
+        fs::create_dir(&external_tie_off).unwrap();
+
+        // Workspace is a subdirectory.
+        let workspace = temp_root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+
+        // Loom directory.
+        let loom_dir = workspace.join("config-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // .loom-config.yaml pointing tie_off_dir to external directory.
+        write_loom_config(
+            &loom_dir,
+            "tie_off_dir: ../../external-output",
+        )
+        .unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(&workspace);
+
+        assert!(result.is_ok(), "scan should succeed with config");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1, "should find one loom");
+
+        let loom = &looms[0];
+        assert_eq!(
+            loom.tie_off_dir, external_tie_off,
+            "tie_off_dir should be the external directory"
+        );
+        assert!(loom.tie_off_dir.is_absolute());
+    }
+
+    #[test]
+    fn scan_fallback_defaults_without_config() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        // Loom directory with NO .loom-config.yaml.
+        let loom_dir = workspace.path().join("default-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(workspace.path());
+
+        assert!(result.is_ok());
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
+
+        let loom = &looms[0];
+        // source_dir defaults to the loom directory.
+        assert_eq!(
+            loom.source_dir, loom_dir,
+            "source_dir should default to loom directory"
+        );
+        // tie_off_dir defaults to <loom>/.knot-output.
+        assert_eq!(
+            loom.tie_off_dir,
+            loom_dir.join(".knot-output"),
+            "tie_off_dir should default to <loom>/.knot-output"
+        );
+    }
+
+    #[test]
+    fn scan_loom_config_absolute_paths() {
+        let temp_root = tempfile::tempdir().unwrap();
+
+        // External directories with absolute paths (outside scanned workspace).
+        let abs_source = temp_root.path().join("abs-source");
+        fs::create_dir(&abs_source).unwrap();
+        let abs_tie_off = temp_root.path().join("abs-output");
+        fs::create_dir(&abs_tie_off).unwrap();
+
+        // Workspace is a subdirectory.
+        let workspace = temp_root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+
+        // Loom directory.
+        let loom_dir = workspace.join("abs-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // .loom-config.yaml with absolute paths.
+        let config_content = format!(
+            "source_dir: {}\ntie_off_dir: {}",
+            abs_source.display(),
+            abs_tie_off.display()
+        );
+        write_loom_config(&loom_dir, &config_content).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(&workspace);
+
+        assert!(result.is_ok(), "scan should succeed with absolute paths");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
+
+        let loom = &looms[0];
+        assert_eq!(
+            loom.source_dir, abs_source,
+            "source_dir should use the absolute path"
+        );
+        assert_eq!(
+            loom.tie_off_dir, abs_tie_off,
+            "tie_off_dir should use the absolute path"
+        );
+    }
+
+    #[test]
+    fn scan_loom_config_malformed_yaml() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        // Loom directory with a malformed .loom-config.yaml.
+        let loom_dir = workspace.path().join("malformed-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // Invalid YAML content.
+        write_loom_config(&loom_dir, "broken: yaml: [\n  unclosed").unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(workspace.path());
+
+        // Should succeed — falls back to defaults.
+        assert!(
+            result.is_ok(),
+            "scan should succeed even with malformed config"
+        );
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
+
+        let loom = &looms[0];
+        // Falls back to defaults.
+        assert_eq!(
+            loom.source_dir, loom_dir,
+            "source_dir should fall back to loom directory"
+        );
+        assert_eq!(
+            loom.tie_off_dir,
+            loom_dir.join(".knot-output"),
+            "tie_off_dir should fall back to <loom>/.knot-output"
+        );
+    }
+
+    #[test]
+    fn read_loom_config_missing_file_returns_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = read_loom_config(dir.path());
+
+        assert!(config.source_dir.is_none());
+        assert!(config.tie_off_dir.is_none());
+    }
+
+    #[test]
+    fn read_loom_config_parses_valid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(".loom-config.yaml"),
+            "source_dir: ../app\ntie_off_dir: ../output",
+        )
+        .unwrap();
+
+        let config = read_loom_config(dir.path());
+
+        assert_eq!(
+            config.source_dir,
+            Some("../app".to_string()),
+            "source_dir should be parsed"
+        );
+        assert_eq!(
+            config.tie_off_dir,
+            Some("../output".to_string()),
+            "tie_off_dir should be parsed"
+        );
+    }
+
+    #[test]
+    fn resolve_config_path_relative_joins_to_loom_dir() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loom_dir = workspace.path().join("my-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let external = workspace.path().join("external");
+        fs::create_dir(&external).unwrap();
+
+        let default_dir = loom_dir.clone();
+        let resolved = resolve_config_path(
+            &loom_dir,
+            Some(&"../external".to_string()),
+            &default_dir,
+        );
+
+        assert_eq!(
+            resolved, external,
+            "relative path should resolve against loom dir"
+        );
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn resolve_config_path_none_returns_default() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loom_dir = workspace.path().join("my-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let default_dir = fs::canonicalize(&loom_dir).unwrap();
+        let resolved = resolve_config_path(&loom_dir, None, &default_dir);
+
+        assert_eq!(
+            resolved, default_dir,
+            "None value should return default_dir"
+        );
+    }
+
+    #[test]
+    fn resolve_config_path_absolute_uses_as_is() {
+        let workspace = tempfile::tempdir().unwrap();
+        let target = workspace.path().join("target");
+        fs::create_dir(&target).unwrap();
+
+        let loom_dir = workspace.path().join("loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let default_dir = fs::canonicalize(&loom_dir).unwrap();
+        let resolved = resolve_config_path(
+            &loom_dir,
+            Some(&target.to_string_lossy().to_string()),
+            &default_dir,
+        );
+
+        assert_eq!(
+            resolved, target,
+            "absolute path should resolve to the target"
         );
     }
 }
