@@ -14,7 +14,7 @@ Two simplifications are needed to reduce indirection and file sprawl:
 
 2. **Knot-state events append to loom-log.** Knot lifecycle events (created, processing, completed, failed) are appended to `.loom-log` as `LoomEvent` entries instead of writing separate `.state` files. The `KnotStatePort` is removed. The HTTP endpoint `GET /looms/:id/knots/:knot_name` derives status from the loom-log.
 
-## Implementation Status: 🔄 Active (2026-06-04)
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Existing Tests
 
@@ -98,14 +98,14 @@ This plan touches all hexagonal layers:
 - [x] Update `NotifyEventSource` wiring — watch per-knot source directories
 - [x] **TDD**: Integration test verifies server starts with per-knot source dirs
 
-### Phase 6: Integration Tests and Verification
+### Phase 6: Integration Tests and Verification ✅
 
-- [ ] Update `tests/integration.rs` tests to reflect new behaviour
-- [ ] Update `tests/http_interface.rs` tests
-- [ ] Update `tests/filesystem_interface.rs` tests
-- [ ] Verify full compile: `cargo build`
-- [ ] Verify full test suite: `cargo test`
-- [ ] Verify no regressions in existing endpoint behaviour
+- [x] Update `tests/integration.rs` tests to reflect new behaviour
+- [x] Update `tests/http_interface.rs` tests
+- [x] Update `tests/filesystem_interface.rs` tests
+- [x] Verify full compile: `cargo build`
+- [x] Verify full test suite: `cargo test`
+- [x] Verify no regressions in existing endpoint behaviour
 
 ## Notes
 
