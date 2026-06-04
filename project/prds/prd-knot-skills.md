@@ -70,4 +70,4 @@ As a user or developer, I want to browse Knot's API in a web UI so I can inspect
 - Constraint: Skills interact with Knot only via its HTTP interface — no direct file system access by the skills (Knot manages its own files)
 - Constraint: Knot is local-first — skills assume `localhost` and no authentication
 
-## Implementation Status: 🔵 Open
+## Implementation Status: 🟡 In Progress

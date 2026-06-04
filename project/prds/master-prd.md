@@ -19,7 +19,7 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
-| [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | 🔵 Open | 2026-06-04 |
+| [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | 🟡 In Progress | 2026-06-04 |
 | [AI-Driven File Generation from Rig Events](prd-ai-driven-file-generation.md) | 🔵 Open | 2026-06-03 |
 
 ---
@@ -28,7 +28,7 @@ To add it to this index:
 
 ### Knot Skills — AI-Driven Configuration via Skills
 
-**Status:** 🔵 Open
+**Status:** 🟡 In Progress
 **Created:** 2026-06-04
 **Summary:** AI skills (knot-init, knots-and-looms, knot-inspect) that configure Knot through natural language via its HTTP API, backed by an auto-generated Swagger UI.
 

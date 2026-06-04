@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 9 | [Knot Skills and Swagger UI](knot-skills-and-swagger.md) | ⬜ Planned | 2026-06-04 |
 | 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ✅ Complete | 2026-06-04 |
 | 7 | [pi Agent Integration](pi-agent-integration.md) | ✅ Complete | 2026-06-04 |
 | 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
@@ -60,6 +61,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 9. Knot Skills and Swagger UI
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-04
+**Goal:** Add utoipa-generated Swagger UI to Knot, create three AI skills (knot-init, knots-and-looms, knot-inspect) and verify them with integration tests.
+
+**PRD:** [Knot Skills — AI-Driven Configuration via Skills](../prds/prd-knot-skills.md)
 
 ### 1. Knot Domain Models
 
