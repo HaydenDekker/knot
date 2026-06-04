@@ -14,7 +14,7 @@ Two simplifications are needed to reduce indirection and file sprawl:
 
 2. **Knot-state events append to loom-log.** Knot lifecycle events (created, processing, completed, failed) are appended to `.loom-log` as `LoomEvent` entries instead of writing separate `.state` files. The `KnotStatePort` is removed. The HTTP endpoint `GET /looms/:id/knots/:knot_name` derives status from the loom-log.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: 🔄 Active (2026-06-04)
 
 ## Existing Tests
 
