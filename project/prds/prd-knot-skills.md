@@ -40,7 +40,7 @@ As a user, I want to describe what I want to achieve (e.g. "review my PRDs", "su
 
 ### Story 3: Inspect Rig Status
 
-As a user, I want to see the current state of my Knot rig — which looms exist, what knots are configured, and their processing status — so I can understand what is set up and whether it is working correctly.
+As a user, I want to see the current state of my rig — which looms exist, what knots are configured, and their processing status — so I can understand what is set up and whether it is working correctly.
 
 **Scenarios:**
 1. Given a configured rig, when I ask to inspect my rig, then a skill calls Knot's HTTP API and presents a summary of looms, knots, and their state

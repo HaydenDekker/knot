@@ -18,7 +18,7 @@ This affects:
 
 All occurrences of "workspace" as a domain concept are replaced with "rig". The codebase compiles, all tests pass, and documentation is consistent. The rope/textile theme is now fully coherent: **rig → loom → knot → strand → tie-off**.
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-04)
 
 ## Existing Tests
 

@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-04 (plan 8 phase 3 in progress)
+> **Last Updated:** 2026-06-04
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ⬜ Planned | 2026-06-04 |
+| 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ✅ Complete | 2026-06-04 |
 | 7 | [pi Agent Integration](pi-agent-integration.md) | ✅ Complete | 2026-06-04 |
 | 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
 | 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
