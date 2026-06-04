@@ -41,12 +41,12 @@ When this plan is done:
 
 Add `utoipa` and `utoipa-swagger-ui` to Knot so the API is self-documenting.
 
-- [ ] Add `utoipa` and `utoipa-swagger-ui` dependencies to `Cargo.toml`
-- [ ] Annotate all existing request/response types with `#[derive(utoipa::ToSchema)]` (e.g. `RigAgentConfig`, `Loom`, `KnotId`, `KnotState`, loom list DTOs)
-- [ ] Annotate all handler functions with `#[utoipa::path]` covering the 12 existing routes (`/health`, `/agents/{dir}`, `/config/rig`, `/looms`, `/looms/discover`, `/looms/{id}`, `/looms/{id}/activity`, `/looms/{id}/knots`, `/looms/{id}/knots/{knot_name}`)
-- [ ] Wire `utoipa-swagger-ui` into the router to serve Swagger UI at `/swagger-ui`
-- [ ] Add a test that `GET /swagger-ui` returns 200 and `GET /swagger-ui/openapi.json` returns valid OpenAPI JSON
-- [ ] Compile and run full test suite — all existing tests still pass
+- [x] Add `utoipa` and `utoipa-swagger-ui` dependencies to `Cargo.toml`
+- [x] Annotate all existing request/response types with `#[derive(utoipa::ToSchema)]` (e.g. `RigAgentConfig`, `Loom`, `KnotId`, `KnotState`, loom list DTOs)
+- [x] Annotate all handler functions with `#[utoipa::path]` covering the 12 existing routes (`/health`, `/agents/{dir}`, `/config/rig`, `/looms`, `/looms/discover`, `/looms/{id}`, `/looms/{id}/activity`, `/looms/{id}/knots`, `/looms/{id}/knots/{knot_name}`)
+- [x] Wire `utoipa-swagger-ui` into the router to serve Swagger UI at `/swagger-ui`
+- [x] Add a test that `GET /swagger-ui` returns 200 and `GET /swagger-ui/openapi.json` returns valid OpenAPI JSON
+- [x] Compile and run full test suite — all existing tests still pass
 
 ### Phase 2: Skills and Integration Tests
 
