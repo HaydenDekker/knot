@@ -58,11 +58,11 @@ This plan touches all hexagonal layers:
 - [x] Update `KnotFile` parse tests in `knot_file.rs`
 - [x] **TDD**: Write a failing test that parses a knot file with `source-dir`/`tie-off-dir` fields → implement parsing
 
-### Phase 1: Domain — New LoomEvent variants for knot lifecycle
+### Phase 1: Domain — New LoomEvent variants for knot lifecycle ✅
 
-- [ ] Add new `LoomEvent` variants: `KnotProcessing`, `KnotCompleted`, `KnotFailed` — each carrying `knot_id`, `strand_path`, `tie_off_path`, and optional error
-- [ ] These replace the information currently tracked in `KnotState`
-- [ ] **TDD**: Write tests for the new event variants (construction, serialization round-trip)
+- [x] Add new `LoomEvent` variants: `KnotProcessing`, `KnotCompleted`, `KnotFailed` — each carrying `knot_id`, `strand_path`, `tie_off_path`, and optional error
+- [x] These replace the information currently tracked in `KnotState`
+- [x] **TDD**: Write tests for the new event variants (construction, serialization round-trip)
 
 ### Phase 2: Application — Remove KnotStatePort, derive status from loom-log
 
