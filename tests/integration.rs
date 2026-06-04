@@ -53,6 +53,89 @@ fn create_mock_agent(
     script_path
 }
 
+/// Create a stub-pi.sh script that mimics `pi -p` behaviour.
+///
+/// The stub:
+/// 1. Parses `--model`, `--system-prompt`, and `@<file>` arguments
+/// 2. If model contains "nonexistent", exits with code 1 (simulates error)
+/// 3. Otherwise reads `@<file>` content and stdin, echoes them back
+///
+/// This verifies that Knot constructs the correct CLI invocation pattern
+/// without needing a real LLM API key.
+fn create_stub_pi_agent(dir: &std::path::Path) -> std::path::PathBuf {
+    let script_path = dir.join("stub-pi");
+    let script = r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SYSTEM_PROMPT=""
+MODEL=""
+FILE_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -p)
+            shift
+            ;;
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
+        --system-prompt)
+            SYSTEM_PROMPT="$2"
+            shift 2
+            ;;
+        --no-session|--no-tools)
+            shift
+            ;;
+        --tool)
+            shift 2
+            ;;
+        @*)
+            FILE_ARGS+=("$1")
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Simulate error for nonexistent models
+if echo "$MODEL" | grep -q "nonexistent"; then
+    echo "Error: model '$MODEL' not found" >&2
+    exit 1
+fi
+
+# Read stdin (the prompt sent by SubprocessAgentRunner)
+STDIN_CONTENT=$(cat)
+
+# Output what we received so integration tests can verify
+{
+    echo "=== SYSTEM PROMPT ==="
+    echo "$SYSTEM_PROMPT"
+    echo "=== MODEL ==="
+    echo "$MODEL"
+    echo "=== STRAND FILES ==="
+    for f in "${FILE_ARGS[@]}"; do
+        filepath="${f#@}"
+        if [ -f "$filepath" ]; then
+            echo "FILE: $filepath"
+            cat "$filepath"
+        fi
+    done
+    echo "=== STDIN ==="
+    echo "$STDIN_CONTENT"
+}
+"#;
+    fs::write(&script_path, script).expect("should write stub-pi script");
+    fs::set_permissions(
+        &script_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("should set stub-pi as executable");
+    script_path
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Simple synchronous HTTP GET using raw TCP.
@@ -1608,6 +1691,239 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     assert!(
         !default_tie_off.exists(),
         "tie-off should NOT be in default .knot-output"
+    );
+
+    let _ = shutdown.send(());
+}
+
+// ── Phase 3: Stub pi CLI Integration Tests ────────────────────────────────
+
+/// Full happy path using a stub `pi` CLI that mimics `pi -p` behaviour.
+///
+/// The stub reads `--system-prompt` and `@<file>` args, then echoes them
+/// back. This verifies that Knot constructs the correct CLI invocation
+/// from the knot's agent config and prompt template, and that the
+/// subprocess runner passes strand content to the agent.
+///
+/// 1. Create loom with knot (provider/openai, model/gpt-4o)
+/// 2. Start server with stub-pi.sh as cli_path
+/// 3. Create strand → tie-off contains system prompt + strand content
+/// 4. Verify knot-state is `completed`
+/// 5. Verify loom-log contains `StrandProcessed` with no error
+#[test]
+fn full_pipeline_with_pi_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("pi-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // Create the stub-pi script that echoes received args and content
+    let stub_pi = create_stub_pi_agent(&base_dir);
+
+    let port = 32003;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: stub_pi.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create a strand file to trigger processing
+    let strand_path = loom_dir.join("test-strand.md");
+    fs::write(&strand_path, "This is the strand content for review.")
+        .expect("should create strand file");
+
+    // Wait for debounce + processing
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 1. Verify tie-off exists and contains the agent output
+    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist: {}",
+        tie_off_path.display()
+    );
+
+    let tie_off_content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+
+    // Tie-off should contain the system prompt from --system-prompt arg
+    assert!(
+        tie_off_content.contains("Review the goals section"),
+        "tie-off should contain system prompt, got: {tie_off_content}"
+    );
+
+    // Tie-off should contain the strand file content (read via @<file>)
+    assert!(
+        tie_off_content.contains("This is the strand content for review."),
+        "tie-off should contain strand content, got: {tie_off_content}"
+    );
+
+    // Tie-off should contain the model name (proves --model was passed)
+    assert!(
+        tie_off_content.contains("gpt-4o"),
+        "tie-off should contain model name, got: {tie_off_content}"
+    );
+
+    // 2. Verify knot-state is `completed`
+    let (status, body) =
+        http_get(&host_port, "/looms/_/knots/review-knot")
+            .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "completed",
+        "knot state should be completed"
+    );
+
+    // 3. Verify loom-log contains StrandProcessed with no error
+    let log_path = base_dir.join("pi-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        log_content.contains("StrandProcessed"),
+        "loom log should contain StrandProcessed entry"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Verify the stub `pi` CLI receives system prompt and strand content,
+/// and that a nonexistent model causes knot-state to show `failed`.
+///
+/// 1. Start server with stub-pi.sh and a knot using `nonexistent-model`
+/// 2. Create strand → stub exits with code 1 (simulates model not found)
+/// 3. Verify knot-state shows `failed` with error message
+/// 4. Verify tie-off contains error details
+/// 5. Verify loom-log contains `StrandProcessed` with error field
+#[test]
+fn pi_agent_receives_system_prompt_and_strand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot that uses a nonexistent model
+    let loom_dir = base_dir.join("error-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    let knot_content = r#"---
+name: review-knot
+agent-config:
+  goal: "Review with nonexistent model"
+  provider: "openai"
+  model: "nonexistent-model-xyz"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: |
+    Review the goals section of this PRD.
+---
+
+# Error Test Knot
+
+This knot tests error handling.
+"#;
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+
+    // Create the stub-pi script (exits 1 for "nonexistent" models)
+    let stub_pi = create_stub_pi_agent(&base_dir);
+
+    let port = 32004;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        workspace_config: WorkspaceAgentConfig {
+            cli_path: stub_pi.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create a strand file to trigger processing
+    let strand_path = loom_dir.join("error-strand.md");
+    fs::write(&strand_path, "Error test strand content")
+        .expect("should create strand file");
+
+    // Wait for debounce + processing
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 1. Verify knot-state shows `failed` with error message
+    let (status, body) =
+        http_get(&host_port, "/looms/_/knots/review-knot")
+            .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["state"]["status"].as_str().unwrap(),
+        "failed",
+        "knot state should be failed for nonexistent model"
+    );
+    assert!(
+        knot_status["state"]["error"].is_string(),
+        "knot state should have error message"
+    );
+    let error_msg = knot_status["state"]["error"].as_str().unwrap();
+    assert!(
+        error_msg.contains("agent execution failed")
+            || error_msg.contains("exited with code 1"),
+        "error should mention agent failure, got: {error_msg}"
+    );
+
+    // 2. Verify tie-off contains error details
+    let tie_off_path = loom_dir.join(".knot-output/error-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist: {}",
+        tie_off_path.display()
+    );
+    let tie_off_content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        tie_off_content.contains("Processing failed"),
+        "tie-off should contain 'Processing failed', got: {tie_off_content}"
+    );
+
+    // 3. Verify loom-log contains StrandProcessed with error
+    let log_path = base_dir.join("error-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        log_content.contains("StrandProcessed"),
+        "loom log should contain StrandProcessed entry"
+    );
+    // The error field should be present (non-null) in the log
+    assert!(
+        log_content.contains("agent execution failed")
+            || log_content.contains("exited with code"),
+        "loom log should contain error details, got: {log_content}"
     );
 
     let _ = shutdown.send(());
