@@ -599,7 +599,6 @@ impl ProcessStrand {
     /// KnotCompleted or KnotFailed, then StrandProcessed.
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
         let (loom_id, knot_id, strand_path) = Self::extract_event_fields(&event);
-        let is_deleted = matches!(event, StrandEvent::Deleted { .. });
 
         // Look up the loom and knot
         let loom = self
@@ -635,40 +634,6 @@ impl ProcessStrand {
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
         })?;
-
-        if is_deleted {
-            // For deleted events, write a report tie-off without running agent
-            let tie_off = TieOff {
-                content: format!(
-                    "Strand deleted: {}\nPrevious output at: {}",
-                    strand_path.0.display(),
-                    tie_off_path.0.display()
-                ),
-                path: tie_off_path.clone(),
-                status: crate::domain::entities::TieOffStatus::Produced,
-                event_type: Some(event_label.clone()),
-                strand_path: Some(strand_path.0.display().to_string()),
-                timestamp: None,
-            };
-            self.tie_off_sink.append(tie_off)?;
-
-            // Append KnotCompleted to loom-log
-            self.log_port.append(LoomEvent::KnotCompleted {
-                loom_id: loom_id.clone(),
-                knot_id: knot_id.clone(),
-                strand_path: strand_path.clone(),
-                tie_off_path: tie_off_path.clone(),
-            })?;
-
-            // Append StrandProcessed
-            self.log_port.append(LoomEvent::StrandProcessed {
-                loom_id,
-                strand_path,
-                error: None,
-            })?;
-
-            return Ok(());
-        }
 
         // 2. Build CLI args from knot's agent config + prompt template
         let mut cli_args =
