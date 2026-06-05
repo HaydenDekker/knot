@@ -19,6 +19,7 @@ use utoipa::OpenApi;
 
 use std::path::PathBuf;
 
+use crate::adapters::outbound::FileSystemLoomRepository;
 use crate::application::ports::{
     AgentRunner, EventSource, LoomLogPort, LoomRepository, TieOffSink,
 };
@@ -290,13 +291,63 @@ pub async fn register_loom(
         }
     };
 
-    let tie_off_dir = body.tie_off_dir.unwrap_or_else(|| "output".to_string());
+    // Resolve source_dir to an absolute path relative to base_dir.
+    let source_dir_path = if source_dir.starts_with('/') {
+        std::path::PathBuf::from(source_dir)
+    } else {
+        ctx.base_dir.join(source_dir)
+    };
+    let source_dir_path =
+        std::fs::canonicalize(&source_dir_path).unwrap_or(source_dir_path);
+
+    // Default tie_off_dir to <source_dir>/.knot-output (matches startup
+    // discovery), or resolve the provided path relative to base_dir.
+    let tie_off_dir_path = if let Some(ref dir) = body.tie_off_dir {
+        let path = if dir.starts_with('/') {
+            std::path::PathBuf::from(dir)
+        } else {
+            ctx.base_dir.join(dir)
+        };
+        std::fs::canonicalize(&path).unwrap_or(path)
+    } else {
+        source_dir_path.join(".knot-output")
+    };
+
+    // Scan source directory for .md knot definition files
+    let mut knots =
+        FileSystemLoomRepository::scan_knot_files(&source_dir_path)
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "WARNING: failed to scan knots for '{}': {}",
+                    source_dir_path.display(),
+                    e
+                );
+                Vec::new()
+            });
+
+    // Resolve per-knot paths relative to the source directory
+    for knot in &mut knots {
+        if let Some(ref raw_path) = knot.source_dir {
+            knot.source_dir =
+                Some(FileSystemLoomRepository::resolve_path(
+                    &source_dir_path,
+                    raw_path,
+                ));
+        }
+        if let Some(ref raw_path) = knot.tie_off_dir {
+            knot.tie_off_dir =
+                Some(FileSystemLoomRepository::resolve_path(
+                    &source_dir_path,
+                    raw_path,
+                ));
+        }
+    }
 
     let loom = Loom {
         id: LoomId(body.id),
-        source_dir: std::path::PathBuf::from(source_dir),
-        tie_off_dir: std::path::PathBuf::from(&tie_off_dir),
-        knots: vec![],
+        source_dir: source_dir_path,
+        tie_off_dir: tie_off_dir_path,
+        knots,
     };
 
     let use_case = RegisterLoom::new(
@@ -1175,10 +1226,11 @@ mod tests {
 
         assert_eq!(resp.status(), 201);
 
-        // Verify watch() was called for the source directory
+        // Verify watch() was called for the resolved source directory.
+        // Handler resolves source_dir relative to base_dir (./rig).
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], PathBuf::from("src/docs"));
+        assert_eq!(watches[0], PathBuf::from("./rig/src/docs"));
     }
 
     /// `DELETE /looms/:id` returns 204, loom no longer in `GET /looms`.

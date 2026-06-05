@@ -2366,4 +2366,396 @@ prompt-template:
     let _ = shutdown.send(());
 }
 
+// ── Phase 5: Integration Test — Full Lifecycle ─────────────────────────────
+
+/// `POST /looms` registers a loom with knots → create strand file in source
+/// dir → tie-off produced → verify via `GET /looms/:id/knots/:knot_name`.
+///
+/// Verifies end-to-end: HTTP → RegisterLoom → EventSource::watch() → file
+/// creation → debounce → agent → tie-off.
+#[test]
+fn http_register_then_process_strand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Mock agent script — ignores all CLI args built by ProcessStrand.
+    let mock_agent = create_mock_agent(&base_dir, "http-processed");
+
+    let port = 32020;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // Create source directory AFTER server start so startup discovery
+    // doesn't find it — we test POST /looms registration path.
+    let source_dir = base_dir.join("http-reg-loom");
+    fs::create_dir(&source_dir).unwrap();
+    fs::write(source_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // 1. POST /looms to register the loom (scans for knots in source dir).
+    let body = serde_json::json!({
+        "id": "http-reg-loom",
+        "source_dir": "http-reg-loom"
+    });
+    let (status, _resp) =
+        http_post_json(&host_port, "/looms", &body)
+            .expect("register loom should respond");
+    assert!(
+        status.contains("201"),
+        "register loom should return 201, got: {status}"
+    );
+
+    // 2. Verify loom is registered and has knots.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/http-reg-loom", 30, 100)
+            .expect("get loom should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().expect("knots should be array");
+    assert_eq!(knots.len(), 1, "loom should have 1 knot");
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "review-knot",
+        "knot id should match"
+    );
+
+    // 3. Create a strand file in the source directory.
+    let strand_path = source_dir.join("new-strand.md");
+    fs::write(&strand_path, "strand content via http").unwrap();
+
+    // Wait for debounce + processing.
+    std::thread::sleep(Duration::from_millis(800));
+
+    // 4. Verify tie-off was produced.
+    let tie_off_path =
+        source_dir.join(".knot-output/new-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist: {}",
+        tie_off_path.display()
+    );
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("http-processed"),
+        "tie-off should contain agent output, got: {content}"
+    );
+
+    // 5. Verify via GET /looms/:id/knots/:knot_name.
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/http-reg-loom/knots/review-knot",
+            30,
+            100,
+        )
+        .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["status"].as_str().unwrap(),
+        "completed",
+        "knot status should be completed"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Create loom directory on disk → `POST /looms/discover` → create strand
+/// file → tie-off produced.
+///
+/// Verifies the discover path: filesystem directory → HTTP discover →
+/// registration with watchers → processing.
+#[test]
+fn discover_then_process_strand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory on disk with a knot definition.
+    let loom_dir = base_dir.join("discover-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // Mock agent script.
+    let mock_agent = create_mock_agent(&base_dir, "discovered-processed");
+
+    let port = 32021;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // 1. Loom was discovered at startup.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have 1 loom at startup");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "discover-loom",
+        "loom id should match"
+    );
+
+    // 2. POST /looms/discover should return empty (loom already registered).
+    let (status, body) =
+        http_post_json(&host_port, "/looms/discover", &serde_json::json!({}))
+            .expect("discover endpoint should respond");
+    assert!(
+        status.contains("200"),
+        "discover should return 200, got: {status}"
+    );
+    let discovered: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert!(
+        discovered.is_empty(),
+        "discover should return empty (loom already registered), \
+         got {discovered:?}"
+    );
+
+    // 3. Create a strand file in the source directory.
+    let strand_path = loom_dir.join("discover-strand.md");
+    fs::write(&strand_path, "discovered strand content").unwrap();
+
+    // Wait for debounce + processing.
+    std::thread::sleep(Duration::from_millis(800));
+
+    // 4. Verify tie-off was produced.
+    let tie_off_path =
+        loom_dir.join(".knot-output/discover-strand.md.output");
+    assert!(
+        tie_off_path.exists(),
+        "tie-off should exist: {}",
+        tie_off_path.display()
+    );
+    let content =
+        fs::read_to_string(&tie_off_path).expect("should read tie-off");
+    assert!(
+        content.contains("discovered-processed"),
+        "tie-off should contain agent output, got: {content}"
+    );
+
+    // 5. Verify via GET /looms/:id/knots/:knot_name.
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/discover-loom/knots/review-knot",
+            30,
+            100,
+        )
+        .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["status"].as_str().unwrap(),
+        "completed",
+        "knot status should be completed"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// `DELETE /looms/:id` stops processing — new strand files are NOT
+/// processed after unregistration (watcher removed).
+///
+/// Verifies: Register → Unregister → create strand → no tie-off produced.
+#[test]
+fn unregister_stops_processing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create source directory with knot definition file.
+    let source_dir = base_dir.join("unreg-loom");
+    fs::create_dir(&source_dir).unwrap();
+    fs::write(source_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+
+    // Mock agent script.
+    let mock_agent = create_mock_agent(&base_dir, "should-not-run");
+
+    let port = 32022;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // 1. Verify loom was discovered at startup.
+    let (status, _body) =
+        http_get_retry(&host_port, "/looms/unreg-loom", 30, 100)
+            .expect("get loom should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    // 2. DELETE /looms/:id to unregister the loom (stops watcher).
+    let (status, _body) =
+        http_delete(&host_port, "/looms/unreg-loom")
+            .expect("unregister should respond");
+    assert!(
+        status.contains("204"),
+        "unregister should return 204, got: {status}"
+    );
+
+    // Give a brief moment for the watcher to be removed.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // 3. Create a strand file AFTER unregistration.
+    let strand_path = source_dir.join("post-unreg-strand.md");
+    fs::write(&strand_path, "this should not be processed").unwrap();
+
+    // Wait to confirm no processing happens.
+    std::thread::sleep(Duration::from_millis(800));
+
+    // 4. Verify NO tie-off was produced.
+    let tie_off_path =
+        source_dir.join(".knot-output/post-unreg-strand.md.output");
+    assert!(
+        !tie_off_path.exists(),
+        "tie-off should NOT exist after unregister: {}",
+        tie_off_path.display()
+    );
+
+    // 5. Verify loom is no longer in the list.
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    let ids: Vec<_> =
+        summaries.iter().map(|s| s["id"].as_str().unwrap_or(""))
+            .collect();
+    assert!(
+        !ids.contains(&"unreg-loom"),
+        "unregistered loom should not appear in list"
+    );
+
+    let _ = shutdown.send(());
+}
+
+// ── HTTP Helper Functions for Phase 5 Tests ────────────────────────────────
+
+/// Simple synchronous HTTP POST with JSON body using raw TCP.
+fn http_post_json(
+    host_port: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<(String, String), String> {
+    let body_str = body.to_string();
+    let mut stream = TcpStream::connect(host_port)
+        .map_err(|e| format!("connect failed: {e}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: \
+         application/json\r\nContent-Length: {}\r\nConnection: \
+         close\r\n\r\n{body_str}",
+        body_str.len()
+    );
+
+    stream.write_all(request.as_bytes())
+        .map_err(|e| format!("write failed: {e}"))?;
+    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
+
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
+
+    let status_line = lines
+        .next()
+        .ok_or("no status line")?
+        .map_err(|e| format!("read failed: {e}"))?;
+
+    let mut remaining = Vec::new();
+    for line_result in lines {
+        let line = line_result.map_err(|e| format!("read failed: {e}"))?;
+        remaining.push(line);
+    }
+
+    let body_start = remaining
+        .iter()
+        .position(|l| l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    let body = remaining[body_start..].join("\n");
+    Ok((status_line, body.trim().to_string()))
+}
+
+/// Simple synchronous HTTP DELETE using raw TCP.
+fn http_delete(host_port: &str, path: &str) -> Result<(String, String), String> {
+    let mut stream = TcpStream::connect(host_port)
+        .map_err(|e| format!("connect failed: {e}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+
+    let request = format!(
+        "DELETE {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: \
+         close\r\n\r\n"
+    );
+
+    stream.write_all(request.as_bytes())
+        .map_err(|e| format!("write failed: {e}"))?;
+    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
+
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
+
+    let status_line = lines
+        .next()
+        .ok_or("no status line")?
+        .map_err(|e| format!("read failed: {e}"))?;
+
+    let mut remaining = Vec::new();
+    for line_result in lines {
+        let line = line_result.map_err(|e| format!("read failed: {e}"))?;
+        remaining.push(line);
+    }
+
+    let body_start = remaining
+        .iter()
+        .position(|l| l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    let body = remaining[body_start..].join("\n");
+    Ok((status_line, body.trim().to_string()))
+}
+
 

@@ -140,13 +140,22 @@ impl LoomRepository for FileSystemLoomRepository {
 }
 
 impl FileSystemLoomRepository {
-    /// Scan a loom directory for `.md` knot definition files and parse them.
+    /// Scan a directory for `.md` knot definition files and parse them.
     ///
     /// Files that fail to parse are skipped with a warning log.
-    fn scan_knot_files(
-        loom_dir: &Path,
+    ///
+    /// # Arguments
+    ///
+    /// * `knot_dir` - Directory to scan for `.md` knot files.
+    ///
+    /// # Returns
+    ///
+    /// Parsed `Knot` instances with unresolved paths (caller must resolve
+    /// `source_dir` and `tie_off_dir` relative to the loom directory).
+    pub fn scan_knot_files(
+        knot_dir: &Path,
     ) -> Result<Vec<Knot>, PortError> {
-        let entries = fs::read_dir(loom_dir)
+        let entries = fs::read_dir(knot_dir)
             .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
         let mut knots = Vec::new();
@@ -217,7 +226,7 @@ impl FileSystemLoomRepository {
     ///
     /// On canonicalisation failure (e.g. directory does not exist yet),
     /// returns the path normalised by resolving `.` and `..` components.
-    fn resolve_path(loom_dir: &Path, value: &PathBuf) -> PathBuf {
+    pub fn resolve_path(loom_dir: &Path, value: &PathBuf) -> PathBuf {
         let path = if value.is_absolute() {
             value.clone()
         } else {

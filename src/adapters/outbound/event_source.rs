@@ -28,6 +28,7 @@ impl InnerState {
     ///
     /// Returns None for events that should be dropped:
     /// - Directory events (only files are watched)
+    /// - Non-`.md` files (only strand files are processed)
     /// - Events outside watched directories
     /// - Non-create/modify/remove event kinds
     fn map_event(&self, event: &Event) -> Option<StrandEvent> {
@@ -35,6 +36,11 @@ impl InnerState {
 
         // Only process file events (skip directories)
         if path.is_dir() {
+            return None;
+        }
+
+        // Only process `.md` files (skip internal files like .loom-log)
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
             return None;
         }
 

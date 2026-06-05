@@ -393,8 +393,9 @@ async fn knots_and_looms_register_and_list() {
     assert_eq!(summaries.len(), 2); // test-loom + new-loom
 
     let new = summaries.iter().find(|s| s.id.0 == "new-loom").unwrap();
-    assert_eq!(new.source_dir, PathBuf::from("src/new"));
-    assert_eq!(new.tie_off_dir, PathBuf::from("output/new"));
+    // Handler resolves paths relative to base_dir (./rig).
+    assert_eq!(new.source_dir, PathBuf::from("./rig/src/new"));
+    assert_eq!(new.tie_off_dir, PathBuf::from("./rig/output/new"));
 }
 
 /// `GET /looms/{id}` returns loom details with knots — the knots-and-looms
