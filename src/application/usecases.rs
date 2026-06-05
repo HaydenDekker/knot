@@ -13,7 +13,7 @@ use crate::application::ports::{
     TieOffSink,
 };
 use crate::application::store::LoomStore;
-use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
+use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
 use crate::domain::events::{LoomEvent, StrandEvent};
 use crate::domain::value_objects::RigAgentConfig;
 use std::path::PathBuf;
@@ -621,8 +621,8 @@ impl ProcessStrand {
             StrandEvent::Deleted { .. } => KnotEventType::Deleted,
         };
 
-        // Determine tie-off path
-        let tie_off_path = Self::compute_tie_off_path(&loom, &strand_path);
+        // Determine tie-off path (knot-level tie_off_dir if set, else loom-level)
+        let tie_off_path = Self::compute_tie_off_path(&loom, knot, &strand_path);
 
         // 1. Append KnotProcessing to loom-log
         self.log_port.append(LoomEvent::KnotProcessing {
@@ -762,14 +762,23 @@ impl ProcessStrand {
         }
     }
 
-    /// Compute the tie-off output path from loom + strand path.
-    fn compute_tie_off_path(loom: &Loom, strand_path: &StrandPath) -> TieOffPath {
+    /// Compute the tie-off output path from knot/loom + strand path.
+    /// Uses knot-level `tie_off_dir` if set, otherwise falls back to loom-level.
+    fn compute_tie_off_path(
+        loom: &Loom,
+        knot: &Knot,
+        strand_path: &StrandPath,
+    ) -> TieOffPath {
         let filename = strand_path
             .0
             .file_name()
             .map(|f| format!("{}.output", f.to_string_lossy()))
             .unwrap_or_else(|| "output".to_string());
-        TieOffPath(loom.tie_off_dir.join(filename))
+        let output_dir = knot
+            .tie_off_dir
+            .as_ref()
+            .unwrap_or(&loom.tie_off_dir);
+        TieOffPath(output_dir.join(filename))
     }
 
 }
