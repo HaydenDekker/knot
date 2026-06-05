@@ -26,7 +26,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - Startup wiring updated: discovered looms go through `RegisterLoom` (or an equivalent path) so watchers are always started consistently.
 - HTTP handler tests verify watchers are started (mock `EventSource` tracks `watch()` calls).
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-05)
 
 ## Hex Layer: Application → Inbound Adapter → Composition Root
 
