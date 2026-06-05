@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ⬜ Draft | 2026-06-05 |
 | 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ⬜ Planned | 2026-06-05 |
 | 10 | [Knot-Per-Strand Config and Loom-Log State](knot-per-strand-and-loom-log-state.md) | ✅ Complete | 2026-06-04 |
 | 9 | [Knot Skills and Swagger UI](knot-skills-and-swagger.md) | ✅ Complete | 2026-06-04 |
@@ -63,6 +64,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 12. Tie-Off Append and Event Context
+
+**Status:** ⬜ Draft
+**Created:** 2026-06-05
+**Goal:** Tie-off files append new agent responses as `---`-separated sections with event metadata headers. Delete events trigger the agent with context about the deletion. The agent receives event type and previous tie-off content.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
 ### 11. Loom Lifecycle Watching
 

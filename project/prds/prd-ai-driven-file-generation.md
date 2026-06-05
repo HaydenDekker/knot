@@ -30,6 +30,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - [x] Users can configure one or more **looms**, each being a directory containing one or more knot definition files. (*Plans 1–5*)
 - [x] When a file is **created, modified, or deleted** in a watched source directory, Knot triggers the relevant loom knot(s) with the file content — no manual user invocation required. (*Plans 2, 3, 5*)
 - [x] The agent works in any directories it is configured to utilise, and at the end of its session produces a **tie-off** (final response or error) that is written to the configured target directory with the target name. (*Plans 3, 5, 6, 7*)
+- [ ] When a strand is processed (create/modify/delete), the tie-off file records the full event history — each agent response is appended as a new section with metadata (event type, strand path, timestamp) separated by `---` delimiters, so the output document tells the complete story of what has happened. (*Plan 12*)
 - [x] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. (*Plans 2, 4*)
 - [x] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors. (*Plans 2, 4*)
 
@@ -59,7 +60,7 @@ As a developer, I want a loom to watch a source directory for strands, so that w
 
 1. Given I have a loom `./docs-drafts` with a knot "convert markdown drafts into published API documentation" and a tie-off point at `./docs-final`, when I take a strand from the monitored source directory, then a tie-off is produced in the tie-off point.
 2. Given I have configured a loom and tie-off point, when I modify a strand in the source directory, then the tie-off in the tie-off point is updated by the knot based on the changes.
-3. Given I have configured a loom and tie-off point, when I delete a strand from the source directory, then the knot is still triggered — it produces a tie-off reporting what it changed or undone. The previous tie-off is overwritten, never deleted.
+3. Given I have configured a loom and tie-off point, when I delete a strand from the source directory, then the knot is still triggered — the agent is invoked with the event context (event type, strand path, previous content if available) and its response is appended to the existing tie-off as a new section, separated by `---`. The tie-off file grows over time to tell the complete story of the strand's lifecycle.
 
 ### Story 3: Configure Multiple Looms
 
@@ -87,6 +88,16 @@ As a developer, I want to check the status of my loom and individual knots, so t
 2. Given a strand event has triggered a knot, when I check the knot via the HTTP interface, then I can see the knot's processing events — event type, strand path, tie-off path, and current status — sourced from the **knot-state** file on disk.
 3. Given a knot generation failed for a strand event, when I check the knot-state or query the HTTP interface, then I can see the error details so I can diagnose the issue.
 
+### Story 6: Understand Processing History from the Tie-off
+
+As a user, I want the tie-off document to tell the complete story of what has happened to a strand — what the agent has done, what changes were made, and when files were deleted — so that I can understand the full processing history by reading the output file.
+
+**Scenarios:**
+
+1. Given a strand has been processed multiple times (created, modified, deleted, etc.), when I open the tie-off document, then I see a chronological record of each event — each entry has a header with event type, strand path, and timestamp, followed by the agent's response for that event, separated by `---` delimiters.
+2. Given a strand was deleted, when I read the tie-off document, then I see the deletion event appended as a new section with the agent's assessment of what was removed and what remains.
+3. Given I am reviewing a tie-off document, when I see the `---` section separators, then I can quickly scan the history of what has happened to the strand without losing context from earlier events.
+
 ## Success Criteria
 
 - [x] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
@@ -96,6 +107,7 @@ As a developer, I want to check the status of my loom and individual knots, so t
 - [x] All HTTP-exposed state is sourced from the filesystem — the HTTP interface reflects loom-log and knot-state files.
 - [ ] Knot discovers the rig directory automatically: `./rig/` in the current working directory. If it doesn't exist, Knot creates it on first run.
 - [x] Multiple configured looms operate independently without cross-interference.
+- [ ] Tie-off files append new agent responses as `---`-separated sections with event metadata headers, preserving the full processing history (*Plan 12*).
 
 ## Dependencies & Constraints
 
