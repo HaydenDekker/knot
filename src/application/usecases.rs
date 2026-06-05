@@ -1898,7 +1898,7 @@ mod tests {
         assert_eq!(ctx.cli_path, "pi");
 
         // cli_args should be built from knot config, NOT workspace cli_args
-        // Expected: -p --model gpt-4o --system-prompt check it --no-session
+        // Expected: -p --model gpt-4o --system-prompt check it
         //           @src/file.md
         let args = &ctx.cli_args;
         assert!(
@@ -1920,10 +1920,6 @@ mod tests {
         assert!(
             args.contains(&"check it".to_string()),
             "args should contain instructions from prompt template"
-        );
-        assert!(
-            args.contains(&"--no-session".to_string()),
-            "args should contain --no-session flag"
         );
         // Strand path appended with @ prefix
         let has_strand_ref = args

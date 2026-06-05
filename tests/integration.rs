@@ -84,9 +84,6 @@ while [[ $# -gt 0 ]]; do
             SYSTEM_PROMPT="$2"
             shift 2
             ;;
-        --no-session)
-            shift
-            ;;
         --tools)
             shift 2
             ;;

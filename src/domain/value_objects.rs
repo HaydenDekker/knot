@@ -69,7 +69,7 @@ impl AgentConfig {
     /// Produces arguments in the format:
     /// ```text
     /// ["-p", "--model", "<model>", "--system-prompt",
-    ///  "<instructions>", "--no-session"]
+    ///  "<instructions>"]
     /// ```
     ///
     /// If `tools` is non-empty, appends `--tools <comma-separated-list>`.
@@ -80,7 +80,6 @@ impl AgentConfig {
         args.push(self.model.clone());
         args.push("--system-prompt".to_string());
         args.push(template.instructions.clone());
-        args.push("--no-session".to_string());
         if !self.tools.is_empty() {
             args.push("--tools".to_string());
             args.push(self.tools.join(","));
@@ -234,7 +233,6 @@ mod tests {
                 "gpt-4o",
                 "--system-prompt",
                 "Review this document.",
-                "--no-session",
             ]
         );
     }
