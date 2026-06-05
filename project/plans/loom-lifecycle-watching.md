@@ -98,11 +98,12 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `application::usecases::tests::unregister_loom_stops_watchers`, `adapters::inbound::tests::delete_loom_stops_watcher`
 
-- [ ] Failing test: `application::usecases::tests::unregister_loom_stops_watchers` — `UnregisterLoom` with mock `EventSource`: after unregistration, `unwatch()` called for each watched source directory
-- [ ] Failing test: `adapters::inbound::tests::delete_loom_stops_watcher` — `DELETE /looms/:id` → 204 → mock `EventSource` has recorded an `unwatch()` call
-- [ ] Add `event_source: Arc<dyn EventSource>` parameter to `UnregisterLoom::new()`
-- [ ] In `UnregisterLoom::execute()`: look up loom in store, call `event_source.unwatch()` for each effective source directory, then remove from store
-- [ ] Update handler wiring: pass `ctx.event_source` to `UnregisterLoom`
+- [x] Failing test: `application::usecases::tests::unregister_loom_stops_watchers` — `UnregisterLoom` with mock `EventSource`: after unregistration, `unwatch()` called for each watched source directory
+- [x] Failing test: `adapters::inbound::tests::delete_loom_stops_watcher` — `DELETE /looms/:id` → 204 → mock `EventSource` has recorded an `unwatch()` call
+- [x] Add `event_source: Arc<dyn EventSource>` parameter to `UnregisterLoom::new()`
+- [x] In `UnregisterLoom::execute()`: look up loom in store, call `event_source.unwatch()` for each effective source directory, then remove from store
+- [x] Update handler wiring: pass `ctx.event_source` to `UnregisterLoom`
+- [x] Also added `unregister_loom_stops_watcher_empty_knots` and `unregister_loom_not_found_no_unwatch` tests
 - [ ] Update existing tests that construct `UnregisterLoom`
 
 ### Phase 4: POST /looms/discover Implementation
