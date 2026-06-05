@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ⬜ Draft | 2026-06-05 |
-| 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ⬜ Planned | 2026-06-05 |
+| 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ✅ Complete | 2026-06-05 |
 | 10 | [Knot-Per-Strand Config and Loom-Log State](knot-per-strand-and-loom-log-state.md) | ✅ Complete | 2026-06-04 |
 | 9 | [Knot Skills and Swagger UI](knot-skills-and-swagger.md) | ✅ Complete | 2026-06-04 |
 | 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ✅ Complete | 2026-06-04 |
@@ -75,8 +75,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 11. Loom Lifecycle Watching
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-05
+**Completed:** 2026-06-05
 **Goal:** Wire `EventSource` into `RegisterLoom`, `UnregisterLoom`, and implement `POST /looms/discover` so looms can be added, discovered, and removed at runtime without restart.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
