@@ -355,11 +355,15 @@ pub async fn unregister_loom(
 }
 
 /// Discover looms in the rig directory and register any new ones.
+///
+/// Scans the rig directory for loom configurations. Already-registered
+/// looms are skipped — only new looms are returned. Each new loom
+/// gets its activity log initialised and file watchers started.
 #[utoipa::path(
     post,
     path = "/looms/discover",
     responses(
-        (status = 200, body = Vec<LoomSummary>, description = "Discovered looms"),
+        (status = 200, body = Vec<LoomSummary>, description = "Newly discovered looms"),
         (status = 500, description = "Discovery failed"),
     ),
 )]
@@ -368,6 +372,7 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
         Arc::clone(&ctx.loom_repo),
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
+        Arc::clone(&ctx.event_source),
     );
     match use_case.execute(&ctx.base_dir) {
         Ok(looms) => {
@@ -1562,5 +1567,191 @@ mod tests {
         let unwatch = unwatch_calls.lock().unwrap();
         assert_eq!(unwatch.len(), 1);
         assert_eq!(unwatch[0], PathBuf::from("/loom1/src"));
+    }
+
+    // ── Configurable Mock Repository ──────────────────────────────────────
+
+    /// Mock `LoomRepository` that returns configurable scan results.
+    struct ConfigurableLoomRepository {
+        scan_result: Vec<Loom>,
+    }
+
+    impl LoomRepository for ConfigurableLoomRepository {
+        fn scan(
+            &self,
+            _rig: &std::path::Path,
+        ) -> Result<Vec<Loom>, PortError> {
+            Ok(self.scan_result.clone())
+        }
+
+        fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<Loom>, PortError> {
+            Ok(vec![])
+        }
+
+        fn save(&self, _loom: Loom) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    /// Build an `AppContext` with a configurable repo and tracking event
+    /// source, returning the context plus handles to inspect watch calls.
+    fn build_test_context_with_repo_and_tracking(
+        looms: Vec<Loom>,
+        log_events: Vec<LoomEvent>,
+    ) -> (
+        AppContext,
+        StdArc<Mutex<Vec<PathBuf>>>,
+        StdArc<Mutex<Vec<PathBuf>>>,
+    ) {
+        let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
+        let _ = _event_rx;
+        let (event_source, watch_calls, unwatch_calls) =
+            TrackingEventSource::new();
+
+        (
+            AppContext {
+                store: LoomStore::new(),
+                loom_repo: Arc::new(ConfigurableLoomRepository {
+                    scan_result: looms,
+                }),
+                loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
+                tie_off_sink: Arc::new(MockTieOffSink),
+                event_source: Arc::new(event_source),
+                event_sender,
+                agent_runner: Arc::new(MockAgentRunner),
+                rig_config: RigAgentConfig::default_config(),
+                loom_ids: Vec::new(),
+                base_dir: PathBuf::from("./rig"),
+            },
+            watch_calls,
+            unwatch_calls,
+        )
+    }
+
+    // ── Phase 4 Tests ───────────────────────────────────────────────────
+
+    /// `POST /looms/discover` with a rig containing new loom directories
+    /// → 200 with list of discovered IDs → mock `EventSource` has `watch()`
+    /// calls → looms appear in `GET /looms`.
+    #[tokio::test]
+    async fn discover_looms_scans_and_registers() {
+        let loom_a = build_test_loom("loom-a", &["k1"]);
+        let loom_b = build_test_loom("loom-b", &["k2", "k3"]);
+
+        let (ctx, watch_calls, _unwatch_calls) =
+            build_test_context_with_repo_and_tracking(
+                vec![loom_a.clone(), loom_b.clone()],
+                vec![],
+            );
+        let app = build_app(ctx);
+
+        // POST /looms/discover
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms/discover")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+
+        // Both looms discovered
+        assert_eq!(summaries.len(), 2);
+        let ids: Vec<_> =
+            summaries.iter().map(|s| s.id.0.as_str()).collect();
+        assert!(ids.contains(&"loom-a"));
+        assert!(ids.contains(&"loom-b"));
+
+        // Watchers started for each loom (each has knots, so source dirs)
+        let watches = watch_calls.lock().unwrap();
+        // loom_a has 1 knot → 1 watch
+        // loom_b has 2 knots → 2 watches
+        assert_eq!(watches.len(), 3);
+
+        // Verify looms are in the store via GET /looms
+        let ctx = build_test_context();
+        ctx.store.register(loom_a);
+        ctx.store.register(loom_b);
+        let app2 = build_app(ctx);
+        let req = Request::builder()
+            .uri("/looms")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app2.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let all: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    /// `POST /looms/discover` when loom already registered → 200 with
+    /// empty or partial list (no duplicates) → no duplicate `watch()`
+    /// calls.
+    #[tokio::test]
+    async fn discover_looms_skips_existing() {
+        let existing = build_test_loom("existing", &["k1"]);
+        let new_loom = build_test_loom("new-discovered", &["k2"]);
+
+        // Pre-register existing loom in the store
+        let (ctx, watch_calls, _unwatch_calls) =
+            build_test_context_with_repo_and_tracking(
+                vec![existing.clone(), new_loom.clone()],
+                vec![],
+            );
+        ctx.store.register(existing.clone());
+        let app = build_app(ctx);
+
+        // POST /looms/discover
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms/discover")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+
+        // Only the new loom returned (existing skipped)
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, LoomId("new-discovered".to_string()));
+
+        // Only 1 watch call (for the new loom's knots), not 2
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+
+        // Verify no duplicate in store
+        let ctx = build_test_context();
+        ctx.store.register(existing);
+        ctx.store.register(new_loom);
+        let app2 = build_app(ctx);
+        let req = Request::builder()
+            .uri("/looms")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app2.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let all: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(all.len(), 2);
     }
 }

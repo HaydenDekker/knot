@@ -12,7 +12,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
-use domain::entities::KnotId;
 use domain::events::StrandEvent;
 use tokio::sync::mpsc;
 
@@ -238,8 +237,8 @@ pub fn build_app_context(
 ///
 /// After building the AppContext, this:
 /// 1. Runs DiscoverLooms to scan rig and register looms
-/// 2. For each loom: uses RegisterLoom to start watchers
-/// 3. Stores loom IDs in AppContext for use during graceful shutdown
+/// 2. DiscoverLooms handles log events, storage, and watchers internally
+/// 3. Returns list of discovered looms
 ///
 /// Returns the list of discovered looms.
 pub fn run_startup(
@@ -256,6 +255,7 @@ pub fn run_startup(
         Arc::clone(&ctx.loom_repo),
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
+        Arc::clone(&ctx.event_source),
     );
 
     let looms = discover
@@ -263,49 +263,6 @@ pub fn run_startup(
         .map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?;
-
-    // For each discovered loom: log LoomStarted and start file watchers.
-    // DiscoverLooms already registered the loom in LoomStore and logged
-    // knot events, so we only need to log LoomStarted and start watchers.
-    for loom in &looms {
-        let _ = ctx.loom_log_port.open(&loom.id);
-        let _ = ctx.loom_log_port.append(
-            domain::events::LoomEvent::LoomStarted {
-                loom_id: loom.id.clone(),
-            },
-        );
-
-        for knot in &loom.knots {
-            let source_dir = knot
-                .source_dir
-                .clone()
-                .unwrap_or_else(|| loom.source_dir.clone());
-            ctx.event_source.set_loom_ids(
-                &source_dir,
-                &loom.id,
-                &knot.id,
-            );
-            if let Err(e) = ctx.event_source.watch(&source_dir) {
-                eprintln!(
-                    "WARNING: failed to watch {}: {e}",
-                    source_dir.display()
-                );
-            }
-        }
-        if loom.knots.is_empty() {
-            ctx.event_source.set_loom_ids(
-                &loom.source_dir,
-                &loom.id,
-                &KnotId(format!("default-{}", loom.id.0)),
-            );
-            if let Err(e) = ctx.event_source.watch(&loom.source_dir) {
-                eprintln!(
-                    "WARNING: failed to watch {}: {e}",
-                    loom.source_dir.display()
-                );
-            }
-        }
-    }
 
     Ok(looms)
 }
