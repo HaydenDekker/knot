@@ -1899,7 +1899,7 @@ mod tests {
 
         // cli_args should be built from knot config, NOT workspace cli_args
         // Expected: -p --model gpt-4o --system-prompt check it --no-session
-        //           --no-tools @src/file.md
+        //           @src/file.md
         let args = &ctx.cli_args;
         assert!(
             args.contains(&"-p".to_string()),
@@ -1924,10 +1924,6 @@ mod tests {
         assert!(
             args.contains(&"--no-session".to_string()),
             "args should contain --no-session flag"
-        );
-        assert!(
-            args.contains(&"--no-tools".to_string()),
-            "args should contain --no-tools flag (no tools configured)"
         );
         // Strand path appended with @ prefix
         let has_strand_ref = args

@@ -69,11 +69,10 @@ impl AgentConfig {
     /// Produces arguments in the format:
     /// ```text
     /// ["-p", "--model", "<model>", "--system-prompt",
-    ///  "<instructions>", "--no-session", "--no-tools"]
+    ///  "<instructions>", "--no-session"]
     /// ```
     ///
-    /// If `tools` is non-empty, `--no-tools` is omitted and each tool is
-    /// added as `--tool <name>`.
+    /// If `tools` is non-empty, appends `--tools <comma-separated-list>`.
     pub fn build_cli_args(&self, template: &PromptTemplate) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
         args.push("-p".to_string());
@@ -82,13 +81,9 @@ impl AgentConfig {
         args.push("--system-prompt".to_string());
         args.push(template.instructions.clone());
         args.push("--no-session".to_string());
-        if self.tools.is_empty() {
-            args.push("--no-tools".to_string());
-        } else {
-            for tool in &self.tools {
-                args.push("--tool".to_string());
-                args.push(tool.clone());
-            }
+        if !self.tools.is_empty() {
+            args.push("--tools".to_string());
+            args.push(self.tools.join(","));
         }
         args
     }
@@ -240,7 +235,6 @@ mod tests {
                 "--system-prompt",
                 "Review this document.",
                 "--no-session",
-                "--no-tools",
             ]
         );
     }
@@ -261,11 +255,9 @@ mod tests {
         .unwrap();
 
         let args = config.build_cli_args(&template);
-        // --no-tools should NOT appear; individual --tool flags instead
-        assert!(!args.contains(&"--no-tools".to_string()));
-        assert!(args.contains(&"--tool".to_string()));
-        assert!(args.contains(&"fs".to_string()));
-        assert!(args.contains(&"web".to_string()));
+        // --tools flag with comma-separated list
+        assert!(args.contains(&"--tools".to_string()));
+        assert!(args.contains(&"fs,web".to_string()));
     }
 
     #[test]

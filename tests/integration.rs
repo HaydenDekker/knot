@@ -84,10 +84,10 @@ while [[ $# -gt 0 ]]; do
             SYSTEM_PROMPT="$2"
             shift 2
             ;;
-        --no-session|--no-tools)
+        --no-session)
             shift
             ;;
-        --tool)
+        --tools)
             shift 2
             ;;
         @*)
@@ -2115,8 +2115,7 @@ processing pipeline.
 /// Demo verification: knot-test loom with tools configured.
 ///
 /// Uses a knot config with `tools: [fs, web]` to verify the
-/// `build_cli_args` path that emits `--tool` flags instead of
-/// `--no-tools`.
+/// `build_cli_args` path that emits `--tools fs,web`.
 #[test]
 fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
