@@ -215,6 +215,18 @@ pub trait EventSource: Send + Sync {
 
     /// Stop watching a directory.
     fn unwatch(&self, path: &Path) -> Result<(), PortError>;
+
+    /// Associate loom and knot IDs with a source directory.
+    ///
+    /// Call this before `watch()` so emitted events carry the correct
+    /// `loom_id` and `knot_id`. No-op for mock implementations.
+    fn set_loom_ids(
+        &self,
+        _source_dir: &Path,
+        _loom_id: &LoomId,
+        _knot_id: &KnotId,
+    ) {
+    }
 }
 
 /// Port for executing the agent CLI and capturing its output.

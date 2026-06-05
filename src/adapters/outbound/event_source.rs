@@ -174,6 +174,19 @@ impl NotifyEventSource {
 }
 
 impl EventSource for NotifyEventSource {
+    fn set_loom_ids(
+        &self,
+        source_dir: &Path,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+    ) {
+        self.with_loom_ids(
+            source_dir.to_path_buf(),
+            loom_id.clone(),
+            knot_id.clone(),
+        );
+    }
+
     fn watch(&self, path: &Path) -> Result<(), PortError> {
         {
             let mut inner = self.state.lock().unwrap();

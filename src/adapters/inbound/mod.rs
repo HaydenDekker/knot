@@ -302,6 +302,7 @@ pub async fn register_loom(
     let use_case = RegisterLoom::new(
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
+        Arc::clone(&ctx.event_source),
     );
 
     match use_case.execute(loom) {
@@ -1143,6 +1144,35 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
 
         assert_eq!(resp.status(), 409);
+    }
+
+    /// `POST /looms` with valid body returns 201 and mock `EventSource`
+    /// has recorded a `watch()` call for the source directory.
+    #[tokio::test]
+    async fn post_loom_starts_watcher() {
+        let (ctx, watch_calls, _unwatch_calls) =
+            build_test_context_with_tracking(vec![]);
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "watch-loom",
+            "source_dir": "src/docs",
+            "tie_off_dir": "output/docs"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+
+        // Verify watch() was called for the source directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], PathBuf::from("src/docs"));
     }
 
     /// `DELETE /looms/:id` returns 204, loom no longer in `GET /looms`.

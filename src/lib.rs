@@ -12,6 +12,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
+use domain::entities::KnotId;
 use domain::events::StrandEvent;
 use tokio::sync::mpsc;
 
@@ -237,10 +238,10 @@ pub fn build_app_context(
 ///
 /// After building the AppContext, this:
 /// 1. Runs DiscoverLooms to scan rig and register looms
-/// 2. For each loom: opens activity log, writes LoomStarted event
+/// 2. For each loom: uses RegisterLoom to start watchers
 /// 3. Stores loom IDs in AppContext for use during graceful shutdown
 ///
-/// Returns the list of discovered looms (used to start watchers).
+/// Returns the list of discovered looms.
 pub fn run_startup(
     ctx: &AppContext,
     base_dir: &StdPath,
@@ -263,7 +264,9 @@ pub fn run_startup(
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?;
 
-    // For each loom: open activity log and record LoomStarted
+    // For each discovered loom: log LoomStarted and start file watchers.
+    // DiscoverLooms already registered the loom in LoomStore and logged
+    // knot events, so we only need to log LoomStarted and start watchers.
     for loom in &looms {
         let _ = ctx.loom_log_port.open(&loom.id);
         let _ = ctx.loom_log_port.append(
@@ -271,6 +274,37 @@ pub fn run_startup(
                 loom_id: loom.id.clone(),
             },
         );
+
+        for knot in &loom.knots {
+            let source_dir = knot
+                .source_dir
+                .clone()
+                .unwrap_or_else(|| loom.source_dir.clone());
+            ctx.event_source.set_loom_ids(
+                &source_dir,
+                &loom.id,
+                &knot.id,
+            );
+            if let Err(e) = ctx.event_source.watch(&source_dir) {
+                eprintln!(
+                    "WARNING: failed to watch {}: {e}",
+                    source_dir.display()
+                );
+            }
+        }
+        if loom.knots.is_empty() {
+            ctx.event_source.set_loom_ids(
+                &loom.source_dir,
+                &loom.id,
+                &KnotId(format!("default-{}", loom.id.0)),
+            );
+            if let Err(e) = ctx.event_source.watch(&loom.source_dir) {
+                eprintln!(
+                    "WARNING: failed to watch {}: {e}",
+                    loom.source_dir.display()
+                );
+            }
+        }
     }
 
     Ok(looms)
@@ -349,13 +383,10 @@ pub async fn start_server_with_shutdown(
 ) -> std::io::Result<()> {
     let (mut ctx, event_rx) = build_app_context(&config);
 
-    // Clone event sender for the watcher (ctx is consumed below)
-    let event_sender = ctx.event_sender.clone();
-
     // Start the event pipeline: debounce + ProcessStrand
     let process_handle = start_event_pipeline(&ctx, event_rx);
 
-    // Startup: discover looms, create state files
+    // Startup: discover looms, create state files, start watchers
     let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
         eprintln!("WARNING: startup discovery failed: {e}");
         Vec::new()
@@ -366,37 +397,6 @@ pub async fn start_server_with_shutdown(
         let loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
         ctx.loom_ids = loom_ids;
     }
-
-    // Start file watchers on each knot's source directory.
-    // Each knot may define its own source_dir (from knot frontmatter).
-    // If a knot has no custom source_dir, it falls back to the loom's.
-    // Kept alive in a scope — dropped during shutdown to stop the watcher.
-    let event_source = {
-        use application::ports::EventSource;
-        let source =
-            adapters::outbound::NotifyEventSource::new(event_sender);
-        for loom in &looms {
-            for knot in &loom.knots {
-                // Resolve effective source directory for this knot.
-                let source_dir = knot
-                    .source_dir
-                    .clone()
-                    .unwrap_or_else(|| loom.source_dir.clone());
-                source.with_loom_ids(
-                    source_dir.clone(),
-                    loom.id.clone(),
-                    knot.id.clone(),
-                );
-                if let Err(e) = source.watch(&source_dir) {
-                    eprintln!(
-                        "WARNING: failed to watch {}: {e}",
-                        source_dir.display()
-                    );
-                }
-            }
-        }
-        source
-    };
 
     let app = build_app(ctx);
 
@@ -421,18 +421,11 @@ pub async fn start_server_with_shutdown(
         .await?;
 
     // Shutdown sequence:
-    // 1. Drop the file watcher — this stops the notify RecommendedWatcher
-    //    and closes the mpsc sender it holds.
-    drop(event_source);
+    // 1. The AppContext is held by the axum Router (already stopped).
+    //    When the router is dropped, the NotifyEventSource in AppContext
+    //    is also dropped, which stops the file watcher.
 
-    // 2. The AppContext is held by the axum Router (already stopped).
-    //    We need the loom_log_port and loom_ids for logging LoomStopped.
-    //    The router state is still accessible since the serve call returned.
-    //    However, ctx was moved into build_app. We reconstruct the minimal
-    //    context we need for shutdown logging.
-
-    // 3. Wait for the processing pipeline to drain and write LoomStopped.
-    //    We need a fresh loom_log_port and the loom_ids.
+    // 2. Wait for the processing pipeline to drain and write LoomStopped.
     let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
         Arc::new(adapters::outbound::FileSystemLoomLog::new(
             config.base_dir.clone(),

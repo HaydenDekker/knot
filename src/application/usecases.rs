@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::application::ports::{
-    AgentRunner, ExecutionContext, KnotEventType,
+    AgentRunner, ExecutionContext, EventSource, KnotEventType,
     LoomLogPort, LoomRepository, ProcessingStatus, PortError,
     TieOffSink,
 };
@@ -115,11 +115,13 @@ impl DiscoverLooms {
 /// 2. Appends `KnotRegistered` for each knot via `LoomLogPort::append()`
 /// 3. Appends `LoomStarted` event via `LoomLogPort::append()`
 /// 4. Stores the loom in `LoomStore`
+/// 5. Starts file watchers for each knot's effective source directory
 ///
 /// Returns an error if a loom with the same ID already exists.
 pub struct RegisterLoom {
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
+    event_source: Arc<dyn EventSource>,
 }
 
 impl RegisterLoom {
@@ -127,10 +129,12 @@ impl RegisterLoom {
     pub fn new(
         log_port: Arc<dyn LoomLogPort>,
         store: LoomStore,
+        event_source: Arc<dyn EventSource>,
     ) -> Self {
         Self {
             log_port,
             store,
+            event_source,
         }
     }
 
@@ -163,7 +167,40 @@ impl RegisterLoom {
         })?;
 
         // Store the loom
-        self.store.register(loom);
+        self.store.register(loom.clone());
+
+        // Start file watchers for each knot's effective source directory
+        for knot in &loom.knots {
+            let source_dir = knot
+                .source_dir
+                .clone()
+                .unwrap_or_else(|| loom.source_dir.clone());
+            self.event_source.set_loom_ids(
+                &source_dir,
+                &loom.id,
+                &knot.id,
+            );
+            self.event_source.watch(&source_dir)
+                .map_err(|e| {
+                    PortError::LoomSaveFailed(format!(
+                        "failed to watch '{}': {}",
+                        source_dir.display(),
+                        e
+                    ))
+                })?;
+        }
+
+        // If no knots, watch the loom-level source directory
+        if loom.knots.is_empty() {
+            self.event_source.watch(&loom.source_dir)
+                .map_err(|e| {
+                    PortError::LoomSaveFailed(format!(
+                        "failed to watch '{}': {}",
+                        loom.source_dir.display(),
+                        e
+                    ))
+                })?;
+        }
 
         Ok(())
     }
@@ -1844,5 +1881,228 @@ mod tests {
             StrandPath(PathBuf::from("src/file.md")),
             "strand_path should match the event strand"
         );
+    }
+}
+
+// ── Phase 2 Tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod phase2_tests {
+    use super::*;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Tracking EventSource Mock ──────────────────────────────────────
+
+    /// A mock `EventSource` that records all `watch()` calls.
+    struct TrackingEventSource {
+        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
+    }
+
+    impl TrackingEventSource {
+        fn new(
+        ) -> (Self, Arc<Mutex<Vec<PathBuf>>>) {
+            let watch_calls = Arc::new(Mutex::new(vec![]));
+            let source = Self {
+                watch_calls: watch_calls.clone(),
+            };
+            (source, watch_calls)
+        }
+    }
+
+    impl EventSource for TrackingEventSource {
+        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.watch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&self, _path: &std::path::Path) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Mock LoomLogPort ───────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────
+
+    /// Build a loom with the given ID and optional knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            source_dir: PathBuf::from("src"),
+            tie_off_dir: PathBuf::from("out"),
+            knots,
+        }
+    }
+
+    /// Build a knot with the given ID and optional custom source_dir.
+    fn build_knot(
+        id: impl Into<String>,
+        source_dir: Option<PathBuf>,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_config: AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
+            },
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            source_dir,
+            tie_off_dir: None,
+        }
+    }
+
+    // ── RegisterLoom Watcher Tests ─────────────────────────────────────
+
+    /// `RegisterLoom` with mock `EventSource`: after registration,
+    /// `watch()` is called for each knot's effective source directory.
+    /// Knots with custom `source_dir` get their own watch;\n    /// knots without fall back to the loom-level `source_dir`.
+    #[test]
+    fn register_loom_starts_watchers() {
+        let loom = build_loom(
+            "watch-loom",
+            vec![
+                build_knot("k1", None), // uses loom source_dir: "src"
+                build_knot("k2", Some(PathBuf::from("src/custom"))),
+            ],
+        );
+        let loom_id = loom.id.clone();
+
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = RegisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es,
+        );
+        let result = use_case.execute(loom);
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // watch() called for each knot's effective source directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 2);
+
+        let watched: HashSet<_> =
+            watches.iter().map(|p| p.as_path()).collect();
+        // k1 falls back to loom source_dir "src"
+        assert!(watched.contains(Path::new("src")));
+        // k2 uses its custom source_dir "src/custom"
+        assert!(watched.contains(Path::new("src/custom")));
+
+        // Loom is in the store
+        assert!(store.get(&loom_id).is_some());
+    }
+
+    /// `RegisterLoom` with no knots still watches the loom-level
+    /// `source_dir`.
+    #[test]
+    fn register_loom_starts_watcher_empty_knots() {
+        let loom = build_loom("empty-loom", vec![]);
+        let loom_id = loom.id.clone();
+
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = RegisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es,
+        );
+        let result = use_case.execute(loom);
+
+        assert!(result.is_ok());
+
+        // watch() called once for loom source_dir
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], PathBuf::from("src"));
+
+        assert!(store.get(&loom_id).is_some());
+    }
+
+    /// `RegisterLoom` duplicate ID returns error without starting watchers.
+    #[test]
+    fn register_loom_duplicate_no_watchers() {
+        let loom1 = build_loom("dup", vec![build_knot("k1", None)]);
+        let loom2 = build_loom("dup", vec![build_knot("k2", None)]);
+
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        // Register first loom
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = RegisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            Arc::clone(&es),
+        );
+        assert!(use_case.execute(loom1).is_ok());
+
+        // Verify first registration started a watcher
+        {
+            let watches = watch_calls.lock().unwrap();
+            assert_eq!(watches.len(), 1);
+        }
+
+        // Attempt duplicate registration
+        let (event_source2, watch_calls2) = TrackingEventSource::new();
+        let es2: Arc<dyn EventSource> = Arc::new(event_source2);
+        let use_case = RegisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es2,
+        );
+        let result = use_case.execute(loom2);
+
+        // Should fail with LoomSaveFailed
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomSaveFailed(msg) => {
+                assert!(msg.contains("already registered"));
+            }
+            other => panic!("Expected LoomSaveFailed, got {other:?}"),
+        }
+
+        // No new watchers started for the duplicate
+        let watches = watch_calls2.lock().unwrap();
+        assert!(watches.is_empty());
+
+        // Original store unchanged
+        let stored = store.get(&LoomId("dup".to_string())).unwrap();
+        assert_eq!(stored.knots.len(), 1);
+        assert_eq!(stored.knots[0].id, KnotId("k1".to_string()));
     }
 }
