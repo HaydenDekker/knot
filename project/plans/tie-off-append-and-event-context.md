@@ -1,5 +1,7 @@
 # Plan: Tie-Off Append and Event Context
 
+## Implementation Status: ✅ Complete (2026-06-05)
+
 ## Related PRD
 
 This plan contributes to [AI-Driven File Generation from Loom Events](../prds/prd-ai-driven-file-generation.md).
@@ -85,6 +87,17 @@ The root cause: `TieOffSink::write()` uses `fs::write()` (overwrite), `ProcessSt
 - [x] Compile and verify no errors
 
 ## Notes
+
+### Lessons Learned
+- **File watcher event coalescing**: On Linux (inotify), rapid file creation + write can coalesce into a single `Modify` event within the debounce window. Integration tests cannot reliably verify `StrandEvent::Created` from `fs::write()` on a new file — only the first write's effective event type is preserved. Tests should focus on metadata structure rather than specific event types for the initial write.
+- **No chrono dependency needed**: ISO 8601 timestamps were implemented with a manual epoch-to-date converter in `tieoff_sink.rs::days_to_ymd()`, keeping the dependency count low.
+- **Disabled tests module**: The `#[cfg(feature = "__disabled_tests")]` module in `usecases.rs` has pre-existing compilation errors (`KnotState` vs `KnotStatus` naming mismatch). It was left disabled — fixing it is outside this plan's scope.
+- **Event context in prompt**: The `ExecutionContext` struct now carries `event_type` and `previous_tie_off`, which are prepended to the agent's stdin as a `## Event Context` block. This gives the agent awareness of the event without modifying the CLI invocation.
+- **MockTieOffSink interior mutability**: The `ports.rs` test mock uses `RwLock<HashMap>` for content tracking since `TieOffSink` trait methods take `&self`. This was necessary after the sub-agent added content tracking to the mock.
+
+### Deviations from Plan
+- Phase 2: The `process_strand_delete_triggers_agent` unit test lives in the disabled `__disabled_tests` module, so it was not verified. The behavior was verified via integration tests (`full_pipeline_create_modify_delete`, `full_tie_off_history`).
+- Phase 3: Tests use a simple `echo "processed"` mock agent rather than an event-aware mock agent. The file watcher's event coalescing behavior makes event-type-specific content in the agent response unreliable. Tests verify the tie-off structure (headers, delimiters, chronological order) rather than agent response content.
 
 - **Markdown section format** — The `---` delimiter is standard markdown horizontal rule. Combined with `## Event:` headers, the tie-off file becomes a readable document that tools (or users) can parse.
 - **Previous tie-off content** — For create events, there is no previous tie-off. For modify/delete events, the previous tie-off content is read and passed to the agent as context. This allows the agent to reference earlier decisions.
