@@ -110,15 +110,15 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `adapters::inbound::tests::discover_looms_scans_and_registers`, `adapters::inbound::tests::discover_looms_skips_existing`, `application::usecases::tests::discover_looms_runtime_skips_registered`
 
-- [ ] Failing test: `adapters::inbound::tests::discover_looms_scans_and_registers` — `POST /looms/discover` with a rig containing new loom directories → 200 with list of discovered IDs → mock `EventSource` has `watch()` calls → looms appear in `GET /looms`
-- [ ] Failing test: `adapters::inbound::tests::discover_looms_skips_existing` — `POST /looms/discover` when loom already registered → 200 with empty or partial list (no duplicates) → no duplicate `watch()` calls
-- [ ] Failing test: `application::usecases::tests::discover_looms_runtime_skips_registered` — `DiscoverLooms` use case given looms where one ID already in store → only new looms are registered (log entries + watchers), existing ones skipped
-- [ ] Implement `discover_looms` handler: calls `DiscoverLooms` with base dir from `AppContext` (need to store `base_dir` in context or accept as param)
-- [ ] In `DiscoverLooms::execute()`: check `store.get()` before registering each loom; skip if already present
-- [ ] After registering each new loom: call `event_source.watch()` for source directories (same logic as `RegisterLoom`)
-- [ ] Return discovered loom IDs in response (200 with JSON array)
-- [ ] Register route: `POST /looms/discover` already wired, update handler body
-- [ ] Update OpenAPI schema to remove 501 response, add 200 response
+- [x] Failing test: `adapters::inbound::tests::discover_looms_scans_and_registers` — `POST /looms/discover` with a rig containing new loom directories → 200 with list of discovered IDs → mock `EventSource` has `watch()` calls → looms appear in `GET /looms`
+- [x] Failing test: `adapters::inbound::tests::discover_looms_skips_existing` — `POST /looms/discover` when loom already registered → 200 with empty or partial list (no duplicates) → no duplicate `watch()` calls
+- [x] Failing test: `application::usecases::tests::discover_looms_runtime_skips_registered` — `DiscoverLooms` use case given looms where one ID already in store → only new looms are registered (log entries + watchers), existing ones skipped
+- [x] Implement `discover_looms` handler: calls `DiscoverLooms` with base dir from `AppContext` (need to store `base_dir` in context or accept as param)
+- [x] In `DiscoverLooms::execute()`: check `store.get()` before registering each loom; skip if already present
+- [x] After registering each new loom: call `event_source.watch()` for source directories (same logic as `RegisterLoom`)
+- [x] Return discovered loom IDs in response (200 with JSON array)
+- [x] Register route: `POST /looms/discover` already wired, update handler body
+- [ ] Update OpenAPI schema to remove 501 response, add 200 response (deferred)
 
 ### Phase 5: Integration Test — Full Lifecycle
 
