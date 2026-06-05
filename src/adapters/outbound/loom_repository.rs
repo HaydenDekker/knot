@@ -48,6 +48,20 @@ impl FileSystemLoomRepository {
 
 impl LoomRepository for FileSystemLoomRepository {
     fn scan(&self, rig: &Path) -> Result<Vec<Loom>, PortError> {
+        // Canonicalise the rig directory, then use its parent as the
+        // base for resolving per-knot paths (project root).
+        let canonical_rig = fs::canonicalize(rig)
+            .map_err(|e| {
+                PortError::RigScanFailed(format!(
+                    "failed to canonicalise {}: {}",
+                    rig.display(),
+                    e
+                ))
+            })?;
+        let project_root = canonical_rig
+            .parent()
+            .unwrap_or(&canonical_rig);
+
         let entries =
             fs::read_dir(rig)
                 .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
@@ -95,15 +109,16 @@ impl LoomRepository for FileSystemLoomRepository {
             // Parse .md knot definition files from the loom directory.
             let mut knots = Self::scan_knot_files(&canonical_loom_dir)?;
 
-            // Resolve per-knot paths relative to the loom directory.
+            // Resolve per-knot paths relative to the project root
+            // (parent of the rig directory).
             for knot in &mut knots {
                 if let Some(ref raw_path) = knot.source_dir {
                     knot.source_dir =
-                        Some(Self::resolve_path(&canonical_loom_dir, raw_path));
+                        Some(Self::resolve_path(project_root, raw_path));
                 }
                 if let Some(ref raw_path) = knot.tie_off_dir {
                     knot.tie_off_dir =
-                        Some(Self::resolve_path(&canonical_loom_dir, raw_path));
+                        Some(Self::resolve_path(project_root, raw_path));
                 }
             }
 
@@ -151,7 +166,7 @@ impl FileSystemLoomRepository {
     /// # Returns
     ///
     /// Parsed `Knot` instances with unresolved paths (caller must resolve
-    /// `source_dir` and `tie_off_dir` relative to the loom directory).
+    /// `source_dir` and `tie_off_dir` relative to the project root).
     pub fn scan_knot_files(
         knot_dir: &Path,
     ) -> Result<Vec<Knot>, PortError> {
@@ -218,7 +233,7 @@ impl FileSystemLoomRepository {
         }
     }
 
-    /// Resolve a path value relative to the loom directory.
+    /// Resolve a path value relative to a base directory.
     ///
     /// - If the value is an absolute path, canonicalise it.
     /// - If the value is a relative path, join it to `loom_dir`, then
@@ -686,8 +701,24 @@ broken: yaml: [
         fs::create_dir(&loom_dir).unwrap();
 
         // Knot with per-knot source-dir and tie-off-dir.
-        create_knot_file(&loom_dir, "custom-knot", KNOT_WITH_DIRS_CONTENT)
-            .unwrap();
+        // Paths resolve relative to project root (rig's parent = temp_root),
+        // so we use simple names that are siblings of rig/.
+        let knot_content = r#"---
+name: custom-dirs-knot
+agent-config:
+  goal: "Review with custom dirs"
+  provider: "openai"
+  model: "gpt-4o"
+source-dir: "external-source"
+tie-off-dir: "external-output"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: "Review with custom dirs"
+---
+
+Body.
+"#;
+        create_knot_file(&loom_dir, "custom-knot", knot_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
         let result = repo.scan(&rig);
@@ -700,18 +731,16 @@ broken: yaml: [
         assert_eq!(loom.knots.len(), 1);
 
         let knot = &loom.knots[0];
-        // source_dir resolves relative to loom dir (rig/config-loom).
-        // "../external-source" from rig/config-loom → rig/external-source.
-        let resolved_source = rig.join("external-source");
-        let resolved_tie_off = rig.join("external-output");
+        // source_dir resolves relative to project root (rig's parent).
+        // "external-source" from temp_root → temp_root/external-source.
         assert_eq!(
             knot.source_dir,
-            Some(resolved_source),
-            "knot source_dir should resolve relative to loom dir"
+            Some(external_source),
+            "knot source_dir should resolve relative to project root"
         );
         assert_eq!(
             knot.tie_off_dir,
-            Some(resolved_tie_off),
+            Some(external_tie_off),
             "knot tie_off_dir should resolve relative to loom dir"
         );
     }

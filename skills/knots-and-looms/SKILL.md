@@ -11,11 +11,12 @@ metadata:
 
 # Knots and Looms Skill
 
-Create, modify, and delete looms and knots through Knot's HTTP API.
+Create and modify looms through Knot's HTTP API, and create, modify,
+and delete knot definition files on disk.
 
 A **loom** watches a source directory for file changes and processes them
-through configured **knots**. Each knot defines an agent configuration and
-prompt template.
+through configured **knots**. Each knot is a `.md` file with YAML
+frontmatter that defines an agent configuration and prompt template.
 
 **Knot API base URL:** `http://localhost:3000`
 **OpenAPI spec:** `http://localhost:3000/swagger-ui/openapi.json`
@@ -24,11 +25,16 @@ prompt template.
 
 ## Core Philosophy
 
-### HTTP-Only Configuration
+### Looms via HTTP API
 
-This skill interacts with Knot **exclusively through its HTTP API**. No
-direct file manipulation for loom registration. Knot manages its own
-state files on disk.
+Looms are registered and unregistered through Knot's HTTP API. Knot
+manages loom state internally.
+
+### Knots as Files
+
+Knots are `.md` files with YAML frontmatter placed inside a loom
+directory. Creating, editing, and deleting knots is done by writing
+files directly — not through the HTTP API.
 
 ### Confirm Before Destructive Actions
 
@@ -114,6 +120,109 @@ When asked to show all looms:
 
 1. Send `GET /looms` to list all registered looms.
 2. Present a summary table with: ID, source dir, tie-off dir, knot count.
+
+---
+
+## Knot Definition Files
+
+Knots are `.md` files with YAML frontmatter placed inside a loom
+directory. Knot discovers them by scanning for `.md` files.
+
+### Knot File Format
+
+A knot file is markdown with YAML frontmatter delimited by `---`:
+
+```markdown
+---
+name: my-knot
+agent-config:
+  goal: "Review document for completeness"
+  provider: "openai"
+  model: "gpt-4o"
+  tools: []
+source-dir: "app"
+tie-off-dir: "output"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: |
+    Review this document.
+---
+
+# My Knot
+
+Free-form markdown documentation about this knot.
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
+| `agent-config.goal` | **Yes** | The agent's goal/instruction |
+| `agent-config.provider` | **Yes** | AI provider (e.g. `openai`, `anthropic`) |
+| `agent-config.model` | **Yes** | Model identifier (e.g. `gpt-4o`) |
+| `agent-config.tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
+| `source-dir` | No | Per-knot source directory. Relative paths resolve against the project root. Falls back to loom-level source dir if omitted. |
+| `tie-off-dir` | No | Per-knot tie-off directory. Relative paths resolve against the project root. Falls back to loom-level tie-off dir if omitted. |
+| `prompt-template.input-bundling` | **Yes** | How input is bundled (e.g. `full-file`) |
+| `prompt-template.instructions` | **Yes** | Prompt instructions sent to the agent |
+
+### Directory Resolution
+
+- `source-dir` and `tie-off-dir` are **relative to the project root**
+  (the directory containing the `rig/` folder).
+- If omitted, the knot uses the loom-level defaults:
+  - `source_dir` = loom directory itself
+  - `tie_off_dir` = `<loom_dir>/.knot-output`
+- Absolute paths are used as-is.
+- Example project layout:
+  ```
+  project_root/              ← source-dir resolves from here
+  ├── app/                   ← source-dir: "app"
+  ├── output/                ← tie-off-dir: "output"
+  └── rig/                   ← rig directory
+      └── my-loom/           ← loom (knot files live here)
+          └── my-knot.md
+  ```
+
+### Create a Knot
+
+When asked to create a new knot:
+
+1. **Identify the target loom directory** (e.g. `.knots/my-loom/`).
+2. **Check for existing knot files**: List `.md` files in the loom
+directory. If a file with the same knot name already exists, ask the
+user whether to overwrite or choose a different name.
+3. **Gather required information** from the user:
+   - `name`: Unique knot identifier
+   - `goal`: The agent's goal
+   - `provider`: AI provider
+   - `model`: Model identifier
+   - `instructions`: Prompt instructions
+   - `source-dir` (optional): Directory to watch. If the knot watches
+     a directory outside the loom, specify it here (e.g. `../../app`).
+   - `tie-off-dir` (optional): Output directory. If output goes outside
+     the loom, specify it here (e.g. `../../output`).
+4. **Write the knot file** as `<name>.md` in the loom directory with
+   proper YAML frontmatter.
+5. **Report success**: "Knot `my-knot` created in `.knots/my-loom/`."
+
+### Modify a Knot
+
+When asked to modify a knot:
+
+1. Read the existing `.md` file in the loom directory.
+2. Update the frontmatter fields as requested.
+3. Write the file back.
+4. Report what changed.
+
+### Delete a Knot
+
+When asked to delete a knot:
+
+1. Confirm with the user which knot file to remove.
+2. Delete the `.md` file from the loom directory.
+3. Report success: "Knot `my-knot` deleted."
 
 ---
 
