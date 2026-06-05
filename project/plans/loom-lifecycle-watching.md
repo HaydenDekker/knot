@@ -26,7 +26,7 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 - Startup wiring updated: discovered looms go through `RegisterLoom` (or an equivalent path) so watchers are always started consistently.
 - HTTP handler tests verify watchers are started (mock `EventSource` tracks `watch()` calls).
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Hex Layer: Application → Inbound Adapter → Composition Root
 
@@ -124,10 +124,15 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `integration::tests::http_register_then_process_strand`, `integration::tests::discover_then_process_strand`, `integration::tests::unregister_stops_processing`
 
-- [ ] Failing test: `integration::tests::http_register_then_process_strand` — `POST /looms` to register → create strand file in source dir → tie-off produced → verify via `GET /looms/:id/knots/:knot_name`
-- [ ] Failing test: `integration::tests::discover_then_process_strand` — create loom directory on disk → `POST /looms/discover` → create strand file → tie-off produced
-- [ ] Failing test: `integration::tests::unregister_stops_processing` — `DELETE /looms/:id` → create strand file → no new tie-off produced (watcher removed)
-- [ ] Tests use mock agent CLI (`echo "processed"`) and `tempfile` for rig/loom/source directories
-- [ ] Verify end-to-end: HTTP → use case → `EventSource::watch()` → file creation → debounce → agent → tie-off
+- [x] Failing test: `integration::tests::http_register_then_process_strand` — `POST /looms` to register → create strand file in source dir → tie-off produced → verify via `GET /looms/:id/knots/:knot_name`
+- [x] Failing test: `integration::tests::discover_then_process_strand` — create loom directory on disk → `POST /looms/discover` → create strand file → tie-off produced
+- [x] Failing test: `integration::tests::unregister_stops_processing` — `DELETE /looms/:id` → create strand file → no new tie-off produced (watcher removed)
+- [x] Tests use mock agent CLI (`echo "processed"`) and `tempfile` for rig/loom/source directories
+- [x] Verify end-to-end: HTTP → use case → `EventSource::watch()` → file creation → debounce → agent → tie-off
+
+**Bonus fixes from Phase 5:**
+- `POST /looms` handler now resolves paths and scans for knot definition files (matching startup discovery)
+- `.loom-log` recursion fix: `NotifyEventSource` filters to `.md` files only
+- `FileSystemLoomRepository::scan_knot_files()` and `resolve_path()` made public for reuse
 
 ## Notes
