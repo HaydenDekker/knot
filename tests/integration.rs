@@ -906,7 +906,7 @@ fn full_pipeline_create_modify_delete() {
         "tie-off should still contain 'processed' after modify, got: {content}"
     );
 
-    // Step 3: Delete strand → tie-off reports deletion (file still exists)
+    // Step 3: Delete strand → agent is triggered, tie-off appended with Deleted header
     fs::remove_file(&strand_path).unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
@@ -917,8 +917,19 @@ fn full_pipeline_create_modify_delete() {
     let content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
-        content.contains("deleted"),
-        "tie-off should report deletion, got: {content}"
+        content.contains("## Event: Deleted"),
+        "tie-off should have Deleted event header, got: {content}"
+    );
+    assert!(
+        content.contains("processed"),
+        "tie-off should contain agent response, got: {content}"
+    );
+    // Should have three sections now (Created, Modified, Deleted)
+    let delimiter_count = content.matches("---").count();
+    assert!(
+        delimiter_count >= 4,
+        "should have 3 sections with delimiters, found {}: {}",
+        delimiter_count, content
     );
 
     // Strand file should not exist (it was deleted)
