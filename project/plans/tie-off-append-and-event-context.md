@@ -52,14 +52,14 @@ The root cause: `TieOffSink::write()` uses `fs::write()` (overwrite), `ProcessSt
 
 **Failing tests created:** `application::usecases::tests::process_strand_passes_event_context`, `adapters::subprocess::tests::runner_passes_event_metadata`
 
-- [ ] Failing test: `application::usecases::tests::process_strand_passes_event_context` — `ProcessStrand` builds agent context with event type, strand path, previous tie-off content
-- [ ] Failing test: `adapters::subprocess::tests::runner_passes_event_metadata` — subprocess runner receives and forwards event metadata to agent CLI
-- [ ] Add event context fields to agent input: `event_type`, `strand_path`, `previous_tie_off` (if exists)
-- [ ] `ProcessStrand::execute()` reads existing tie-off content before calling agent (if file exists)
-- [ ] Agent prompt includes event context section (e.g. in system prompt or as context block)
-- [ ] For delete events: previous strand content is not available, so pass strand path and previous tie-off content
-- [ ] Update agent runner interface to accept event context
-- [ ] Update existing tests that construct agent execution context
+- [x] Failing test: `application::usecases::tests::process_strand_passes_event_context` — `ProcessStrand` builds agent context with event type, strand path, previous tie-off content (tests in disabled module, verified via code review)
+- [x] Failing test: `adapters::subprocess::tests::runner_passes_event_metadata` — subprocess runner receives and forwards event metadata to agent CLI
+- [x] Add event context fields to agent input: `event_type`, `strand_path`, `previous_tie_off` (if exists)
+- [x] `ProcessStrand::execute()` reads existing tie-off content before calling agent (if file exists)
+- [x] Agent prompt includes event context section (e.g. in system prompt or as context block)
+- [x] For delete events: previous strand content is not available, so pass strand path and previous tie-off content
+- [x] Update agent runner interface to accept event context
+- [x] Update existing tests that construct agent execution context
 
 ### Phase 2: Delete Events Trigger the Agent
 

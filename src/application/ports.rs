@@ -155,6 +155,10 @@ pub struct ExecutionContext {
     pub prompt: String,
     /// Path to the strand being processed.
     pub strand_path: StrandPath,
+    /// The type of strand event (e.g. "Created", "Modified", "Deleted").
+    pub event_type: String,
+    /// Content of the previous tie-off file, if it existed.
+    pub previous_tie_off: String,
 }
 
 /// Output captured from agent execution.
@@ -246,6 +250,11 @@ pub trait TieOffSink: Send + Sync {
     /// prepended before the new content. If the file does not exist,
     /// it is created with the metadata header and content.
     fn append(&self, tie_off: TieOff) -> Result<(), PortError>;
+
+    /// Read existing tie-off content at the given path.
+    ///
+    /// Returns an empty string if the file does not exist.
+    fn read_content(&self, path: &TieOffPath) -> Result<String, PortError>;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -334,15 +343,30 @@ mod tests {
 
     /// Mock of `TieOffSink` that never errors.
     #[derive(Default)]
-    struct MockTieOffSink;
+    struct MockTieOffSink {
+        content: std::sync::RwLock<std::collections::HashMap<String, String>>,
+    }
 
     impl TieOffSink for MockTieOffSink {
-        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
+        fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.content
+                .write()
+                .unwrap()
+                .insert(tie_off.path.0.display().to_string(), tie_off.content);
             Ok(())
         }
 
         fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
             self.write(tie_off)
+        }
+
+        fn read_content(&self, path: &TieOffPath) -> Result<String, PortError> {
+            Ok(self.content
+                .read()
+                .unwrap()
+                .get(&path.0.display().to_string())
+                .cloned()
+                .unwrap_or_default())
         }
     }
 
@@ -417,6 +441,8 @@ mod tests {
             cli_args: vec!["--verbose".to_string()],
             prompt: "Review this document".to_string(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
+            event_type: "Created".to_string(),
+            previous_tie_off: String::new(),
         };
         let result = runner.execute(ctx);
         assert!(result.is_ok());
@@ -487,11 +513,15 @@ mod tests {
             cli_args: vec!["--mode".to_string(), "stream".to_string()],
             prompt: "Process this file".to_string(),
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
+            event_type: "Created".to_string(),
+            previous_tie_off: String::new(),
         };
 
         assert_eq!(ctx.cli_path, "pi");
         assert_eq!(ctx.cli_args.len(), 2);
         assert!(!ctx.prompt.is_empty());
+        assert_eq!(ctx.event_type, "Created");
+        assert!(ctx.previous_tie_off.is_empty());
     }
 
     #[test]

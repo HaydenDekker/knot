@@ -36,6 +36,36 @@ impl SubprocessAgentRunner {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self { timeout }
     }
+
+    /// Build the prompt with event context block prepended.
+    ///
+    /// If event context fields are present, a `## Event Context` block
+    /// is prepended to the prompt before writing to stdin. This gives
+    /// the agent metadata about the strand event being processed.
+    fn build_prompt_with_context(ctx: &ExecutionContext) -> String {
+        let mut full_prompt = String::new();
+
+        // Prepend event context block if any fields are set
+        if !ctx.event_type.is_empty() || !ctx.previous_tie_off.is_empty() {
+            full_prompt.push_str("## Event Context\n");
+            if !ctx.event_type.is_empty() {
+                full_prompt.push_str(&format!("Event: {}\n", ctx.event_type));
+            }
+            full_prompt.push_str(&format!(
+                "Strand: {}\n",
+                ctx.strand_path.0.display()
+            ));
+            if !ctx.previous_tie_off.is_empty() {
+                full_prompt.push_str("Previous tie-off:\n");
+                full_prompt.push_str(&ctx.previous_tie_off);
+                full_prompt.push('\n');
+            }
+            full_prompt.push('\n');
+        }
+
+        full_prompt.push_str(&ctx.prompt);
+        full_prompt
+    }
 }
 
 impl AgentRunner for SubprocessAgentRunner {
@@ -90,8 +120,12 @@ impl AgentRunner for SubprocessAgentRunner {
         // Write the prompt to the child's stdin.
         let mut stdin = child.stdin.take().expect("stdin was piped");
         use std::io::Write;
+
+        // Build event context block to prepend to prompt.
+        let prompt_with_context = Self::build_prompt_with_context(&ctx);
+
         stdin
-            .write_all(ctx.prompt.as_bytes())
+            .write_all(prompt_with_context.as_bytes())
             .map_err(|e| {
                 PortError::AgentExecutionFailed(format!(
                     "failed to write prompt to stdin: {e}"
@@ -143,15 +177,16 @@ impl AgentRunner for SubprocessAgentRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn make_context(cli: &str, args: &[&str]) -> ExecutionContext {
         ExecutionContext {
             cli_path: cli.to_string(),
             cli_args: args.iter().map(|s| s.to_string()).collect(),
             prompt: "test prompt".to_string(),
-            strand_path: crate::domain::entities::StrandPath(
-                std::path::PathBuf::from("test.md"),
-            ),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
         }
     }
 
@@ -250,9 +285,9 @@ mod tests {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "cat".to_string()],
             prompt: prompt.to_string(),
-            strand_path: crate::domain::entities::StrandPath(
-                std::path::PathBuf::from("test.md"),
-            ),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
         };
 
         let result = runner.execute(ctx);
@@ -272,9 +307,9 @@ mod tests {
             cli_path: "cat".to_string(),
             cli_args: vec![],
             prompt: prompt.to_string(),
-            strand_path: crate::domain::entities::StrandPath(
-                std::path::PathBuf::from("strand.md"),
-            ),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("strand.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
         };
 
         let result = runner.execute(ctx);
@@ -284,6 +319,58 @@ mod tests {
         assert_eq!(
             output.stdout, prompt,
             "cat should echo stdin content exactly"
+        );
+    }
+
+    /// Verify that `SubprocessAgentRunner` prepends event context to the
+    /// prompt when `event_type` or `previous_tie_off` are set.
+    #[test]
+    fn runner_passes_event_metadata() {
+        let runner = SubprocessAgentRunner::new();
+        let ctx = ExecutionContext {
+            cli_path: "cat".to_string(),
+            cli_args: vec![],
+            prompt: "Review this file.".to_string(),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("doc.md")),
+            event_type: "Modified".to_string(),
+            previous_tie_off: "Previous review done.".to_string(),
+        };
+
+        let result = runner.execute(ctx);
+        assert!(result.is_ok(), "should succeed: {result:?}");
+
+        let output = result.unwrap();
+        // Output should contain the event context block
+        assert!(
+            output.stdout.contains("## Event Context"),
+            "output should contain event context header: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("Event: Modified"),
+            "output should contain event type: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("Strand: doc.md"),
+            "output should contain strand path: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("Previous tie-off:"),
+            "output should contain previous tie-off header: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("Previous review done."),
+            "output should contain previous tie-off content: {}",
+            output.stdout
+        );
+        // Original prompt should still be present
+        assert!(
+            output.stdout.contains("Review this file."),
+            "output should still contain original prompt: {}",
+            output.stdout
         );
     }
 }

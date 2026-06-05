@@ -69,6 +69,13 @@ impl TieOffSink for MockTieOffSink {
     ) -> Result<(), PortError> {
         Ok(())
     }
+
+    fn read_content(
+        &self,
+        _path: &knot::domain::entities::TieOffPath,
+    ) -> Result<String, PortError> {
+        Ok(String::new())
+    }
 }
 
 struct MockAgentRunner;

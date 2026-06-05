@@ -57,6 +57,15 @@ impl TieOffSink for FileSystemTieOffSink {
         Ok(())
     }
 
+    fn read_content(&self, path: &TieOffPath) -> Result<String, PortError> {
+        if path.0.exists() {
+            fs::read_to_string(&path.0)
+                .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))
+        } else {
+            Ok(String::new())
+        }
+    }
+
     fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
         let path = &tie_off.path.0;
 

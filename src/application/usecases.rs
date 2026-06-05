@@ -678,15 +678,22 @@ impl ProcessStrand {
             format!("@{}", strand_path.0.display()),
         );
 
-        // 3. Build execution context
+        // 3. Read previous tie-off content (for event context)
+        let previous_tie_off = self.tie_off_sink
+            .read_content(&tie_off_path)
+            .unwrap_or_default();
+
+        // 4. Build execution context with event metadata
         let ctx = ExecutionContext {
             cli_path: self.rig_config.cli_path.clone(),
             cli_args,
             prompt: knot.prompt_template.instructions.clone(),
             strand_path: strand_path.clone(),
+            event_type: event_label.clone(),
+            previous_tie_off,
         };
 
-        // 4. Execute agent and handle result
+        // 5. Execute agent and handle result
         let result = self.agent_runner.execute(ctx);
 
         match result {
@@ -1453,6 +1460,10 @@ mod tests {
         fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
             self.write_calls.write().unwrap().push(tie_off);
             Ok(())
+        }
+
+        fn read_content(&self, _path: &TieOffPath) -> Result<String, PortError> {
+            Ok(String::new())
         }
     }
 

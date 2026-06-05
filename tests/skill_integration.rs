@@ -73,6 +73,10 @@ impl TieOffSink for MockTieOffSink {
     fn append(&self, _tie_off: TieOff) -> Result<(), PortError> {
         Ok(())
     }
+
+    fn read_content(&self, _path: &TieOffPath) -> Result<String, PortError> {
+        Ok(String::new())
+    }
 }
 
 struct MockAgentRunner;
