@@ -210,19 +210,30 @@ impl RegisterLoom {
 
 /// Use case: unregister a loom.
 ///
-/// 1. Appends `LoomStopped` event via `LoomLogPort::append()`
-/// 2. Removes the loom from `LoomStore`
+/// 1. Looks up the loom in `LoomStore`
+/// 2. Calls `EventSource::unwatch()` for each effective source directory
+/// 3. Appends `LoomStopped` event via `LoomLogPort::append()`
+/// 4. Removes the loom from `LoomStore`
 ///
 /// Returns an error if the loom was not found.
 pub struct UnregisterLoom {
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
+    event_source: Arc<dyn EventSource>,
 }
 
 impl UnregisterLoom {
     /// Create a new `UnregisterLoom` use case.
-    pub fn new(log_port: Arc<dyn LoomLogPort>, store: LoomStore) -> Self {
-        Self { log_port, store }
+    pub fn new(
+        log_port: Arc<dyn LoomLogPort>,
+        store: LoomStore,
+        event_source: Arc<dyn EventSource>,
+    ) -> Self {
+        Self {
+            log_port,
+            store,
+            event_source,
+        }
     }
 
     /// Unregister the loom with the given ID.
@@ -230,8 +241,35 @@ impl UnregisterLoom {
     /// Returns `PortError::LoomNotFound` if the loom is not in the store.
     pub fn execute(&self, id: &LoomId) -> Result<(), PortError> {
         // Check loom exists before any side effects
-        if self.store.get(id).is_none() {
-            return Err(PortError::LoomNotFound(id.clone()));
+        let loom = self.store.get(id)
+            .ok_or_else(|| PortError::LoomNotFound(id.clone()))?;
+
+        // Stop watching source directories for each knot
+        for knot in &loom.knots {
+            let source_dir = knot
+                .source_dir
+                .clone()
+                .unwrap_or_else(|| loom.source_dir.clone());
+            self.event_source.unwatch(&source_dir)
+                .map_err(|e| {
+                    PortError::EventUnwatchFailed(format!(
+                        "failed to unwatch '{}': {}",
+                        source_dir.display(),
+                        e
+                    ))
+                })?;
+        }
+
+        // If no knots, unwatch the loom-level source directory
+        if loom.knots.is_empty() {
+            self.event_source.unwatch(&loom.source_dir)
+                .map_err(|e| {
+                    PortError::EventUnwatchFailed(format!(
+                        "failed to unwatch '{}': {}",
+                        loom.source_dir.display(),
+                        e
+                    ))
+                })?;
         }
 
         // Append LoomStopped event
@@ -2104,5 +2142,226 @@ mod phase2_tests {
         let stored = store.get(&LoomId("dup".to_string())).unwrap();
         assert_eq!(stored.knots.len(), 1);
         assert_eq!(stored.knots[0].id, KnotId("k1".to_string()));
+    }
+}
+
+// ── Phase 3 Tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod phase3_tests {
+    use super::*;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Tracking EventSource Mock ──────────────────────────────────────
+
+    /// A mock `EventSource` that records all `watch()` and `unwatch()` calls.
+    struct TrackingEventSource {
+        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
+        unwatch_calls: Arc<Mutex<Vec<PathBuf>>>,
+    }
+
+    impl TrackingEventSource {
+        fn new(
+        ) -> (
+            Self,
+            Arc<Mutex<Vec<PathBuf>>>,
+            Arc<Mutex<Vec<PathBuf>>>,
+        ) {
+            let watch_calls = Arc::new(Mutex::new(vec![]));
+            let unwatch_calls = Arc::new(Mutex::new(vec![]));
+            let source = Self {
+                watch_calls: watch_calls.clone(),
+                unwatch_calls: unwatch_calls.clone(),
+            };
+            (source, watch_calls, unwatch_calls)
+        }
+    }
+
+    impl EventSource for TrackingEventSource {
+        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.watch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.unwatch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+    }
+
+    // ── Mock LoomLogPort ───────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────
+
+    /// Build a loom with the given ID and optional knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            source_dir: PathBuf::from("src"),
+            tie_off_dir: PathBuf::from("out"),
+            knots,
+        }
+    }
+
+    /// Build a knot with the given ID and optional custom source_dir.
+    fn build_knot(
+        id: impl Into<String>,
+        source_dir: Option<PathBuf>,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_config: AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
+            },
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            source_dir,
+            tie_off_dir: None,
+        }
+    }
+
+    // ── UnregisterLoom Watcher Tests ───────────────────────────────────
+
+    /// `UnregisterLoom` with mock `EventSource`: after unregistration,
+    /// `unwatch()` is called for each watched source directory.
+    /// Knots with custom `source_dir` get their own unwatch;
+    /// knots without fall back to the loom-level `source_dir`.
+    #[test]
+    fn unregister_loom_stops_watchers() {
+        let loom = build_loom(
+            "unwatch-loom",
+            vec![
+                build_knot("k1", None), // uses loom source_dir: "src"
+                build_knot("k2", Some(PathBuf::from("src/custom"))),
+            ],
+        );
+        let loom_id = loom.id.clone();
+
+        let (event_source, _watch_calls, unwatch_calls) =
+            TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        // Register the loom first (so it exists in the store)
+        store.register(loom);
+
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = UnregisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es,
+        );
+        let result = use_case.execute(&loom_id);
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // unwatch() called for each effective source directory
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 2);
+
+        let unwatched: HashSet<_> =
+            unwatches.iter().map(|p| p.as_path()).collect();
+        // k1 falls back to loom source_dir "src"
+        assert!(unwatched.contains(Path::new("src")));
+        // k2 uses its custom source_dir "src/custom"
+        assert!(unwatched.contains(Path::new("src/custom")));
+
+        // Loom is no longer in the store
+        assert!(store.get(&loom_id).is_none());
+    }
+
+    /// `UnregisterLoom` with no knots still unwatch the loom-level
+    /// `source_dir`.
+    #[test]
+    fn unregister_loom_stops_watcher_empty_knots() {
+        let loom = build_loom("empty-unwatch-loom", vec![]);
+        let loom_id = loom.id.clone();
+
+        let (event_source, _watch_calls, unwatch_calls) =
+            TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        // Register the loom first
+        store.register(loom);
+
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = UnregisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es,
+        );
+        let result = use_case.execute(&loom_id);
+
+        assert!(result.is_ok());
+
+        // unwatch() called once for loom source_dir
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 1);
+        assert_eq!(unwatches[0], PathBuf::from("src"));
+
+        assert!(store.get(&loom_id).is_none());
+    }
+
+    /// `UnregisterLoom` for unknown loom returns error without calling
+    /// `unwatch()`.
+    #[test]
+    fn unregister_loom_not_found_no_unwatch() {
+        let (event_source, _watch_calls, unwatch_calls) =
+            TrackingEventSource::new();
+        let store = LoomStore::new();
+
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+        let use_case = UnregisterLoom::new(
+            Arc::new(MockLoomLogPort::default()),
+            store.clone(),
+            es,
+        );
+        let result =
+            use_case.execute(&LoomId("nonexistent".to_string()));
+
+        // Should fail with LoomNotFound
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomNotFound(id) => {
+                assert_eq!(id, LoomId("nonexistent".to_string()));
+            }
+            other => panic!("Expected LoomNotFound, got {other:?}"),
+        }
+
+        // No unwatch calls
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert!(unwatches.is_empty());
     }
 }

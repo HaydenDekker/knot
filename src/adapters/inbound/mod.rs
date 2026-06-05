@@ -339,6 +339,7 @@ pub async fn unregister_loom(
     let use_case = UnregisterLoom::new(
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
+        Arc::clone(&ctx.event_source),
     );
     match use_case.execute(&loom_id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -1206,6 +1207,31 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
 
         assert_eq!(resp.status(), 404);
+    }
+
+    /// `DELETE /looms/:id` returns 204 and mock `EventSource` has recorded
+    /// an `unwatch()` call for the source directory.
+    #[tokio::test]
+    async fn delete_loom_stops_watcher() {
+        let (ctx, _watch_calls, unwatch_calls) =
+            build_test_context_with_tracking(vec![]);
+        // Register a loom with a source directory
+        ctx.store.register(build_test_loom("watch-del-loom", &[]));
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/looms/watch-del-loom")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 204);
+
+        // Verify unwatch() was called for the source directory
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 1);
+        assert_eq!(unwatches[0], PathBuf::from("src"));
     }
 
     // ── Phase 4: Route Integration Tests ──────────────────────────────────
