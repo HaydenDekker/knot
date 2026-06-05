@@ -85,13 +85,14 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 
 **Failing tests created:** `application::usecases::tests::register_loom_starts_watchers`, `adapters::inbound::tests::post_loom_starts_watcher`
 
-- [ ] Failing test: `application::usecases::tests::register_loom_starts_watchers` — `RegisterLoom` with mock `EventSource`: after registration, `watch()` called for source directory (and per-knot source dirs)
-- [ ] Failing test: `adapters::inbound::tests::post_loom_starts_watcher` — `POST /looms` with valid body → 201 → mock `EventSource` has recorded a `watch()` call for the source directory
-- [ ] Add `event_source: Arc<dyn EventSource>` parameter to `RegisterLoom::new()`
-- [ ] In `RegisterLoom::execute()`: after storing loom, call `event_source.watch()` for each knot's effective source directory (knot `source_dir` or loom `source_dir` fallback)
-- [ ] Update `AppContext` handler wiring: pass `ctx.event_source` to `RegisterLoom`
-- [ ] Update startup (`run_startup` in `lib.rs`): for each discovered loom, start watchers via the same path
-- [ ] Update existing tests that construct `RegisterLoom` (add `Arc::new(MockEventSource)`)
+- [x] Failing test: `application::usecases::tests::register_loom_starts_watchers` — `RegisterLoom` with mock `EventSource`: after registration, `watch()` called for source directory (and per-knot source dirs)
+- [x] Failing test: `adapters::inbound::tests::post_loom_starts_watcher` — `POST /looms` with valid body → 201 → mock `EventSource` has recorded a `watch()` call for the source directory
+- [x] Add `event_source: Arc<dyn EventSource>` parameter to `RegisterLoom::new()`
+- [x] In `RegisterLoom::execute()`: after storing loom, call `event_source.watch()` for each knot's effective source directory (knot `source_dir` or loom `source_dir` fallback)
+- [x] Update `AppContext` handler wiring: pass `ctx.event_source` to `RegisterLoom`
+- [x] Update startup (`run_startup` in `lib.rs`): for each discovered loom, start watchers via the same path
+- [x] Update existing tests that construct `RegisterLoom` (add `Arc::new(MockEventSource)`)
+- [x] Also added `set_loom_ids()` to `EventSource` trait (needed for `NotifyEventSource` to map dirs to loom/knot IDs)
 
 ### Phase 3: UnregisterLoom Stops Watchers
 
