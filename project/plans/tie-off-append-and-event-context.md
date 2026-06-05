@@ -77,12 +77,12 @@ The root cause: `TieOffSink::write()` uses `fs::write()` (overwrite), `ProcessSt
 
 **Failing tests created:** `integration::tests::full_tie_off_history`, `integration::tests::tie_off_sections_readable`
 
-- [ ] Failing test: `integration::tests::full_tie_off_history` — create strand → modify strand → delete strand → tie-off has 3 sections with correct headers
-- [ ] Failing test: `integration::tests::tie_off_sections_readable` — parse tie-off markdown sections, verify each has event type, strand path, timestamp
-- [ ] Tests use mock agent CLI that returns different content per event type
-- [ ] Verify tie-off file is valid markdown with `---` delimiters
-- [ ] Verify sections are in chronological order
-- [ ] Compile and verify no errors
+- [x] Failing test: `integration::tests::full_tie_off_history` — create strand → modify strand → delete strand → tie-off has 3 sections with correct headers
+- [x] Failing test: `integration::tests::tie_off_sections_readable` — parse tie-off markdown sections, verify each has event type, strand path, timestamp
+- [x] Tests use mock agent CLI that returns different content per event type
+- [x] Verify tie-off file is valid markdown with `---` delimiters
+- [x] Verify sections are in chronological order
+- [x] Compile and verify no errors
 
 ## Notes
 
