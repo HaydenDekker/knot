@@ -133,6 +133,9 @@ The root cause: `RegisterLoom` and `UnregisterLoom` use cases have no access to 
 **Bonus fixes from Phase 5:**
 - `POST /looms` handler now resolves paths and scans for knot definition files (matching startup discovery)
 - `.loom-log` recursion fix: `NotifyEventSource` filters to `.md` files only
+
+**Post-plan bugfix (detected during demo):**
+- `compute_tie_off_path` always used `loom.tie_off_dir`, ignoring per-knot `tie-off-dir` from knot definition frontmatter. Fixed to check `knot.tie_off_dir` first, falling back to `loom.tie_off_dir`.
 - `FileSystemLoomRepository::scan_knot_files()` and `resolve_path()` made public for reuse
 
 ## Notes
