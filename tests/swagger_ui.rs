@@ -62,6 +62,13 @@ impl TieOffSink for MockTieOffSink {
     ) -> Result<(), PortError> {
         Ok(())
     }
+
+    fn append(
+        &self,
+        _tie_off: knot::domain::entities::TieOff,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
 }
 
 struct MockAgentRunner;

@@ -82,6 +82,12 @@ pub struct TieOff {
     pub content: String,
     pub path: TieOffPath,
     pub status: TieOffStatus,
+    /// Optional event type metadata for append-mode sections.
+    pub event_type: Option<String>,
+    /// Optional strand path metadata for append-mode sections.
+    pub strand_path: Option<String>,
+    /// Optional timestamp for append-mode sections.
+    pub timestamp: Option<String>,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -199,11 +205,17 @@ mod tests {
             content: content.clone(),
             path: path.clone(),
             status: status.clone(),
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         };
 
         assert_eq!(tieoff.content, content);
         assert_eq!(tieoff.path, path);
         assert_eq!(tieoff.status, status);
+        assert!(tieoff.event_type.is_none());
+        assert!(tieoff.strand_path.is_none());
+        assert!(tieoff.timestamp.is_none());
     }
 
     #[test]
@@ -284,6 +296,9 @@ mod tests {
             content: "output".to_string(),
             path: TieOffPath(PathBuf::from("out.md")),
             status: TieOffStatus::Produced,
+            event_type: Some("created".to_string()),
+            strand_path: Some("in.md".to_string()),
+            timestamp: Some("2026-01-01T00:00:00Z".to_string()),
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -297,6 +312,9 @@ mod tests {
             content: String::new(),
             path: TieOffPath(PathBuf::from("err.md")),
             status: TieOffStatus::Failed,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         };
 
         assert_eq!(tieoff.status, TieOffStatus::Failed);

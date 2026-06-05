@@ -237,8 +237,15 @@ pub trait AgentRunner: Send + Sync {
 
 /// Port for writing tie-off content to disk.
 pub trait TieOffSink: Send + Sync {
-    /// Write tie-off output to its target location.
+    /// Write tie-off output to its target location (overwrites existing file).
     fn write(&self, tie_off: TieOff) -> Result<(), PortError>;
+
+    /// Append tie-off content as a new section with metadata header.
+    ///
+    /// If the file exists, a `---` delimiter and metadata header are
+    /// prepended before the new content. If the file does not exist,
+    /// it is created with the metadata header and content.
+    fn append(&self, tie_off: TieOff) -> Result<(), PortError>;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -332,6 +339,10 @@ mod tests {
     impl TieOffSink for MockTieOffSink {
         fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
             Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.write(tie_off)
         }
     }
 
@@ -427,6 +438,9 @@ mod tests {
             content: "Generated content".to_string(),
             path: TieOffPath(PathBuf::from("output/review.md")),
             status: crate::domain::entities::TieOffStatus::Produced,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         };
         let result = sink.write(tie_off);
         assert!(result.is_ok());

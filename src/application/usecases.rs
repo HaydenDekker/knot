@@ -615,10 +615,15 @@ impl ProcessStrand {
                 knot_id.0, loom_id.0
             )))?;
 
-        let _event_type = match event {
+        let event_type = match event {
             StrandEvent::Created { .. } => KnotEventType::Created,
             StrandEvent::Modified { .. } => KnotEventType::Modified,
             StrandEvent::Deleted { .. } => KnotEventType::Deleted,
+        };
+        let event_label = match event_type {
+            KnotEventType::Created => "Created".to_string(),
+            KnotEventType::Modified => "Modified".to_string(),
+            KnotEventType::Deleted => "Deleted".to_string(),
         };
 
         // Determine tie-off path (knot-level tie_off_dir if set, else loom-level)
@@ -641,8 +646,11 @@ impl ProcessStrand {
                 ),
                 path: tie_off_path.clone(),
                 status: crate::domain::entities::TieOffStatus::Produced,
+                event_type: Some(event_label.clone()),
+                strand_path: Some(strand_path.0.display().to_string()),
+                timestamp: None,
             };
-            self.tie_off_sink.write(tie_off)?;
+            self.tie_off_sink.append(tie_off)?;
 
             // Append KnotCompleted to loom-log
             self.log_port.append(LoomEvent::KnotCompleted {
@@ -688,8 +696,11 @@ impl ProcessStrand {
                     content: output.stdout,
                     path: tie_off_path.clone(),
                     status: crate::domain::entities::TieOffStatus::Produced,
+                    event_type: Some(event_label.clone()),
+                    strand_path: Some(strand_path.0.display().to_string()),
+                    timestamp: None,
                 };
-                self.tie_off_sink.write(tie_off)?;
+                self.tie_off_sink.append(tie_off)?;
 
                 // 5. Append KnotCompleted to loom-log
                 self.log_port.append(LoomEvent::KnotCompleted {
@@ -716,8 +727,11 @@ impl ProcessStrand {
                     content: format!("Processing failed: {}", error_msg),
                     path: tie_off_path.clone(),
                     status: crate::domain::entities::TieOffStatus::Failed,
+                    event_type: Some(event_label.clone()),
+                    strand_path: Some(strand_path.0.display().to_string()),
+                    timestamp: None,
                 };
-                self.tie_off_sink.write(tie_off)?;
+                self.tie_off_sink.append(tie_off)?;
 
                 // 5. Append KnotFailed to loom-log
                 self.log_port.append(LoomEvent::KnotFailed {
@@ -1432,6 +1446,11 @@ mod tests {
 
     impl TieOffSink for TrackingTieOffSink {
         fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.write_calls.write().unwrap().push(tie_off);
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
             self.write_calls.write().unwrap().push(tie_off);
             Ok(())
         }

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::application::ports::{PortError, TieOffSink};
 use crate::domain::entities::{StrandPath, TieOff, TieOffPath};
@@ -55,6 +56,94 @@ impl TieOffSink for FileSystemTieOffSink {
             .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))?;
         Ok(())
     }
+
+    fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+        let path = &tie_off.path.0;
+
+        // Ensure parent directories exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))?;
+        }
+
+        let file_exists = path.exists();
+
+        // Build the section content with metadata header
+        let event_label = tie_off
+            .event_type
+            .clone()
+            .unwrap_or_else(|| "Processed".to_string());
+        let strand_label = tie_off
+            .strand_path
+            .clone()
+            .unwrap_or_default();
+        let timestamp = tie_off.timestamp.clone().unwrap_or_else(|| {
+            Self::format_timestamp(SystemTime::now())
+        });
+
+        let mut new_content = String::new();
+        new_content.push_str(&format!(
+            "## Event: {event_label}\n## Strand: {strand_label}\n## Timestamp: {timestamp}\n---\n"
+        ));
+        new_content.push_str(&tie_off.content);
+
+        if file_exists {
+            // Read existing content, prepend delimiter
+            let existing = fs::read_to_string(path)
+                .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))?;
+            let mut full_content = existing;
+            full_content.push_str("\n---\n");
+            full_content.push_str(&new_content);
+            fs::write(path, full_content)
+                .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))?;
+        } else {
+            // Create file with header section (no leading ---)
+            fs::write(path, new_content)
+                .map_err(|e| PortError::TieOffWriteFailed(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl FileSystemTieOffSink {
+    /// Format a SystemTime as ISO 8601 UTC string.
+    fn format_timestamp(time: SystemTime) -> String {
+        let duration = time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = duration.as_secs();
+
+        // Compute UTC date/time components from Unix epoch seconds
+        let days = secs / 86400;
+        let remaining = secs % 86400;
+        let hours = remaining / 3600;
+        let minutes = (remaining % 3600) / 60;
+        let seconds = remaining % 60;
+
+        // Convert days since epoch to year/month/day
+        let (year, month, day) = Self::days_to_ymd(days);
+
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hours, minutes, seconds
+        )
+    }
+
+    /// Convert days since Unix epoch (1970-01-01) to (year, month, day).
+    fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+        let d = days as i64 + 719468; // Adjust for algorithm
+        let era = if d >= 0 { d } else { d - 146096 } / 146097;
+        let doe = d - era * 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let y = yoe as u64 + era as u64 * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy as i64 + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        let year = y + if month <= 2 { 1 } else { 0 };
+        (year, month as u64, day as u64)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -73,6 +162,9 @@ mod tests {
             content: "Generated content".to_string(),
             path: TieOffPath(dir.path().join("review.tie-off.md")),
             status: TieOffStatus::Produced,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         };
 
         let result = sink.write(tie_off);
@@ -107,6 +199,9 @@ mod tests {
             content: "First content".to_string(),
             path: path.clone(),
             status: TieOffStatus::Produced,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         })
         .unwrap();
 
@@ -115,6 +210,9 @@ mod tests {
             content: "Second content".to_string(),
             path: path.clone(),
             status: TieOffStatus::Produced,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         })
         .unwrap();
 
@@ -151,6 +249,9 @@ mod tests {
             content: "Deep content".to_string(),
             path: TieOffPath(base.join("sub/dir/deep.tie-off.md")),
             status: TieOffStatus::Produced,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
         };
 
         let sub_dir = dir.path().join("sub/dir");
@@ -225,6 +326,198 @@ mod tests {
             path.0,
             PathBuf::from("output/reviews/input.tie-off.md"),
             "resolve_path should join tie_off_dir with derived filename"
+        );
+    }
+
+    #[test]
+    fn append_mode_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("first.tie-off");
+
+        let tie_off = TieOff {
+            content: "First section content".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            event_type: Some("Created".to_string()),
+            strand_path: Some("strand1.md".to_string()),
+            timestamp: Some("2026-06-05T00:00:00Z".to_string()),
+        };
+
+        assert!(
+            !file_path.exists(),
+            "file should not exist before append"
+        );
+
+        let result = sink.append(tie_off);
+        assert!(result.is_ok(), "append should succeed");
+        assert!(file_path.exists(), "file should be created");
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            content.contains("## Event: Created"),
+            "content should have event header: {}", content
+        );
+        assert!(
+            content.contains("## Strand: strand1.md"),
+            "content should have strand header: {}", content
+        );
+        assert!(
+            content.contains("## Timestamp: 2026-06-05T00:00:00Z"),
+            "content should have timestamp header: {}", content
+        );
+        assert!(
+            content.contains("First section content"),
+            "content should include body: {}", content
+        );
+        // First section should NOT have a leading ---
+        assert!(
+            !content.starts_with("---"),
+            "first section should not start with ---: {}", content
+        );
+    }
+
+    #[test]
+    fn append_mode_adds_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("history.tie-off");
+
+        // First append
+        let tie_off_1 = TieOff {
+            content: "Section one".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            event_type: Some("Created".to_string()),
+            strand_path: Some("strand.md".to_string()),
+            timestamp: Some("2026-06-05T10:00:00Z".to_string()),
+        };
+        sink.append(tie_off_1).unwrap();
+
+        // Second append
+        let tie_off_2 = TieOff {
+            content: "Section two".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            event_type: Some("Modified".to_string()),
+            strand_path: Some("strand.md".to_string()),
+            timestamp: Some("2026-06-05T11:00:00Z".to_string()),
+        };
+        sink.append(tie_off_2).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+
+        // Should have two --- delimiters (one after first header, one between sections)
+        let delimiter_count = content.matches("---").count();
+        assert!(
+            delimiter_count >= 2,
+            "should have at least 2 delimiter sections, found {}: {}",
+            delimiter_count, content
+        );
+        assert!(
+            content.contains("Section one"),
+            "should preserve first section: {}", content
+        );
+        assert!(
+            content.contains("Section two"),
+            "should have second section: {}", content
+        );
+        assert!(
+            content.contains("Event: Created"),
+            "should have first event type: {}", content
+        );
+        assert!(
+            content.contains("Event: Modified"),
+            "should have second event type: {}", content
+        );
+        // Section two should come after section one
+        let pos_one = content.find("Section one").unwrap();
+        let pos_two = content.find("Section two").unwrap();
+        assert!(
+            pos_one < pos_two,
+            "sections should be in chronological order"
+        );
+    }
+
+    #[test]
+    fn append_mode_preserves_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("full-history.tie-off");
+
+        let events = vec![
+            (
+                "Created".to_string(),
+                "Initial content".to_string(),
+                "2026-06-05T10:00:00Z".to_string(),
+            ),
+            (
+                "Modified".to_string(),
+                "Updated content".to_string(),
+                "2026-06-05T11:00:00Z".to_string(),
+            ),
+            (
+                "Deleted".to_string(),
+                "Deleted content".to_string(),
+                "2026-06-05T12:00:00Z".to_string(),
+            ),
+        ];
+
+        for (event_type, body, ts) in &events {
+            let tie_off = TieOff {
+                content: body.clone(),
+                path: TieOffPath(file_path.clone()),
+                status: TieOffStatus::Produced,
+                event_type: Some(event_type.clone()),
+                strand_path: Some("strand.md".to_string()),
+                timestamp: Some(ts.clone()),
+            };
+            sink.append(tie_off).unwrap();
+        }
+
+        let content = fs::read_to_string(&file_path).unwrap();
+
+        // All three sections should be present
+        assert!(
+            content.contains("## Event: Created"),
+            "should have Created event: {}", content
+        );
+        assert!(
+            content.contains("Initial content"),
+            "should have initial content: {}", content
+        );
+        assert!(
+            content.contains("## Event: Modified"),
+            "should have Modified event: {}", content
+        );
+        assert!(
+            content.contains("Updated content"),
+            "should have updated content: {}", content
+        );
+        assert!(
+            content.contains("## Event: Deleted"),
+            "should have Deleted event: {}", content
+        );
+        assert!(
+            content.contains("Deleted content"),
+            "should have deleted content: {}", content
+        );
+
+        // Three sections in chronological order
+        let pos_created = content.find("Initial content").unwrap();
+        let pos_modified = content.find("Updated content").unwrap();
+        let pos_deleted = content.find("Deleted content").unwrap();
+        assert!(
+            pos_created < pos_modified && pos_modified < pos_deleted,
+            "sections should be in chronological order"
+        );
+
+        // Should have --- delimiters between sections
+        let delimiter_count = content.matches("---").count();
+        assert!(
+            delimiter_count >= 4,
+            "should have multiple delimiters for 3 sections, found {}: {}",
+            delimiter_count, content
         );
     }
 }

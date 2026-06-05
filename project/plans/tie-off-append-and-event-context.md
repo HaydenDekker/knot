@@ -31,12 +31,12 @@ The root cause: `TieOffSink::write()` uses `fs::write()` (overwrite), `ProcessSt
 
 **Failing tests created:** `adapters::outbound::tie_off_sink::tests::append_mode_creates_file`, `adapters::outbound::tie_off_sink::tests::append_mode_adds_section`, `adapters::outbound::tie_off_sink::tests::append_mode_preserves_history`
 
-- [ ] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_creates_file` — first append creates the file with header section
-- [ ] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_adds_section` — second append adds `---` delimiter and new section
-- [ ] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_preserves_history` — three appends produce three sections, all readable
-- [ ] Add `append_mode: bool` to `TieOff` or `TieOffSink::append()` method
-- [ ] Implement `append()` in `FileSystemTieOffSink`: read existing content, add `---` delimiter, write metadata header + new content
-- [ ] Metadata header format:
+- [x] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_creates_file` — first append creates the file with header section
+- [x] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_adds_section` — second append adds `---` delimiter and new section
+- [x] Failing test: `adapters::outbound::tie_off_sink::tests::append_mode_preserves_history` — three appends produce three sections, all readable
+- [x] Add `append_mode: bool` to `TieOff` or `TieOffSink::append()` method
+- [x] Implement `append()` in `FileSystemTieOffSink`: read existing content, add `---` delimiter, write metadata header + new content
+- [x] Metadata header format:
   ```markdown
   ---
   ## Event: Created | Modified | Deleted
@@ -44,9 +44,9 @@ The root cause: `TieOffSink::write()` uses `fs::write()` (overwrite), `ProcessSt
   ## Timestamp: 2026-06-05T14:00:00Z
   ---
   ```
-- [ ] If file does not exist, create with header section (no leading `---`)
-- [ ] Update `ProcessStrand` to call `append()` instead of `write()`
-- [ ] Update existing tests that construct `TieOff` with `write()` calls
+- [x] If file does not exist, create with header section (no leading `---`)
+- [x] Update `ProcessStrand` to call `append()` instead of `write()`
+- [x] Update existing tests that construct `TieOff` with `write()` calls
 
 ### Phase 1: Event Context in Agent Prompt
 
