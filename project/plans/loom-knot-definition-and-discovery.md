@@ -128,10 +128,12 @@ Changes:
 - `scan_knot_files()`: update to parse `strand-dir` instead of `source-dir`. Knots missing required fields are skipped (logged as warning).
 - Resolve per-knot paths relative to project root (parent of rig) — unchanged logic, just renamed field.
 
-- [ ] Write failing tests: `scan_skips_non_loom_directories` (a `rig/output` directory is ignored), `scan_requires_strand_and_tieoff_dirs` (knot without dirs is skipped), `scan_ignores_loom_log_directory` (a `rig/<id>/` created by log port is ignored because it doesn't end in `-loom`)
-- [ ] Implement: add `-loom` suffix filter in `scan()`, update field name in `scan_knot_files()`, add validation for required fields
-- [ ] Update existing adapter tests: rename `source_dir` → `strand_dir`, add required dirs to test knot content
-- [ ] All outbound adapter tests green
+- [x] Write failing tests: `scan_skips_non_loom_directories` (a `rig/output` directory is ignored), `scan_requires_strand_and_tieoff_dirs` (knot without dirs is skipped), `scan_ignores_loom_log_directory` (a `rig/<id>/` created by log port is ignored because it doesn't end in `-loom`)
+- [x] Implement: add `-loom` suffix filter in `scan()`, update field name in `scan_knot_files()`, add validation for required fields
+- [x] Update existing adapter tests: rename `source_dir` → `strand_dir`, add required dirs to test knot content
+- [x] All outbound adapter tests green
+
+**Note:** Integration test failures are pre-existing path resolution issues and are Phase 5 scope.
 
 ### Phase 3: Outbound Adapters — Loom Log and Tie-Off Sink
 
