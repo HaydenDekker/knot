@@ -229,12 +229,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move graceful shutdown tests.
 
-- [ ] Create `tests/shutdown.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `graceful_shutdown_stops_watchers`, `shutdown_logs_loom_stopped`
-- [ ] `cargo test --test shutdown` — 2 tests pass
-- [ ] Remove those 2 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 4 tests pass
-- [ ] Commit: `test: extract shutdown from integration.rs`
+- [x] Create `tests/shutdown.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `graceful_shutdown_stops_watchers`, `shutdown_logs_loom_stopped`
+- [x] `cargo test --test shutdown` — 2 tests pass
+- [x] Remove those 2 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 4 tests pass
+- [x] Commit: `test: extract shutdown from integration.rs`
 
 ### Phase 9: Extract `multi_loom.rs` (2 tests)
 
