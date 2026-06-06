@@ -220,12 +220,12 @@ Changes:
 - `AppContext` gains a `config_sender: mpsc::Sender<ConfigEvent>` field (or the sender is captured by the config pipeline task, not stored in context)
 - The config pipeline task runs alongside the strand processing pipeline
 
-- [ ] Update `build_app_context()` to create config event channel and pass both to `NotifyEventSource`
-- [ ] Wire rig directory watch in startup (`run_startup`)
-- [ ] Wire loom directory watches after each loom registration
-- [ ] Start config event handler task in `start_server_with_shutdown()`
-- [ ] Update `graceful_shutdown()` if needed (config handler drains when channel closes)
-- [ ] Build succeeds, all tests pass
+- [x] Update `build_app_context()` to create config event channel and pass both to `NotifyEventSource`
+- [x] Wire rig directory watch in startup (`run_startup`)
+- [x] Wire loom directory watches after each loom registration
+- [x] Start config event handler task in `start_server_with_shutdown()`
+- [x] Update `graceful_shutdown()` if needed (config handler drains when channel closes)
+- [x] Build succeeds, all tests pass
 
 ### Phase 5: Inbound Adapters — Knot CRUD Endpoints and Remove Discover
 
