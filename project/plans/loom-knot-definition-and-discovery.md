@@ -190,9 +190,9 @@ Changes:
 - Add integration test: `discovery_ignores_non_loom_directories` — rig contains both `*-loom` and non-`*-loom` directories; only `-loom` dirs are discovered.
 - Add integration test: `api_register_then_discover_after_restart` — register loom via API, verify loom directory created with knot files, stop server, restart, verify loom re-discovered with same config.
 
-- [ ] Update existing integration test knot content to use `strand-dir` and `tie-off-dir`
-- [ ] Write new integration tests listed above
-- [ ] Full integration test suite green
+- [x] Update existing integration test knot content to use `strand-dir` and `tie-off-dir`
+- [ ] Write new integration tests listed above (`discovery_ignores_non_loom_directories`, `api_register_then_discover_after_restart`)
+- [x] Full integration test suite green (29/29 passing)
 
 ### Phase 6: Composition Root and Skills Update
 
