@@ -265,18 +265,18 @@ Also:
 - Remove `POST /looms/discover` route and handler
 - Remove `DiscoverLooms` use case? No — keep it, it's still used at startup via `run_startup()`. Just remove the HTTP endpoint.
 
-- [ ] Failing test: `post_knot_success` — `POST /looms/{id}/knots` with valid body → 201 → knot appears in `GET /looms/{id}/knots` → `.md` file exists on disk
-- [ ] Failing test: `post_knot_missing_fields` — `POST /looms/{id}/knots` with missing `strand_dir` → 400
-- [ ] Failing test: `patch_knot_success` — `PATCH /looms/{id}/knots/{name}` with updated config → 200 → `GET /looms/{id}` shows new config → `.md` file updated on disk
-- [ ] Failing test: `patch_knot_not_found` — `PATCH /looms/{id}/knots/{unknown}` → 404
-- [ ] Failing test: `delete_knot_success` — `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in `GET /looms/{id}/knots` → `.md` file deleted on disk
-- [ ] Failing test: `delete_knot_not_found` — `DELETE /looms/{id}/knots/{unknown}` → 404
-- [ ] Implement: `create_knot`, `update_knot`, `delete_knot` handlers
-- [ ] Wire routes: `.route("/looms/{id}/knots", post(create_knot))`, `.route("/looms/{id}/knots/{name}", patch(update_knot))`, `.route("/looms/{id}/knots/{name}", delete(delete_knot))`
-- [ ] Remove: `POST /looms/discover` route and handler
-- [ ] Update OpenAPI schema annotations (remove `/looms/discover`, add new endpoints)
-- [ ] Update `utoipa::path` annotations
-- [ ] All inbound tests green
+- [x] Failing test: `post_knot_success` — `POST /looms/{id}/knots` with valid body → 201 → knot appears in `GET /looms/{id}/knots` → `.md` file exists on disk
+- [x] Failing test: `post_knot_missing_fields` — `POST /looms/{id}/knots` with missing `strand_dir` → 400
+- [x] Failing test: `patch_knot_success` — `PATCH /looms/{id}/knots/{name}` with updated config → 200 → `GET /looms/{id}` shows new config → `.md` file updated on disk
+- [x] Failing test: `patch_knot_not_found` — `PATCH /looms/{id}/knots/{unknown}` → 404
+- [x] Failing test: `delete_knot_success` — `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in `GET /looms/{id}/knots` → `.md` file deleted on disk
+- [x] Failing test: `delete_knot_not_found` — `DELETE /looms/{id}/knots/{unknown}` → 404
+- [x] Implement: `create_knot`, `update_knot`, `delete_knot` handlers
+- [x] Wire routes: `.route("/looms/{id}/knots", post(create_knot))`, `.route("/looms/{id}/knots/{name}", patch(update_knot))`, `.route("/looms/{id}/knots/{name}", delete(delete_knot))`
+- [x] Remove: `POST /looms/discover` route and handler
+- [x] Update OpenAPI schema annotations (remove `/looms/discover`, add new endpoints)
+- [x] Update `utoipa::path` annotations
+- [x] All inbound tests green
 
 ### Phase 6: Integration Tests — Full Auto-Discovery and CRUD Verification
 
