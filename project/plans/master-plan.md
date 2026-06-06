@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-06
+> **Last Updated:** 2026-06-07
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
 | 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ✅ Complete | 2026-06-06 |
 | 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ✅ Complete | 2026-06-05 |
 | 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ✅ Complete | 2026-06-05 |
@@ -65,6 +66,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 14. Loom/Knot Auto-Discovery and Knot CRUD API
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-07
+**Goal:** Watch the rig and loom directories for filesystem events so new looms, new knots, edited knots, and deleted knots are active in real time without restart. Add HTTP CRUD endpoints for individual knots. Remove `POST /looms/discover`.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [loom-knot-auto-discovery-and-knot-crud.md](loom-knot-auto-discovery-and-knot-crud.md).
 
 ### 13. Loom Naming Convention, Knot Definition Rules, and Discovery Fix
 

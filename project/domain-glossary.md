@@ -43,7 +43,7 @@ A knot is defined in a `.md` file with YAML frontmatter. One loom can contain on
 
 A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). A loom directory contains one or more `.md` knot definition files at its first level — Knot discovers these as the loom's knots. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API.
 
-Knot auto-discovers looms at startup by scanning the rig directory for subdirectories matching the `*-loom` pattern. The loom's identity (`LoomId`) is derived from the directory name (the `-loom` suffix is included in the ID).
+The loom's identity (`LoomId`) is derived from the directory name (the `-loom` suffix is included in the ID).
 
 ---
 
@@ -96,8 +96,8 @@ The final response or error produced by a knot at the end of its session. Each p
 ## Term Relationships
 
 ```
-Rig (aggregation of looms, discovered from `./rig/`)
- └── Loom (`<rig>/<name>-loom/`, discovered by `-loom` suffix)
+Rig (`./rig/`)
+ └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
       ├── Knot definition files (first-level `.md` files)
       │     ├── Agent Profile
       │     │     ├── LLM Provider

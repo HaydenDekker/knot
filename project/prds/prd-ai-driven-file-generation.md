@@ -16,7 +16,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 >   3. **Directories** — `strand_dir` (where strands to watch live, **required**) and `tie_off_dir` (where output is written, **required**).
 >   The knot is where it all comes together, ready for processing.
 >
-> - **Loom** — A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). Contains one or more `.md` knot definition files at its first level. Knot auto-discovers looms at startup by scanning for `*-loom` directories. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API. The loom directory holds knot definitions — **not** strands. Strands live in each knot's `strand_dir`.
+> - **Loom** — A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). Contains one or more `.md` knot definition files at its first level. Knot auto-discovers looms by watching the rig directory: when a new `*-loom` directory is created it is immediately registered with file watchers and begins processing. Loom directories can also be created via the HTTP `POST /looms` endpoint, which writes the directory to disk and triggers the same registration flow. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API beyond creation. The loom directory holds knot definitions — **not** strands. Strands live in each knot's `strand_dir`.
 >
 > - **Strand Directory** — The directory a knot watches for strand file events. Configured per-knot as `strand_dir` in the knot's YAML frontmatter. This is where raw input files (**strands**) live. Distinct from the loom directory.
 >
@@ -34,7 +34,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - [x] When a file is **created, modified, or deleted** in a knot's strand directory, Knot triggers the relevant knot(s) with the file content — no manual user invocation required. (*Plans 2, 3, 5*)
 - [x] The agent works in any directories it is configured to utilise, and at the end of its session produces a **tie-off** (final response or error) that is written to the configured target directory with the target name. (*Plans 3, 5, 6, 7*)
 - [ ] When a strand is processed (create/modify/delete), the tie-off file records the full event history — each agent response is appended as a new section with metadata (event type, strand path, timestamp) separated by `---` delimiters, so the output document tells the complete story of what has happened. (*Plan 12*)
-- [x] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. (*Plans 2, 4*)
+- [ ] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. Looms created as directories on disk (or via `POST /looms`) are auto-discovered at runtime: a rig directory watcher detects new `*-loom` directories and registers them with file watchers immediately. Knots defined as `.md` files inside a loom directory are auto-discovered: new `.md` files are parsed and the knot is registered for processing, edited `.md` files update the in-memory knot config, and deleted `.md` files deregister the knot. The HTTP interface (`GET /looms`, `GET /looms/{id}/knots`) reflects the current in-memory state, which is always in sync with the filesystem. (*Planned*)
 - [x] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors. (*Plans 2, 4*)
 
 ## Non-Goals
@@ -118,7 +118,7 @@ As a user, I want the tie-off document to tell the complete story of what has ha
 - **Technical constraint:** Knot uses axum for its HTTP server; any new endpoints follow the existing routing pattern.
 - **Technical dependency:** Knot uses the `notify` crate for file system watching.
 - **External dependency:** Knot calls an external agent CLI to execute knots. Initially this is **pi** (`pi.dev` CLI). The user configures `agent-config` in the knot with CLI arguments (e.g. `--no-tools`), and Knot parses the knot config to construct the full CLI invocation (provider, model, skills, tools, system prompt).
-- **Configuration constraint:** Knot is started with respect to its rig directory and discovers looms and knots by scanning downward from there. No separate top-level config file is required. The scanning rule may be constrained further in future.
+- **Configuration constraint:** Knot is started with respect to its rig directory. Looms and knots are discovered by watching the rig and loom directories for filesystem events (directory creation, `.md` file creation/modification/deletion), not by periodic scanning. No separate top-level config file is required.
 
 ## Implementation Status: ✅ Complete (2026-06-04)
 
