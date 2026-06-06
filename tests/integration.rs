@@ -3025,6 +3025,207 @@ fn tie_off_sections_readable() {
     let _ = shutdown.send(());
 }
 
+// ── Phase 5: Discovery and Restart Integration Tests ─────────────────────
+
+/// Non-`-loom` directories in the rig are ignored during discovery.
+///
+/// 1. Create rig with both `*-loom` and non-`*-loom` directories
+/// 2. Start Knot with base_dir pointing to the rig
+/// 3. Verify only `-loom` directories appear in `GET /looms`
+#[test]
+fn discovery_ignores_non_loom_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_path = tmp.path().join("rig");
+    fs::create_dir_all(&rig_path).unwrap();
+
+    // Create a valid loom directory (ends in `-loom`)
+    let valid_loom = rig_path.join("valid-loom");
+    fs::create_dir(&valid_loom).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(tmp.path());
+    fs::write(valid_loom.join("review.md"), knot_content).unwrap();
+
+    // Create non-loom directories that should be ignored
+    let output_dir = rig_path.join("output");
+    fs::create_dir(&output_dir).unwrap();
+    fs::write(output_dir.join("something.txt"), "not a loom").unwrap();
+
+    let state_dir = rig_path.join("some-state");
+    fs::create_dir(&state_dir).unwrap();
+    fs::write(state_dir.join("state.json"), "{}" ).unwrap();
+
+    // A loom-log directory (created by LoomLogPort, should be ignored)
+    let log_dir = rig_path.join("phantom-id");
+    fs::create_dir(&log_dir).unwrap();
+    fs::write(log_dir.join(".loom-log"), "LoomStarted").unwrap();
+
+    let port = 32025;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: rig_path.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server should start listening");
+
+    // GET /looms should return only the valid loom
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have exactly 1 loom (non-loom dirs ignored)");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "valid-loom",
+        "loom id should be the only -loom directory"
+    );
+
+    // Verify non-loom directories are NOT in the list
+    let loom_ids: Vec<_> =
+        summaries.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert!(
+        !loom_ids.contains(&"output"),
+        "'output' directory should not be discovered as a loom"
+    );
+    assert!(
+        !loom_ids.contains(&"some-state"),
+        "'some-state' directory should not be discovered as a loom"
+    );
+    assert!(
+        !loom_ids.contains(&"phantom-id"),
+        "'phantom-id' directory (loom-log directory) should not be discovered as a loom"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Register a loom via API, stop server, restart — loom re-discovered
+/// with same configuration (knot files survive restart).
+///
+/// 1. Start server with empty rig
+/// 2. POST /looms with a loom that has a knot
+/// 3. Verify loom directory and knot file created on disk
+/// 4. Shutdown server
+/// 5. Restart server with same rig directory
+/// 6. Verify loom is re-discovered via GET /looms with matching config
+#[test]
+fn api_register_then_discover_after_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_path = tmp.path().join("rig");
+    let strand_dir = tmp.path().join("strands");
+    let tie_off_dir = tmp.path().join("tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+
+    let port = 32011;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: rig_path.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    // --- First server instance ---
+    let shutdown1 = spawn_server(config);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server 1 should start listening");
+
+    // POST /looms to register a new loom
+    let post_body = serde_json::json!({
+        "id": "persist-loom",
+        "knots": [{
+            "name": "persist-knot",
+            "agent_config": {
+                "goal": "Persist test",
+                "provider": "openai",
+                "model": "gpt-4o"
+            },
+            "prompt_template": {
+                "input_bundling": "full-file",
+                "instructions": "Review this content."
+            },
+            "strand_dir": strand_dir.to_string_lossy().to_string(),
+            "tie_off_dir": tie_off_dir.to_string_lossy().to_string()
+        }]
+    });
+
+    let (status, _body) =
+        http_post_json(&host_port, "/looms", &post_body)
+            .expect("POST /looms should respond");
+    assert!(
+        status.contains("201"),
+        "expected 201 Created, got: {status}"
+    );
+
+    // Verify loom directory and knot file created on disk
+    let loom_dir = rig_path.join("persist-loom");
+    assert!(
+        loom_dir.exists(),
+        "loom directory should be created on disk: {}",
+        loom_dir.display()
+    );
+    let knot_file = loom_dir.join("persist-knot.md");
+    assert!(
+        knot_file.exists(),
+        "knot file should be created on disk: {}",
+        knot_file.display()
+    );
+
+    // Shutdown first server
+    let _ = shutdown1.send(());
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // --- Second server instance (restart) ---
+    let config2 = AppConfig {
+        base_dir: rig_path.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let shutdown2 = spawn_server(config2);
+    wait_for_port(&host_port, 100, 50)
+        .expect("server 2 should start listening");
+
+    // GET /looms should re-discover the loom
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should re-discover exactly 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "persist-loom",
+        "loom id should match after restart"
+    );
+
+    // Verify knot configuration matches
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/persist-loom", 30, 100)
+            .expect("get loom endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().unwrap();
+    assert_eq!(knots.len(), 1, "loom should have 1 knot after restart");
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "persist-knot",
+        "knot id should match after restart"
+    );
+
+    let _ = shutdown2.send(());
+}
+
 // ── HTTP Helper Functions for Phase 5 Tests ────────────────────────────────
 
 /// Simple synchronous HTTP DELETE using raw TCP.

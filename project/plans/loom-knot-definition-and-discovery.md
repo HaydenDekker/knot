@@ -191,8 +191,8 @@ Changes:
 - Add integration test: `api_register_then_discover_after_restart` — register loom via API, verify loom directory created with knot files, stop server, restart, verify loom re-discovered with same config.
 
 - [x] Update existing integration test knot content to use `strand-dir` and `tie-off-dir`
-- [ ] Write new integration tests listed above (`discovery_ignores_non_loom_directories`, `api_register_then_discover_after_restart`)
-- [x] Full integration test suite green (29/29 passing)
+- [x] Write new integration tests listed above (`discovery_ignores_non_loom_directories`, `api_register_then_discover_after_restart`)
+- [x] Full integration test suite green (31/31 passing)
 
 ### Phase 6: Composition Root and Skills Update
 
@@ -204,10 +204,10 @@ Changes:
 - Update skills (`knot-init`, `knots-and-looms`, `knot-inspect`) to reference new API contract (new `RegisterLoomRequest` shape).
 - Update OpenAPI schema annotations to match new types.
 
-- [ ] Verify composition root compiles and integration tests pass
-- [ ] Update skill files with new API shapes
-- [ ] Update `utoipa` schema annotations for new types
-- [ ] Full build and test suite green
+- [x] Verify composition root compiles and integration tests pass
+- [x] Update skill files with new API shapes
+- [x] Update `utoipa` schema annotations for new types
+- [x] Full build and test suite green
 
 ## Notes
 

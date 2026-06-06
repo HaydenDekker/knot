@@ -422,19 +422,7 @@ fn generate_knot_file(knot: &KnotRequest) -> String {
     };
 
     format!(
-        "---\n\
-         name: {}\n\
-         agent-config:\n\
-           goal: {}\n\
-           provider: {}\n\
-           model: {}{}\n\
-         strand-dir: {}\n\
-         tie-off-dir: {}\n\
-         prompt-template:\n\
-           input-bundling: {}\n\
-           instructions: {}\n\
-         ---\n\n\
-         # {}\n",
+        "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\ntie-off-dir: {6}\nprompt-template:\n  input-bundling: {7}\n  instructions: {8}\n---\n\n# {9}\n",
         knot.name,
         quote_yaml_scalar(&knot.agent_config.goal),
         quote_yaml_scalar(&knot.agent_config.provider),
