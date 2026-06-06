@@ -272,9 +272,9 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Merge overlapping agent error variants in `agent_integration.rs`.
 
-- [ ] In `agent_integration.rs`, merge `full_pipeline_external_source_with_agent_error` into `full_pipeline_agent_error_in_state_and_log` (external dirs is a config variant — add a section or parameterise)
-- [ ] `cargo test --test agent_integration` — merged tests pass (expect ~3 tests instead of 4)
-- [ ] Commit: `test: consolidate agent_integration tests`
+- [x] In `agent_integration.rs`, merge `full_pipeline_external_source_with_agent_error` into `full_pipeline_agent_error_in_state_and_log` (external dirs is a config variant — add a section or parameterise)
+- [x] `cargo test --test agent_integration` — merged tests pass (expect ~3 tests instead of 4)
+- [x] Commit: `test: consolidate agent_integration tests`
 
 ### Phase 13: Remove `integration.rs` and verify
 
