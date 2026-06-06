@@ -4,7 +4,7 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::application::ports::{
@@ -14,7 +14,7 @@ use crate::application::ports::{
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
-use crate::domain::events::{LoomEvent, StrandEvent};
+use crate::domain::events::{ConfigEvent, LoomEvent, StrandEvent};
 use crate::domain::value_objects::RigAgentConfig;
 
 // ── Query Result Types ───────────────────────────────────────────────────
@@ -836,6 +836,1040 @@ impl ManageKnot {
         loom.knots.remove(found);
         self.store.register(loom);
         Ok(())
+    }
+}
+
+// ── ConfigEventHandler ───────────────────────────────────────────────
+
+/// Use case: handle configuration events for looms and knots.
+///
+/// Receives `ConfigEvent`s from the file watcher (via outbound adapter)
+/// and updates the in-memory `LoomStore`, starts/stops watchers, and
+/// writes loom-log entries.
+///
+/// - `ConfigEvent::LoomAdded` — scan the loom directory via
+///   `LoomRepository::scan()` and register the loom (same flow as
+///   `RegisterLoom`).
+/// - `ConfigEvent::KnotAdded` — add the knot to the loom in the store,
+///   log `KnotRegistered`, start watcher for `strand_dir`.
+/// - `ConfigEvent::KnotModified` — update the knot in the store, stop
+///   old watcher, start new watcher if `strand_dir` changed.
+/// - `ConfigEvent::KnotDeleted` — remove the knot from the loom in the
+///   store, stop watcher, log `KnotDeregistered`.
+pub struct ConfigEventHandler {
+    repository: Arc<dyn LoomRepository>,
+    log_port: Arc<dyn LoomLogPort>,
+    store: LoomStore,
+    event_source: Arc<dyn EventSource>,
+    rig_path: PathBuf,
+}
+
+impl ConfigEventHandler {
+    /// Create a new `ConfigEventHandler`.
+    pub fn new(
+        repository: Arc<dyn LoomRepository>,
+        log_port: Arc<dyn LoomLogPort>,
+        store: LoomStore,
+        event_source: Arc<dyn EventSource>,
+        rig_path: PathBuf,
+    ) -> Self {
+        Self {
+            repository,
+            log_port,
+            store,
+            event_source,
+            rig_path,
+        }
+    }
+
+    /// Handle a single configuration event.
+    pub fn execute(&self, event: ConfigEvent) -> Result<(), PortError> {
+        match event {
+            ConfigEvent::LoomAdded { loom_id } => {
+                self.handle_loom_added(&loom_id)
+            }
+            ConfigEvent::KnotAdded { loom_id, knot } => {
+                self.handle_knot_added(&loom_id, knot)
+            }
+            ConfigEvent::KnotModified { loom_id, knot } => {
+                self.handle_knot_modified(&loom_id, knot)
+            }
+            ConfigEvent::KnotDeleted { loom_id, knot_id } => {
+                self.handle_knot_deleted(&loom_id, &knot_id)
+            }
+        }
+    }
+
+    /// Handle `ConfigEvent::LoomAdded`.
+    ///
+    /// Scans the rig via `LoomRepository::scan()` to get the full loom
+    /// (with parsed knots and resolved paths), then registers it using
+    /// the same flow as `RegisterLoom`.
+    fn handle_loom_added(&self, loom_id: &LoomId) -> Result<(), PortError> {
+        // Skip if already registered
+        if self.store.get(loom_id).is_some() {
+            return Ok(());
+        }
+
+        // Scan the rig to get the loom with full knot data
+        let looms = self.repository.scan(&self.rig_path)?;
+        let loom = looms
+            .into_iter()
+            .find(|l| l.id == *loom_id)
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+
+        self.register_loom(&loom)
+    }
+
+    /// Handle `ConfigEvent::KnotAdded`.
+    ///
+    /// Adds the knot to the loom in the store, logs `KnotRegistered`,
+    /// and starts a watcher for its `strand_dir`.
+    fn handle_knot_added(
+        &self,
+        loom_id: &LoomId,
+        knot: Knot,
+    ) -> Result<(), PortError> {
+        let mut loom = self.store.get(loom_id)
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+
+        // Check for duplicate knot ID
+        if loom.knots.iter().any(|k| k.id == knot.id) {
+            // Idempotent — knot already present, skip
+            return Ok(());
+        }
+
+        let knot_strand_dir = knot.strand_dir.clone();
+        let knot_id = knot.id.clone();
+        loom.knots.push(knot);
+        self.store.register(loom);
+
+        // Log KnotRegistered
+        self.log_port.append(LoomEvent::KnotRegistered {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+        })?;
+
+        // Start watcher for knot's strand directory
+        self.event_source.set_loom_ids(
+            &knot_strand_dir,
+            loom_id,
+            &knot_id,
+        );
+        self.event_source.watch(&knot_strand_dir)
+            .map_err(|e| {
+                PortError::EventWatchFailed(format!(
+                    "failed to watch '{}': {}",
+                    knot_strand_dir.display(),
+                    e
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    /// Handle `ConfigEvent::KnotModified`.
+    ///
+    /// Updates the knot in the store, stops the old watcher if
+    /// `strand_dir` changed, and starts a new watcher for the
+    /// updated `strand_dir`.
+    fn handle_knot_modified(
+        &self,
+        loom_id: &LoomId,
+        knot: Knot,
+    ) -> Result<(), PortError> {
+        let mut loom = self.store.get(loom_id)
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+
+        let pos = loom.knots.iter()
+            .position(|k| k.id == knot.id)
+            .ok_or_else(|| PortError::LoomSaveFailed(format!(
+                "knot '{}' not found in loom '{}'",
+                knot.id.0,
+                loom_id.0
+            )))?;
+
+        // Check if strand_dir changed
+        let old_strand_dir = loom.knots[pos].strand_dir.clone();
+        let new_strand_dir = knot.strand_dir.clone();
+        let knot_id = knot.id.clone();
+        loom.knots[pos] = knot;
+        self.store.register(loom);
+
+        // If strand_dir changed, stop old watcher and start new one
+        if old_strand_dir != new_strand_dir {
+            self.event_source.unwatch(&old_strand_dir)
+                .map_err(|e| {
+                    PortError::EventUnwatchFailed(format!(
+                        "failed to unwatch '{}': {}",
+                        old_strand_dir.display(),
+                        e
+                    ))
+                })?;
+
+            self.event_source.set_loom_ids(
+                &new_strand_dir,
+                loom_id,
+                &knot_id,
+            );
+            self.event_source.watch(&new_strand_dir)
+                .map_err(|e| {
+                    PortError::EventWatchFailed(format!(
+                        "failed to watch '{}': {}",
+                        new_strand_dir.display(),
+                        e
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Handle `ConfigEvent::KnotDeleted`.
+    ///
+    /// Removes the knot from the loom in the store, stops its
+    /// `strand_dir` watcher, and logs `KnotDeregistered`.
+    fn handle_knot_deleted(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+    ) -> Result<(), PortError> {
+        let loom = self.store.get(loom_id)
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+
+        let pos = loom.knots.iter()
+            .position(|k| k.id == *knot_id)
+            .ok_or_else(|| PortError::LoomSaveFailed(format!(
+                "knot '{}' not found in loom '{}'",
+                knot_id.0,
+                loom_id.0
+            )))?;
+
+        let knot = &loom.knots[pos];
+        let strand_dir = knot.strand_dir.clone();
+
+        // Remove knot from loom
+        let mut updated_loom = loom;
+        updated_loom.knots.remove(pos);
+        self.store.register(updated_loom);
+
+        // Stop watcher for the knot's strand directory
+        self.event_source.unwatch(&strand_dir)
+            .map_err(|e| {
+                PortError::EventUnwatchFailed(format!(
+                    "failed to unwatch '{}': {}",
+                    strand_dir.display(),
+                    e
+                ))
+            })?;
+
+        // Log KnotDeregistered
+        self.log_port.append(LoomEvent::KnotDeregistered {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+        })?;
+
+        Ok(())
+    }
+
+    /// Register a loom: log events, store, and start watchers.
+    fn register_loom(&self, loom: &Loom) -> Result<(), PortError> {
+        // Open the loom activity log
+        self.log_port.open(&loom.id)?;
+
+        // Append KnotRegistered for each knot
+        for knot in &loom.knots {
+            self.log_port.append(LoomEvent::KnotRegistered {
+                loom_id: loom.id.clone(),
+                knot_id: knot.id.clone(),
+            })?;
+        }
+
+        // Append LoomStarted event
+        self.log_port.append(LoomEvent::LoomStarted {
+            loom_id: loom.id.clone(),
+        })?;
+
+        // Store the loom
+        self.store.register(loom.clone());
+
+        // Start file watchers for each knot's strand directory
+        for knot in &loom.knots {
+            self.event_source.set_loom_ids(
+                &knot.strand_dir,
+                &loom.id,
+                &knot.id,
+            );
+            self.event_source.watch(&knot.strand_dir)
+                .map_err(|e| {
+                    PortError::EventWatchFailed(format!(
+                        "failed to watch '{}': {}",
+                        knot.strand_dir.display(),
+                        e
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
+}
+
+// ── ConfigEventHandler Tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod config_handler_tests {
+    use super::*;
+    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    // ── Tracking EventSource Mock ──────────────────────────────────────
+
+    /// A mock `EventSource` that records all `watch()` and `unwatch()` calls.
+    struct TrackingEventSource {
+        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
+        unwatch_calls: Arc<Mutex<Vec<PathBuf>>>,
+        set_ids_calls: Arc<Mutex<Vec<(PathBuf, LoomId, KnotId)>>>,
+    }
+
+    impl TrackingEventSource {
+        fn new(
+        ) -> (
+            Self,
+            Arc<Mutex<Vec<PathBuf>>>,
+            Arc<Mutex<Vec<PathBuf>>>,
+            Arc<Mutex<Vec<(PathBuf, LoomId, KnotId)>>>,
+        ) {
+            let watch_calls = Arc::new(Mutex::new(vec![]));
+            let unwatch_calls = Arc::new(Mutex::new(vec![]));
+            let set_ids_calls = Arc::new(Mutex::new(vec![]));
+            let source = Self {
+                watch_calls: watch_calls.clone(),
+                unwatch_calls: unwatch_calls.clone(),
+                set_ids_calls: set_ids_calls.clone(),
+            };
+            (source, watch_calls, unwatch_calls, set_ids_calls)
+        }
+    }
+
+    impl EventSource for TrackingEventSource {
+        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.watch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.unwatch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn set_loom_ids(
+            &self,
+            source_dir: &Path,
+            loom_id: &LoomId,
+            knot_id: &KnotId,
+        ) {
+            self.set_ids_calls
+                .lock()
+                .unwrap()
+                .push((
+                    source_dir.to_path_buf(),
+                    loom_id.clone(),
+                    knot_id.clone(),
+                ));
+        }
+    }
+
+    // ── Mock LoomLogPort ───────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort {
+        events: Arc<Mutex<Vec<LoomEvent>>>,
+    }
+
+    impl MockLoomLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            let port = Self {
+                events: events.clone(),
+            };
+            (port, events)
+        }
+    }
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock LoomRepository ────────────────────────────────────────────
+
+    struct MockLoomRepository {
+        scan_result: Arc<Mutex<Vec<Loom>>>,
+    }
+
+    impl LoomRepository for MockLoomRepository {
+        fn scan(
+            &self,
+            _rig: &std::path::Path,
+        ) -> Result<Vec<Loom>, PortError> {
+            Ok(self.scan_result.lock().unwrap().clone())
+        }
+
+        fn get(
+            &self,
+            _id: &LoomId,
+        ) -> Result<Option<Loom>, PortError> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<Loom>, PortError> {
+            Ok(vec![])
+        }
+
+        fn save(&self, _loom: Loom) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────
+
+    /// Build a knot with the given ID and strand_dir.
+    fn build_knot(id: impl Into<String>) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_config: AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
+            },
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
+        }
+    }
+
+    /// Build a knot with custom strand_dir.
+    fn build_knot_with_strand_dir(
+        id: impl Into<String>,
+        strand_dir: PathBuf,
+    ) -> Knot {
+        let mut knot = build_knot(id);
+        knot.strand_dir = strand_dir;
+        knot
+    }
+
+    /// Build a loom with the given ID and optional knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    // ── Tests ──────────────────────────────────────────────────────────
+
+    /// `ConfigEventHandler` with `ConfigEvent::LoomAdded`: scans the
+    /// loom dir via repository, registers loom in store, logs events,
+    /// and starts watchers for each knot's strand directory.
+    #[test]
+    fn config_handler_loom_added() {
+        let loom_id = LoomId("new-loom".to_string());
+        let loom = build_loom(
+            "new-loom",
+            vec![build_knot("k1"), build_knot("k2")],
+        );
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![loom.clone()])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let store = LoomStore::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom is in the store
+        let stored = store.get(&loom_id);
+        assert!(stored.is_some(), "loom should be in store");
+        let stored = stored.unwrap();
+        assert_eq!(stored.id, loom_id);
+        assert_eq!(stored.knots.len(), 2);
+
+        // Log events: open, 2x KnotRegistered, LoomStarted
+        let events = logged_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "should log KnotRegistered x2 + LoomStarted"
+        );
+        match &events[0] {
+            LoomEvent::KnotRegistered { loom_id: lid, knot_id } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("Expected KnotRegistered, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotRegistered { loom_id: lid, knot_id } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k2");
+            }
+            other => panic!("Expected KnotRegistered, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::LoomStarted { loom_id: lid } => {
+                assert_eq!(*lid, loom_id);
+            }
+            other => panic!("Expected LoomStarted, got {other:?}"),
+        }
+
+        // Watchers started for each knot's strand directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(
+            watches.len(),
+            2,
+            "should watch 2 knot strand directories"
+        );
+        let watched: HashSet<_> =
+            watches.iter().map(|p| p.as_path()).collect();
+        assert!(watched.contains(Path::new("strands")));
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::LoomAdded` for an
+    /// already-registered loom is idempotent (no-op).
+    #[test]
+    fn config_handler_loom_added_already_registered() {
+        let loom = build_loom("existing-loom", vec![build_knot("k1")]);
+        let loom_id = loom.id.clone();
+
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+        });
+
+        // Should succeed (idempotent)
+        assert!(result.is_ok(), "should succeed for existing loom");
+
+        // No watchers started
+        let watches = watch_calls.lock().unwrap();
+        assert!(
+            watches.is_empty(),
+            "no watchers should be started for existing loom"
+        );
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotAdded`: adds the
+    /// knot to the loom in the store, logs `KnotRegistered`, and
+    /// starts a watcher for the knot's strand directory.
+    #[test]
+    fn config_handler_knot_added() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let new_knot = build_knot("k2");
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: new_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom now has 2 knots
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+        let k2 = loom.knots.iter()
+            .find(|k| k.id == KnotId("k2".to_string()))
+            .unwrap();
+        assert_eq!(k2.id, KnotId("k2".to_string()));
+
+        // Log: KnotRegistered for k2
+        let events = logged_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotRegistered {
+                loom_id: lid,
+                knot_id,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k2");
+            }
+            other => panic!("Expected KnotRegistered, got {other:?}"),
+        }
+
+        // Watcher started for new knot's strand directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], PathBuf::from("strands"));
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotAdded` for a
+    /// duplicate knot is idempotent (no-op).
+    #[test]
+    fn config_handler_knot_added_duplicate() {
+        let loom_id = LoomId("test-loom".to_string());
+        let knot = build_knot("k1");
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: knot,
+        });
+
+        // Should succeed (idempotent)
+        assert!(result.is_ok(), "should succeed for duplicate knot");
+
+        // Loom still has 1 knot
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 1);
+
+        // No new log entries
+        let events = logged_events.lock().unwrap();
+        assert!(events.is_empty());
+
+        // No new watchers
+        let watches = watch_calls.lock().unwrap();
+        assert!(watches.is_empty());
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotAdded` returns
+    /// error when loom does not exist.
+    #[test]
+    fn config_handler_knot_added_loom_not_found() {
+        let store = LoomStore::new();
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _) = MockLoomLogPort::new();
+        let (event_source, _, _, _) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: LoomId("nonexistent".to_string()),
+            knot: build_knot("k1"),
+        });
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomNotFound(id) => {
+                assert_eq!(id, LoomId("nonexistent".to_string()));
+            }
+            other => panic!("Expected LoomNotFound, got {other:?}"),
+        }
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified`: updates
+    /// the knot in the store, stops the old watcher, and starts a
+    /// new watcher if `strand_dir` changed.
+    #[test]
+    fn config_handler_knot_modified() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_knot = build_knot("k1");
+        let existing_loom =
+            build_loom("test-loom", vec![existing_knot]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            _watch_calls,
+            unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        // Update knot with different strand_dir
+        let updated_knot =
+            build_knot_with_strand_dir("k1", PathBuf::from("new-strands"));
+
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: updated_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Knot is updated in store
+        let loom = store.get(&loom_id).unwrap();
+        let k1 = loom.knots.iter()
+            .find(|k| k.id == KnotId("k1".to_string()))
+            .unwrap();
+        assert_eq!(
+            k1.strand_dir,
+            PathBuf::from("new-strands")
+        );
+
+        // Old watcher stopped
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 1);
+        assert_eq!(unwatches[0], PathBuf::from("strands"));
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` with
+    /// same `strand_dir`: updates knot without watcher changes.
+    #[test]
+    fn config_handler_knot_modified_same_strand_dir() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_knot = build_knot("k1");
+        let existing_loom =
+            build_loom("test-loom", vec![existing_knot]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _) = MockLoomLogPort::new();
+        let (
+            event_source,
+            _watch_calls,
+            unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        // Update knot with same strand_dir (only config changed)
+        let mut updated_knot = build_knot("k1");
+        updated_knot.agent_config.model = "claude-sonnet".to_string();
+
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: updated_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // No watcher changes
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert!(
+            unwatches.is_empty(),
+            "no unwatch when strand_dir unchanged"
+        );
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` returns
+    /// error when knot does not exist in the loom.
+    #[test]
+    fn config_handler_knot_modified_not_found() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _) = MockLoomLogPort::new();
+        let (event_source, _, _, _) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: build_knot("k_unknown"),
+        });
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomSaveFailed(msg) => {
+                assert!(msg.contains("not found"));
+            }
+            other => panic!("Expected LoomSaveFailed, got {other:?}"),
+        }
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotDeleted`: removes
+    /// the knot from the loom in the store, stops its watcher, and
+    /// logs `KnotDeregistered`.
+    #[test]
+    fn config_handler_knot_deleted() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom = build_loom(
+            "test-loom",
+            vec![
+                build_knot("k1"),
+                build_knot("k2"),
+                build_knot("k3"),
+            ],
+        );
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            _watch_calls,
+            unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let knot_id = KnotId("k2".to_string());
+        let result = handler.execute(ConfigEvent::KnotDeleted {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Knot removed from loom
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+        let ids: Vec<_> = loom.knots.iter()
+            .map(|k| k.id.0.as_str())
+            .collect();
+        assert!(ids.contains(&"k1"));
+        assert!(ids.contains(&"k3"));
+        assert!(!ids.contains(&"k2"));
+
+        // Watcher stopped for the deleted knot's strand directory
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 1);
+        assert_eq!(unwatches[0], PathBuf::from("strands"));
+
+        // Log: KnotDeregistered
+        let events = logged_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotDeregistered {
+                loom_id: lid,
+                knot_id: kid,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+            }
+            other => panic!("Expected KnotDeregistered, got {other:?}"),
+        }
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotDeleted` returns
+    /// error when knot does not exist in the loom.
+    #[test]
+    fn config_handler_knot_deleted_not_found() {
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _) = MockLoomLogPort::new();
+        let (event_source, _, _, _) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotDeleted {
+            loom_id: loom_id.clone(),
+            knot_id: KnotId("k_unknown".to_string()),
+        });
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomSaveFailed(msg) => {
+                assert!(msg.contains("not found"));
+            }
+            other => panic!("Expected LoomSaveFailed, got {other:?}"),
+        }
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotDeleted` returns
+    /// error when loom does not exist.
+    #[test]
+    fn config_handler_knot_deleted_loom_not_found() {
+        let store = LoomStore::new();
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, _) = MockLoomLogPort::new();
+        let (event_source, _, _, _) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotDeleted {
+            loom_id: LoomId("nonexistent".to_string()),
+            knot_id: KnotId("k1".to_string()),
+        });
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::LoomNotFound(id) => {
+                assert_eq!(id, LoomId("nonexistent".to_string()));
+            }
+            other => panic!("Expected LoomNotFound, got {other:?}"),
+        }
     }
 }
 

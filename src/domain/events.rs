@@ -88,6 +88,11 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         error: String,
     },
+    /// A knot was deregistered from the loom.
+    KnotDeregistered {
+        loom_id: LoomId,
+        knot_id: KnotId,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -657,6 +662,10 @@ mod tests {
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 error: "boom".to_string(),
+            },
+            LoomEvent::KnotDeregistered {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
             },
         ];
 
