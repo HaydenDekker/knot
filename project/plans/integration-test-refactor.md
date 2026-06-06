@@ -163,12 +163,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move composition root wiring test (only non-HTTP test).
 
-- [ ] Create `tests/composition.rs`
-- [ ] Copy from `integration.rs`: `build_app_context_wires_layers`
-- [ ] `cargo test --test composition` — 1 test passes
-- [ ] Remove that test from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 25 tests pass
-- [ ] Commit: `test: extract composition from integration.rs`
+- [x] Create `tests/composition.rs`
+- [x] Copy from `integration.rs`: `build_app_context_wires_layers`
+- [x] `cargo test --test composition` — 1 test passes
+- [x] Remove that test from `integration.rs`
+- [x] `cargo test --test integration` — remaining 25 tests pass
+- [x] Commit: `test: extract composition from integration.rs`
 
 ### Phase 3: Extract `discovery.rs` (4 tests)
 
