@@ -251,12 +251,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move demo workflow verification tests.
 
-- [ ] Create `tests/demo.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `demo_knot_test_processes_sample_document`, `demo_knot_test_with_tools`
-- [ ] `cargo test --test demo` — 2 tests pass
-- [ ] Remove those 2 tests from `integration.rs`
-- [ ] `cargo test --test integration` — `integration.rs` is now empty (only `mod helpers;` remaining)
-- [ ] Commit: `test: extract demo from integration.rs`
+- [x] Create `tests/demo.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `demo_knot_test_processes_sample_document`, `demo_knot_test_with_tools`
+- [x] `cargo test --test demo` — 2 tests pass
+- [x] Remove those 2 tests from `integration.rs`
+- [x] `cargo test --test integration` — `integration.rs` is now empty (only `mod helpers;` remaining)
+- [x] Commit: `test: extract demo from integration.rs`
 
 ### Phase 11: Consolidate pipeline tests
 
