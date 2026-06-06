@@ -4,7 +4,7 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::application::ports::{
@@ -24,6 +24,12 @@ use crate::domain::value_objects::RigAgentConfig;
 pub struct LoomSummary {
     /// The loom's unique ID.
     pub id: LoomId,
+    /// The source directory path.
+    #[schema(value_type = String)]
+    pub source_dir: PathBuf,
+    /// The tie-off (output) directory path.
+    #[schema(value_type = String)]
+    pub tie_off_dir: PathBuf,
     /// Number of knots in this loom.
     pub knot_count: usize,
 }
@@ -315,6 +321,8 @@ impl ListLooms {
             .into_iter()
             .map(|loom| LoomSummary {
                 id: loom.id,
+                source_dir: PathBuf::from(""),
+                tie_off_dir: PathBuf::from(""),
                 knot_count: loom.knots.len(),
             })
             .collect()

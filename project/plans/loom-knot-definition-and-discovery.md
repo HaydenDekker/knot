@@ -113,9 +113,11 @@ Changes:
 - `ProcessStrand` use case: uses `knot.strand_dir` instead of `knot.source_dir.unwrap_or(loom.source_dir)`.
 - Update all use case tests: rename `source_dir` → `strand_dir`, remove `Loom.source_dir` construction.
 
-- [ ] Write failing tests: update existing `DiscoverLooms`, `RegisterLoom`, `ProcessStrand` tests with new field names and required dirs
-- [ ] Implement: update port trait signatures, update use case implementations, update `ProcessStrand` to use `knot.strand_dir`
-- [ ] All application tests green
+- [x] Write failing tests: update existing `DiscoverLooms`, `RegisterLoom`, `ProcessStrand` tests with new field names and required dirs
+- [x] Implement: update port trait signatures, update use case implementations, update `ProcessStrand` to use `knot.strand_dir`
+- [x] All application tests green
+
+**Note:** `skill_integration::knots_and_looms_register_and_list` fails because `POST /looms` handler still uses the old `source_dir` scan flow — fixed in Phase 4.
 
 ### Phase 2: Outbound Adapters — Loom Repository with `-loom` Filter
 

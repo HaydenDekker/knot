@@ -424,6 +424,8 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
                 .into_iter()
                 .map(|loom| LoomSummary {
                     id: loom.id,
+                    source_dir: PathBuf::from(""),
+                    tie_off_dir: PathBuf::from(""),
                     knot_count: loom.knots.len(),
                 })
                 .collect();
