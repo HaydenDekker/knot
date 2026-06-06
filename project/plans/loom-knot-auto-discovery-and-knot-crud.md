@@ -111,9 +111,9 @@ pub enum ConfigEvent {
 }
 ```
 
-- [ ] Failing test: `domain::events::tests::config_event_types` — all four variants exist, carry correct data, serialise round-trip
-- [ ] Implement: `ConfigEvent` enum in `src/domain/events.rs`
-- [ ] All domain tests green
+- [x] Failing test: `domain::events::tests::config_event_types` — all four variants exist, carry correct data, serialise round-trip
+- [x] Implement: `ConfigEvent` enum in `src/domain/events.rs`
+- [x] All domain tests green
 
 ### Phase 1: Application — `ConfigEventHandler` Use Case
 
