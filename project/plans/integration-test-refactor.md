@@ -18,7 +18,7 @@ Specific issues:
 
 Split `tests/integration.rs` into feature-focused modules under `tests/`, each with a clear responsibility. Extract shared infrastructure (HTTP helpers, test server spawning, knot fixture creation) into `tests/helpers.rs`. Every test should be findable by feature area, and the test file structure should mirror the system's architecture phases.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-06)
 
 ## Existing Tests
 

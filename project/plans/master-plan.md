@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 15 | [Integration Test Refactor](integration-test-refactor.md) | ⬜ Planned | 2026-06-06 |
+| 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
 | 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
 | 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ✅ Complete | 2026-06-06 |
 | 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ✅ Complete | 2026-06-05 |
@@ -70,8 +70,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 15. Integration Test Refactor
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-06
+**Completed:** 2026-06-06
 **Goal:** Split 3272-line `tests/integration.rs` into 10 feature-focused modules with shared infrastructure, reducing ~31 tests to ~25 through consolidation of duplicate pipeline variants.
 
 Full details in [integration-test-refactor.md](integration-test-refactor.md).
