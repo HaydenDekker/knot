@@ -144,8 +144,10 @@ Changes:
 - `FileSystemTieOffSink`: no changes needed — uses `knot.tie_off_dir` which is renamed but same logic.
 - `NotifyEventSource`: no changes needed — uses paths passed to `watch()`.
 
-- [ ] Verify existing tests still pass after domain changes propagate
-- [ ] All outbound adapter tests green
+- [x] Verify existing tests still pass after domain changes propagate
+- [x] All outbound adapter tests green
+
+**No code changes needed.** FileSystemLoomLog, FileSystemTieOffSink, NotifyEventSource all work correctly with the renamed fields. The -loom naming convention prevents log directory collision.
 
 ### Phase 4: Inbound Adapter — `POST /looms` Handler Rewrite
 
