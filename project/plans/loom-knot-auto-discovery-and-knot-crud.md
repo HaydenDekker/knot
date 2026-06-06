@@ -197,14 +197,14 @@ Changes:
 - `map_event()` extended to produce `ConfigEvent` for rig/loom watches
 - The callback sends to the appropriate channel based on the watch type
 
-- [ ] Failing test: `rig_dir_new_loom_emits_config_event` — watch rig dir with `WatchType::Rig`; create `new-loom` directory → `ConfigEvent::LoomAdded` emitted on config channel
-- [ ] Failing test: `loom_dir_new_knot_emits_config_event` — watch loom dir with `WatchType::Loom(id)`; create `new-knot.md` → `ConfigEvent::KnotAdded` emitted
-- [ ] Failing test: `loom_dir_edit_knot_emits_config_event` — watch loom dir; edit `existing-knot.md` → `ConfigEvent::KnotModified` emitted
-- [ ] Failing test: `loom_dir_delete_knot_emits_config_event` — watch loom dir; delete `knot.md` → `ConfigEvent::KnotDeleted` emitted
-- [ ] Implement: `ConfigEventSender` channel in `NotifyEventSource`, `WatchType` enum, extended `map_event()`
-- [ ] Update existing `EventSource` port trait to include `register_watch(path, watch_type)` or similar
-- [ ] Update existing tests to use new API (strand watching still works)
-- [ ] All outbound adapter tests green
+- [x] Failing test: `rig_dir_new_loom_emits_config_event` — watch rig dir with `WatchType::Rig`; create `new-loom` directory → `ConfigEvent::LoomAdded` emitted on config channel
+- [x] Failing test: `loom_dir_new_knot_emits_config_event` — watch loom dir with `WatchType::Loom(id)`; create `new-knot.md` → `ConfigEvent::KnotAdded` emitted
+- [x] Failing test: `loom_dir_edit_knot_emits_config_event` — watch loom dir; edit `existing-knot.md` → `ConfigEvent::KnotModified` emitted
+- [x] Failing test: `loom_dir_delete_knot_emits_config_event` — watch loom dir; delete `knot.md` → `ConfigEvent::KnotDeleted` emitted
+- [x] Implement: `ConfigEventSender` channel in `NotifyEventSource`, `WatchType` enum, extended `map_event()`
+- [x] Update existing `EventSource` port trait to include `register_watch(path, watch_type)` or similar
+- [x] Update existing tests to use new API (strand watching still works)
+- [x] All outbound adapter tests green
 
 ### Phase 4: Composition Root — Wire Config Event Channel and Handler
 
