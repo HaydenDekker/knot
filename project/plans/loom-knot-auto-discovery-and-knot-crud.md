@@ -131,13 +131,13 @@ For `KnotModified`: re-parse the `.md` file, update the knot in the store, stop 
 
 For `KnotDeleted`: remove the knot from the loom in the store, stop watcher for its `strand_dir`, log `KnotDeregistered` (new `LoomEvent` variant).
 
-- [ ] Failing test: `config_handler_loom_added` — given `ConfigEvent::LoomAdded`, handler scans loom dir via repository, registers loom in store, logs events, starts watchers
-- [ ] Failing test: `config_handler_knot_added` — given `ConfigEvent::KnotAdded`, handler adds knot to loom in store, logs `KnotRegistered`, starts watcher
-- [ ] Failing test: `config_handler_knot_modified` — given `ConfigEvent::KnotModified`, handler updates knot in store, stops old watcher, starts new watcher
-- [ ] Failing test: `config_handler_knot_deleted` — given `ConfigEvent::KnotDeleted`, handler removes knot from loom in store, stops watcher
-- [ ] Add `LoomEvent::KnotDeregistered { loom_id, knot_id }` variant
-- [ ] Implement: `ConfigEventHandler` use case in `src/application/usecases.rs`
-- [ ] All application tests green
+- [x] Failing test: `config_handler_loom_added` — given `ConfigEvent::LoomAdded`, handler scans loom dir via repository, registers loom in store, logs events, starts watchers
+- [x] Failing test: `config_handler_knot_added` — given `ConfigEvent::KnotAdded`, handler adds knot to loom in store, logs `KnotRegistered`, starts watcher
+- [x] Failing test: `config_handler_knot_modified` — given `ConfigEvent::KnotModified`, handler updates knot in store, stops old watcher, starts new watcher
+- [x] Failing test: `config_handler_knot_deleted` — given `ConfigEvent::KnotDeleted`, handler removes knot from loom in store, stops watcher
+- [x] Add `LoomEvent::KnotDeregistered { loom_id, knot_id }` variant
+- [x] Implement: `ConfigEventHandler` use case in `src/application/usecases.rs`
+- [x] All application tests green
 
 ### Phase 2: Application — `ManageKnot` Use Case
 
