@@ -280,11 +280,11 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Final cleanup — remove the empty file and verify the full suite.
 
-- [ ] Delete `tests/integration.rs` (empty after Phase 10)
-- [ ] Run full test suite: `cargo test --test '*'`
-- [ ] Verify final test count: expect ~27 tests across 11 integration modules + 4 existing modules (total ~57 integration tests)
-- [ ] Verify total test time is not significantly increased (same parallelism)
-- [ ] Commit: `test: remove empty integration.rs`
+- [x] Delete `tests/integration.rs` (empty after Phase 10)
+- [x] Run full test suite: `cargo test --test '*'`
+- [x] Verify final test count: expect ~27 tests across 11 integration modules + 4 existing modules (total ~57 integration tests)
+- [x] Verify total test time is not significantly increased (same parallelism)
+- [x] Commit: `test: remove empty integration.rs`
 
 ## Notes
 
