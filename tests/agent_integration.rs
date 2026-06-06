@@ -13,32 +13,43 @@ use knot::RigAgentConfig;
 
 use helpers::*;
 
-// ── Agent Error Logging in Knot-State and Loom-Log ─────────────────────
+// ── Agent Error Logging in Knot-State, Loom-Log, and Tie-Off ─────────────
 
 /// Full pipeline test with a nonexistent agent CLI.
 ///
-/// 1. Create a rig with a loom
-/// 2. Configure `cli_path` to a nonexistent binary
-/// 3. Create a strand — agent will fail
-/// 4. Verify knot-state shows `Failed` with error message
-/// 5. Verify loom-log contains `StrandProcessed` with error field
+/// Covers both root-level and rig-subdirectory layouts with external
+/// source directories — the core error path is identical regardless of
+/// directory layout.
+///
+/// 1. Create a rig (subdirectory) with a loom and external strand/tie-off dirs.
+/// 2. Configure `cli_path` to a nonexistent binary.
+/// 3. Verify loom is discovered via HTTP.
+/// 4. Create a strand — agent will fail.
+/// 5. Verify knot-state shows `Failed` with error message.
+/// 6. Verify loom-log contains `StrandProcessed` with error field.
+/// 7. Verify tie-off file written with `Processing failed` content.
 #[test]
 fn full_pipeline_agent_error_in_state_and_log() {
     let tmp = tempfile::tempdir().unwrap();
-    let base_dir = tmp.path().to_path_buf();
+    let root = tmp.path();
 
-    // Create a loom directory with a knot definition file
-    let loom_dir = base_dir.join("error-loom");
+    // Rig subdirectory (what the server scans for looms).
+    let rig = root.join("rig");
+    fs::create_dir(&rig).unwrap();
+
+    // Loom directory with knot definition.
+    let loom_dir = rig.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    // External source directories (strands and tie-offs live outside the rig).
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31998;
     let host_port = format!("127.0.0.1:{port}");
 
-    // Use a nonexistent CLI path
+    // Use a nonexistent CLI path.
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        base_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "/nonexistent/path/to/fake-agent".to_string(),
@@ -51,14 +62,20 @@ fn full_pipeline_agent_error_in_state_and_log() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    // Create a strand to trigger processing
+    // 1. Verify loom is discovered via HTTP.
+    let (status, _body) =
+        http_get_retry(&host_port, "/looms/error-loom", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    // 2. Create a strand to trigger processing.
     let strand_path = strand_dir.join("error-strand.md");
     fs::write(&strand_path, "error strand content").unwrap();
 
-    // Wait for debounce + processing
+    // Wait for debounce + processing.
     std::thread::sleep(Duration::from_millis(500));
 
-    // 1. Verify knot status shows `Failed` with error message
+    // 3. Verify knot status shows `Failed` with error message.
     let (status, body) =
         http_get(&host_port, "/looms/error-loom/knots/review-knot")
             .expect("knot status endpoint should respond");
@@ -80,108 +97,8 @@ fn full_pipeline_agent_error_in_state_and_log() {
         "error should mention command not found, got: {error_msg}"
     );
 
-    // 2. Verify loom-log contains StrandProcessed with error field
-    let log_path = base_dir.join("error-loom/.loom-log");
-    assert!(
-        log_path.exists(),
-        "loom log should exist: {}",
-        log_path.display()
-    );
-    let log_content =
-        fs::read_to_string(&log_path).expect("should read log file");
-    assert!(
-        log_content.contains("StrandProcessed"),
-        "loom log should contain StrandProcessed entry"
-    );
-    assert!(
-        log_content.contains("command not found"),
-        "loom log should contain error details, got: {log_content}"
-    );
-
-    let _ = shutdown.send(());
-}
-
-// ── Full Pipeline with External Source + Agent Error ────────────────────
-
-/// End-to-end test combining `.loom-config.yaml` external directories with
-/// a nonexistent agent CLI.
-///
-/// 1. Loom in a subdirectory with nonexistent agent CLI (`/no/such/agent`).
-/// 2. Create strand → triggers processing → agent fails.
-/// 3. Verify:
-///    - Knot status shows `Failed` with descriptive error.
-///    - Loom-log contains `StrandProcessed` with error details.
-///    - Tie-off file written at loom's `.knot-output` with `Failed` status.
-#[test]
-fn full_pipeline_external_source_with_agent_error() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-
-    // Rig subdirectory (what the server scans for looms).
-    let rig = root.join("rig");
-    fs::create_dir(&rig).unwrap();
-
-    // Loom directory with knot definition.
-    let loom_dir = rig.join("error-external-loom");
-    fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
-    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
-
-    let port = 32001;
-    let host_port = format!("127.0.0.1:{port}");
-
-    // Use a nonexistent agent CLI path.
-    let config = AppConfig {
-        base_dir: rig.clone(),
-        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        rig_config: RigAgentConfig {
-            cli_path: "/no/such/agent".to_string(),
-            cli_args: vec![],
-        },
-        ..AppConfig::default_config()
-    };
-
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
-        .expect("server should start listening");
-
-    // 1. Verify loom is discovered.
-    let (status, _body) =
-        http_get_retry(&host_port, "/looms/error-external-loom", 30, 100)
-            .expect("looms endpoint should respond");
-    assert!(status.contains("200"), "expected 200, got: {status}");
-
-    // 2. Create strand in loom source directory → triggers processing.
-    let strand_path = strand_dir.join("error-strand.md");
-    fs::write(&strand_path, "external error strand content").unwrap();
-
-    // Wait for debounce + processing.
-    std::thread::sleep(Duration::from_millis(500));
-
-    // 3. Verify knot status shows `Failed` with descriptive error.
-    let (status, body) =
-        http_get(&host_port, "/looms/error-external-loom/knots/review-knot")
-            .expect("knot status endpoint should respond");
-    assert!(status.contains("200"), "expected 200, got: {status}");
-    let knot_status: serde_json::Value =
-        serde_json::from_str(&body).expect("should be JSON");
-    assert_eq!(
-        knot_status["status"].as_str().unwrap(),
-        "failed",
-        "knot status should be failed"
-    );
-    assert!(
-        knot_status["last_error"].is_string(),
-        "knot status should have error message"
-    );
-    let error_msg = knot_status["last_error"].as_str().unwrap();
-    assert!(
-        error_msg.contains("command not found"),
-        "error should mention command not found, got: {error_msg}"
-    );
-
-    // 4. Verify loom-log contains `StrandProcessed` with error details.
-    let log_path = rig.join("error-external-loom/.loom-log");
+    // 4. Verify loom-log contains StrandProcessed with error field.
+    let log_path = rig.join("error-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -199,8 +116,7 @@ fn full_pipeline_external_source_with_agent_error() {
     );
 
     // 5. Verify tie-off file written with Failed content.
-    let tie_off_path =
-        tie_off_dir.join("error-strand.md.output");
+    let tie_off_path = tie_off_dir.join("error-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
