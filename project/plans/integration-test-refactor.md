@@ -262,11 +262,11 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Merge overlapping pipeline variants in `pipeline.rs` into fewer, clearer tests.
 
-- [ ] In `pipeline.rs`, merge `full_pipeline_http_observable` into `full_pipeline_create_modify_delete` — add HTTP assertion block to the existing test
-- [ ] In `pipeline.rs`, merge `full_pipeline_subdirectory_rig` as a section of `full_pipeline_create_modify_delete` or rename to `full_pipeline_with_subdirectory_rig` keeping its own assertions
-- [ ] In `pipeline.rs`, merge `full_pipeline_external_source_with_mock_agent_success` into the main pipeline test as a section or rename to `full_pipeline_with_external_dirs`
-- [ ] `cargo test --test pipeline` — merged tests pass (expect ~3 tests instead of 6)
-- [ ] Commit: `test: consolidate pipeline tests`
+- [x] In `pipeline.rs`, merge `full_pipeline_http_observable` into `full_pipeline_create_modify_delete` — add HTTP assertion block to the existing test
+- [x] In `pipeline.rs`, merge `full_pipeline_subdirectory_rig` as a section of `full_pipeline_create_modify_delete` or rename to `full_pipeline_with_subdirectory_rig` keeping its own assertions
+- [x] In `pipeline.rs`, merge `full_pipeline_external_source_with_mock_agent_success` into the main pipeline test as a section or rename to `full_pipeline_with_external_dirs`
+- [x] `cargo test --test pipeline` — merged tests pass (expect ~3 tests instead of 6)
+- [x] Commit: `test: consolidate pipeline tests`
 
 ### Phase 12: Consolidate agent integration tests
 
