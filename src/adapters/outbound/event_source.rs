@@ -6,7 +6,6 @@
 //! subscribes to the strand channel, and the `ConfigEventHandler`
 //! subscribes to the config channel.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -40,7 +39,12 @@ pub enum WatchType {
 struct InnerState {
     strand_sender: mpsc::Sender<StrandEvent>,
     config_sender: mpsc::Sender<ConfigEvent>,
-    watched_dirs: HashMap<PathBuf, WatchType>,
+    /// Watched directories with their types.
+    ///
+    /// Stored as a `Vec` so `find_watch_type` can iterate in
+    /// longest-path-first order — more specific (longer) paths
+    /// always take priority over broader (shorter) parent paths.
+    watched_dirs: Vec<(PathBuf, WatchType)>,
 }
 
 impl InnerState {
@@ -121,34 +125,93 @@ impl InnerState {
 
     /// Map events for rig directory watches.
     ///
-    /// Detects new `*-loom` directories and emits `ConfigEvent::LoomAdded`.
+    /// Handles two types of events:
+    /// 1. New `*-loom` directories at the rig root → `ConfigEvent::LoomAdded`
+    /// 2. `.md` file changes inside existing loom directories → `ConfigEvent::Knot*`
     fn map_rig_event(
         &self,
         event: &Event,
         path: &Path,
     ) -> (Option<StrandEvent>, Option<ConfigEvent>) {
-        // Only process directory creation events
-        if !path.is_dir() {
+        // Case 1: New loom directory at the rig root level.
+        // Detects `*-loom` directory creation and emits `ConfigEvent::LoomAdded`.
+        if path.is_dir() {
+            if matches!(event.kind, EventKind::Create(_)) {
+                if let Some(name) = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                {
+                    if name.ends_with("-loom") {
+                        let loom_id = LoomId(name.to_string());
+                        return (None, Some(ConfigEvent::LoomAdded { loom_id }));
+                    }
+                }
+            }
+            // Directory events that don't match the above are ignored.
             return (None, None);
         }
 
-        let config_event = if matches!(event.kind, EventKind::Create(_)) {
-            // Check if directory name ends with `-loom`
-            if let Some(name) = path
-                .file_name()
-                .and_then(|n| n.to_str())
-            {
-                if name.ends_with("-loom") {
-                    let loom_id = LoomId(name.to_string());
-                    return (
-                        None,
-                        Some(ConfigEvent::LoomAdded { loom_id }),
-                    );
+        // Case 2: `.md` file changes inside a loom subdirectory.
+        // Extract the loom ID from the path (parent directory must end in `-loom`).
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            return (None, None);
+        }
+
+        let loom_id = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .filter(|name| name.ends_with("-loom"))
+            .map(|name| LoomId(name.to_string()));
+
+        let Some(loom_id) = loom_id else {
+            return (None, None);
+        };
+
+        // Parse the knot file for create/modify events
+        let config_event = match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => match knot_file::parse(&content) {
+                        Ok(knot_file) => {
+                            let knot = Knot {
+                                id: KnotId(knot_file.name.clone()),
+                                agent_config: knot_file.agent_config,
+                                prompt_template: knot_file.prompt_template,
+                                strand_dir: knot_file.strand_dir,
+                                tie_off_dir: knot_file.tie_off_dir,
+                            };
+                            if matches!(event.kind, EventKind::Create(_)) {
+                                Some(ConfigEvent::KnotAdded {
+                                    loom_id,
+                                    knot,
+                                })
+                            } else {
+                                Some(ConfigEvent::KnotModified {
+                                    loom_id,
+                                    knot,
+                                })
+                            }
+                        }
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
                 }
             }
-            None
-        } else {
-            None
+            EventKind::Remove(_) => {
+                if let Some(name) = path
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                {
+                    Some(ConfigEvent::KnotDeleted {
+                        loom_id,
+                        knot_id: KnotId(name.to_string()),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
         };
 
         (None, config_event)
@@ -226,10 +289,18 @@ impl InnerState {
     }
 
     /// Find the watch type for a path by checking watched directories.
+    ///
+    /// Iterates in longest-path-first order so that more specific
+    /// (longer) paths always take priority over broader (shorter)
+    /// parent paths. For example, a watch on `/rig/strands/` with
+    /// `WatchType::Strand` will match before a watch on `/rig/` with
+    /// `WatchType::Rig`.
     fn find_watch_type(&self, path: &Path) -> Option<WatchType> {
+        // Find the longest matching watched directory.
         self.watched_dirs
             .iter()
-            .find(|(dir, _)| path.starts_with(dir))
+            .filter(|(dir, _)| path.starts_with(dir))
+            .max_by_key(|(dir, _)| dir.as_os_str().len())
             .map(|(_, wt)| wt.clone())
     }
 }
@@ -260,7 +331,7 @@ impl NotifyEventSource {
         let state = Arc::new(Mutex::new(InnerState {
             strand_sender,
             config_sender,
-            watched_dirs: HashMap::new(),
+            watched_dirs: Vec::new(),
         }));
 
         let state_clone = state.clone();
@@ -271,11 +342,18 @@ impl NotifyEventSource {
                     let inner = state_clone.lock().unwrap();
                     let (strand_event, config_event) =
                         inner.map_event(&event);
+                    // Use try_send to avoid blocking the notify callback
+                    // thread. If the channel is full, the event is dropped
+                    // — this is acceptable because:
+                    // 1. Strand events: the debounce engine will see the
+                    //    file exists on next poll cycle
+                    // 2. Config events: the config handler is idempotent
+                    //    and will re-process on next event
                     if let Some(se) = strand_event {
-                        let _ = inner.strand_sender.blocking_send(se);
+                        let _ = inner.strand_sender.try_send(se);
                     }
                     if let Some(ce) = config_event {
-                        let _ = inner.config_sender.blocking_send(ce);
+                        let _ = inner.config_sender.try_send(ce);
                     }
                 }
             },
@@ -295,11 +373,17 @@ impl NotifyEventSource {
     /// Call this before `watch()` so events carry the correct metadata
     /// and map to the right event type.
     pub fn register_watch(&self, path: PathBuf, watch_type: WatchType) {
-        self.state
-            .lock()
-            .unwrap()
+        let mut inner = self.state.lock().unwrap();
+        // Update if already present, otherwise push.
+        if let Some(pos) = inner
             .watched_dirs
-            .insert(path, watch_type);
+            .iter()
+            .position(|(p, _)| p == &path)
+        {
+            inner.watched_dirs[pos].1 = watch_type;
+        } else {
+            inner.watched_dirs.push((path, watch_type));
+        }
     }
 
     /// Set the loom and knot IDs for a strand source directory.
@@ -346,57 +430,70 @@ impl EventSource for NotifyEventSource {
     }
 
     fn watch(&self, path: &Path) -> Result<(), PortError> {
-        // Check if a watch type was registered for this path
+        // Determine watch type and mode
         let watch_type = {
             let inner = self.state.lock().unwrap();
             inner
                 .watched_dirs
-                .get(path)
-                .cloned()
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, wt)| wt.clone())
                 // Fall back to default IDs if no per-directory mapping
                 .or_else(|| {
                     inner
                         .watched_dirs
-                        .get(&PathBuf::from("__default_ids__"))
-                        .cloned()
+                        .iter()
+                        .find(|(p, _)| p == &PathBuf::from("__default_ids__"))
+                        .map(|(_, wt)| wt.clone())
                 })
         };
 
+        let mut inner = self.state.lock().unwrap();
         if let Some(ref wt) = watch_type {
             // Ensure the path is in the map for event lookup
-            self.state
-                .lock()
-                .unwrap()
+            if let Some(pos) = inner
                 .watched_dirs
-                .insert(path.to_path_buf(), wt.clone());
+                .iter()
+                .position(|(p, _)| p == path)
+            {
+                inner.watched_dirs[pos].1 = wt.clone();
+            } else {
+                inner.watched_dirs
+                    .push((path.to_path_buf(), wt.clone()));
+            }
         } else {
             // Default: treat as strand watch with unknown IDs
             let default = WatchType::Strand(
                 LoomId("unknown".to_string()),
                 KnotId("unknown".to_string()),
             );
-            self.state
-                .lock()
-                .unwrap()
-                .watched_dirs
-                .insert(path.to_path_buf(), default);
+            inner.watched_dirs
+                .push((path.to_path_buf(), default));
         }
+
+        // Rig watch uses recursive mode to detect both new loom directories
+        // (at the rig root) and knot file changes (in loom subdirectories).
+        // Strand and loom watches use their configured modes.
+        let mode = match &watch_type {
+            Some(WatchType::Rig) => RecursiveMode::Recursive,
+            Some(WatchType::Loom(_)) => RecursiveMode::NonRecursive,
+            _ => RecursiveMode::Recursive,
+        };
 
         self.watcher
             .lock()
             .unwrap()
-            .watch(path, RecursiveMode::Recursive)
+            .watch(path, mode)
             .map_err(|e| PortError::EventWatchFailed(e.to_string()))?;
 
         Ok(())
     }
 
     fn unwatch(&self, path: &Path) -> Result<(), PortError> {
-        self.state
-            .lock()
-            .unwrap()
+        let mut inner = self.state.lock().unwrap();
+        inner
             .watched_dirs
-            .remove(path);
+            .retain(|(p, _)| p != path);
 
         self.watcher
             .lock()
