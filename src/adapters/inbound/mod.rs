@@ -85,6 +85,7 @@ use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
         crate::application::ports::KnotState,
         // Inbound types
         RegisterLoomRequest,
+        KnotRequest,
         RigConfigResponse,
     )),
 )]
@@ -95,13 +96,28 @@ struct ApiDoc;
 /// JSON body for `POST /looms` to register a new loom.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct RegisterLoomRequest {
-    /// Unique loom identifier.
+    /// Unique loom identifier (must end in `-loom`).
     pub id: String,
-    /// Source directory to watch.
-    pub source_dir: Option<String>,
-    /// Tie-off (output) directory.
-    #[serde(default)]
-    pub tie_off_dir: Option<String>,
+    /// Knot definitions to write and register.
+    pub knots: Vec<KnotRequest>,
+}
+
+/// A single knot definition within a `RegisterLoomRequest`.
+///
+/// All fields are required — `strand_dir` and `tie_off_dir` are
+/// mandatory per the updated domain model.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct KnotRequest {
+    /// The name of the knot (becomes the `KnotId`).
+    pub name: String,
+    /// Agent configuration for this knot.
+    pub agent_config: AgentConfig,
+    /// Prompt template for this knot.
+    pub prompt_template: PromptTemplate,
+    /// Directory to watch for strand files (required).
+    pub strand_dir: String,
+    /// Directory to write tie-off output (required).
+    pub tie_off_dir: String,
 }
 
 /// Response for `GET /config/rig` — rig path info plus agent config.
@@ -281,62 +297,88 @@ pub async fn register_loom(
     State(ctx): State<AppContext>,
     Json(body): Json<RegisterLoomRequest>,
 ) -> Response {
-    // Validate source_dir is present
-    let source_dir = match &body.source_dir {
-        Some(dir) if !dir.trim().is_empty() => dir,
-        _ => {
+    // Validate loom ID ends in `-loom`
+    if !body.id.ends_with("-loom") {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": format!(
+                "loom id '{}' must end in '-loom'",
+                body.id
+            )
+        }))).into_response();
+    }
+
+    // Validate knots are present
+    if body.knots.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "knots list must not be empty"
+        }))).into_response();
+    }
+
+    // Validate each knot has required fields
+    for (i, knot) in body.knots.iter().enumerate() {
+        if knot.name.trim().is_empty() {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": "source_dir is required and must not be empty"
+                "error": format!("knot[{}] name must not be empty", i)
             }))).into_response();
         }
-    };
-
-    // Resolve source_dir to an absolute path relative to base_dir.
-    let source_dir_path = if source_dir.starts_with('/') {
-        std::path::PathBuf::from(source_dir)
-    } else {
-        ctx.base_dir.join(source_dir)
-    };
-    let source_dir_path =
-        std::fs::canonicalize(&source_dir_path).unwrap_or(source_dir_path);
-
-    // Default tie_off_dir to <source_dir>/.knot-output (matches startup
-    // discovery), or resolve the provided path relative to base_dir.
-    // (unused — tie-off dir is per-knot, not per-loom)
-    let _tie_off_dir_path = if let Some(ref dir) = body.tie_off_dir {
-        let path = if dir.starts_with('/') {
-            std::path::PathBuf::from(dir)
-        } else {
-            ctx.base_dir.join(dir)
-        };
-        std::fs::canonicalize(&path).unwrap_or(path)
-    } else {
-        source_dir_path.join(".knot-output")
-    };
-
-    // Scan source directory for .md knot definition files
-    let mut knots =
-        FileSystemLoomRepository::scan_knot_files(&source_dir_path)
-            .unwrap_or_else(|e| {
-                eprintln!(
-                    "WARNING: failed to scan knots for '{}': {}",
-                    source_dir_path.display(),
-                    e
-                );
-                Vec::new()
-            });
-
-    // Resolve per-knot paths relative to the source directory
-    for knot in &mut knots {
-        knot.strand_dir = FileSystemLoomRepository::resolve_path(
-            &source_dir_path,
-            &knot.strand_dir,
-        );
-        knot.tie_off_dir = FileSystemLoomRepository::resolve_path(
-            &source_dir_path,
-            &knot.tie_off_dir,
-        );
+        if knot.strand_dir.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": format!("knot[{}] strand_dir is required", i)
+            }))).into_response();
+        }
+        if knot.tie_off_dir.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": format!("knot[{}] tie_off_dir is required", i)
+            }))).into_response();
+        }
     }
+
+    // Create the loom directory: <rig>/<id>/
+    let loom_dir = ctx.base_dir.join(&body.id);
+    if let Err(e) = std::fs::create_dir_all(&loom_dir) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("failed to create loom directory: {e}")
+        }))).into_response();
+    }
+
+    // Write knot .md files to the loom directory
+    for knot in &body.knots {
+        let content = generate_knot_file(knot);
+        let file_path = loom_dir.join(format!("{}.md", knot.name));
+        if let Err(e) = std::fs::write(&file_path, content) {
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("failed to write knot file: {e}")
+                }))).into_response();
+        }
+    }
+
+    // Build the Loom from request data (knots read from disk will match
+    // on restart via FileSystemLoomRepository::scan).
+    let project_root = ctx.base_dir
+        .parent()
+        .unwrap_or(&ctx.base_dir);
+
+    let knots: Vec<Knot> = body.knots
+        .iter()
+        .map(|k| {
+            let strand_dir = FileSystemLoomRepository::resolve_path(
+                project_root,
+                &std::path::PathBuf::from(&k.strand_dir),
+            );
+            let tie_off_dir = FileSystemLoomRepository::resolve_path(
+                project_root,
+                &std::path::PathBuf::from(&k.tie_off_dir),
+            );
+            Knot {
+                id: KnotId(k.name.clone()),
+                agent_config: k.agent_config.clone(),
+                prompt_template: k.prompt_template.clone(),
+                strand_dir,
+                tie_off_dir,
+            }
+        })
+        .collect();
 
     let loom = Loom {
         id: LoomId(body.id),
@@ -360,6 +402,60 @@ pub async fn register_loom(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
         }
     }
+}
+
+/// Generate the YAML frontmatter content for a knot definition file.
+///
+/// Produces a markdown file with `---` delimited frontmatter containing
+/// the knot's configuration fields. The body is a minimal heading.
+fn generate_knot_file(knot: &KnotRequest) -> String {
+    let tools_yaml = if knot.agent_config.tools.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = knot
+            .agent_config
+            .tools
+            .iter()
+            .map(|t| format!("    - {t}"))
+            .collect();
+        format!("\n  tools:\n{}", lines.join("\n"))
+    };
+
+    format!(
+        "---\n\
+         name: {}\n\
+         agent-config:\n\
+           goal: {}\n\
+           provider: {}\n\
+           model: {}{}\n\
+         strand-dir: {}\n\
+         tie-off-dir: {}\n\
+         prompt-template:\n\
+           input-bundling: {}\n\
+           instructions: {}\n\
+         ---\n\n\
+         # {}\n",
+        knot.name,
+        quote_yaml_scalar(&knot.agent_config.goal),
+        quote_yaml_scalar(&knot.agent_config.provider),
+        quote_yaml_scalar(&knot.agent_config.model),
+        tools_yaml,
+        quote_yaml_scalar(&knot.strand_dir),
+        quote_yaml_scalar(&knot.tie_off_dir),
+        quote_yaml_scalar(&knot.prompt_template.input_bundling),
+        quote_yaml_scalar(&knot.prompt_template.instructions),
+        knot.name,
+    )
+}
+
+/// Wrap a string in double quotes for safe YAML scalar output.
+///
+/// Escapes internal double quotes and backslashes.
+fn quote_yaml_scalar(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 /// Unregister a loom.
@@ -1107,17 +1203,54 @@ mod tests {
 
     // ── Phase 3 Tests ───────────────────────────────────────────────────
 
+    /// Build a valid `RegisterLoomRequest` JSON body for testing.
+    fn valid_register_body(id: &str, knot_count: usize) -> serde_json::Value {
+        let mut knots = serde_json::Value::Array(Vec::new());
+        for i in 0..knot_count {
+            knots.as_array_mut().unwrap().push(serde_json::json!({
+                "name": format!("knot{}", i),
+                "agent_config": {
+                    "goal": "review",
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "tools": []
+                },
+                "prompt_template": {
+                    "input_bundling": "full-file",
+                    "instructions": "check it"
+                },
+                "strand_dir": "strands",
+                "tie_off_dir": "tie-offs"
+            }));
+        }
+        serde_json::json!({
+            "id": id,
+            "knots": knots
+        })
+    }
+
     /// `POST /looms` with valid body returns 201, loom appears in `GET /looms`.
     #[tokio::test]
     async fn post_loom_success() {
-        let ctx = build_test_context();
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(TrackingEventSource::new().0),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: tmp.path().to_path_buf(),
+        };
         let app = build_app(ctx);
 
-        let body = serde_json::json!({
-            "id": "new-loom",
-            "source_dir": "src/docs",
-            "tie_off_dir": "output/docs"
-        });
+        let body = valid_register_body("new-loom", 1);
         let req = Request::builder()
             .method("POST")
             .uri("/looms")
@@ -1152,43 +1285,29 @@ mod tests {
         assert_eq!(summaries[0].id, LoomId("new-loom".to_string()));
     }
 
-    /// Body missing `source_dir`; returns 400.
-    #[tokio::test]
-    async fn post_loom_missing_source_dir() {
-        let ctx = build_test_context();
-        let app = build_app(ctx);
-
-        let body = serde_json::json!({
-            "id": "bad-loom"
-        });
-        let req = Request::builder()
-            .method("POST")
-            .uri("/looms")
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-
-        assert_eq!(resp.status(), 400);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let err: serde_json::Value =
-            serde_json::from_slice(&body).unwrap();
-        assert!(err.get("error").is_some());
-    }
-
     /// Register same loom twice; second returns 409.
     #[tokio::test]
     async fn post_loom_duplicate_id() {
-        let ctx = build_test_context();
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(TrackingEventSource::new().0),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: tmp.path().to_path_buf(),
+        };
         ctx.store.register(build_test_loom("dup-loom", &["k1"]));
         let app = build_app(ctx);
 
-        let body = serde_json::json!({
-            "id": "dup-loom",
-            "source_dir": "src/other"
-        });
+        let body = valid_register_body("dup-loom", 1);
         let req = Request::builder()
             .method("POST")
             .uri("/looms")
@@ -1201,18 +1320,30 @@ mod tests {
     }
 
     /// `POST /looms` with valid body returns 201 and mock `EventSource`
-    /// has recorded a `watch()` call for the source directory.
+    /// has recorded `watch()` calls for each knot's `strand_dir`.
     #[tokio::test]
     async fn post_loom_starts_watcher() {
-        let (ctx, watch_calls, _unwatch_calls) =
-            build_test_context_with_tracking(vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        let (event_source, watch_calls, _unwatch_calls) =
+            TrackingEventSource::new();
+        let ctx = AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(event_source),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: tmp.path().to_path_buf(),
+        };
         let app = build_app(ctx);
 
-        let body = serde_json::json!({
-            "id": "watch-loom",
-            "source_dir": "src/docs",
-            "tie_off_dir": "output/docs"
-        });
+        let body = valid_register_body("watch-loom", 2);
         let req = Request::builder()
             .method("POST")
             .uri("/looms")
@@ -1223,10 +1354,9 @@ mod tests {
 
         assert_eq!(resp.status(), 201);
 
-        // No knots found (source_dir doesn't have knot files)
-        // so no watches are started. Loom is registered anyway.
+        // 2 knots, each watches its strand_dir
         let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 0);
+        assert_eq!(watches.len(), 2);
     }
 
     /// `DELETE /looms/:id` returns 204, loom no longer in `GET /looms`.
@@ -1289,14 +1419,35 @@ mod tests {
 
     // ── Phase 4: Route Integration Tests ──────────────────────────────────
 
+    /// Build a test context with a temp base_dir for filesystem tests.
+    fn build_test_context_with_temp_dir() -> (AppContext, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(TrackingEventSource::new().0),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: tmp.path().to_path_buf(),
+        };
+        (ctx, tmp)
+    }
+
     /// All 7 loom endpoints are accessible on a single router with shared
     /// `AppContext`. Verifies GET returns 200/404, POST returns 201/400/409,
     /// and DELETE returns 204/404.
     #[tokio::test]
     async fn full_route_wiring() {
         // Pre-register a loom so read endpoints have data to return
-        let ctx = build_test_context();
-        ctx.store.register(build_test_loom("wired", &["k1", "k2"]));
+        let (ctx, _tmp) = build_test_context_with_temp_dir();
+        ctx.store.register(build_test_loom("wired-loom", &["k1", "k2"]));
         let app = build_app(ctx);
 
         // 1. GET /looms → 200 with non-empty array
@@ -1317,7 +1468,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/looms/wired")
+                    .uri("/looms/wired-loom")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1343,7 +1494,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/looms/wired/activity")
+                    .uri("/looms/wired-loom/activity")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1356,7 +1507,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/looms/wired/knots")
+                    .uri("/looms/wired-loom/knots")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1369,7 +1520,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/looms/wired/knots/k1")
+                    .uri("/looms/wired-loom/knots/k1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1377,11 +1528,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 404);
 
-        // 7. POST /looms → 201 (valid body)
-        let body = serde_json::json!({
-            "id": "post-wired",
-            "source_dir": "src/wired"
-        });
+        // 7. POST /looms → 201 (valid body with knots)
+        let body = valid_register_body("post-wired-loom", 1);
         let resp = app
             .clone()
             .oneshot(
@@ -1396,9 +1544,26 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 201);
 
-        // 8. POST /looms → 400 (missing source_dir)
+        // 8. POST /looms → 400 (id doesn't end in -loom)
         let body = serde_json::json!({
-            "id": "bad-post"
+            "id": "bad-post",
+            "knots": [
+                {
+                    "name": "k1",
+                    "agent_config": {
+                        "goal": "g",
+                        "provider": "openai",
+                        "model": "gpt-4o",
+                        "tools": []
+                    },
+                    "prompt_template": {
+                        "input_bundling": "full-file",
+                        "instructions": "do it"
+                    },
+                    "strand_dir": "strands",
+                    "tie_off_dir": "tie-offs"
+                }
+            ]
         });
         let resp = app
             .clone()
@@ -1415,10 +1580,7 @@ mod tests {
         assert_eq!(resp.status(), 400);
 
         // 9. POST /looms → 409 (duplicate ID)
-        let body = serde_json::json!({
-            "id": "wired",
-            "source_dir": "src/other"
-        });
+        let body = valid_register_body("wired-loom", 1);
         let resp = app
             .clone()
             .oneshot(
@@ -1439,7 +1601,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri("/looms/wired")
+                    .uri("/looms/wired-loom")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1453,13 +1615,271 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri("/looms/wired")
+                    .uri("/looms/wired-loom")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), 404);
+    }
+
+    // ── Phase 4: POST /looms New Request Shape Tests ──────────────────────
+
+    /// `POST /looms` creates the loom directory at `<rig>/<id>/`.
+    #[tokio::test]
+    async fn post_loom_creates_loom_directory() {
+        let (ctx, tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = valid_register_body("new-loom", 1);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+
+        // Verify the loom directory was created
+        let loom_dir = tmp.path().join("new-loom");
+        assert!(loom_dir.is_dir(), "loom directory should exist");
+    }
+
+    /// `POST /looms` writes `.md` knot files to the loom directory.
+    #[tokio::test]
+    async fn post_loom_writes_knot_files() {
+        let (ctx, tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "files-loom",
+            "knots": [
+                {
+                    "name": "knot-a",
+                    "agent_config": {
+                        "goal": "review a",
+                        "provider": "openai",
+                        "model": "gpt-4o",
+                        "tools": []
+                    },
+                    "prompt_template": {
+                        "input_bundling": "full-file",
+                        "instructions": "check a"
+                    },
+                    "strand_dir": "strands",
+                    "tie_off_dir": "tie-offs"
+                },
+                {
+                    "name": "knot-b",
+                    "agent_config": {
+                        "goal": "review b",
+                        "provider": "anthropic",
+                        "model": "claude",
+                        "tools": ["fs"]
+                    },
+                    "prompt_template": {
+                        "input_bundling": "diff",
+                        "instructions": "check b"
+                    },
+                    "strand_dir": "strands-b",
+                    "tie_off_dir": "tie-offs-b"
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+
+        // Verify knot files exist
+        let loom_dir = tmp.path().join("files-loom");
+        assert!(loom_dir.join("knot-a.md").is_file());
+        assert!(loom_dir.join("knot-b.md").is_file());
+
+        // Verify file content is parseable knot frontmatter
+        let content_a = std::fs::read_to_string(loom_dir.join("knot-a.md"))
+            .unwrap();
+        assert!(content_a.starts_with("---"));
+        assert!(content_a.contains("name: knot-a"));
+        assert!(content_a.contains("review a"));
+        assert!(content_a.contains("strand-dir:"));
+        assert!(content_a.contains("tie-off-dir:"));
+
+        let content_b = std::fs::read_to_string(loom_dir.join("knot-b.md"))
+            .unwrap();
+        assert!(content_b.contains("name: knot-b"));
+        assert!(content_b.contains("review b"));
+    }
+
+    /// `POST /looms` with missing `strand_dir` on a knot returns 400.
+    #[tokio::test]
+    async fn post_loom_missing_strand_dir_returns_400() {
+        let (ctx, _tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "bad-loom",
+            "knots": [
+                {
+                    "name": "k1",
+                    "agent_config": {
+                        "goal": "g",
+                        "provider": "openai",
+                        "model": "gpt-4o",
+                        "tools": []
+                    },
+                    "prompt_template": {
+                        "input_bundling": "full-file",
+                        "instructions": "do it"
+                    },
+                    "strand_dir": "",
+                    "tie_off_dir": "output"
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value =
+            serde_json::from_slice(&body).unwrap();
+        assert!(err.get("error").is_some());
+        let msg = err["error"].as_str().unwrap();
+        assert!(msg.contains("strand_dir"));
+    }
+
+    /// `POST /looms` with missing `tie_off_dir` on a knot returns 400.
+    #[tokio::test]
+    async fn post_loom_missing_tieoff_dir_returns_400() {
+        let (ctx, _tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "bad-loom",
+            "knots": [
+                {
+                    "name": "k1",
+                    "agent_config": {
+                        "goal": "g",
+                        "provider": "openai",
+                        "model": "gpt-4o",
+                        "tools": []
+                    },
+                    "prompt_template": {
+                        "input_bundling": "full-file",
+                        "instructions": "do it"
+                    },
+                    "strand_dir": "strands",
+                    "tie_off_dir": ""
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value =
+            serde_json::from_slice(&body).unwrap();
+        assert!(err.get("error").is_some());
+        let msg = err["error"].as_str().unwrap();
+        assert!(msg.contains("tie_off_dir"));
+    }
+
+    /// `POST /looms` with empty `knots` array returns 400.
+    #[tokio::test]
+    async fn post_loom_requires_knots() {
+        let (ctx, _tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "empty-loom",
+            "knots": []
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value =
+            serde_json::from_slice(&body).unwrap();
+        assert!(err.get("error").is_some());
+        let msg = err["error"].as_str().unwrap();
+        assert!(msg.contains("knots"));
+    }
+
+    /// `POST /looms` with ID not ending in `-loom` returns 400.
+    #[tokio::test]
+    async fn post_loom_id_must_end_in_loom() {
+        let (ctx, _tmp) = build_test_context_with_temp_dir();
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "id": "bad-name",
+            "knots": [
+                {
+                    "name": "k1",
+                    "agent_config": {
+                        "goal": "g",
+                        "provider": "openai",
+                        "model": "gpt-4o",
+                        "tools": []
+                    },
+                    "prompt_template": {
+                        "input_bundling": "full-file",
+                        "instructions": "do it"
+                    },
+                    "strand_dir": "strands",
+                    "tie_off_dir": "tie-offs"
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value =
+            serde_json::from_slice(&body).unwrap();
+        let msg = err["error"].as_str().unwrap();
+        assert!(msg.contains("-loom"));
     }
 
     /// Existing routes (`/health`, `/agents/{dir}`) still work alongside
