@@ -185,12 +185,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move event pipeline, debounce, and strand lifecycle tests.
 
-- [ ] Create `tests/pipeline.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `event_flows_through_pipeline`, `debounce_prevents_duplicate_processing`, `full_pipeline_create_modify_delete`, `full_pipeline_subdirectory_rig`, `full_pipeline_external_source_with_mock_agent_success`, `full_pipeline_http_observable`
-- [ ] `cargo test --test pipeline` — 6 tests pass
-- [ ] Remove those 6 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 15 tests pass
-- [ ] Commit: `test: extract pipeline from integration.rs`
+- [x] Create `tests/pipeline.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `event_flows_through_pipeline`, `debounce_prevents_duplicate_processing`, `full_pipeline_create_modify_delete`, `full_pipeline_subdirectory_rig`, `full_pipeline_external_source_with_mock_agent_success`, `full_pipeline_http_observable`
+- [x] `cargo test --test pipeline` — 6 tests pass
+- [x] Remove those 6 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 15 tests pass
+- [x] Commit: `test: extract pipeline from integration.rs`
 
 ### Phase 5: Extract `agent_integration.rs` (4 tests)
 
