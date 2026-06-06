@@ -302,7 +302,8 @@ pub async fn register_loom(
 
     // Default tie_off_dir to <source_dir>/.knot-output (matches startup
     // discovery), or resolve the provided path relative to base_dir.
-    let tie_off_dir_path = if let Some(ref dir) = body.tie_off_dir {
+    // (unused — tie-off dir is per-knot, not per-loom)
+    let _tie_off_dir_path = if let Some(ref dir) = body.tie_off_dir {
         let path = if dir.starts_with('/') {
             std::path::PathBuf::from(dir)
         } else {
@@ -423,8 +424,6 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
                 .into_iter()
                 .map(|loom| LoomSummary {
                     id: loom.id,
-                    source_dir: PathBuf::from(""),
-                    tie_off_dir: PathBuf::from(""),
                     knot_count: loom.knots.len(),
                 })
                 .collect();
