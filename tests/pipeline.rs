@@ -191,11 +191,15 @@ fn debounce_prevents_duplicate_processing() {
 
 // ── End-to-End Pipeline ────────────────────────────────────────────────────
 
-/// Full pipeline test using mock agent CLI (`echo "processed"`).
+/// Full pipeline test: create → modify → delete strand lifecycle.
 ///
-/// 1. Create strand → tie-off file created with content
-/// 2. Modify strand → tie-off overwritten with new content
-/// 3. Delete strand → tie-off reports deletion (file still exists)
+/// Verifies both filesystem state (tie-off files) and HTTP observability
+/// (`/looms`, `/looms/:id/knots/:name`, `/looms/:id/activity`).
+///
+/// 1. Create strand → tie-off file created, knot status `completed`
+/// 2. Modify strand → tie-off overwritten
+/// 3. Delete strand → tie-off appended with Deleted header
+/// 4. HTTP: `/looms` lists loom, activity has `StrandProcessed`
 #[test]
 fn full_pipeline_create_modify_delete() {
     let tmp = tempfile::tempdir().unwrap();
@@ -227,10 +231,55 @@ fn full_pipeline_create_modify_delete() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    // Step 1: Create strand → tie-off file created
+    // — HTTP: loom is registered —
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should have 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "pipeline-loom",
+        "loom id should match"
+    );
+
+    // — HTTP: knot status is `idle` before any event —
+    let (status, body) =
+        http_get_retry(
+            &host_port,
+            "/looms/pipeline-loom/knots/review-knot",
+            30,
+            100,
+        )
+        .expect("knot status endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let knot_status: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    assert_eq!(
+        knot_status["status"].as_str().unwrap(),
+        "idle",
+        "knot status should be idle before any event"
+    );
+
+    // — Step 1: Create strand → tie-off file created —
     let strand_path = strand_dir.join("test-strand.md");
     fs::write(&strand_path, "initial content").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+
+    // Poll until status is `completed`
+    let status_result =
+        poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100);
+    assert!(
+        status_result.is_ok(),
+        "knot status should reach terminal state"
+    );
+    let completed_status = status_result.unwrap();
+    assert_eq!(
+        completed_status["status"].as_str().unwrap(),
+        "completed",
+        "knot status should be completed after processing"
+    );
 
     let tie_off_path = tie_off_dir.join("test-strand.md.output");
     assert!(
@@ -245,7 +294,7 @@ fn full_pipeline_create_modify_delete() {
         "tie-off should contain 'processed', got: {content}"
     );
 
-    // Step 2: Modify strand → tie-off overwritten
+    // — Step 2: Modify strand → tie-off overwritten —
     fs::write(&strand_path, "modified content").unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
@@ -256,7 +305,7 @@ fn full_pipeline_create_modify_delete() {
         "tie-off should still contain 'processed' after modify, got: {content}"
     );
 
-    // Step 3: Delete strand → agent is triggered, tie-off appended with Deleted header
+    // — Step 3: Delete strand → tie-off appended with Deleted header —
     fs::remove_file(&strand_path).unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
@@ -285,107 +334,14 @@ fn full_pipeline_create_modify_delete() {
     // Strand file should not exist (it was deleted)
     assert!(!strand_path.exists(), "strand file should be deleted");
 
-    let _ = shutdown.send(());
-}
-
-/// Same flow as above but observable via HTTP endpoints.
-///
-/// 1. `GET /looms` → loom listed
-/// 2. `GET /looms/:id/knots/:knot_name` → status is `idle` before event,
-///    `completed` after processing
-/// 3. `GET /looms/:id/activity` → contains `StrandProcessed` entry
-#[test]
-fn full_pipeline_http_observable() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base_dir = tmp.path().to_path_buf();
-
-    // Create loom directory with knot definition
-    let loom_dir = base_dir.join("http-loom");
-    fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
-    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
-
-    // Mock agent script — ignores all CLI args built by ProcessStrand
-    let mock_agent = create_mock_agent(&base_dir, "processed");
-
-    let port = 31993;
-    let host_port = format!("127.0.0.1:{port}");
-
-    let config = AppConfig {
-        base_dir: base_dir.clone(),
-        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
-        rig_config: RigAgentConfig {
-            cli_path: mock_agent.to_string_lossy().to_string(),
-            cli_args: vec![],
-        },
-        ..AppConfig::default_config()
-    };
-
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
-        .expect("server should start listening");
-
-    // 1. GET /looms → loom listed
+    // — HTTP: activity log contains `StrandProcessed` entry —
     let (status, body) =
-        http_get_retry(&host_port, "/looms", 30, 100)
-            .expect("looms endpoint should respond");
-    assert!(status.contains("200"), "expected 200, got: {status}");
-    let summaries: Vec<serde_json::Value> =
-        serde_json::from_str(&body).expect("should be JSON array");
-    assert_eq!(summaries.len(), 1, "should have 1 loom");
-    assert_eq!(
-        summaries[0]["id"].as_str().unwrap(),
-        "http-loom",
-        "loom id should match"
-    );
-
-    // 2a. GET /looms/:id/knots/:knot_name → status is `idle` before event
-    let (status, body) =
-        http_get_retry(
-            &host_port,
-            "/looms/http-loom/knots/review-knot",
-            30,
-            100,
-        )
-        .expect("knot status endpoint should respond");
-    assert!(status.contains("200"), "expected 200, got: {status}");
-    let knot_status: serde_json::Value =
-        serde_json::from_str(&body).expect("should be JSON");
-    assert_eq!(
-        knot_status["status"].as_str().unwrap(),
-        "idle",
-        "knot status should be idle before any event"
-    );
-
-    // Create a strand file in the strand directory
-    let strand_path = strand_dir.join("http-strand.md");
-    fs::write(&strand_path, "http strand content").unwrap();
-
-    // 2b. Poll until status is `completed`
-    let status_result =
-        poll_knot_status(&host_port, "http-loom", "review-knot", 60, 100);
-    assert!(
-        status_result.is_ok(),
-        "knot status should reach terminal state"
-    );
-    let completed_status = status_result.unwrap();
-    assert_eq!(
-        completed_status["status"]
-            .as_str()
-            .unwrap(),
-        "completed",
-        "knot status should be completed after processing"
-    );
-
-    // 3. GET /looms/:id/activity → contains StrandProcessed entry
-    let (status, body) =
-        http_get_retry(&host_port, "/looms/http-loom/activity", 30, 100)
+        http_get_retry(&host_port, "/looms/pipeline-loom/activity", 30, 100)
             .expect("activity endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&body).expect("should be JSON array");
 
-    // Find StrandProcessed event
     let has_strand_processed = events.iter().any(|e| {
         e.get("StrandProcessed").is_some()
             || e.get("strand_path").is_some()
@@ -400,14 +356,16 @@ fn full_pipeline_http_observable() {
 
 // ── Pipeline with Subdirectory Rig ─────────────────────────────────────────
 
-/// Full pipeline test with loom in a subdirectory.
+/// Full pipeline test with loom in a subdirectory rig.
 ///
-/// 1. Create a rig with a loom in a subdirectory
-/// 2. Loom source_dir defaults to the loom directory
-/// 3. Create a strand in the loom's source directory
-/// 4. Tie-off should be produced at the loom's tie-off directory
+/// Verifies that when `base_dir` is a subdirectory of the project root,
+/// looms are still discovered and strands processed correctly.
+///
+/// 1. Rig subdirectory scanned for looms
+/// 2. Loom discovered with correct id
+/// 3. Strand processed → tie-off produced with agent output
 #[test]
-fn full_pipeline_subdirectory_rig() {
+fn full_pipeline_with_subdirectory_rig() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -459,7 +417,7 @@ fn full_pipeline_subdirectory_rig() {
     fs::write(&strand_path, "external strand content").unwrap();
 
     // Wait for debounce + processing.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(500));
 
     // Tie-off should appear in the loom's .knot-output directory.
     let tie_off_path = tie_off_dir.join("external-strand.md.output");
@@ -479,21 +437,21 @@ fn full_pipeline_subdirectory_rig() {
     let _ = shutdown.send(());
 }
 
-// ── Pipeline with External Source ──────────────────────────────────────────
+// ── Pipeline with External Directories ─────────────────────────────────────
 
-/// End-to-end test combining `.loom-config.yaml` external directories with
-/// a mock agent CLI (`echo "summary"`). Verifies the full happy path with
-/// external source and output directories.
+/// End-to-end test with external source and output directories.
 ///
-/// 1. Loom in a subdirectory with mock agent CLI (`echo summary`).
-/// 2. Create strand → triggers processing → agent succeeds.
-/// 3. Verify:
-///    - Loom discovered with source_dir = loom directory.
-///    - Knot status shows `completed`.
-///    - Loom-log contains `StrandProcessed` with no error.
-///    - Tie-off file written at loom's `.knot-output` with agent output.
+/// Verifies the full happy path: loom discovered, strand processed,
+/// knot reaches `completed`, loom-log has `StrandProcessed`, and
+/// tie-off file contains agent output.
+///
+/// 1. Loom in rig subdirectory discovered correctly
+/// 2. Create strand → processing completes successfully
+/// 3. Knot status `completed` with no error
+/// 4. Loom-log contains `StrandProcessed` referencing strand filename
+/// 5. Tie-off file written with agent output
 #[test]
-fn full_pipeline_external_source_with_mock_agent_success() {
+fn full_pipeline_with_external_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -577,8 +535,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     );
 
     // 5. Verify tie-off file written with agent output.
-    let tie_off_path =
-        tie_off_dir.join("success-strand.md.output");
+    let tie_off_path = tie_off_dir.join("success-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
