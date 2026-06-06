@@ -4,7 +4,7 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::application::ports::{
@@ -20,16 +20,14 @@ use crate::domain::value_objects::RigAgentConfig;
 // ── Query Result Types ───────────────────────────────────────────────────
 
 /// A summary of a loom (lightweight, for list responses).
+///
+/// The loom directory is derived from the loom ID and rig base path
+/// (naming convention `*-loom`). Strand and tie-off directories are
+/// per-knot fields, not loom-level.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoomSummary {
-    /// The loom's unique ID.
+    /// The loom's unique ID (must end in `-loom`).
     pub id: LoomId,
-    /// The source directory path.
-    #[schema(value_type = String)]
-    pub source_dir: PathBuf,
-    /// The tie-off (output) directory path.
-    #[schema(value_type = String)]
-    pub tie_off_dir: PathBuf,
     /// Number of knots in this loom.
     pub knot_count: usize,
 }
@@ -321,8 +319,6 @@ impl ListLooms {
             .into_iter()
             .map(|loom| LoomSummary {
                 id: loom.id,
-                source_dir: PathBuf::from(""),
-                tie_off_dir: PathBuf::from(""),
                 knot_count: loom.knots.len(),
             })
             .collect()
