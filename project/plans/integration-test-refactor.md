@@ -196,12 +196,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move agent execution tests (mock agent, pi stub, error paths).
 
-- [ ] Create `tests/agent_integration.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `full_pipeline_with_pi_agent`, `pi_agent_receives_system_prompt_and_strand`, `full_pipeline_agent_error_in_state_and_log`, `full_pipeline_external_source_with_agent_error`
-- [ ] `cargo test --test agent_integration` — 4 tests pass
-- [ ] Remove those 4 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 11 tests pass
-- [ ] Commit: `test: extract agent_integration from integration.rs`
+- [x] Create `tests/agent_integration.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `full_pipeline_with_pi_agent`, `pi_agent_receives_system_prompt_and_strand`, `full_pipeline_agent_error_in_state_and_log`, `full_pipeline_external_source_with_agent_error`
+- [x] `cargo test --test agent_integration` — 4 tests pass
+- [x] Remove those 4 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 11 tests pass
+- [x] Commit: `test: extract agent_integration from integration.rs`
 
 ### Phase 6: Extract `tie_off.rs` (2 tests)
 
