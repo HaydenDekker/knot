@@ -240,12 +240,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move multi-loom isolation and per-knot source directory tests.
 
-- [ ] Create `tests/multi_loom.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `multiple_looms_independent`, `server_starts_with_per_knot_source_dirs`
-- [ ] `cargo test --test multi_loom` — 2 tests pass
-- [ ] Remove those 2 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 2 tests pass
-- [ ] Commit: `test: extract multi_loom from integration.rs`
+- [x] Create `tests/multi_loom.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `multiple_looms_independent`, `server_starts_with_per_knot_source_dirs`
+- [x] `cargo test --test multi_loom` — 2 tests pass
+- [x] Remove those 2 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 2 tests pass
+- [x] Commit: `test: extract multi_loom from integration.rs`
 
 ### Phase 10: Extract `demo.rs` (2 tests)
 
