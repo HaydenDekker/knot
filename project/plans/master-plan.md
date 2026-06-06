@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-05
+> **Last Updated:** 2026-06-06
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ⬜ Planned | 2026-06-06 |
 | 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ✅ Complete | 2026-06-05 |
 | 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ✅ Complete | 2026-06-05 |
 | 10 | [Knot-Per-Strand Config and Loom-Log State](knot-per-strand-and-loom-log-state.md) | ✅ Complete | 2026-06-04 |
@@ -64,6 +65,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 13. Loom Naming Convention, Knot Definition Rules, and Discovery Fix
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-06
+**Goal:** Fix loom discovery to use `-loom` suffix filter, make `strand_dir` and `tie_off_dir` required per-knot fields, remove ambiguous `Loom.source_dir`, and rewrite `POST /looms` to create loom directories with knot files.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [loom-knot-definition-and-discovery.md](loom-knot-definition-and-discovery.md).
 
 ### 12. Tie-Off Append and Event Context
 

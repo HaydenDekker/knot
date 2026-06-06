@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-04
+> **Last Updated:** 2026-06-06
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -29,18 +29,29 @@ Part of a **knot**.
 
 ### Knot
 
-A configured artifact that brings everything together, ready for processing. Composed of two parts:
+A configured artifact that brings everything together, ready for processing. Composed of three parts:
 
 1. **Agent Profile** — determines *which agent* runs.
 2. **Prompt Template** — determines *how* input files are processed.
+3. **Directories** — the `strand_dir` (where strands to watch live, **required**) and `tie_off_dir` (where output is written, **required**).
 
-One knot is configured per loom. The same knot can be reused across multiple looms.
+A knot is defined in a `.md` file with YAML frontmatter. One loom can contain one or more knot files.
 
 ---
 
 ### Loom
 
-A directory containing one or more knot definition files. The directory structure inside the loom is up to the user (e.g. `prd-review-loom/goals-review-knot.md`, `prd-review-loom/non-goals-review-knot.md`). Each knot file defines a knot. A loom watches a configured source directory for **strands** — file events on strands trigger the loom's knots.
+A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). A loom directory contains one or more `.md` knot definition files at its first level — Knot discovers these as the loom's knots. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API.
+
+Knot auto-discovers looms at startup by scanning the rig directory for subdirectories matching the `*-loom` pattern. The loom's identity (`LoomId`) is derived from the directory name (the `-loom` suffix is included in the ID).
+
+---
+
+### Strand Directory
+
+The directory that a knot watches for strand file events. Configured per-knot as `strand_dir` in the knot's YAML frontmatter. This is the directory where raw input files (**strands**) live.
+
+> **Note:** The strand directory is the *knot-level* watch target. It is not the same as the loom directory. The loom directory holds knot definition files; the strand directory holds the files being processed.
 
 ---
 
@@ -52,27 +63,21 @@ Part of a **knot**.
 
 ---
 
-### Target
-
-An output directory for generated files. Each loom has an associated target where **tie-offs** are written.
-
----
-
-### Tie-off Point
-
-The directory location where tie-offs land. Configured per loom. This is where the agent's final response or error is filed away after processing a strand.
-
----
-
 ### Strand
 
-A file in the source directory that a loom watches for. When a strand is created, modified, or deleted, the loom's knots are triggered to process it. The strand is the raw input fed into a knot.
+A file in a knot's strand directory. When a strand is created, modified, or deleted, the knot that watches that directory is triggered to process it. The strand is the raw input fed into a knot.
+
+---
+
+### Tie-off Directory
+
+The directory location where tie-offs land. Configured per-knot as `tie_off_dir` in the knot's YAML frontmatter. This is where the agent's final response or error is filed away after processing a strand.
 
 ---
 
 ### Loom-log
 
-A file that holds a loom's activity log. Records which knots are detected and registered, and high-level loom events. Users check this to confirm a loom is configured correctly.
+A file that holds a loom's activity log. Lives inside the loom directory at `<rig>/<loom-id>/.loom-log`. Records which knots are detected and registered, and all loom and knot events for that loom. Users check this to confirm a loom is configured correctly and to trace processing history.
 
 ---
 
@@ -84,24 +89,25 @@ A per-knot file that records processing events and status for that knot. Contain
 
 ### Tie-off
 
-The final response or error produced by a knot at the end of its session. This is the single output that lands in the configured target directory (e.g. a summary, a list of documents, an error report). During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
+The final response or error produced by a knot at the end of its session. Each processing event is appended to the tie-off file, so the document grows over time and tells the complete story of the knot's work. The tie-off lands in the configured tie-off directory (e.g. a summary, a list of documents, an error report). During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
 
 ---
 
 ## Term Relationships
 
 ```
-Rig (aggregation of looms)
- └── Loom (directory of knot definitions)
-      ├── Knot (Agent Profile + Prompt Template)
+Rig (aggregation of looms, discovered from `./rig/`)
+ └── Loom (`<rig>/<name>-loom/`, discovered by `-loom` suffix)
+      ├── Knot definition files (first-level `.md` files)
       │     ├── Agent Profile
       │     │     ├── LLM Provider
       │     │     ├── Skills
       │     │     ├── Tools
       │     │     └── System Prompt
-      │     └── Prompt Template
-      │           ├── Goal Description
-      │           └── Input Bundling Rules
-      └── Target (output directory)
-            └── Tie-off (final response or error)
+      │     ├── Prompt Template
+      │     │     ├── Goal Description
+      │     │     └── Input Bundling Rules
+      │     ├── strand_dir (required — directory to watch for strands)
+      │     └── tie_off_dir (required — directory to write output)
+      └── .loom-log (activity log inside loom directory)
 ```
