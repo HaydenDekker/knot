@@ -34,7 +34,7 @@ When this plan is done:
 - `POST /looms` creates the loom directory (`<rig>/<id>/`) and accepts knot definitions with required `strand_dir` and `tie_off_dir`
 - On restart, looms are re-discovered from the rig directory with correct paths — no collision with state files
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-06)
 
 ## Existing Tests
 
