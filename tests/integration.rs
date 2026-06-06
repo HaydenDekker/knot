@@ -1051,7 +1051,7 @@ fn multiple_looms_independent() {
     let base_dir = tmp.path().to_path_buf();
 
     // Loom A
-    let loom_a_dir = base_dir.join("loom-a");
+    let loom_a_dir = base_dir.join("loom-a-loom");
     fs::create_dir(&loom_a_dir).unwrap();
     fs::write(
         loom_a_dir.join("review.md"),
@@ -1060,7 +1060,7 @@ fn multiple_looms_independent() {
     .unwrap();
 
     // Loom B
-    let loom_b_dir = base_dir.join("loom-b");
+    let loom_b_dir = base_dir.join("loom-b-loom");
     fs::create_dir(&loom_b_dir).unwrap();
     fs::write(
         loom_b_dir.join("review.md"),
@@ -1101,12 +1101,12 @@ fn multiple_looms_independent() {
     let loom_ids: Vec<_> =
         summaries.iter().map(|s| s["id"].as_str().unwrap()).collect();
     assert!(
-        loom_ids.contains(&"loom-a"),
-        "loom-a should be registered"
+        loom_ids.contains(&"loom-a-loom"),
+        "loom-a-loom should be registered"
     );
     assert!(
-        loom_ids.contains(&"loom-b"),
-        "loom-b should be registered"
+        loom_ids.contains(&"loom-b-loom"),
+        "loom-b-loom should be registered"
     );
 
     // 1. Create strand in loom A
@@ -1349,16 +1349,17 @@ fn full_pipeline_subdirectory_rig() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    // Verify loom is registered (source_dir defaults to loom directory).
+    // Verify loom is registered.
     let (status, body) =
         http_get_retry(&host_port, "/looms/config-loom", 30, 100)
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
         serde_json::from_str(&body).expect("should be JSON");
-    assert!(
-        loom["source_dir"].as_str().unwrap().contains("config-loom"),
-        "source_dir should be the loom directory"
+    assert_eq!(
+        loom["id"].as_str().unwrap(),
+        "config-loom",
+        "loom id should match"
     );
 
     // Create a strand in the loom's source directory.
@@ -1956,8 +1957,8 @@ fn demo_knot_test_processes_sample_document() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Create knot-test loom directory with provider/model in config
-    let loom_dir = base_dir.join("knot-test");
+    // Create knot-test-loom directory with provider/model in config
+    let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     fs::write(
         &loom_dir.join("review-knot.md"),
@@ -2077,7 +2078,7 @@ processing pipeline.
 
     // 2. Verify knot status is `completed` via HTTP
     let (status, body) =
-        http_get(&host_port, "/looms/knot-test/knots/review-knot")
+        http_get(&host_port, "/looms/knot-test-loom/knots/review-knot")
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -2089,7 +2090,7 @@ processing pipeline.
     );
 
     // 3. Verify loom-log records successful processing
-    let log_path = base_dir.join("knot-test/.loom-log");
+    let log_path = base_dir.join("knot-test-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -2118,8 +2119,8 @@ fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Create knot-test loom with tools in agent-config
-    let loom_dir = base_dir.join("knot-test");
+    // Create knot-test-loom with tools in agent-config
+    let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     fs::write(
         &loom_dir.join("review-knot.md"),
@@ -2185,7 +2186,7 @@ prompt-template:
 
     // Verify knot status is completed
     let (status, body) =
-        http_get(&host_port, "/looms/knot-test/knots/review-knot")
+        http_get(&host_port, "/looms/knot-test-loom/knots/review-knot")
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =

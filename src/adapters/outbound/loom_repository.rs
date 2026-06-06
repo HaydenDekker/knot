@@ -88,6 +88,13 @@ impl LoomRepository for FileSystemLoomRepository {
                 })?
                 .to_string();
 
+            // Only discover directories ending in `-loom` (naming convention).
+            // This prevents phantom looms from state directories like
+            // `<rig>/<id>/` created by LoomLogPort::open().
+            if !loom_name.ends_with("-loom") {
+                continue;
+            }
+
             let loom_id = LoomId(loom_name.clone());
 
             // Canonicalise the loom directory to an absolute path.
@@ -358,12 +365,12 @@ This knot has custom source and tie-off directories.
         let rig = tempfile::tempdir().unwrap();
 
         // Loom 1.
-        let loom1_dir = rig.path().join("loom-a");
+        let loom1_dir = rig.path().join("loom-a-loom");
         fs::create_dir(&loom1_dir).unwrap();
         create_knot_file(&loom1_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         // Loom 2.
-        let loom2_dir = rig.path().join("loom-b");
+        let loom2_dir = rig.path().join("loom-b-loom");
         fs::create_dir(&loom2_dir).unwrap();
         create_knot_file(&loom2_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
 
@@ -380,8 +387,8 @@ This knot has custom source and tie-off directories.
 
         // Verify both looms are present.
         let ids: Vec<_> = looms.iter().map(|l| &l.id).collect();
-        assert!(ids.contains(&&LoomId("loom-a".to_string())));
-        assert!(ids.contains(&&LoomId("loom-b".to_string())));
+        assert!(ids.contains(&&LoomId("loom-a-loom".to_string())));
+        assert!(ids.contains(&&LoomId("loom-b-loom".to_string())));
 
         // Each loom has one knot.
         for loom in &looms {
@@ -876,5 +883,136 @@ Body.
             "nonexistent relative path should still join correctly"
         );
         assert!(resolved.is_absolute());
+    }
+
+    // ── Phase 2: -loom naming convention tests ─────────────────────────
+
+    #[test]
+    fn scan_skips_non_loom_directories() {
+        let rig = tempfile::tempdir().unwrap();
+
+        // Create a valid loom directory (ends in -loom).
+        let loom_dir = rig.path().join("valid-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // Create a non-loom directory (e.g. output directory).
+        let output_dir = rig.path().join("output");
+        fs::create_dir(&output_dir).unwrap();
+        create_knot_file(&output_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(rig.path());
+
+        assert!(result.is_ok());
+        let looms = result.unwrap();
+        assert_eq!(
+            looms.len(),
+            1,
+            "only -loom directories should be discovered"
+        );
+        assert_eq!(
+            looms[0].id,
+            LoomId("valid-loom".to_string()),
+            "should only find the -loom directory"
+        );
+    }
+
+    #[test]
+    fn scan_requires_strand_and_tieoff_dirs() {
+        let rig = tempfile::tempdir().unwrap();
+
+        let loom_dir = rig.path().join("required-dirs-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // Knot without strand-dir — should be skipped.
+        let no_strand_content = "---
+name: no-strand-knot
+agent-config:
+  goal: \"Review\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+tie-off-dir: \"../output\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review\"
+---
+
+Body.
+";
+        create_knot_file(&loom_dir, "no-strand", no_strand_content).unwrap();
+
+        // Knot without tie-off-dir — should be skipped.
+        let no_tieoff_content = "---
+name: no-tieoff-knot
+agent-config:
+  goal: \"Review\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+strand-dir: \"../input\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review\"
+---
+
+Body.
+";
+        create_knot_file(&loom_dir, "no-tieoff", no_tieoff_content).unwrap();
+
+        // Valid knot with both required dirs.
+        create_knot_file(&loom_dir, "valid", VALID_KNOT_CONTENT).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(rig.path());
+
+        assert!(result.is_ok(), "scan should succeed even with invalid knots");
+        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
+
+        // Only the valid knot should be present.
+        let loom = &looms[0];
+        assert_eq!(
+            loom.knots.len(),
+            1,
+            "knots missing required dirs should be skipped"
+        );
+        assert_eq!(
+            loom.knots[0].id,
+            KnotId("review-knot".to_string()),
+            "only the valid knot should be registered"
+        );
+    }
+
+    #[test]
+    fn scan_ignores_loom_log_directory() {
+        let rig = tempfile::tempdir().unwrap();
+
+        // Create a valid loom directory.
+        let valid_loom_dir = rig.path().join("active-loom");
+        fs::create_dir(&valid_loom_dir).unwrap();
+        create_knot_file(&valid_loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
+
+        // Simulate a state directory created by LoomLogPort::open().
+        // This would be <rig>/<some-id>/ (no -loom suffix).
+        let state_dir = rig.path().join("some-loom-id");
+        fs::create_dir(&state_dir).unwrap();
+        // It has a .loom-log file (state file, not a loom).
+        fs::write(state_dir.join(".loom-log"), "some log data").unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let result = repo.scan(rig.path());
+
+        assert!(result.is_ok());
+        let looms = result.unwrap();
+        assert_eq!(
+            looms.len(),
+            1,
+            "state directory should not be discovered as a loom"
+        );
+        assert_eq!(
+            looms[0].id,
+            LoomId("active-loom".to_string()),
+            "should only find the -loom directory"
+        );
     }
 }
