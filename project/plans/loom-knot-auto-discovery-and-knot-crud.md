@@ -164,11 +164,11 @@ Changes:
 - `ManageKnot` use case: `LoomStore` only. Updates the in-memory loom entry.
 - HTTP handler: writes `.md` files to disk (same pattern as `POST /looms`), then calls `ManageKnot` to update the store. The config event handler also sees the file change but the store is already updated (idempotent — `LoomStore::register()` overwrites).
 
-- [ ] Failing test: `manage_knot_create` — given a new knot, handler adds it to the loom in the store
-- [ ] Failing test: `manage_knot_update` — given an updated knot, handler updates it in the store
-- [ ] Failing test: `manage_knot_delete` — given a knot name, handler removes it from the loom in the store
-- [ ] Implement: `ManageKnot` use case with `KnotAction` enum
-- [ ] All application tests green
+- [x] Failing test: `manage_knot_create` — given a new knot, handler adds it to the loom in the store
+- [x] Failing test: `manage_knot_update` — given an updated knot, handler updates it in the store
+- [x] Failing test: `manage_knot_delete` — given a knot name, handler removes it from the loom in the store
+- [x] Implement: `ManageKnot` use case with `KnotAction` enum
+- [x] All application tests green
 
 ### Phase 3: Outbound Adapters — `NotifyEventSource` with Rig/Loom Watching
 
