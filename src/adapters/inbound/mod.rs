@@ -327,26 +327,18 @@ pub async fn register_loom(
 
     // Resolve per-knot paths relative to the source directory
     for knot in &mut knots {
-        if let Some(ref raw_path) = knot.source_dir {
-            knot.source_dir =
-                Some(FileSystemLoomRepository::resolve_path(
-                    &source_dir_path,
-                    raw_path,
-                ));
-        }
-        if let Some(ref raw_path) = knot.tie_off_dir {
-            knot.tie_off_dir =
-                Some(FileSystemLoomRepository::resolve_path(
-                    &source_dir_path,
-                    raw_path,
-                ));
-        }
+        knot.strand_dir = FileSystemLoomRepository::resolve_path(
+            &source_dir_path,
+            &knot.strand_dir,
+        );
+        knot.tie_off_dir = FileSystemLoomRepository::resolve_path(
+            &source_dir_path,
+            &knot.tie_off_dir,
+        );
     }
 
     let loom = Loom {
         id: LoomId(body.id),
-        source_dir: source_dir_path,
-        tie_off_dir: tie_off_dir_path,
         knots,
     };
 
@@ -431,8 +423,8 @@ pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
                 .into_iter()
                 .map(|loom| LoomSummary {
                     id: loom.id,
-                    source_dir: loom.source_dir,
-                    tie_off_dir: loom.tie_off_dir,
+                    source_dir: PathBuf::from(""),
+                    tie_off_dir: PathBuf::from(""),
                     knot_count: loom.knots.len(),
                 })
                 .collect();
@@ -723,8 +715,6 @@ mod tests {
     fn build_test_loom(id: impl Into<String>, knot_ids: &[&str]) -> Loom {
         Loom {
             id: LoomId(id.into()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots: knot_ids
                 .iter()
                 .map(|k| Knot {
@@ -739,8 +729,8 @@ mod tests {
                         input_bundling: "full-file".to_string(),
                         instructions: "check it".to_string(),
                     },
-                    source_dir: None,
-                    tie_off_dir: None,
+                    strand_dir: PathBuf::from("strands"),
+                    tie_off_dir: PathBuf::from("tie-offs"),
                 })
                 .collect(),
         }
@@ -1141,8 +1131,6 @@ mod tests {
         let ctx = build_test_context();
         ctx.store.register(Loom {
             id: LoomId("new-loom".to_string()),
-            source_dir: PathBuf::from("src/docs"),
-            tie_off_dir: PathBuf::from("output/docs"),
             knots: vec![],
         });
         let app2 = build_app(ctx);
@@ -1234,11 +1222,10 @@ mod tests {
 
         assert_eq!(resp.status(), 201);
 
-        // Verify watch() was called for the resolved source directory.
-        // Handler resolves source_dir relative to base_dir (./rig).
+        // No knots found (source_dir doesn't have knot files)
+        // so no watches are started. Loom is registered anyway.
         let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], PathBuf::from("./rig/src/docs"));
+        assert_eq!(watches.len(), 0);
     }
 
     /// `DELETE /looms/:id` returns 204, loom no longer in `GET /looms`.
@@ -1275,13 +1262,13 @@ mod tests {
     }
 
     /// `DELETE /looms/:id` returns 204 and mock `EventSource` has recorded
-    /// an `unwatch()` call for the source directory.
+    /// an `unwatch()` call for each knot's strand directory.
     #[tokio::test]
     async fn delete_loom_stops_watcher() {
         let (ctx, _watch_calls, unwatch_calls) =
             build_test_context_with_tracking(vec![]);
-        // Register a loom with a source directory
-        ctx.store.register(build_test_loom("watch-del-loom", &[]));
+        // Register a loom with one knot (which has strand_dir = "strands")
+        ctx.store.register(build_test_loom("watch-del-loom", &["k1"]));
         let app = build_app(ctx);
 
         let req = Request::builder()
@@ -1293,10 +1280,10 @@ mod tests {
 
         assert_eq!(resp.status(), 204);
 
-        // Verify unwatch() was called for the source directory
+        // Verify unwatch() was called for the knot's strand directory
         let unwatches = unwatch_calls.lock().unwrap();
         assert_eq!(unwatches.len(), 1);
-        assert_eq!(unwatches[0], PathBuf::from("src"));
+        assert_eq!(unwatches[0], PathBuf::from("strands"));
     }
 
     // ── Phase 4: Route Integration Tests ──────────────────────────────────

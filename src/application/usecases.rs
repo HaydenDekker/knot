@@ -134,34 +134,18 @@ impl DiscoverLooms {
         // Store the loom
         self.store.register(loom.clone());
 
-        // Start file watchers for each knot's effective source directory
+        // Start file watchers for each knot's strand directory
         for knot in &loom.knots {
-            let source_dir = knot
-                .source_dir
-                .clone()
-                .unwrap_or_else(|| loom.source_dir.clone());
             self.event_source.set_loom_ids(
-                &source_dir,
+                &knot.strand_dir,
                 &loom.id,
                 &knot.id,
             );
-            self.event_source.watch(&source_dir)
+            self.event_source.watch(&knot.strand_dir)
                 .map_err(|e| {
                     PortError::LoomSaveFailed(format!(
                         "failed to watch '{}': {}",
-                        source_dir.display(),
-                        e
-                    ))
-                })?;
-        }
-
-        // If no knots, watch the loom-level source directory
-        if loom.knots.is_empty() {
-            self.event_source.watch(&loom.source_dir)
-                .map_err(|e| {
-                    PortError::LoomSaveFailed(format!(
-                        "failed to watch '{}': {}",
-                        loom.source_dir.display(),
+                        knot.strand_dir.display(),
                         e
                     ))
                 })?;
@@ -233,34 +217,18 @@ impl RegisterLoom {
         // Store the loom
         self.store.register(loom.clone());
 
-        // Start file watchers for each knot's effective source directory
+        // Start file watchers for each knot's strand directory
         for knot in &loom.knots {
-            let source_dir = knot
-                .source_dir
-                .clone()
-                .unwrap_or_else(|| loom.source_dir.clone());
             self.event_source.set_loom_ids(
-                &source_dir,
+                &knot.strand_dir,
                 &loom.id,
                 &knot.id,
             );
-            self.event_source.watch(&source_dir)
+            self.event_source.watch(&knot.strand_dir)
                 .map_err(|e| {
                     PortError::LoomSaveFailed(format!(
                         "failed to watch '{}': {}",
-                        source_dir.display(),
-                        e
-                    ))
-                })?;
-        }
-
-        // If no knots, watch the loom-level source directory
-        if loom.knots.is_empty() {
-            self.event_source.watch(&loom.source_dir)
-                .map_err(|e| {
-                    PortError::LoomSaveFailed(format!(
-                        "failed to watch '{}': {}",
-                        loom.source_dir.display(),
+                        knot.strand_dir.display(),
                         e
                     ))
                 })?;
@@ -308,29 +276,13 @@ impl UnregisterLoom {
         let loom = self.store.get(id)
             .ok_or_else(|| PortError::LoomNotFound(id.clone()))?;
 
-        // Stop watching source directories for each knot
+        // Stop watching strand directories for each knot
         for knot in &loom.knots {
-            let source_dir = knot
-                .source_dir
-                .clone()
-                .unwrap_or_else(|| loom.source_dir.clone());
-            self.event_source.unwatch(&source_dir)
+            self.event_source.unwatch(&knot.strand_dir)
                 .map_err(|e| {
                     PortError::EventUnwatchFailed(format!(
                         "failed to unwatch '{}': {}",
-                        source_dir.display(),
-                        e
-                    ))
-                })?;
-        }
-
-        // If no knots, unwatch the loom-level source directory
-        if loom.knots.is_empty() {
-            self.event_source.unwatch(&loom.source_dir)
-                .map_err(|e| {
-                    PortError::EventUnwatchFailed(format!(
-                        "failed to unwatch '{}': {}",
-                        loom.source_dir.display(),
+                        knot.strand_dir.display(),
                         e
                     ))
                 })?;
@@ -370,8 +322,8 @@ impl ListLooms {
             .into_iter()
             .map(|loom| LoomSummary {
                 id: loom.id,
-                source_dir: loom.source_dir,
-                tie_off_dir: loom.tie_off_dir,
+                source_dir: PathBuf::from(""),
+                tie_off_dir: PathBuf::from(""),
                 knot_count: loom.knots.len(),
             })
             .collect()
@@ -748,10 +700,10 @@ impl ProcessStrand {
         }
     }
 
-    /// Compute the tie-off output path from knot/loom + strand path.
-    /// Uses knot-level `tie_off_dir` if set, otherwise falls back to loom-level.
+    /// Compute the tie-off output path from knot + strand path.
+    /// Uses the knot's required `tie_off_dir`.
     fn compute_tie_off_path(
-        loom: &Loom,
+        _loom: &Loom,
         knot: &Knot,
         strand_path: &StrandPath,
     ) -> TieOffPath {
@@ -760,11 +712,7 @@ impl ProcessStrand {
             .file_name()
             .map(|f| format!("{}.output", f.to_string_lossy()))
             .unwrap_or_else(|| "output".to_string());
-        let output_dir = knot
-            .tie_off_dir
-            .as_ref()
-            .unwrap_or(&loom.tie_off_dir);
-        TieOffPath(output_dir.join(filename))
+        TieOffPath(knot.tie_off_dir.join(filename))
     }
 
 }
@@ -935,8 +883,6 @@ mod tests {
     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         Loom {
             id: LoomId(id.into()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots,
         }
     }
@@ -956,8 +902,8 @@ mod tests {
                 "check it".to_string(),
             )
             .unwrap(),
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -1189,7 +1135,7 @@ mod tests {
             .find(|s| s.id == LoomId("loom-a".to_string()))
             .expect("loom-a summary missing");
         assert_eq!(summary_a.knot_count, 1);
-        assert_eq!(summary_a.source_dir, PathBuf::from("src"));
+        assert_eq!(summary_a.source_dir, PathBuf::from(""));
         assert_eq!(summary_a.tie_off_dir, PathBuf::from("out"));
 
         let summary_b = summaries
@@ -2050,8 +1996,6 @@ mod phase2_tests {
     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         Loom {
             id: LoomId(id.into()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots,
         }
     }
@@ -2059,7 +2003,7 @@ mod phase2_tests {
     /// Build a knot with the given ID and optional custom source_dir.
     fn build_knot(
         id: impl Into<String>,
-        source_dir: Option<PathBuf>,
+        
     ) -> Knot {
         Knot {
             id: KnotId(id.into()),
@@ -2073,23 +2017,22 @@ mod phase2_tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
-            source_dir,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
     // ── RegisterLoom Watcher Tests ─────────────────────────────────────
 
     /// `RegisterLoom` with mock `EventSource`: after registration,
-    /// `watch()` is called for each knot's effective source directory.
-    /// Knots with custom `source_dir` get their own watch;\n    /// knots without fall back to the loom-level `source_dir`.
+    /// `watch()` is called for each knot's strand directory.
     #[test]
     fn register_loom_starts_watchers() {
         let loom = build_loom(
             "watch-loom",
             vec![
-                build_knot("k1", None), // uses loom source_dir: "src"
-                build_knot("k2", Some(PathBuf::from("src/custom"))),
+                build_knot("k1"),
+                build_knot("k2"),
             ],
         );
         let loom_id = loom.id.clone();
@@ -2108,23 +2051,20 @@ mod phase2_tests {
         // Should succeed
         assert!(result.is_ok());
 
-        // watch() called for each knot's effective source directory
+        // watch() called for each knot's strand directory
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 2);
 
+        // Both knots use their strand_dir ("strands")
         let watched: HashSet<_> =
             watches.iter().map(|p| p.as_path()).collect();
-        // k1 falls back to loom source_dir "src"
-        assert!(watched.contains(Path::new("src")));
-        // k2 uses its custom source_dir "src/custom"
-        assert!(watched.contains(Path::new("src/custom")));
+        assert!(watched.contains(Path::new("strands")));
 
         // Loom is in the store
         assert!(store.get(&loom_id).is_some());
     }
 
-    /// `RegisterLoom` with no knots still watches the loom-level
-    /// `source_dir`.
+    /// `RegisterLoom` with no knots registers the loom without watchers.
     #[test]
     fn register_loom_starts_watcher_empty_knots() {
         let loom = build_loom("empty-loom", vec![]);
@@ -2143,10 +2083,9 @@ mod phase2_tests {
 
         assert!(result.is_ok());
 
-        // watch() called once for loom source_dir
+        // No knots means no watches
         let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], PathBuf::from("src"));
+        assert_eq!(watches.len(), 0);
 
         assert!(store.get(&loom_id).is_some());
     }
@@ -2154,8 +2093,8 @@ mod phase2_tests {
     /// `RegisterLoom` duplicate ID returns error without starting watchers.
     #[test]
     fn register_loom_duplicate_no_watchers() {
-        let loom1 = build_loom("dup", vec![build_knot("k1", None)]);
-        let loom2 = build_loom("dup", vec![build_knot("k2", None)]);
+        let loom1 = build_loom("dup", vec![build_knot("k1")]);
+        let loom2 = build_loom("dup", vec![build_knot("k2")]);
 
         let (event_source, watch_calls) = TrackingEventSource::new();
         let store = LoomStore::new();
@@ -2284,8 +2223,6 @@ mod phase3_tests {
     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         Loom {
             id: LoomId(id.into()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots,
         }
     }
@@ -2293,7 +2230,7 @@ mod phase3_tests {
     /// Build a knot with the given ID and optional custom source_dir.
     fn build_knot(
         id: impl Into<String>,
-        source_dir: Option<PathBuf>,
+        
     ) -> Knot {
         Knot {
             id: KnotId(id.into()),
@@ -2307,24 +2244,22 @@ mod phase3_tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
-            source_dir,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
     // ── UnregisterLoom Watcher Tests ───────────────────────────────────
 
     /// `UnregisterLoom` with mock `EventSource`: after unregistration,
-    /// `unwatch()` is called for each watched source directory.
-    /// Knots with custom `source_dir` get their own unwatch;
-    /// knots without fall back to the loom-level `source_dir`.
+    /// `unwatch()` is called for each knot's strand directory.
     #[test]
     fn unregister_loom_stops_watchers() {
         let loom = build_loom(
             "unwatch-loom",
             vec![
-                build_knot("k1", None), // uses loom source_dir: "src"
-                build_knot("k2", Some(PathBuf::from("src/custom"))),
+                build_knot("k1"),
+                build_knot("k2"),
             ],
         );
         let loom_id = loom.id.clone();
@@ -2347,23 +2282,20 @@ mod phase3_tests {
         // Should succeed
         assert!(result.is_ok());
 
-        // unwatch() called for each effective source directory
+        // unwatch() called for each knot's strand directory
         let unwatches = unwatch_calls.lock().unwrap();
         assert_eq!(unwatches.len(), 2);
 
+        // Both knots use their strand_dir ("strands")
         let unwatched: HashSet<_> =
             unwatches.iter().map(|p| p.as_path()).collect();
-        // k1 falls back to loom source_dir "src"
-        assert!(unwatched.contains(Path::new("src")));
-        // k2 uses its custom source_dir "src/custom"
-        assert!(unwatched.contains(Path::new("src/custom")));
+        assert!(unwatched.contains(Path::new("strands")));
 
         // Loom is no longer in the store
         assert!(store.get(&loom_id).is_none());
     }
 
-    /// `UnregisterLoom` with no knots still unwatch the loom-level
-    /// `source_dir`.
+    /// `UnregisterLoom` with no knots unregisters without unwatch.
     #[test]
     fn unregister_loom_stops_watcher_empty_knots() {
         let loom = build_loom("empty-unwatch-loom", vec![]);
@@ -2386,10 +2318,9 @@ mod phase3_tests {
 
         assert!(result.is_ok());
 
-        // unwatch() called once for loom source_dir
+        // No knots means no unwatch
         let unwatches = unwatch_calls.lock().unwrap();
-        assert_eq!(unwatches.len(), 1);
-        assert_eq!(unwatches[0], PathBuf::from("src"));
+        assert_eq!(unwatches.len(), 0);
 
         assert!(store.get(&loom_id).is_none());
     }
@@ -2517,8 +2448,6 @@ mod phase4_tests {
     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         Loom {
             id: LoomId(id.into()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots,
         }
     }
@@ -2537,8 +2466,8 @@ mod phase4_tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -2589,9 +2518,9 @@ mod phase4_tests {
 
         // Watchers started only for new looms (not existing)
         let watches = watch_calls.lock().unwrap();
-        // new_loom has 1 knot → 1 watch for "src"
-        // new_loom2 has 0 knots → 1 watch for "src"
-        assert_eq!(watches.len(), 2);
+        // new_loom has 1 knot → 1 watch for "strands"
+        // new_loom2 has 0 knots → no watch
+        assert_eq!(watches.len(), 1);
 
         // Both new looms are in store
         assert!(store.get(&LoomId("new-loom".to_string())).is_some());

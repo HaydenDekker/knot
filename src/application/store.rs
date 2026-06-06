@@ -79,8 +79,6 @@ mod tests {
     fn build_loom(id: LoomId) -> Loom {
         Loom {
             id,
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
             knots: vec![
                 crate::domain::entities::Knot {
                     id: crate::domain::entities::KnotId("k1".to_string()),
@@ -95,8 +93,8 @@ mod tests {
                         "check it".to_string(),
                     )
                     .unwrap(),
-                    source_dir: None,
-                    tie_off_dir: None,
+                    strand_dir: PathBuf::from("strands"),
+                    tie_off_dir: PathBuf::from("tie-offs"),
                 },
             ],
         }

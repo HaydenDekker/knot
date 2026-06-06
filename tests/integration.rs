@@ -14,23 +14,19 @@ use knot::AppConfig;
 use knot::ShutdownSignal;
 use knot::RigAgentConfig;
 
-/// Valid knot definition file content for creating test looms.
-const VALID_KNOT_CONTENT: &str = "---
-name: review-knot
-agent-config:
-  goal: \"Review PRD goals for clarity\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
-prompt-template:
-  input-bundling: \"full-file\"
-  instructions: |
-    Review the goals section of this PRD.
----
-
-# Review Knot
-
-This knot reviews PRD goals.
-";
+/// Generate valid knot definition file content with absolute paths.
+/// Creates the strand and tie-off directories if they don't exist.
+fn make_knot_content(project_root: &std::path::Path) -> String {
+    let strand_dir = project_root.join("strands");
+    let tie_off_dir = project_root.join("tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+    format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals for clarity\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
+        strand_dir.display(),
+        tie_off_dir.display()
+    )
+}
 
 /// Create a mock agent script in the given directory.
 /// The script echoes the given message and ignores all CLI arguments.
@@ -285,7 +281,7 @@ fn rig_directory_scanned() {
     fs::create_dir(&rig_path).unwrap();
     let loom_dir = rig_path.join("docs-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(tmp.path())).unwrap();
 
     let port = 31981;
     let host_port = format!("127.0.0.1:{port}");
@@ -451,7 +447,7 @@ fn startup_discovers_looms() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("my-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31986;
     let host_port = format!("127.0.0.1:{port}");
@@ -514,7 +510,7 @@ fn startup_starts_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("watch-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31987;
     let host_port = format!("127.0.0.1:{port}");
@@ -576,7 +572,7 @@ fn startup_logs_knot_registration() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("state-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31988;
     let host_port = format!("127.0.0.1:{port}");
@@ -677,7 +673,7 @@ fn event_flows_through_pipeline() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent =
@@ -747,7 +743,7 @@ fn debounce_prevents_duplicate_processing() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("debounce-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31991;
     let host_port = format!("127.0.0.1:{port}");
@@ -852,7 +848,7 @@ fn full_pipeline_create_modify_delete() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -949,7 +945,7 @@ fn full_pipeline_http_observable() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("http-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -1059,7 +1055,7 @@ fn multiple_looms_independent() {
     fs::create_dir(&loom_a_dir).unwrap();
     fs::write(
         loom_a_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"strands\"\ntie-off-dir: \"tie-offs\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
     )
     .unwrap();
 
@@ -1068,7 +1064,7 @@ fn multiple_looms_independent() {
     fs::create_dir(&loom_b_dir).unwrap();
     fs::write(
         loom_b_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"strands\"\ntie-off-dir: \"tie-offs\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
     )
     .unwrap();
 
@@ -1188,7 +1184,7 @@ fn graceful_shutdown_stops_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("shutdown-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31995;
     let host_port = format!("127.0.0.1:{port}");
@@ -1255,7 +1251,7 @@ fn shutdown_logs_loom_stopped() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("log-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31996;
     let host_port = format!("127.0.0.1:{port}");
@@ -1331,7 +1327,7 @@ fn full_pipeline_subdirectory_rig() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("config-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&root, "processed external");
@@ -1407,7 +1403,7 @@ fn full_pipeline_agent_error_in_state_and_log() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let port = 31998;
     let host_port = format!("127.0.0.1:{port}");
@@ -1500,7 +1496,7 @@ fn full_pipeline_external_source_with_agent_error() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("error-external-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
 
     let port = 32001;
     let host_port = format!("127.0.0.1:{port}");
@@ -1618,7 +1614,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("success-external-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&root, "summary");
@@ -1730,7 +1726,7 @@ fn full_pipeline_with_pi_agent() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pi-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Create the stub-pi script that echoes received args and content
     let stub_pi = create_stub_pi_agent(&base_dir);
@@ -1841,6 +1837,8 @@ agent-config:
   goal: "Review with nonexistent model"
   provider: "openai"
   model: "nonexistent-model-xyz"
+strand-dir: "strands"
+tie-off-dir: "tie-offs"
 prompt-template:
   input-bundling: "full-file"
   instructions: |
@@ -1969,6 +1967,8 @@ agent-config:
   goal: "Review and summarize documents"
   provider: "openai"
   model: "gpt-4o"
+strand-dir: "strands"
+tie-off-dir: "tie-offs"
 prompt-template:
   input-bundling: "full-file"
   instructions: |
@@ -2132,6 +2132,8 @@ agent-config:
   tools:
     - fs
     - web
+strand-dir: "strands"
+tie-off-dir: "tie-offs"
 prompt-template:
   input-bundling: "full-file"
   instructions: |
@@ -2202,7 +2204,7 @@ prompt-template:
 /// Two knots in one loom, each with its own source directory.
 ///
 /// 1. Create a rig with a loom containing two knot files.
-/// 2. Each knot defines its own `source-dir` pointing to a separate dir.
+/// 2. Each knot defines its own `strand-dir` pointing to a separate dir.
 /// 3. Start the server with a mock agent.
 /// 4. Create a strand in knot A's source → processed by knot A only.
 /// 5. Create a strand in knot B's source → processed by knot B only.
@@ -2226,6 +2228,12 @@ fn server_starts_with_per_knot_source_dirs() {
     let source_b = root.join("source-b");
     fs::create_dir(&source_b).unwrap();
 
+    // Tie-off directories for each knot.
+    let tieoff_a = root.join("tieoff-a");
+    fs::create_dir(&tieoff_a).unwrap();
+    let tieoff_b = root.join("tieoff-b");
+    fs::create_dir(&tieoff_b).unwrap();
+
     // Knot A — watches source-a.
     let knot_a_content = format!(
         "---
@@ -2234,13 +2242,15 @@ agent-config:
   goal: \"Review A\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"{}\"
+strand-dir: \"{}\"
+tie-off-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review A\"
 ---
 ",
-        source_a.display()
+        source_a.display(),
+        tieoff_a.display()
     );
     fs::write(loom_dir.join("knot-a.md"), knot_a_content).unwrap();
 
@@ -2252,13 +2262,15 @@ agent-config:
   goal: \"Review B\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"{}\"
+strand-dir: \"{}\"
+tie-off-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review B\"
 ---
 ",
-        source_b.display()
+        source_b.display(),
+        tieoff_b.display()
     );
     fs::write(loom_dir.join("knot-b.md"), knot_b_content).unwrap();
 
@@ -2409,7 +2421,7 @@ fn http_register_then_process_strand() {
     // doesn't find it — we test POST /looms registration path.
     let source_dir = base_dir.join("http-reg-loom");
     fs::create_dir(&source_dir).unwrap();
-    fs::write(source_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(source_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // 1. POST /looms to register the loom (scans for knots in source dir).
     let body = serde_json::json!({
@@ -2495,7 +2507,7 @@ fn discover_then_process_strand() {
     // Create a loom directory on disk with a knot definition.
     let loom_dir = base_dir.join("discover-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Mock agent script.
     let mock_agent = create_mock_agent(&base_dir, "discovered-processed");
@@ -2602,7 +2614,7 @@ fn unregister_stops_processing() {
     // Create source directory with knot definition file.
     let source_dir = base_dir.join("unreg-loom");
     fs::create_dir(&source_dir).unwrap();
-    fs::write(source_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(source_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Mock agent script.
     let mock_agent = create_mock_agent(&base_dir, "should-not-run");
@@ -2738,7 +2750,7 @@ fn full_tie_off_history() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("history-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     // Simple mock agent — always returns "processed"
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -2855,7 +2867,7 @@ fn tie_off_sections_readable() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("sections-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), VALID_KNOT_CONTENT).unwrap();
+    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
 
     let mock_agent = create_mock_agent(&base_dir, "processed");
 

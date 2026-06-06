@@ -394,9 +394,7 @@ mod tests {
         assert!(list_result.unwrap().is_empty());
 
         let loom = Loom {
-            id: LoomId("save-test".to_string()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
+            id: LoomId("save-test-loom".to_string()),
             knots: vec![],
         };
         let save_result = repo.save(loom);

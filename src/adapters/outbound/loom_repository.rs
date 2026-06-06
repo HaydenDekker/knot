@@ -12,10 +12,9 @@ use crate::domain::knot_file::{self as knot_file_parser, KnotFile};
 /// Scans a rig directory for looms (subdirectories) and parses
 /// `.md` knot definition files using `KnotFileParser` from the domain layer.
 ///
-/// Each knot can define its own `source_dir` and `tie_off_dir` in its
-/// frontmatter. Relative paths are resolved against the loom directory.
-/// Loom-level defaults: `source_dir` = loom directory,
-/// `tie_off_dir` = `<loom_dir>/.knot-output`.
+/// Each knot defines its own `strand_dir` and `tie_off_dir` in its
+/// frontmatter (both required). Relative paths are resolved against the
+/// loom directory.
 ///
 /// Also maintains an in-memory registry of saved looms for `get()`,
 /// `list()`, and `save()` operations.
@@ -101,31 +100,18 @@ impl LoomRepository for FileSystemLoomRepository {
                     ))
                 })?;
 
-            // Loom-level defaults: source_dir = loom dir,
-            // tie_off_dir = <loom_dir>/.knot-output.
-            let source_dir = canonical_loom_dir.clone();
-            let tie_off_dir = canonical_loom_dir.join(".knot-output");
-
-            // Parse .md knot definition files from the loom directory.
+// Parse .md knot definition files from the loom directory.
             let mut knots = Self::scan_knot_files(&canonical_loom_dir)?;
 
             // Resolve per-knot paths relative to the project root
             // (parent of the rig directory).
             for knot in &mut knots {
-                if let Some(ref raw_path) = knot.source_dir {
-                    knot.source_dir =
-                        Some(Self::resolve_path(project_root, raw_path));
-                }
-                if let Some(ref raw_path) = knot.tie_off_dir {
-                    knot.tie_off_dir =
-                        Some(Self::resolve_path(project_root, raw_path));
-                }
+                knot.strand_dir = Self::resolve_path(project_root, &knot.strand_dir);
+                knot.tie_off_dir = Self::resolve_path(project_root, &knot.tie_off_dir);
             }
 
             let loom = Loom {
                 id: loom_id,
-                source_dir,
-                tie_off_dir,
                 knots,
             };
 
@@ -166,7 +152,7 @@ impl FileSystemLoomRepository {
     /// # Returns
     ///
     /// Parsed `Knot` instances with unresolved paths (caller must resolve
-    /// `source_dir` and `tie_off_dir` relative to the project root).
+    /// `strand_dir` and `tie_off_dir` relative to the project root).
     pub fn scan_knot_files(
         knot_dir: &Path,
     ) -> Result<Vec<Knot>, PortError> {
@@ -220,7 +206,7 @@ impl FileSystemLoomRepository {
 
     /// Convert a parsed `KnotFile` into a domain `Knot`.
     ///
-    /// The `source_dir` and `tie_off_dir` fields carry raw paths from the
+    /// The `strand_dir` and `tie_off_dir` fields carry raw paths from the
     /// frontmatter (may be relative). Resolution to absolute paths is
     /// performed by the caller in `scan()`.
     fn knot_from_file(file: KnotFile) -> Knot {
@@ -228,7 +214,7 @@ impl FileSystemLoomRepository {
             id: KnotId(file.name.clone()),
             agent_config: file.agent_config,
             prompt_template: file.prompt_template,
-            source_dir: file.source_dir,
+            strand_dir: file.strand_dir,
             tie_off_dir: file.tie_off_dir,
         }
     }
@@ -280,6 +266,8 @@ agent-config:
   goal: \"Review PRD goals for clarity\"
   provider: \"openai\"
   model: \"gpt-4o\"
+strand-dir: \"../external-source\"
+tie-off-dir: \"../external-output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -297,7 +285,7 @@ agent-config:
   goal: \"Review with custom dirs\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"../external-source\"
+strand-dir: \"../external-source\"
 tie-off-dir: \"../external-output\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -356,15 +344,13 @@ This knot has custom source and tie-off directories.
 
         let loom = &looms[0];
         assert_eq!(loom.id, LoomId("my-loom".to_string()));
-        assert_eq!(loom.source_dir, loom_dir);
-        assert_eq!(loom.tie_off_dir, loom_dir.join(".knot-output"));
         assert_eq!(loom.knots.len(), 1);
         assert_eq!(loom.knots[0].id, KnotId("review-knot".to_string()));
 
-        // Knot without custom dirs has None for both.
+        // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
-        assert!(knot.source_dir.is_none());
-        assert!(knot.tie_off_dir.is_none());
+        assert!(knot.strand_dir.is_absolute());
+        assert!(knot.tie_off_dir.is_absolute());
     }
 
     #[test]
@@ -483,8 +469,6 @@ broken: yaml: [
 
         let loom = Loom {
             id: LoomId("saved-loom".to_string()),
-            source_dir: std::path::PathBuf::from("src/prds"),
-            tie_off_dir: std::path::PathBuf::from("output/prds"),
             knots: vec![],
         };
 
@@ -497,7 +481,6 @@ broken: yaml: [
         let listed = list_result.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, LoomId("saved-loom".to_string()));
-        assert_eq!(listed[0].source_dir, std::path::PathBuf::from("src/prds"));
 
         // get() should also return the saved loom.
         let get_result = repo.get(&LoomId("saved-loom".to_string()));
@@ -542,24 +525,20 @@ broken: yaml: [
         let looms = result.unwrap();
         assert_eq!(looms.len(), 1, "should find one loom");
 
-        // Every loom's source_dir must be absolute.
+        // Every loom's knots have absolute paths.
         for loom in &looms {
-            let source_str = loom.source_dir.to_string_lossy();
-            assert!(
-                loom.source_dir.is_absolute(),
-                "source_dir should be absolute, got: {}",
-                source_str
-            );
-            assert!(
-                !source_str.contains("./"),
-                "source_dir should not contain . component, got: {}",
-                source_str
-            );
-            assert!(
-                !source_str.contains("../"),
-                "source_dir should not contain .. component, got: {}",
-                source_str
-            );
+            for knot in &loom.knots {
+                assert!(
+                    knot.strand_dir.is_absolute(),
+                    "strand_dir should be absolute, got: {}",
+                    knot.strand_dir.display()
+                );
+                assert!(
+                    !knot.strand_dir.to_string_lossy().contains("./"),
+                    "strand_dir should not contain . component, got: {}",
+                    knot.strand_dir.display()
+                );
+            }
         }
     }
 
@@ -582,20 +561,20 @@ broken: yaml: [
         assert_eq!(looms.len(), 1, "should find one loom");
 
         let loom = &looms[0];
-        let source_str = loom.source_dir.to_string_lossy();
+        let strand_str = loom.knots[0].strand_dir.to_string_lossy();
 
-        // source_dir must be absolute.
+        // strand_dir must be absolute.
         assert!(
-            loom.source_dir.is_absolute(),
-            "source_dir should be absolute, got: {}",
-            source_str
+            loom.knots[0].strand_dir.is_absolute(),
+            "strand_dir should be absolute, got: {}",
+            strand_str
         );
 
         // No double-slashes in the canonicalised path.
         assert!(
-            !source_str.contains("//"),
-            "source_dir should not contain double-slashes, got: {}",
-            source_str
+            !strand_str.contains("//"),
+            "strand_dir should not contain double-slashes, got: {}",
+            strand_str
         );
     }
 
@@ -642,41 +621,24 @@ broken: yaml: [
             .find(|k| k.id == KnotId("review-knot".to_string()))
             .expect("review-knot should exist");
 
-        // Custom knot should have directories set (resolved relative to loom).
+        // Custom knot has required directories (resolved to absolute).
         assert!(
-            custom_knot.source_dir.is_some(),
-            "custom knot should have source_dir"
+            custom_knot.strand_dir.is_absolute(),
+            "custom knot strand_dir should be absolute"
         );
         assert!(
-            custom_knot.tie_off_dir.is_some(),
-            "custom knot should have tie_off_dir"
-        );
-        // Resolved paths should be absolute (loom_dir is canonical).
-        assert!(
-            custom_knot
-                .source_dir
-                .as_ref()
-                .unwrap()
-                .is_absolute(),
-            "custom knot source_dir should be absolute"
-        );
-        assert!(
-            custom_knot
-                .tie_off_dir
-                .as_ref()
-                .unwrap()
-                .is_absolute(),
+            custom_knot.tie_off_dir.is_absolute(),
             "custom knot tie_off_dir should be absolute"
         );
 
-        // Default knot should have None for both.
+        // Default knot also has required directories (from frontmatter).
         assert!(
-            default_knot.source_dir.is_none(),
-            "default knot should not have source_dir"
+            default_knot.strand_dir.is_absolute(),
+            "default knot strand_dir should be absolute"
         );
         assert!(
-            default_knot.tie_off_dir.is_none(),
-            "default knot should not have tie_off_dir"
+            default_knot.tie_off_dir.is_absolute(),
+            "default knot tie_off_dir should be absolute"
         );
     }
 
@@ -700,7 +662,7 @@ broken: yaml: [
         let loom_dir = rig.join("config-loom");
         fs::create_dir(&loom_dir).unwrap();
 
-        // Knot with per-knot source-dir and tie-off-dir.
+        // Knot with per-knot strand-dir and tie-off-dir.
         // Paths resolve relative to project root (rig's parent = temp_root),
         // so we use simple names that are siblings of rig/.
         let knot_content = r#"---
@@ -709,7 +671,7 @@ agent-config:
   goal: "Review with custom dirs"
   provider: "openai"
   model: "gpt-4o"
-source-dir: "external-source"
+strand-dir: "external-source"
 tie-off-dir: "external-output"
 prompt-template:
   input-bundling: "full-file"
@@ -731,16 +693,16 @@ Body.
         assert_eq!(loom.knots.len(), 1);
 
         let knot = &loom.knots[0];
-        // source_dir resolves relative to project root (rig's parent).
+        // strand_dir resolves relative to project root (rig's parent).
         // "external-source" from temp_root → temp_root/external-source.
         assert_eq!(
-            knot.source_dir,
-            Some(external_source),
-            "knot source_dir should resolve relative to project root"
+            knot.strand_dir,
+            external_source,
+            "knot strand_dir should resolve relative to project root"
         );
         assert_eq!(
             knot.tie_off_dir,
-            Some(external_tie_off),
+            external_tie_off,
             "knot tie_off_dir should resolve relative to loom dir"
         );
     }
@@ -762,24 +724,30 @@ Body.
         fs::create_dir(&loom_dir).unwrap();
 
         // Knot A with its own source dir.
+        let tieoff_a = temp_root.path().join("tieoff-a");
+        fs::create_dir(&tieoff_a).unwrap();
         let knot_a_content = format!(
             "---\nname: knot-a\nagent-config:\n  goal: \"Review \
              A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\
-             \nsource-dir: \"{}\"\nprompt-template:\n  \
+             \nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  \
              input-bundling: \"full-file\"\n  instructions: \"Review \
              A\"\n---\n",
-            source_a.display()
+            source_a.display(),
+            tieoff_a.display()
         );
         create_knot_file(&loom_dir, "knot-a", &knot_a_content).unwrap();
 
         // Knot B with its own source dir.
+        let tieoff_b = temp_root.path().join("tieoff-b");
+        fs::create_dir(&tieoff_b).unwrap();
         let knot_b_content = format!(
             "---\nname: knot-b\nagent-config:\n  goal: \"Review \
              B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\
-             \nsource-dir: \"{}\"\nprompt-template:\n  \
+             \nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  \
              input-bundling: \"full-file\"\n  instructions: \"Review \
              B\"\n---\n",
-            source_b.display()
+            source_b.display(),
+            tieoff_b.display()
         );
         create_knot_file(&loom_dir, "knot-b", &knot_b_content).unwrap();
 
@@ -806,28 +774,28 @@ Body.
 
         // Each knot has its own source directory.
         assert_eq!(
-            knot_a.source_dir,
-            Some(source_a.clone()),
-            "knot-a should have source-a as source_dir"
+            knot_a.strand_dir,
+            source_a,
+            "knot-a should have source-a as strand_dir"
         );
         assert_eq!(
-            knot_b.source_dir,
-            Some(source_b.clone()),
-            "knot-b should have source-b as source_dir"
+            knot_b.strand_dir,
+            source_b,
+            "knot-b should have source-b as strand_dir"
         );
 
         // They should be different.
         assert_ne!(
-            knot_a.source_dir, knot_b.source_dir,
-            "knots should have different source directories"
+            knot_a.strand_dir, knot_b.strand_dir,
+            "knots should have different strand directories"
         );
     }
 
     #[test]
-    fn scan_knot_without_dirs_gets_none() {
+    fn scan_knot_gets_required_dirs() {
         let rig = tempfile::tempdir().unwrap();
 
-        let loom_dir = rig.path().join("default-loom");
+        let loom_dir = rig.path().join("my-loom");
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
@@ -839,21 +807,12 @@ Body.
         assert_eq!(looms.len(), 1);
 
         let loom = &looms[0];
-        // Loom-level defaults.
-        assert_eq!(
-            loom.source_dir, loom_dir,
-            "loom source_dir should default to loom directory"
-        );
-        assert_eq!(
-            loom.tie_off_dir,
-            loom_dir.join(".knot-output"),
-            "loom tie_off_dir should default to <loom>/.knot-output"
-        );
+        assert_eq!(loom.id, LoomId("my-loom".to_string()));
 
-        // Knot has no custom dirs — fields are None.
+        // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
-        assert!(knot.source_dir.is_none());
-        assert!(knot.tie_off_dir.is_none());
+        assert!(knot.strand_dir.is_absolute(), "strand_dir should be absolute");
+        assert!(knot.tie_off_dir.is_absolute(), "tie_off_dir should be absolute");
     }
 
     #[test]

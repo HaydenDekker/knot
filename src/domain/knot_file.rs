@@ -18,6 +18,10 @@ pub enum KnotFileError {
     EmptyModel,
     /// The `prompt-template` section is missing from frontmatter.
     MissingPromptTemplate,
+    /// The `strand-dir` field is missing or empty.
+    MissingStrandDir,
+    /// The `tie-off-dir` field is missing or empty.
+    MissingTieOffDir,
     /// The frontmatter YAML could not be parsed.
     InvalidFormat,
 }
@@ -25,12 +29,26 @@ pub enum KnotFileError {
 impl std::fmt::Display for KnotFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            KnotFileError::MissingName => write!(f, "knot file is missing 'name' field"),
-            KnotFileError::EmptyGoal => write!(f, "knot file 'goal' field is empty"),
-            KnotFileError::EmptyProvider => write!(f, "knot file 'provider' field is empty"),
-            KnotFileError::EmptyModel => write!(f, "knot file 'model' field is empty"),
+            KnotFileError::MissingName => {
+                write!(f, "knot file is missing 'name' field")
+            }
+            KnotFileError::EmptyGoal => {
+                write!(f, "knot file 'goal' field is empty")
+            }
+            KnotFileError::EmptyProvider => {
+                write!(f, "knot file 'provider' field is empty")
+            }
+            KnotFileError::EmptyModel => {
+                write!(f, "knot file 'model' field is empty")
+            }
             KnotFileError::MissingPromptTemplate => {
                 write!(f, "knot file is missing 'prompt-template' section")
+            }
+            KnotFileError::MissingStrandDir => {
+                write!(f, "knot file is missing 'strand-dir' field")
+            }
+            KnotFileError::MissingTieOffDir => {
+                write!(f, "knot file is missing 'tie-off-dir' field")
             }
             KnotFileError::InvalidFormat => {
                 write!(f, "knot file frontmatter is not valid YAML")
@@ -54,10 +72,10 @@ pub struct KnotFile {
     pub agent_config: AgentConfig,
     /// Prompt template extracted from frontmatter.
     pub prompt_template: PromptTemplate,
-    /// Optional per-knot source directory.
-    pub source_dir: Option<PathBuf>,
-    /// Optional per-knot tie-off directory.
-    pub tie_off_dir: Option<PathBuf>,
+    /// Directory to watch for strand files (required).
+    pub strand_dir: PathBuf,
+    /// Directory to write tie-off output (required).
+    pub tie_off_dir: PathBuf,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -68,8 +86,8 @@ struct RawFrontmatter {
     agent_config: Option<RawAgentConfig>,
     #[serde(rename = "prompt-template")]
     prompt_template: Option<RawPromptTemplate>,
-    #[serde(rename = "source-dir")]
-    source_dir: Option<String>,
+    #[serde(rename = "strand-dir")]
+    strand_dir: Option<String>,
     #[serde(rename = "tie-off-dir")]
     tie_off_dir: Option<String>,
 }
@@ -155,23 +173,25 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     let prompt_template = PromptTemplate::new(input_bundling, instructions)
         .map_err(|_| KnotFileError::MissingPromptTemplate)?;
 
-    // Parse optional source-dir
-    let source_dir = raw
-        .source_dir
+    // Parse required strand-dir
+    let strand_dir = raw
+        .strand_dir
         .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+        .ok_or(KnotFileError::MissingStrandDir)?;
 
-    // Parse optional tie-off-dir
+    // Parse required tie-off-dir
     let tie_off_dir = raw
         .tie_off_dir
         .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+        .ok_or(KnotFileError::MissingTieOffDir)?;
 
     Ok(KnotFile {
         name,
         agent_config,
         prompt_template,
-        source_dir,
+        strand_dir,
         tie_off_dir,
     })
 }
@@ -204,6 +224,8 @@ agent-config:
   goal: \"Review PRD goals for clarity, completeness, and alignment\"
   provider: \"openai\"
   model: \"gpt-4o\"
+strand-dir: \"strands\"
+tie-off-dir: \"tie-offs\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -230,19 +252,19 @@ This knot reviews the goals section of PRD documents.
         assert!(file.agent_config.tools.is_empty());
         assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
-        assert!(file.source_dir.is_none());
-        assert!(file.tie_off_dir.is_none());
+        assert_eq!(file.strand_dir, PathBuf::from("strands"));
+        assert_eq!(file.tie_off_dir, PathBuf::from("tie-offs"));
     }
 
     #[test]
-    fn knot_file_with_source_and_tieoff_dirs() {
+    fn knot_file_with_strand_and_tieoff_dirs() {
         let content = "---
 name: custom-dirs-knot
 agent-config:
   goal: \"Review with custom dirs\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"../custom-source\"
+strand-dir: \"../custom-source\"
 tie-off-dir: \"../custom-output\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -255,24 +277,24 @@ Body.
         let file = parse(content).unwrap();
         assert_eq!(file.name, "custom-dirs-knot");
         assert_eq!(
-            file.source_dir,
-            Some(PathBuf::from("../custom-source"))
+            file.strand_dir,
+            PathBuf::from("../custom-source")
         );
         assert_eq!(
             file.tie_off_dir,
-            Some(PathBuf::from("../custom-output"))
+            PathBuf::from("../custom-output")
         );
     }
 
     #[test]
-    fn knot_file_with_only_source_dir() {
+    fn missing_strand_dir_returns_error() {
         let content = "---
-name: source-only-knot
+name: no-strand-dir-knot
 agent-config:
   goal: \"Review\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"../my-source\"
+tie-off-dir: \"../output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -281,23 +303,42 @@ prompt-template:
 Body.
 ";
 
-        let file = parse(content).unwrap();
-        assert_eq!(
-            file.source_dir,
-            Some(PathBuf::from("../my-source"))
-        );
-        assert!(file.tie_off_dir.is_none());
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::MissingStrandDir);
     }
 
     #[test]
-    fn knot_file_empty_dir_values_treated_as_none() {
+    fn missing_tieoff_dir_returns_error() {
+        let content = "---
+name: no-tieoff-dir-knot
+agent-config:
+  goal: \"Review\"
+  provider: \"openai\"
+  model: \"gpt-4o\"
+strand-dir: \"../input\"
+prompt-template:
+  input-bundling: \"full-file\"
+  instructions: \"Review the document\"
+---
+
+Body.
+";
+
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::MissingTieOffDir);
+    }
+
+    #[test]
+    fn empty_dir_values_return_error() {
         let content = "---
 name: empty-dirs-knot
 agent-config:
   goal: \"Review\"
   provider: \"openai\"
   model: \"gpt-4o\"
-source-dir: \"  \"
+strand-dir: \"  \"
 tie-off-dir: \"\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -307,15 +348,10 @@ prompt-template:
 Body.
 ";
 
-        let file = parse(content).unwrap();
-        assert!(
-            file.source_dir.is_none(),
-            "whitespace-only source-dir should be None"
-        );
-        assert!(
-            file.tie_off_dir.is_none(),
-            "empty tie-off-dir should be None"
-        );
+        let result = parse(content);
+        assert!(result.is_err());
+        // strand-dir is checked first (alphabetical in frontmatter parsing)
+        assert_eq!(result.unwrap_err(), KnotFileError::MissingStrandDir);
     }
 
     #[test]
@@ -329,6 +365,8 @@ agent-config:
   tools:
     - fs
     - web
+strand-dir: \"strands\"
+tie-off-dir: \"tie-offs\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -454,8 +492,8 @@ No frontmatter at all.";
                 "do it".to_string(),
             )
             .unwrap(),
-            source_dir: Some(PathBuf::from("src/test")),
-            tie_off_dir: Some(PathBuf::from("out/test")),
+            strand_dir: PathBuf::from("strands/test"),
+            tie_off_dir: PathBuf::from("tie-offs/test"),
         };
 
         let json = serde_json::to_string(&file).unwrap();
@@ -562,6 +600,14 @@ Body.
         assert_eq!(
             KnotFileError::MissingPromptTemplate.to_string(),
             "knot file is missing 'prompt-template' section"
+        );
+        assert_eq!(
+            KnotFileError::MissingStrandDir.to_string(),
+            "knot file is missing 'strand-dir' field"
+        );
+        assert_eq!(
+            KnotFileError::MissingTieOffDir.to_string(),
+            "knot file is missing 'tie-off-dir' field"
         );
         assert_eq!(
             KnotFileError::InvalidFormat.to_string(),

@@ -97,10 +97,10 @@ Changes:
   }
 ```
 
-- [ ] Write failing tests: `knot_file::tests::missing_strand_dir_returns_error`, `knot_file::tests::missing_tieoff_dir_returns_error`, `entities::tests::knot_construction_with_required_dirs`
-- [ ] Implement: rename fields in `Knot` entity, update `KnotFile` parser, add new error variants
-- [ ] Update existing domain tests: rename `source_dir` references to `strand_dir`, update knot construction to include required fields
-- [ ] All domain tests green
+- [x] Write failing tests: `knot_file::tests::missing_strand_dir_returns_error`, `knot_file::tests::missing_tieoff_dir_returns_error`, `entities::tests::knot_construction_with_required_dirs`
+- [x] Implement: rename fields in `Knot` entity, update `KnotFile` parser, add new error variants
+- [x] Update existing domain tests: rename `source_dir` references to `strand_dir`, update knot construction to include required fields
+- [x] All domain tests green
 
 ### Phase 1: Application — Ports and Use Cases
 

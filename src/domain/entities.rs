@@ -50,23 +50,21 @@ pub struct Knot {
     pub id: KnotId,
     pub agent_config: AgentConfig,
     pub prompt_template: PromptTemplate,
-    /// Optional per-knot source directory. Falls back to loom-level config.
-    #[schema(value_type = Option<String>)]
-    pub source_dir: Option<PathBuf>,
-    /// Optional per-knot tie-off directory. Falls back to loom-level config.
-    #[schema(value_type = Option<String>)]
-    pub tie_off_dir: Option<PathBuf>,
+    /// Directory to watch for strand files (required).
+    #[schema(value_type = String)]
+    pub strand_dir: PathBuf,
+    /// Directory to write tie-off output (required).
+    #[schema(value_type = String)]
+    pub tie_off_dir: PathBuf,
 }
 
-/// A Loom orchestrates a collection of Knots over a source directory,
-/// writing output to a tie-off directory.
+/// A Loom orchestrates a collection of Knots.
+///
+/// The loom directory is static and derived from the loom ID and rig base
+/// path — not stored as a field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Loom {
     pub id: LoomId,
-    #[schema(value_type = String)]
-    pub source_dir: PathBuf,
-    #[schema(value_type = String)]
-    pub tie_off_dir: PathBuf,
     pub knots: Vec<Knot>,
 }
 
@@ -114,19 +112,19 @@ mod tests {
             id: id.clone(),
             agent_config: agent_config.clone(),
             prompt_template: prompt_template.clone(),
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         };
 
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_config, agent_config);
         assert_eq!(knot.prompt_template, prompt_template);
-        assert!(knot.source_dir.is_none());
-        assert!(knot.tie_off_dir.is_none());
+        assert_eq!(knot.strand_dir, PathBuf::from("strands"));
+        assert_eq!(knot.tie_off_dir, PathBuf::from("tie-offs"));
     }
 
     #[test]
-    fn knot_construction_with_directories() {
+    fn knot_construction_with_required_dirs() {
         let knot = Knot {
             id: KnotId("custom-dirs".to_string()),
             agent_config: AgentConfig {
@@ -139,25 +137,23 @@ mod tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
-            source_dir: Some(PathBuf::from("../custom-source")),
-            tie_off_dir: Some(PathBuf::from("../custom-output")),
+            strand_dir: PathBuf::from("../custom-source"),
+            tie_off_dir: PathBuf::from("../custom-output"),
         };
 
         assert_eq!(
-            knot.source_dir,
-            Some(PathBuf::from("../custom-source"))
+            knot.strand_dir,
+            PathBuf::from("../custom-source")
         );
         assert_eq!(
             knot.tie_off_dir,
-            Some(PathBuf::from("../custom-output"))
+            PathBuf::from("../custom-output")
         );
     }
 
     #[test]
     fn loom_construction() {
-        let id = LoomId("prds".to_string());
-        let source_dir = PathBuf::from("project/prds");
-        let tie_off_dir = PathBuf::from("output/prds");
+        let id = LoomId("prds-loom".to_string());
         let knots = vec![Knot {
             id: KnotId("review".to_string()),
             agent_config: AgentConfig {
@@ -170,20 +166,16 @@ mod tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("project/prds"),
+            tie_off_dir: PathBuf::from("output/prds"),
         }];
 
         let loom = Loom {
             id: id.clone(),
-            source_dir: source_dir.clone(),
-            tie_off_dir: tie_off_dir.clone(),
             knots: knots.clone(),
         };
 
         assert_eq!(loom.id, id);
-        assert_eq!(loom.source_dir, source_dir);
-        assert_eq!(loom.tie_off_dir, tie_off_dir);
         assert_eq!(loom.knots, knots);
     }
 
@@ -256,8 +248,8 @@ mod tests {
                 input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
-            source_dir: Some(PathBuf::from("src")),
-            tie_off_dir: Some(PathBuf::from("out")),
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
         };
 
         let json = serde_json::to_string(&knot).unwrap();
@@ -268,9 +260,7 @@ mod tests {
     #[test]
     fn loom_serialization() {
         let loom = Loom {
-            id: LoomId("test".to_string()),
-            source_dir: PathBuf::from("src"),
-            tie_off_dir: PathBuf::from("out"),
+            id: LoomId("test-loom".to_string()),
             knots: vec![],
         };
 

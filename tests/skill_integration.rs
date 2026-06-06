@@ -126,8 +126,6 @@ fn build_context_with_loom() -> AppContext {
     // Register a test loom with a knot
     let test_loom = Loom {
         id: LoomId("test-loom".to_string()),
-        source_dir: PathBuf::from("src/docs"),
-        tie_off_dir: PathBuf::from("output/docs"),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
             agent_config: AgentConfig {
@@ -140,8 +138,8 @@ fn build_context_with_loom() -> AppContext {
                 input_bundling: "full-file".to_string(),
                 instructions: "Review this document.".to_string(),
             },
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("src/docs"),
+            tie_off_dir: PathBuf::from("output/docs"),
         }],
     };
     ctx.store.register(test_loom);
@@ -686,8 +684,6 @@ async fn knot_inspect_knot_status_with_state() {
     };
     ctx.store.register(Loom {
         id: LoomId("test-loom".to_string()),
-        source_dir: PathBuf::from("src/docs"),
-        tie_off_dir: PathBuf::from("output/docs"),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
             agent_config: AgentConfig {
@@ -700,8 +696,8 @@ async fn knot_inspect_knot_status_with_state() {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
-            source_dir: None,
-            tie_off_dir: None,
+            strand_dir: PathBuf::from("src/docs"),
+            tie_off_dir: PathBuf::from("output/docs"),
         }],
     });
     let app = knot::adapters::inbound::build_app(ctx);
