@@ -143,10 +143,10 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move all shared infrastructure out of `integration.rs` so every future module can import from `tests/helpers.rs`.
 
-- [ ] Create `tests/helpers.rs` containing: `make_knot_content_with_dirs`, `make_knot_content`, `create_mock_agent`, `create_stub_pi_agent`, `http_get`, `http_get_retry`, `http_post_json`, `http_delete`, `wait_for_port`, `spawn_server`, `poll_knot_status`
-- [ ] Update `integration.rs` to `mod helpers;` and use `helpers::*` — no logic changes
-- [ ] `cargo test --test integration` — all 31 tests still pass
-- [ ] Commit: `test: extract shared helpers from integration.rs`
+- [x] Create `tests/helpers.rs` containing: `make_knot_content_with_dirs`, `make_knot_content`, `create_mock_agent`, `create_stub_pi_agent`, `http_get`, `http_get_retry`, `http_post_json`, `http_delete`, `wait_for_port`, `spawn_server`, `poll_knot_status`
+- [x] Update `integration.rs` to `mod helpers;` and use `helpers::*` — no logic changes
+- [x] `cargo test --test integration` — all 31 tests still pass
+- [x] Commit: `test: extract shared helpers from integration.rs`
 
 ### Phase 1: Extract `rig_lifecycle.rs` (5 tests)
 
