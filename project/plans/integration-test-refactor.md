@@ -218,12 +218,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move HTTP loom CRUD tests.
 
-- [ ] Create `tests/loom_crud.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `http_register_then_process_strand`, `discover_then_process_strand`, `unregister_stops_processing`
-- [ ] `cargo test --test loom_crud` — 3 tests pass
-- [ ] Remove those 3 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 6 tests pass
-- [ ] Commit: `test: extract loom_crud from integration.rs`
+- [x] Create `tests/loom_crud.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `http_register_then_process_strand`, `discover_then_process_strand`, `unregister_stops_processing`
+- [x] `cargo test --test loom_crud` — 3 tests pass
+- [x] Remove those 3 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 6 tests pass
+- [x] Commit: `test: extract loom_crud from integration.rs`
 
 ### Phase 8: Extract `shutdown.rs` (2 tests)
 
