@@ -16,16 +16,24 @@ use knot::RigAgentConfig;
 
 /// Generate valid knot definition file content with absolute paths.
 /// Creates the strand and tie-off directories if they don't exist.
-fn make_knot_content(project_root: &std::path::Path) -> String {
+/// Returns (knot_content, strand_dir, tie_off_dir).
+fn make_knot_content_with_dirs(project_root: &std::path::Path) -> (String, std::path::PathBuf, std::path::PathBuf) {
     let strand_dir = project_root.join("strands");
     let tie_off_dir = project_root.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
     fs::create_dir_all(&tie_off_dir).unwrap();
-    format!(
+    let content = format!(
         "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals for clarity\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
         strand_dir.display(),
         tie_off_dir.display()
-    )
+    );
+    (content, strand_dir, tie_off_dir)
+}
+
+/// Generate valid knot definition file content (ignores returned paths).
+fn make_knot_content(project_root: &std::path::Path) -> String {
+    let (content, _, _) = make_knot_content_with_dirs(project_root);
+    content
 }
 
 /// Create a mock agent script in the given directory.
@@ -281,7 +289,8 @@ fn rig_directory_scanned() {
     fs::create_dir(&rig_path).unwrap();
     let loom_dir = rig_path.join("docs-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(tmp.path())).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(tmp.path());
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31981;
     let host_port = format!("127.0.0.1:{port}");
@@ -447,7 +456,8 @@ fn startup_discovers_looms() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("my-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31986;
     let host_port = format!("127.0.0.1:{port}");
@@ -510,7 +520,8 @@ fn startup_starts_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("watch-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31987;
     let host_port = format!("127.0.0.1:{port}");
@@ -572,7 +583,8 @@ fn startup_logs_knot_registration() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("state-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31988;
     let host_port = format!("127.0.0.1:{port}");
@@ -673,7 +685,8 @@ fn event_flows_through_pipeline() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent =
@@ -699,7 +712,7 @@ fn event_flows_through_pipeline() {
         .expect("server should start listening");
 
     // Create a strand file in the watched source directory
-    let strand_path = loom_dir.join("test-strand.md");
+    let strand_path = strand_dir.join("test-strand.md");
     fs::write(&strand_path, "strand content").expect("should create file");
 
     // Wait for debounce window + processing time
@@ -716,7 +729,7 @@ fn event_flows_through_pipeline() {
     );
 
     // Verify tie-off file was produced
-    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    let tie_off_path = tie_off_dir.join("test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off file should exist: {}",
@@ -743,7 +756,8 @@ fn debounce_prevents_duplicate_processing() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("debounce-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31991;
     let host_port = format!("127.0.0.1:{port}");
@@ -764,8 +778,8 @@ fn debounce_prevents_duplicate_processing() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    // Create initial file to establish the strand
-    let strand_path = loom_dir.join("rapid-edit.md");
+    // Create initial file in the strand directory (watched by the loom)
+    let strand_path = strand_dir.join("rapid-edit.md");
     fs::write(&strand_path, "initial").expect("should create file");
 
     // Wait for the first event to fully process
@@ -816,7 +830,7 @@ fn debounce_prevents_duplicate_processing() {
     );
 
     // Tie-off directory exists and has at least one file for the strand
-    let tie_off_dir = loom_dir.join(".knot-output");
+    let tie_off_dir = tie_off_dir;
     assert!(
         tie_off_dir.exists(),
         "tie-off directory should exist"
@@ -848,7 +862,8 @@ fn full_pipeline_create_modify_delete() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -871,11 +886,11 @@ fn full_pipeline_create_modify_delete() {
         .expect("server should start listening");
 
     // Step 1: Create strand → tie-off file created
-    let strand_path = loom_dir.join("test-strand.md");
+    let strand_path = strand_dir.join("test-strand.md");
     fs::write(&strand_path, "initial content").unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
-    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    let tie_off_path = tie_off_dir.join("test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after create: {}",
@@ -945,7 +960,8 @@ fn full_pipeline_http_observable() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("http-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -999,8 +1015,8 @@ fn full_pipeline_http_observable() {
         "knot status should be idle before any event"
     );
 
-    // Create a strand file to trigger processing
-    let strand_path = loom_dir.join("http-strand.md");
+    // Create a strand file in the strand directory
+    let strand_path = strand_dir.join("http-strand.md");
     fs::write(&strand_path, "http strand content").unwrap();
 
     // 2b. Poll until status is `completed`
@@ -1050,23 +1066,33 @@ fn multiple_looms_independent() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Loom A
+    // Loom A with its own strand and tie-off directories
     let loom_a_dir = base_dir.join("loom-a-loom");
     fs::create_dir(&loom_a_dir).unwrap();
-    fs::write(
-        loom_a_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"strands\"\ntie-off-dir: \"tie-offs\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
-    )
-    .unwrap();
+    let strand_dir_a = base_dir.join("loom-a-strands");
+    let tie_off_dir_a = base_dir.join("loom-a-tieoffs");
+    fs::create_dir_all(&strand_dir_a).unwrap();
+    fs::create_dir_all(&tie_off_dir_a).unwrap();
+    let knot_a_content = format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+        strand_dir_a.display(),
+        tie_off_dir_a.display()
+    );
+    fs::write(loom_a_dir.join("review.md"), knot_a_content).unwrap();
 
-    // Loom B
+    // Loom B with its own strand and tie-off directories
     let loom_b_dir = base_dir.join("loom-b-loom");
     fs::create_dir(&loom_b_dir).unwrap();
-    fs::write(
-        loom_b_dir.join("review.md"),
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"strands\"\ntie-off-dir: \"tie-offs\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
-    )
-    .unwrap();
+    let strand_dir_b = base_dir.join("loom-b-strands");
+    let tie_off_dir_b = base_dir.join("loom-b-tieoffs");
+    fs::create_dir_all(&strand_dir_b).unwrap();
+    fs::create_dir_all(&tie_off_dir_b).unwrap();
+    let knot_b_content = format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+        strand_dir_b.display(),
+        tie_off_dir_b.display()
+    );
+    fs::write(loom_b_dir.join("review.md"), knot_b_content).unwrap();
 
     let port = 31994;
     let host_port = format!("127.0.0.1:{port}");
@@ -1110,12 +1136,12 @@ fn multiple_looms_independent() {
     );
 
     // 1. Create strand in loom A
-    let strand_a_path = loom_a_dir.join("strand-a.md");
+    let strand_a_path = strand_dir_a.join("strand-a.md");
     fs::write(&strand_a_path, "content for A").unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     // Tie-off appears only in A's output directory
-    let tie_off_a = loom_a_dir.join(".knot-output/strand-a.md.output");
+    let tie_off_a = tie_off_dir_a.join("strand-a.md.output");
     assert!(
         tie_off_a.exists(),
         "tie-off should exist in loom A: {}",
@@ -1123,12 +1149,12 @@ fn multiple_looms_independent() {
     );
 
     // 2. Create strand in loom B
-    let strand_b_path = loom_b_dir.join("strand-b.md");
+    let strand_b_path = strand_dir_b.join("strand-b.md");
     fs::write(&strand_b_path, "content for B").unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     // Tie-off appears only in B's output directory
-    let tie_off_b = loom_b_dir.join(".knot-output/strand-b.md.output");
+    let tie_off_b = tie_off_dir_b.join("strand-b.md.output");
     assert!(
         tie_off_b.exists(),
         "tie-off should exist in loom B: {}",
@@ -1137,7 +1163,6 @@ fn multiple_looms_independent() {
 
     // 3. No cross-interference
     // A's tie-off dir should NOT contain B's strand output
-    let tie_off_dir_a = loom_a_dir.join(".knot-output");
     let files_in_a: Vec<_> =
         fs::read_dir(&tie_off_dir_a)
             .expect("should read tie-off dir A")
@@ -1150,7 +1175,6 @@ fn multiple_looms_independent() {
     );
 
     // B's tie-off dir should NOT contain A's strand output
-    let tie_off_dir_b = loom_b_dir.join(".knot-output");
     let files_in_b: Vec<_> =
         fs::read_dir(&tie_off_dir_b)
             .expect("should read tie-off dir B")
@@ -1184,7 +1208,8 @@ fn graceful_shutdown_stops_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("shutdown-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31995;
     let host_port = format!("127.0.0.1:{port}");
@@ -1220,7 +1245,7 @@ fn graceful_shutdown_stops_watchers() {
     std::thread::sleep(Duration::from_millis(1000));
 
     // Create a strand file AFTER shutdown — should NOT be processed
-    let strand_path = loom_dir.join("post-shutdown-strand.md");
+    let strand_path = strand_dir.join("post-shutdown-strand.md");
     fs::write(&strand_path, "this should not be processed").unwrap();
 
     // Wait a bit to confirm no processing happens
@@ -1228,7 +1253,7 @@ fn graceful_shutdown_stops_watchers() {
 
     // Tie-off file should NOT exist (watcher was stopped)
     let tie_off_path =
-        loom_dir.join(".knot-output/post-shutdown-strand.md.output");
+        tie_off_dir.join("post-shutdown-strand.md.output");
     assert!(
         !tie_off_path.exists(),
         "tie-off should NOT exist after shutdown: {}",
@@ -1251,7 +1276,8 @@ fn shutdown_logs_loom_stopped() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("log-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31996;
     let host_port = format!("127.0.0.1:{port}");
@@ -1327,7 +1353,8 @@ fn full_pipeline_subdirectory_rig() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("config-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&root, "processed external");
@@ -1363,14 +1390,14 @@ fn full_pipeline_subdirectory_rig() {
     );
 
     // Create a strand in the loom's source directory.
-    let strand_path = loom_dir.join("external-strand.md");
+    let strand_path = strand_dir.join("external-strand.md");
     fs::write(&strand_path, "external strand content").unwrap();
 
     // Wait for debounce + processing.
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Tie-off should appear in the loom's .knot-output directory.
-    let tie_off_path = loom_dir.join(".knot-output/external-strand.md.output");
+    let tie_off_path = tie_off_dir.join("external-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1404,7 +1431,8 @@ fn full_pipeline_agent_error_in_state_and_log() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31998;
     let host_port = format!("127.0.0.1:{port}");
@@ -1425,7 +1453,7 @@ fn full_pipeline_agent_error_in_state_and_log() {
         .expect("server should start listening");
 
     // Create a strand to trigger processing
-    let strand_path = loom_dir.join("error-strand.md");
+    let strand_path = strand_dir.join("error-strand.md");
     fs::write(&strand_path, "error strand content").unwrap();
 
     // Wait for debounce + processing
@@ -1497,7 +1525,8 @@ fn full_pipeline_external_source_with_agent_error() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("error-external-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 32001;
     let host_port = format!("127.0.0.1:{port}");
@@ -1524,7 +1553,7 @@ fn full_pipeline_external_source_with_agent_error() {
     assert!(status.contains("200"), "expected 200, got: {status}");
 
     // 2. Create strand in loom source directory → triggers processing.
-    let strand_path = loom_dir.join("error-strand.md");
+    let strand_path = strand_dir.join("error-strand.md");
     fs::write(&strand_path, "external error strand content").unwrap();
 
     // Wait for debounce + processing.
@@ -1572,7 +1601,7 @@ fn full_pipeline_external_source_with_agent_error() {
 
     // 5. Verify tie-off file written with Failed content.
     let tie_off_path =
-        loom_dir.join(".knot-output/error-strand.md.output");
+        tie_off_dir.join("error-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1582,7 +1611,7 @@ fn full_pipeline_external_source_with_agent_error() {
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
         tie_off_content.contains("Processing failed"),
-        "tie-off should contain 'Processing failed', got: {tie_off_content}"
+        "tie-off should contain Processing failed, got: {tie_off_content}"
     );
     assert!(
         tie_off_content.contains("command not found"),
@@ -1615,7 +1644,8 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("success-external-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(root)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent = create_mock_agent(&root, "summary");
@@ -1644,7 +1674,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
     assert!(status.contains("200"), "expected 200, got: {status}");
 
     // 2. Create strand in loom source directory.
-    let strand_path = loom_dir.join("success-strand.md");
+    let strand_path = strand_dir.join("success-strand.md");
     fs::write(&strand_path, "external success strand content").unwrap();
 
     // Wait for debounce + processing.
@@ -1688,7 +1718,7 @@ fn full_pipeline_external_source_with_mock_agent_success() {
 
     // 5. Verify tie-off file written with agent output.
     let tie_off_path =
-        loom_dir.join(".knot-output/success-strand.md.output");
+        tie_off_dir.join("success-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1727,7 +1757,8 @@ fn full_pipeline_with_pi_agent() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pi-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Create the stub-pi script that echoes received args and content
     let stub_pi = create_stub_pi_agent(&base_dir);
@@ -1750,7 +1781,7 @@ fn full_pipeline_with_pi_agent() {
         .expect("server should start listening");
 
     // Create a strand file to trigger processing
-    let strand_path = loom_dir.join("test-strand.md");
+    let strand_path = strand_dir.join("test-strand.md");
     fs::write(&strand_path, "This is the strand content for review.")
         .expect("should create strand file");
 
@@ -1758,7 +1789,7 @@ fn full_pipeline_with_pi_agent() {
     std::thread::sleep(Duration::from_millis(500));
 
     // 1. Verify tie-off exists and contains the agent output
-    let tie_off_path = loom_dir.join(".knot-output/test-strand.md.output");
+    let tie_off_path = tie_off_dir.join("test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1829,27 +1860,20 @@ fn pi_agent_receives_system_prompt_and_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create strand and tie-off directories
+    let strand_dir = base_dir.join("strands");
+    let tie_off_dir = base_dir.join("tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+
     // Create a loom directory with a knot that uses a nonexistent model
     let loom_dir = base_dir.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let knot_content = r#"---
-name: review-knot
-agent-config:
-  goal: "Review with nonexistent model"
-  provider: "openai"
-  model: "nonexistent-model-xyz"
-strand-dir: "strands"
-tie-off-dir: "tie-offs"
-prompt-template:
-  input-bundling: "full-file"
-  instructions: |
-    Review the goals section of this PRD.
----
-
-# Error Test Knot
-
-This knot tests error handling.
-"#;
+    let knot_content = format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review with nonexistent model\"\n  provider: \"openai\"\n  model: \"nonexistent-model-xyz\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Error Test Knot\n\nThis knot tests error handling.\n",
+        strand_dir.display(),
+        tie_off_dir.display()
+    );
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Create the stub-pi script (exits 1 for "nonexistent" models)
@@ -1873,7 +1897,7 @@ This knot tests error handling.
         .expect("server should start listening");
 
     // Create a strand file to trigger processing
-    let strand_path = loom_dir.join("error-strand.md");
+    let strand_path = strand_dir.join("error-strand.md");
     fs::write(&strand_path, "Error test strand content")
         .expect("should create strand file");
 
@@ -1904,7 +1928,7 @@ This knot tests error handling.
     );
 
     // 2. Verify tie-off contains error details
-    let tie_off_path = loom_dir.join(".knot-output/error-strand.md.output");
+    let tie_off_path = tie_off_dir.join("error-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1914,7 +1938,7 @@ This knot tests error handling.
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
         tie_off_content.contains("Processing failed"),
-        "tie-off should contain 'Processing failed', got: {tie_off_content}"
+        "tie-off should contain Processing failed, got: {tie_off_content}"
     );
 
     // 3. Verify loom-log contains StrandProcessed with error
@@ -1957,36 +1981,25 @@ fn demo_knot_test_processes_sample_document() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create strand and tie-off directories
+    let strand_dir = base_dir.join("strands");
+    let tie_off_dir = base_dir.join("tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+
     // Create knot-test-loom directory with provider/model in config
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(
-        &loom_dir.join("review-knot.md"),
-        r#"---
-name: review-knot
-agent-config:
-  goal: "Review and summarize documents"
-  provider: "openai"
-  model: "gpt-4o"
-strand-dir: "strands"
-tie-off-dir: "tie-offs"
-prompt-template:
-  input-bundling: "full-file"
-  instructions: |
-    Review the provided document. Provide a concise summary
-    of its key points and any recommendations.
----
-
-# Review Knot
-
-This knot reviews and summarizes documents.
-"#,
-    )
-    .unwrap();
+    let knot_content = format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review and summarize documents\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the provided document. Provide a concise summary\n    of its key points and any recommendations.\n---\n\n# Review Knot\n\nThis knot reviews and summarizes documents.\n",
+        strand_dir.display(),
+        tie_off_dir.display()
+    );
+    fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
 
     // Create the sample-document.md strand
     fs::write(
-        &loom_dir.join("sample-document.md"),
+        &strand_dir.join("sample-document.md"),
         r#"# Sample Document for Knot Processing
 
 ## Introduction
@@ -2038,10 +2051,10 @@ processing pipeline.
     // If the initial file hasn't been processed yet (startup race),
     // create a new file to trigger processing explicitly.
     let tie_off_path =
-        loom_dir.join(".knot-output/sample-document.md.output");
+        tie_off_dir.join("sample-document.md.output");
     if !tie_off_path.exists() {
         // Touch the file to trigger a Modify event
-        fs::write(&loom_dir.join("sample-document.md"),
+        fs::write(&strand_dir.join("sample-document.md"),
             "# Sample Document for Knot Processing\n\n## Updated\n\nContent.")
             .unwrap();
         std::thread::sleep(Duration::from_millis(500));
@@ -2119,32 +2132,21 @@ fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create strand and tie-off directories
+    let strand_dir = base_dir.join("strands");
+    let tie_off_dir = base_dir.join("tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+
     // Create knot-test-loom with tools in agent-config
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(
-        &loom_dir.join("review-knot.md"),
-        r#"---
-name: review-knot
-agent-config:
-  goal: "Review with tools"
-  provider: "anthropic"
-  model: "claude-sonnet-4-20250514"
-  tools:
-    - fs
-    - web
-strand-dir: "strands"
-tie-off-dir: "tie-offs"
-prompt-template:
-  input-bundling: "full-file"
-  instructions: |
-    Review the document with tool access.
----
-
-# Review Knot With Tools
-"#,
-    )
-    .unwrap();
+    let knot_content = format!(
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review with tools\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet-4-20250514\"\n  tools:\n    - fs\n    - web\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the document with tool access.\n---\n\n# Review Knot With Tools\n",
+        strand_dir.display(),
+        tie_off_dir.display()
+    );
+    fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
 
     // Create stub-pi agent that echoes all received flags
     let stub_pi = create_stub_pi_agent(&base_dir);
@@ -2167,11 +2169,11 @@ prompt-template:
         .expect("server should start listening");
 
     // Create a strand file
-    fs::write(&loom_dir.join("input.md"), "Document to review.").unwrap();
+    fs::write(&strand_dir.join("input.md"), "Document to review.").unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     // Verify tie-off exists and contains the model from knot config
-    let tie_off_path = loom_dir.join(".knot-output/input.md.output");
+    let tie_off_path = tie_off_dir.join("input.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -2422,12 +2424,28 @@ fn http_register_then_process_strand() {
     // doesn't find it — we test POST /looms registration path.
     let source_dir = base_dir.join("http-reg-loom");
     fs::create_dir(&source_dir).unwrap();
-    fs::write(source_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(source_dir.join("review.md"), knot_content).unwrap();
 
-    // 1. POST /looms to register the loom (scans for knots in source dir).
+    // 1. POST /looms to register the loom with knot definitions.
     let body = serde_json::json!({
         "id": "http-reg-loom",
-        "source_dir": "http-reg-loom"
+        "knots": [
+            {
+                "name": "review-knot",
+                "agent_config": {
+                    "goal": "Review documents",
+                    "provider": "openai",
+                    "model": "gpt-4o"
+                },
+                "prompt_template": {
+                    "input_bundling": "full-file",
+                    "instructions": "Review docs"
+                },
+                "strand_dir": strand_dir.to_string_lossy(),
+                "tie_off_dir": tie_off_dir.to_string_lossy()
+            }
+        ]
     });
     let (status, _resp) =
         http_post_json(&host_port, "/looms", &body)
@@ -2452,16 +2470,16 @@ fn http_register_then_process_strand() {
         "knot id should match"
     );
 
-    // 3. Create a strand file in the source directory.
-    let strand_path = source_dir.join("new-strand.md");
+    // 3. Create a strand file in the strand directory (watched by the loom).
+    let strand_path = strand_dir.join("new-strand.md");
     fs::write(&strand_path, "strand content via http").unwrap();
 
     // Wait for debounce + processing.
     std::thread::sleep(Duration::from_millis(800));
 
-    // 4. Verify tie-off was produced.
+    // 4. Verify tie-off was produced in tie_off_dir.
     let tie_off_path =
-        source_dir.join(".knot-output/new-strand.md.output");
+        tie_off_dir.join("new-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -2508,7 +2526,8 @@ fn discover_then_process_strand() {
     // Create a loom directory on disk with a knot definition.
     let loom_dir = base_dir.join("discover-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script.
     let mock_agent = create_mock_agent(&base_dir, "discovered-processed");
@@ -2561,7 +2580,7 @@ fn discover_then_process_strand() {
     );
 
     // 3. Create a strand file in the source directory.
-    let strand_path = loom_dir.join("discover-strand.md");
+    let strand_path = strand_dir.join("discover-strand.md");
     fs::write(&strand_path, "discovered strand content").unwrap();
 
     // Wait for debounce + processing.
@@ -2569,7 +2588,7 @@ fn discover_then_process_strand() {
 
     // 4. Verify tie-off was produced.
     let tie_off_path =
-        loom_dir.join(".knot-output/discover-strand.md.output");
+        tie_off_dir.join("discover-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -2615,7 +2634,8 @@ fn unregister_stops_processing() {
     // Create source directory with knot definition file.
     let source_dir = base_dir.join("unreg-loom");
     fs::create_dir(&source_dir).unwrap();
-    fs::write(source_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(source_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script.
     let mock_agent = create_mock_agent(&base_dir, "should-not-run");
@@ -2751,7 +2771,8 @@ fn full_tie_off_history() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("history-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Simple mock agent — always returns "processed"
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -2773,8 +2794,8 @@ fn full_tie_off_history() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    let strand_path = loom_dir.join("lifecycle-strand.md");
-    let tie_off_path = loom_dir.join(".knot-output/lifecycle-strand.md.output");
+    let strand_path = strand_dir.join("lifecycle-strand.md");
+    let tie_off_path = tie_off_dir.join("lifecycle-strand.md.output");
 
     // Step 1: First write (triggers Modified event)
     fs::write(&strand_path, "initial content").unwrap();
@@ -2868,7 +2889,8 @@ fn tie_off_sections_readable() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("sections-loom");
     fs::create_dir(&loom_dir).unwrap();
-    fs::write(loom_dir.join("review.md"), make_knot_content(&base_dir)).unwrap();
+    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let mock_agent = create_mock_agent(&base_dir, "processed");
 
@@ -2889,8 +2911,8 @@ fn tie_off_sections_readable() {
     wait_for_port(&host_port, 100, 50)
         .expect("server should start listening");
 
-    let strand_path = loom_dir.join("sections-strand.md");
-    let tie_off_path = loom_dir.join(".knot-output/sections-strand.md.output");
+    let strand_path = strand_dir.join("sections-strand.md");
+    let tie_off_path = tie_off_dir.join("sections-strand.md.output");
 
     // Create then modify
     fs::write(&strand_path, "content v1").unwrap();
