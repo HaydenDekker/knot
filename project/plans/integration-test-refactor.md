@@ -207,12 +207,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move tie-off lifecycle and section parsing tests.
 
-- [ ] Create `tests/tie_off.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `full_tie_off_history`, `tie_off_sections_readable`
-- [ ] `cargo test --test tie_off` — 2 tests pass
-- [ ] Remove those 2 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 9 tests pass
-- [ ] Commit: `test: extract tie_off from integration.rs`
+- [x] Create `tests/tie_off.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `full_tie_off_history`, `tie_off_sections_readable`
+- [x] `cargo test --test tie_off` — 2 tests pass
+- [x] Remove those 2 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 9 tests pass
+- [x] Commit: `test: extract tie_off from integration.rs`
 
 ### Phase 7: Extract `loom_crud.rs` (3 tests)
 
