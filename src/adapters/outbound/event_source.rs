@@ -339,9 +339,21 @@ impl NotifyEventSource {
         let watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {
                 if let Ok(event) = result {
+                    eprintln!(
+                        "DEBUG NotifyEventSource callback: event kind={:?}, \
+                         paths={:?}",
+                        event.kind,
+                        event.paths
+                    );
                     let inner = state_clone.lock().unwrap();
                     let (strand_event, config_event) =
                         inner.map_event(&event);
+                    eprintln!(
+                        "DEBUG NotifyEventSource mapped: strand={:?}, \
+                         config={:?}",
+                        strand_event.is_some(),
+                        config_event.is_some()
+                    );
                     // Use try_send to avoid blocking the notify callback
                     // thread. If the channel is full, the event is dropped
                     // — this is acceptable because:
@@ -373,6 +385,10 @@ impl NotifyEventSource {
     /// Call this before `watch()` so events carry the correct metadata
     /// and map to the right event type.
     pub fn register_watch(&self, path: PathBuf, watch_type: WatchType) {
+        eprintln!(
+            "DEBUG EventSource::register_watch path={:?}, type={:?}",
+            path, watch_type
+        );
         let mut inner = self.state.lock().unwrap();
         // Update if already present, otherwise push.
         if let Some(pos) = inner
@@ -380,8 +396,10 @@ impl NotifyEventSource {
             .iter()
             .position(|(p, _)| p == &path)
         {
+            eprintln!("  updating existing at pos {}", pos);
             inner.watched_dirs[pos].1 = watch_type;
         } else {
+            eprintln!("  adding new, count was {}", inner.watched_dirs.len());
             inner.watched_dirs.push((path, watch_type));
         }
     }
@@ -416,6 +434,11 @@ impl NotifyEventSource {
 }
 
 impl EventSource for NotifyEventSource {
+    fn register_watch(&self, path: PathBuf, watch_type: WatchType) {
+        // Delegate to the inherent implementation
+        NotifyEventSource::register_watch(self, path, watch_type);
+    }
+
     fn set_loom_ids(
         &self,
         source_dir: &Path,
@@ -431,13 +454,24 @@ impl EventSource for NotifyEventSource {
 
     fn watch(&self, path: &Path) -> Result<(), PortError> {
         // Determine watch type and mode
+        eprintln!(
+            "DEBUG EventSource::watch path={:?}, watched_dirs count={}",
+            path,
+            self.state.lock().unwrap().watched_dirs.len()
+        );
         let watch_type = {
             let inner = self.state.lock().unwrap();
+            for (p, wt) in &inner.watched_dirs {
+                eprintln!("  watched_dir: {:?} -> {:?}", p, wt);
+            }
             inner
                 .watched_dirs
                 .iter()
                 .find(|(p, _)| p == path)
-                .map(|(_, wt)| wt.clone())
+                .map(|(_, wt)| {
+                    eprintln!("  MATCH found!");
+                    wt.clone()
+                })
                 // Fall back to default IDs if no per-directory mapping
                 .or_else(|| {
                     inner
