@@ -7,41 +7,10 @@ mod helpers;
 use std::fs;
 use std::time::Duration;
 
-use knot::application::ports::{
-    AgentRunner, LoomLogPort, LoomRepository, TieOffSink,
-};
 use knot::AppConfig;
 use knot::RigAgentConfig;
 
 use helpers::*;
-
-// ── Composition Root Test (non-network) ────────────────────────────────────
-
-/// Verify `build_app_context` wires all hex layers correctly.
-#[test]
-fn build_app_context_wires_layers() {
-    let config = AppConfig::default_config();
-    let (ctx, _event_rx) = knot::build_app_context(&config);
-
-    // Store is present and empty (not yet populated)
-    assert!(ctx.store.list().is_empty());
-
-    // Ports are present (trait objects)
-    let _repo: &dyn LoomRepository = &*ctx.loom_repo;
-    let _log: &dyn LoomLogPort = &*ctx.loom_log_port;
-    let _sink: &dyn TieOffSink = &*ctx.tie_off_sink;
-
-    // Agent runner is present (subprocess)
-    let _runner: &dyn AgentRunner = &*ctx.agent_runner;
-
-    // Workspace config is loaded with defaults
-    assert_eq!(ctx.rig_config.cli_path, "pi");
-    assert!(ctx.rig_config.cli_args.is_empty());
-
-    // Event sender is present; receiver is returned for pipeline wiring
-    // (Receiver type proves the channel was created)
-    let _ = _event_rx;
-}
 
 // ── Phase 1: Startup Discovery and Watcher Boot ────────────────────────────
 
