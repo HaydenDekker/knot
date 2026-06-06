@@ -12,7 +12,7 @@ use knot::AppConfig;
 #[test]
 fn build_app_context_wires_layers() {
     let config = AppConfig::default_config();
-    let (ctx, _event_rx) = knot::build_app_context(&config);
+    let (ctx, _strand_rx, _config_rx) = knot::build_app_context(&config);
 
     // Store is present and empty (not yet populated)
     assert!(ctx.store.list().is_empty());
@@ -29,7 +29,7 @@ fn build_app_context_wires_layers() {
     assert_eq!(ctx.rig_config.cli_path, "pi");
     assert!(ctx.rig_config.cli_args.is_empty());
 
-    // Event sender is present; receiver is returned for pipeline wiring
-    // (Receiver type proves the channel was created)
-    let _ = _event_rx;
+    // Both event senders are present; receivers are returned for wiring
+    let _ = _strand_rx;
+    let _ = _config_rx;
 }

@@ -231,6 +231,18 @@ pub trait EventSource: Send + Sync {
         _knot_id: &KnotId,
     ) {
     }
+
+    /// Register a watch type for a directory path.
+    ///
+    /// Tells the adapter how to interpret events from this directory
+    /// (strand, rig, or loom config events). No-op for mock
+    /// implementations.
+    fn register_watch(
+        &self,
+        _path: std::path::PathBuf,
+        _watch_type: crate::adapters::outbound::event_source::WatchType,
+    ) {
+    }
 }
 
 /// Port for executing the agent CLI and capturing its output.
