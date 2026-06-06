@@ -174,10 +174,12 @@ pub struct KnotRequest {
 }
 ```
 
-- [ ] Write failing tests: `post_loom_creates_loom_directory`, `post_loom_writes_knot_files`, `post_loom_missing_strand_dir_returns_400`, `post_loom_missing_tieoff_dir_returns_400`, `post_loom_requires_knots`, `post_loom_id_must_end_in_loom`
-- [ ] Implement: new request types, directory creation, knot file writing, updated validation
-- [ ] Update existing inbound tests: adapt to new request shape, update watcher verification to check `strand_dir`
-- [ ] All inbound adapter tests green
+- [x] Write failing tests: `post_loom_creates_loom_directory`, `post_loom_writes_knot_files`, `post_loom_missing_strand_dir_returns_400`, `post_loom_missing_tieoff_dir_returns_400`, `post_loom_requires_knots`, `post_loom_id_must_end_in_loom`
+- [x] Implement: new request types, directory creation, knot file writing, updated validation
+- [x] Update existing inbound tests: adapt to new request shape, update watcher verification to check `strand_dir`
+- [x] All inbound adapter tests green
+
+**Also updated:** `skill_integration` tests to use new API contract (`knots` array with `strand_dir`/`tie_off_dir`).
 
 ### Phase 5: Integration Tests — Full Pipeline Verification
 

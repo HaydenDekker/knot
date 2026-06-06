@@ -359,11 +359,25 @@ async fn knots_and_looms_register_and_list() {
     let ctx = build_context_with_loom();
     let app = knot::adapters::inbound::build_app(ctx);
 
-    // POST /looms — register a new loom
+    // POST /looms — register a new loom with knots
     let body = serde_json::json!({
         "id": "new-loom",
-        "source_dir": "src/new",
-        "tie_off_dir": "output/new"
+        "knots": [
+            {
+                "name": "review-knot",
+                "agent_config": {
+                    "goal": "Review documents",
+                    "provider": "openai",
+                    "model": "gpt-4o"
+                },
+                "prompt_template": {
+                    "input_bundling": "full-file",
+                    "instructions": "Review docs"
+                },
+                "strand_dir": "src/new",
+                "tie_off_dir": "output/new"
+            }
+        ]
     });
     let resp = app
         .clone()
@@ -399,9 +413,8 @@ async fn knots_and_looms_register_and_list() {
     assert_eq!(summaries.len(), 2); // test-loom + new-loom
 
     let new = summaries.iter().find(|s| s.id.0 == "new-loom").unwrap();
-    // Handler resolves paths relative to base_dir (./rig).
-    assert_eq!(new.source_dir, PathBuf::from("./rig/src/new"));
-    assert_eq!(new.tie_off_dir, PathBuf::from("./rig/output/new"));
+    // Loom directory is derived from naming convention (not stored as source_dir).
+    assert_eq!(new.knot_count, 1, "new loom should have 1 knot");
 }
 
 /// `GET /looms/{id}` returns loom details with knots — the knots-and-looms
@@ -806,11 +819,25 @@ async fn skill_contract_knots_and_looms_workflow() {
     let ctx = build_context_with_loom();
     let app = knot::adapters::inbound::build_app(ctx);
 
-    // Step 1: Register a loom
+    // Step 1: Register a loom with knots
     let body = serde_json::json!({
         "id": "workflow-loom",
-        "source_dir": "src/workflow",
-        "tie_off_dir": "output/workflow"
+        "knots": [
+            {
+                "name": "review-knot",
+                "agent_config": {
+                    "goal": "Review documents",
+                    "provider": "openai",
+                    "model": "gpt-4o"
+                },
+                "prompt_template": {
+                    "input_bundling": "full-file",
+                    "instructions": "Review docs"
+                },
+                "strand_dir": "src/workflow",
+                "tie_off_dir": "output/workflow"
+            }
+        ]
     });
     let resp = app
         .clone()
@@ -860,7 +887,7 @@ async fn skill_contract_knots_and_looms_workflow() {
         .await
         .unwrap();
     let names: Vec<String> = serde_json::from_slice(&body).unwrap();
-    assert!(names.is_empty()); // No knots registered yet
+    assert_eq!(names, vec!["review-knot"]); // Has one knot
 
     // Step 4: Delete loom
     let resp = app
