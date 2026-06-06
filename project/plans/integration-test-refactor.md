@@ -174,12 +174,12 @@ This ensures the full suite passes at every step and any regression is isolated 
 
 **Goal:** Move loom discovery, filtering, watcher boot, and registration logging.
 
-- [ ] Create `tests/discovery.rs` with `mod helpers; use helpers::*;`
-- [ ] Copy from `integration.rs`: `startup_discovers_looms`, `discovery_ignores_non_loom_directories`, `startup_starts_watchers`, `startup_logs_knot_registration`
-- [ ] `cargo test --test discovery` — 4 tests pass
-- [ ] Remove those 4 tests from `integration.rs`
-- [ ] `cargo test --test integration` — remaining 21 tests pass
-- [ ] Commit: `test: extract discovery from integration.rs`
+- [x] Create `tests/discovery.rs` with `mod helpers; use helpers::*;`
+- [x] Copy from `integration.rs`: `startup_discovers_looms`, `discovery_ignores_non_loom_directories`, `startup_starts_watchers`, `startup_logs_knot_registration`
+- [x] `cargo test --test discovery` — 4 tests pass
+- [x] Remove those 4 tests from `integration.rs`
+- [x] `cargo test --test integration` — remaining 21 tests pass
+- [x] Commit: `test: extract discovery from integration.rs`
 
 ### Phase 4: Extract `pipeline.rs` (6 tests)
 
