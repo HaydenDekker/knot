@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::domain::entities::{KnotId, LoomId, StrandPath, TieOffPath};
+use crate::domain::entities::{
+    Knot, KnotId, LoomId, StrandPath, TieOffPath,
+};
 
 // ── Domain Events ──────────────────────────────────────────────────────────
 
@@ -95,11 +97,42 @@ pub struct KnotRegistered {
     pub knot_id: KnotId,
 }
 
+// ── Configuration Events ───────────────────────────────────────────────────
+
+/// An event that describes configuration changes to looms and knots.
+///
+/// Unlike [`StrandEvent`] which tracks input file lifecycle, config events
+/// track changes to the loom/knot definition files themselves (the `.md` knot
+/// files and `*-loom` directories).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum ConfigEvent {
+    /// A new loom directory was detected (ends in `-loom`).
+    LoomAdded {
+        loom_id: LoomId,
+    },
+    /// A new knot `.md` file was created in a loom directory.
+    KnotAdded {
+        loom_id: LoomId,
+        knot: Knot,
+    },
+    /// An existing knot `.md` file was modified in a loom directory.
+    KnotModified {
+        loom_id: LoomId,
+        knot: Knot,
+    },
+    /// A knot `.md` file was deleted from a loom directory.
+    KnotDeleted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+    },
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entities::{AgentConfig, PromptTemplate};
     use std::path::PathBuf;
 
     #[test]
@@ -484,6 +517,104 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    fn make_knot(id: &str) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_config: AgentConfig {
+                goal: "Test goal".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: Vec::new(),
+            },
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "Test instructions.".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            tie_off_dir: PathBuf::from("tie-offs"),
+        }
+    }
+
+    #[test]
+    fn config_event_types() {
+        let loom_id = LoomId("prds".to_string());
+        let knot = make_knot("review");
+        let knot_id = KnotId("review".to_string());
+
+        // Build all four variants
+        let loom_added = ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+        };
+        let knot_added = ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: knot.clone(),
+        };
+        let knot_modified = ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: knot.clone(),
+        };
+        let knot_deleted = ConfigEvent::KnotDeleted {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+        };
+
+        // Verify LoomAdded carries correct data
+        match &loom_added {
+            ConfigEvent::LoomAdded { loom_id: lid } => {
+                assert_eq!(*lid, LoomId("prds".to_string()));
+            }
+            _ => panic!("Expected LoomAdded variant"),
+        }
+
+        // Verify KnotAdded carries correct data
+        match &knot_added {
+            ConfigEvent::KnotAdded {
+                loom_id: lid,
+                knot: k,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(k.id, KnotId("review".to_string()));
+            }
+            _ => panic!("Expected KnotAdded variant"),
+        }
+
+        // Verify KnotModified carries correct data
+        match &knot_modified {
+            ConfigEvent::KnotModified {
+                loom_id: lid,
+                knot: k,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(k.id, KnotId("review".to_string()));
+            }
+            _ => panic!("Expected KnotModified variant"),
+        }
+
+        // Verify KnotDeleted carries correct data
+        match &knot_deleted {
+            ConfigEvent::KnotDeleted {
+                loom_id: lid,
+                knot_id: kid,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+            }
+            _ => panic!("Expected KnotDeleted variant"),
+        }
+
+        // Verify serialisation round-trip for all variants
+        let events: Vec<ConfigEvent> =
+            vec![loom_added, knot_added, knot_modified, knot_deleted];
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let deserialized: ConfigEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                deserialized, *event,
+                "round-trip failed for variant"
+            );
+        }
     }
 
     #[test]
