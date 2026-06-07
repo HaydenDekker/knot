@@ -50,9 +50,9 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 - [x] Write `tasks_drain_on_shutdown` — two-stage pipeline (A → B), `JoinSet`, `while let Some join_next()` — all tasks complete cooperatively, no abort
 
 ### Phase 1: Channel cascade and flush
-- [ ] Write `channel_closure_propagates_cascade` — chain 2 channels, drop last sender, verify downstream `recv() → None` propagates
-- [ ] Write `flush_on_channel_close` — stage holds pending items; on `recv() → None` flushes them before returning; verify flushed items received
-- [ ] Write `leaked_sender_prevents_shutdown` — extra `Sender` clone held outside pipeline → `recv()` never yields `None` → task hangs → timeout proves the hang
+- [x] Write `channel_closure_propagates_cascade` — chain 2 channels, drop last sender, verify downstream `recv() → None` propagates
+- [x] Write `flush_on_channel_close` — stage holds pending items; on `recv() → None` flushes them before returning; verify flushed items received
+- [x] Write `leaked_sender_prevents_shutdown` — extra `Sender` clone held outside pipeline → `recv()` never yields `None` → task hangs → timeout proves the hang
 
 ### Phase 2: In-flight work and multi-stage
 - [ ] Write `in_flight_work_completes` — stage is mid-`await` (sleep) when upstream closes → current work finishes → stage exits
