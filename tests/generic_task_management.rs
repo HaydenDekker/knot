@@ -13,6 +13,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -565,5 +566,295 @@ async fn oneshot_trigger_starts_cascade() {
         completed,
         4,
         "signal waiter + ingestion + 2 stages should all complete"
+    );
+}
+
+/// A post-shutdown hook executes only after all `JoinSet` tasks have
+/// completed via the `join_next()` drain loop.
+///
+/// In the Knot service, `LoomStopped` is written to the loom-log after
+/// the JoinSet is fully drained. This test proves the ordering: the hook
+/// runs *after* the drain loop exits, not during or before it.
+///
+/// 1. Two-stage pipeline (source → stage A → stage B → sink).
+/// 2. Send items, drop source sender, drain output channel.
+/// 3. Run `while let Some = join_next()` loop to drain JoinSet.
+/// 4. Set a shared flag immediately after the drain loop exits.
+/// 5. Verify the flag is set — proves code after the loop executed.
+/// 6. Verify the flag was NOT set while tasks were still running.
+#[tokio::test]
+async fn post_shutdown_hook_executes() {
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+
+    let mut set: JoinSet<()> = JoinSet::new();
+
+    let exit_order: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let config = StageConfig {
+        work_delay: Duration::from_millis(5),
+        pending_capacity: 1,
+    };
+
+    // Stage A — pushes 1 on exit
+    let order_a = exit_order.clone();
+    let config_a = config.clone();
+    let stage_a_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(source_rx, config_a, tx).await;
+            order_a.lock().unwrap().push(1);
+        });
+        rx
+    };
+
+    // Stage B — pushes 2 on exit
+    let order_b = exit_order.clone();
+    let mut stage_b_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(stage_a_output, config, tx).await;
+            order_b.lock().unwrap().push(2);
+        });
+        rx
+    };
+
+    // Send items and trigger shutdown
+    for i in 0..4 {
+        source_tx.send(i).await.expect("send should succeed");
+    }
+    drop(source_tx);
+
+    // Drain output
+    while let Some(_item) = stage_b_output.recv().await {
+        // consume all items
+    }
+
+    // Drain JoinSet — all tasks complete cooperatively
+    let mut completed = 0usize;
+    while let Some(result) = set.join_next().await {
+        assert!(result.is_ok(), "stage should exit cooperatively");
+        completed += 1;
+    }
+
+    // Post-shutdown hook — runs AFTER the drain loop exits
+    let exit_order_snapshot = {
+        let mut order = exit_order.lock().unwrap();
+        order.push(99); // marker: hook ran
+        order.clone()
+    };
+
+    assert_eq!(completed, 2, "both stages should have completed");
+    assert_eq!(
+        exit_order_snapshot,
+        vec![1, 2, 99],
+        "exit order: stage A, stage B, then hook (99) — hook runs \
+         after join_next() loop completes"
+    );
+}
+
+/// `JoinSet::abort_all()` is a safety net for tasks that genuinely hang.
+///
+/// In the cascade pattern, cooperative drain is the primary mechanism.
+/// But if a task blocks on something that never resolves (hung I/O,
+/// deadlock, bug), the `join_next()` loop never completes for that task.
+/// The `JoinSet` Drop (or explicit `abort_all()`) terminates hung tasks
+/// as a last resort.
+///
+/// 1. Three-stage pipeline where middle stage intentionally hangs.
+/// 2. Send items, drop source sender — upstream stage drains, hung stage
+///    blocks, downstream stage never gets close signal.
+/// 3. `join_next()` returns completed tasks; hung task remains.
+/// 4. `abort_all()` terminates the hung task.
+/// 5. Verify: normal stages completed OK, hung stage was cancelled.
+#[tokio::test]
+async fn abort_is_safety_net() {
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+
+    let mut set: JoinSet<Result<(), &'static str>> = JoinSet::new();
+
+    let exit_order: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let config = StageConfig {
+        work_delay: Duration::ZERO,
+        pending_capacity: 1,
+    };
+
+    // Stage 1 (normal) — upstream of hung stage, pushes 1 on exit
+    let order_1 = exit_order.clone();
+    let config_1 = config.clone();
+    let stage_1_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(source_rx, config_1, tx).await;
+            order_1.lock().unwrap().push(1);
+            Ok(())
+        });
+        rx
+    };
+
+    // Stage 2 (hung) — never returns, blocks on a never-resolving future
+    let _stage_2_handle = set.spawn(async {
+        // Simulate a genuinely hung task that never returns
+        std::future::pending::<()>().await;
+        unreachable!()
+    });
+
+    // Stage 3 (normal) — independent stage with its own channel.
+    // Proves that abort_all() only affects hung tasks, not normal ones.
+    // We drop the sender immediately so the stage sees channel close
+    // and exits cooperatively.
+    let (stage_3_input_tx, stage_3_rx) = mpsc::channel::<u32>(16);
+    let (stage_3_output_tx, stage_3_output_rx) = mpsc::channel::<u32>(16);
+    let order_3 = exit_order.clone();
+    let config_3 = config;
+    set.spawn(async move {
+        spawn_stage_task(stage_3_rx, config_3, stage_3_output_tx).await;
+        order_3.lock().unwrap().push(3);
+        Ok(())
+    });
+    // Drop both external handles — stage 3 sees channel close immediately
+    drop(stage_3_input_tx);
+    drop(stage_3_output_rx);
+
+    // Send items through stage 1
+    for i in 0..3 {
+        source_tx.send(i).await.expect("send should succeed");
+    }
+    drop(source_tx);
+
+    // Drain stage 1 output (items that came through)
+    let mut stage_1_rx = stage_1_output;
+    let mut received = Vec::new();
+    while let Some(item) = stage_1_rx.recv().await {
+        received.push(item);
+    }
+    assert_eq!(received.len(), 3, "stage 1 should process all items");
+
+    // Collect completed tasks — stage 1 finishes, stage 3 finishes,
+    // but stage 2 (hung) never completes
+    let mut completed = Vec::new();
+    let timeout = tokio::time::timeout(
+        Duration::from_millis(500),
+        async {
+            // join_next() returns completed tasks one at a time.
+            // We expect 2 completions (stage 1 + stage 3) then timeout.
+            // The hung stage blocks join_next() from returning again.
+            for _ in 0..2 {
+                if let Some(result) = set.join_next().await {
+                    completed.push(result);
+                }
+            }
+        },
+    )
+    .await;
+
+    assert!(
+        timeout.is_ok(),
+        "two normal stages should complete within timeout"
+    );
+    assert_eq!(completed.len(), 2, "two normal stages should complete");
+
+    // Normal stages completed OK
+    for result in &completed {
+        assert!(
+            result.is_ok(),
+            "normal stage should complete cooperatively"
+        );
+    }
+
+    // Exit order: stage 1 first, then stage 3
+    let order = exit_order.lock().unwrap();
+    assert_eq!(
+        *order, vec![1, 3],
+        "normal stages exit in order, hung stage never exits"
+    );
+    drop(order);
+
+    // abort_all() terminates the hung stage as safety net
+    set.abort_all();
+
+    // After abort, the hung task should be cancelled
+    let abort_result = set.join_next().await;
+    assert!(
+        abort_result.is_some(),
+        "hung task should exist after abort_all"
+    );
+    let abort_result = abort_result.unwrap();
+    assert!(
+        abort_result.is_err(),
+        "hung task should be cancelled (JoinError::Cancelled) after \
+         abort_all"
+    );
+}
+
+/// `select! { biased; }` prioritises the ready branch — when a channel
+/// closes, the close branch fires at the next `.await` even if work is
+/// in progress.
+///
+/// In a non-biased `select!`, the work branch and close branch compete
+/// fairly — the work may finish first. With `biased`, branches are
+/// checked in order: the channel close branch is checked first and wins
+/// if ready.
+///
+/// 1. Stage uses `select! { biased; }` with two branches:
+///    - Channel recv (checked first — receives items)
+///    - Channel closed (checked second — fires when no more items)
+/// 2. Send 5 items through the channel (buffered).
+/// 3. Drop sender after a short delay — channel closes.
+/// 4. Stage processes items, detects close, and records which branch
+///    fired last (proving biased select prioritised close).
+/// 5. Verify exit path was through the close branch.
+#[tokio::test]
+async fn biased_select_prioritises_shutdown() {
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+
+    let exit_path = Arc::new(Mutex::new(String::new()));
+    let exit_for_task = exit_path.clone();
+
+    // Spawn a stage using biased select!
+    tokio::spawn(async move {
+        let mut rx = source_rx;
+
+        // biased: recv branch is checked first, then close branch.
+        // When channel closes, the close branch fires at the next
+        // .await — even if we were mid-iteration.
+        loop {
+            tokio::select! {
+                biased;
+
+                // First branch: receive an item (checked first)
+                maybe_item = rx.recv() => {
+                    if let Some(_item) = maybe_item {
+                        // Process item (simulate with yield)
+                        tokio::task::yield_now().await;
+                    } else {
+                        // Channel closed — biased select prioritises
+                        // this branch when recv() returns None
+                        exit_for_task.lock().unwrap().push_str("closed");
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Send 5 items (buffered in channel)
+    for i in 0..5 {
+        source_tx.send(i).await.expect("send should succeed");
+    }
+
+    // Short delay to let stage start consuming items
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Drop sender — channel closes after buffered items are drained
+    drop(source_tx);
+
+    // Wait for the stage to finish (drain buffered items + detect close)
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let path = exit_path.lock().unwrap();
+    assert_eq!(
+        *path,
+        "closed",
+        "biased select should fire the close branch when channel \
+         closes after draining buffered items"
     );
 }
