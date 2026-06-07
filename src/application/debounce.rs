@@ -67,6 +67,24 @@ impl DebounceEngine {
         (output_rx, handle)
     }
 
+    /// Start the debounce engine, spawning into a `JoinSet`.
+    ///
+    /// This variant ties the debounce task's lifetime to the caller's
+    /// `JoinSet`, so it is aborted when the set is dropped or aborted.
+    /// Used by the server startup to ensure pipeline tasks are children
+    /// of the server task.
+    ///
+    /// Returns the debounced output receiver.
+    pub fn spawn_with_receiver(
+        input_rx: mpsc::Receiver<StrandEvent>,
+        join_set: &mut tokio::task::JoinSet<()>,
+
+    ) -> mpsc::Receiver<StrandEvent> {
+        let (output_tx, output_rx) = mpsc::channel::<StrandEvent>(100);
+        join_set.spawn(Self::run(input_rx, output_tx));
+        output_rx
+    }
+
     /// Internal event loop: watch for incoming events and emit debounced ones.
     async fn run(
         mut input_rx: mpsc::Receiver<StrandEvent>,

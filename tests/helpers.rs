@@ -4,13 +4,12 @@
 //! making HTTP requests, and polling for expected states.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::path::Path;
-use std::time::Duration;
 
 use knot::AppConfig;
-use knot::ShutdownSignal;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::{sleep, Duration};
 
 // ── Knot Fixtures ──────────────────────────────────────────────────────────
 
@@ -141,58 +140,67 @@ STDIN_CONTENT=$(cat)
 
 // ── HTTP Helpers ───────────────────────────────────────────────────────────
 
-/// Simple synchronous HTTP GET using raw TCP.
-pub fn http_get(host_port: &str, path: &str) -> Result<(String, String), String> {
-    let mut stream = TcpStream::connect(host_port)
-        .map_err(|e| format!("connect failed: {e}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+/// Read the full response from a TCP stream, returning (status_line, body).
+async fn read_response(mut stream: TcpStream) -> Result<(String, String), String> {
+    let mut buf = Vec::new();
+    stream
+        .read_to_end(&mut buf)
+        .await
+        .map_err(|e| format!("read failed: {e}"))?;
 
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
-    );
-
-    // Write before creating BufReader (avoids borrow conflict)
-    stream.write_all(request.as_bytes())
-        .map_err(|e| format!("write failed: {e}"))?;
-    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
-
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
 
     let status_line = lines
         .next()
         .ok_or("no status line")?
-        .map_err(|e| format!("read failed: {e}"))?;
+        .to_string();
 
-    let mut remaining = Vec::new();
-    for line_result in lines {
-        let line = line_result.map_err(|e| format!("read failed: {e}"))?;
-        remaining.push(line);
+    // Find body after first empty line
+    let mut body_iter = lines.peekable();
+    let mut found_blank = false;
+    let mut body_lines = Vec::new();
+    for line in &mut body_iter {
+        if !found_blank {
+            if line.trim().is_empty() {
+                found_blank = true;
+            }
+        } else {
+            body_lines.push(line.to_string());
+        }
     }
 
-    let body_start = remaining
-        .iter()
-        .position(|l| l.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-
-    let body = remaining[body_start..].join("\n");
+    let body = body_lines.join("\n");
     Ok((status_line, body.trim().to_string()))
 }
 
+/// Simple async HTTP GET using raw TCP.
+pub async fn http_get(host_port: &str, path: &str) -> Result<(String, String), String> {
+    let mut stream = TcpStream::connect(host_port)
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| format!("write failed: {e}"))?;
+    read_response(stream).await
+}
+
 /// Retry HTTP GET with delays between attempts.
-pub fn http_get_retry(
+pub async fn http_get_retry(
     host_port: &str,
     path: &str,
     max_retries: usize,
     delay_ms: u64,
 ) -> Result<(String, String), String> {
     for attempt in 0..max_retries {
-        match http_get(host_port, path) {
+        match http_get(host_port, path).await {
             Ok(result) => return Ok(result),
             Err(e) if attempt == max_retries - 1 => return Err(e),
-            Err(_) => std::thread::sleep(Duration::from_millis(delay_ms)),
+            Err(_) => sleep(Duration::from_millis(delay_ms)).await,
         }
     }
     Err(format!(
@@ -200,126 +208,120 @@ pub fn http_get_retry(
     ))
 }
 
-/// Simple synchronous HTTP POST with JSON body using raw TCP.
-pub fn http_post_json(
+/// Simple async HTTP POST with JSON body using raw TCP.
+pub async fn http_post_json(
     host_port: &str,
     path: &str,
     body: &serde_json::Value,
 ) -> Result<(String, String), String> {
     let body_str = body.to_string();
     let mut stream = TcpStream::connect(host_port)
+        .await
         .map_err(|e| format!("connect failed: {e}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: \
          application/json\r\nContent-Length: {}\r\nConnection: \
          close\r\n\r\n{body_str}",
         body_str.len()
     );
-
-    stream.write_all(request.as_bytes())
+    stream
+        .write_all(request.as_bytes())
+        .await
         .map_err(|e| format!("write failed: {e}"))?;
-    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
-
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
-
-    let status_line = lines
-        .next()
-        .ok_or("no status line")?
-        .map_err(|e| format!("read failed: {e}"))?;
-
-    let mut remaining = Vec::new();
-    for line_result in lines {
-        let line = line_result.map_err(|e| format!("read failed: {e}"))?;
-        remaining.push(line);
-    }
-
-    let body_start = remaining
-        .iter()
-        .position(|l| l.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-
-    let body = remaining[body_start..].join("\n");
-    Ok((status_line, body.trim().to_string()))
+    read_response(stream).await
 }
 
-/// Simple synchronous HTTP DELETE using raw TCP.
-pub fn http_delete(host_port: &str, path: &str) -> Result<(String, String), String> {
-    let mut stream = TcpStream::connect(host_port)
-        .map_err(|e| format!("connect failed: {e}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+/// Retry HTTP POST with JSON body.
+pub async fn http_post_json_retry(
+    host_port: &str,
+    path: &str,
+    body: &serde_json::Value,
+    max_retries: u32,
+    delay_ms: u64,
+) -> Result<(String, String), String> {
+    for attempt in 0..max_retries {
+        match http_post_json(host_port, path, body).await {
+            Ok(result) => return Ok(result),
+            Err(e) if attempt == max_retries - 1 => return Err(e),
+            Err(_) => sleep(Duration::from_millis(delay_ms)).await,
+        }
+    }
+    Err(format!(
+        "connection to {host_port}{path} failed after {max_retries} retries"
+    ))
+}
 
+/// Simple async HTTP DELETE using raw TCP.
+pub async fn http_delete(host_port: &str, path: &str) -> Result<(String, String), String> {
+    let mut stream = TcpStream::connect(host_port)
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
     let request = format!(
         "DELETE {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: \
          close\r\n\r\n"
     );
-
-    stream.write_all(request.as_bytes())
+    stream
+        .write_all(request.as_bytes())
+        .await
         .map_err(|e| format!("write failed: {e}"))?;
-    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
-
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
-
-    let status_line = lines
-        .next()
-        .ok_or("no status line")?
-        .map_err(|e| format!("read failed: {e}"))?;
-
-    let mut remaining = Vec::new();
-    for line_result in lines {
-        let line = line_result.map_err(|e| format!("read failed: {e}"))?;
-        remaining.push(line);
-    }
-
-    let body_start = remaining
-        .iter()
-        .position(|l| l.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-
-    let body = remaining[body_start..].join("\n");
-    Ok((status_line, body.trim().to_string()))
+    read_response(stream).await
 }
 
 // ── Server Helpers ─────────────────────────────────────────────────────────
 
-/// Wait for a TCP port to become available.
-pub fn wait_for_port(host_port: &str, max_retries: usize, delay_ms: u64) -> Result<(), String> {
-    for attempt in 0..max_retries {
-        if TcpStream::connect(host_port).is_ok() {
+/// Wait for a TCP port to become available (async).
+pub async fn wait_for_port(host_port: &str, timeout_ms: u64) -> Result<(), String> {
+    let deadline = Duration::from_millis(timeout_ms);
+    let start = tokio::time::Instant::now();
+
+    loop {
+        if TcpStream::connect(host_port).await.is_ok() {
             return Ok(());
         }
-        if attempt < max_retries - 1 {
-            std::thread::sleep(Duration::from_millis(delay_ms));
+        if start.elapsed() >= deadline {
+            return Err(format!(
+                "connection to {host_port} timed out after {timeout_ms}ms"
+            ));
         }
+        sleep(Duration::from_millis(50)).await;
     }
-    Err(format!(
-        "connection to {host_port} failed after {max_retries} retries"
-    ))
 }
 
-/// Spawn a server in a background thread with a shutdown channel.
-/// Returns a shutdown sender that, when sent, gracefully stops the server.
-pub fn spawn_server(config: AppConfig) -> tokio::sync::oneshot::Sender<()> {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+/// Spawn a server in a background tokio task.
+/// The task is dropped (and the server stopped) when the JoinHandle is dropped.
+pub fn spawn_server(config: AppConfig) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let _ = knot::start_server(config).await;
+    })
+}
 
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("create runtime");
-        let signal = ShutdownSignal::Channel(shutdown_rx);
-        let _ = rt.block_on(knot::start_server_with_shutdown(config, signal));
+/// Spawn a server with a controllable shutdown signal.
+///
+/// Returns a `oneshot::Sender<()>` — sending on it triggers the server's
+/// graceful shutdown sequence (axum stops, pipeline drains, LoomStopped
+/// written). The background `JoinHandle` completes when shutdown finishes.
+///
+/// Use this for tests that need to verify graceful shutdown behaviour
+/// (pipeline drain, LoomStopped logging, in-flight work completion).
+pub fn spawn_server_with_shutdown(
+    config: knot::AppConfig,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let _ = knot::start_server_with_shutdown(
+            config,
+            knot::ShutdownSignal::Channel(rx),
+        )
+        .await;
     });
-
-    shutdown_tx
+    (handle, tx)
 }
 
 /// Poll a knot status endpoint until it reaches a terminal state.
-pub fn poll_knot_status(
+pub async fn poll_knot_status(
     host_port: &str,
     loom_id: &str,
     knot_id: &str,
@@ -328,7 +330,7 @@ pub fn poll_knot_status(
 ) -> Result<serde_json::Value, String> {
     for attempt in 0..max_retries {
         let path = format!("/looms/{loom_id}/knots/{knot_id}");
-        match http_get(host_port, &path) {
+        match http_get(host_port, &path).await {
             Ok((status, body)) if status.contains("200") => {
                 let val: serde_json::Value =
                     serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -341,7 +343,7 @@ pub fn poll_knot_status(
             Err(_) => {}
         }
         if attempt < max_retries - 1 {
-            std::thread::sleep(Duration::from_millis(delay_ms));
+            sleep(Duration::from_millis(delay_ms)).await;
         }
     }
     Err("timeout waiting for knot status".to_string())

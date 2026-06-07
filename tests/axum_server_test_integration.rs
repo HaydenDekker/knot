@@ -155,7 +155,7 @@ fn spawn_server_with_shutdown_timeout(
 
             // Simulate a pipeline task that never drains.
             let _blocking_handle = tokio::spawn(async {
-                futures_util::future::pending::<()>().await;
+                std::future::pending::<()>().await;
             });
 
             axum::serve(listener, simple_app())

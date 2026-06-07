@@ -86,14 +86,23 @@ pub struct AppConfig {
 /// The `event_rx` parameter is the receiver from the channel that
 /// `NotifyEventSource` sends raw events into.
 ///
-/// Returns the process strand task handle.
+/// Spawns both the debounce engine and process strand into the provided
+/// `JoinSet`. This ensures the pipeline tasks are children of the server
+/// task and are aborted when the server stops.
 pub fn start_event_pipeline(
     ctx: &AppContext,
     event_rx: mpsc::Receiver<domain::events::StrandEvent>,
-) -> tokio::task::JoinHandle<()> {
-    // Wire event_rx directly into the debounce engine.
-    let (mut debounce_rx, _debounce_handle) =
-        application::debounce::DebounceEngine::start_with_receiver(event_rx);
+    join_set: &mut tokio::task::JoinSet<()>,
+) {
+    // Wire event_rx into the debounce engine, spawned into the join set.
+    //
+    // `spawn_with_receiver` creates an output channel, moves `output_tx` into
+    // the spawned debounce task, and returns `output_rx` to the caller.
+    // When the debounce task exits (input channel closed → flush → return),
+    // its `output_tx` is dropped → `output_rx.recv()` yields None →
+    // ProcessStrand exits naturally.
+    let mut debounce_rx =
+        application::debounce::DebounceEngine::spawn_with_receiver(event_rx, join_set);
 
     // ProcessStrand loop: read debounced events and process them.
     let store = ctx.store.clone();
@@ -102,7 +111,7 @@ pub fn start_event_pipeline(
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
     let rig_config = ctx.rig_config.clone();
 
-    tokio::spawn(async move {
+    join_set.spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
             store,
             log_port,
@@ -115,7 +124,7 @@ pub fn start_event_pipeline(
                 eprintln!("ProcessStrand error: {e}");
             }
         }
-    })
+    });
 }
 
 impl AppConfig {
@@ -340,8 +349,11 @@ pub async fn start_server_with_shutdown(
 ) -> std::io::Result<()> {
     let (mut ctx, event_rx) = build_app_context(&config);
 
-    // Start the event pipeline: debounce + ProcessStrand
-    let process_handle = start_event_pipeline(&ctx, event_rx);
+    // JoinSet ties the pipeline task lifetimes to the server task.
+    let mut join_set = tokio::task::JoinSet::new();
+
+    // Start the event pipeline: debounce + ProcessStrand (children of this task)
+    start_event_pipeline(&ctx, event_rx, &mut join_set);
 
     // Startup: discover looms, create state files, start watchers
     let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
@@ -354,6 +366,11 @@ pub async fn start_server_with_shutdown(
         let loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
         ctx.loom_ids = loom_ids;
     }
+
+    // Preserve references needed after AppContext is consumed by the router.
+    let shutdown_log_port: Arc<dyn application::ports::LoomLogPort> =
+        Arc::clone(&ctx.loom_log_port);
+    let shutdown_loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
 
     let app = build_app(ctx);
 
@@ -377,24 +394,42 @@ pub async fn start_server_with_shutdown(
         .with_graceful_shutdown(shutdown)
         .await?;
 
-    // Shutdown sequence:
-    // 1. The AppContext is held by the axum Router (already stopped).
-    //    When the router is dropped, the NotifyEventSource in AppContext
-    //    is also dropped, which stops the file watcher.
+    // ── Graceful Cascade Shutdown ─────────────────────────────────────
+    //
+    // The shutdown sequence is a cooperative cascade, not forced abort:
+    //
+    // 1. axum::serve has exited — HTTP server stopped, AppContext dropped,
+    //    NotifyEventSource dropped (file watcher stopped).
+    //
+    // 2. The event_sender clone held by AppContext is dropped. Any other
+    //    clones (e.g., from route handlers) are also gone.
+    //
+    // 3. DebounceEngine: its input rx.recv() yields None → flushes all
+    //    pending entries to output channel → task exits naturally.
+    //
+    // 4. ProcessStrand: finishes in-flight agent execution → writes
+    //    tie-off → its debounce_rx.recv() yields None → exits naturally.
+    //
+    // 5. JoinSet drained: `while let Some` loop waits for ALL tasks to
+    //    complete. No tasks are aborted — they all exit cooperatively.
+    //
+    // 6. LoomStopped written to each loom-log.
+    //
+    // Safety net: if a task has a bug and never exits, the JoinSet Drop
+    // will abort it. This is a last resort, not the primary mechanism.
 
-    // 2. Wait for the processing pipeline to drain and write LoomStopped.
-    let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
-        Arc::new(adapters::outbound::FileSystemLoomLog::new(
-            config.base_dir.clone(),
-        ));
-    let loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
-
-    // Wait for the processing pipeline to finish draining.
-    let _ = process_handle.await;
+    // Drain all pipeline tasks. Use `while let Some` to wait for every
+    // task to complete — not just the first one. This ensures ProcessStrand
+    // finishes in-flight agent work before the JoinSet is dropped.
+    while let Some(res) = join_set.join_next().await {
+        if let Err(e) = res {
+            eprintln!("Background task failed: {e}");
+        }
+    }
 
     // Write LoomStopped to each loom's activity log.
-    for loom_id in &loom_ids {
-        let _ = loom_log_port.append(
+    for loom_id in &shutdown_loom_ids {
+        let _ = shutdown_log_port.append(
             domain::events::LoomEvent::LoomStopped {
                 loom_id: loom_id.clone(),
             },
