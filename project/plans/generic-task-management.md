@@ -25,7 +25,7 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 - Abort as safety net for hung tasks
 - Biased `select!` prioritising channel close
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-07)
 
 ## Existing Tests
 
@@ -67,4 +67,7 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 
 ## Notes
 
-_No notes yet._
+- Executed via plan-orchestrator skill with `qwen3-27b` (llama-workhorse provider)
+- Phase 0 required `--skip-baseline` due to pre-existing compile errors in unrelated test files (`tests/pipeline.rs`, `tests/rig_lifecycle.rs`)
+- Phase 3 sub-agent was killed due to stall timeout; all work was already written and passing — recovered by committing its dirty tree
+- All 10 tests pass: `cargo test --test generic_task_management`
