@@ -11,9 +11,11 @@
 //! These tests serve as living documentation of the pattern and can be read
 //! without any Knot context.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
 // ── Stage Helper ──────────────────────────────────────────────────────────
@@ -314,4 +316,254 @@ async fn leaked_sender_prevents_shutdown() {
     // Clean up: abort the hung task and drop the leaked sender
     set.abort_all();
     drop(_leaked_tx);
+}
+
+/// A stage mid-`await` (simulated work) when upstream closes finishes its
+/// current item before exiting.
+///
+/// This validates the cooperative drain guarantee: a task that has already
+/// pulled an item off the channel and is processing it will complete that
+/// work, even if the input channel closes while the work is in flight.
+///
+/// 1. Stage configured with pending_capacity = 2 and a 50ms work delay.
+/// 2. Send 1 item — stage begins processing (sleep starts).
+/// 3. Immediately drop source sender — input channel closes.
+/// 4. The stage finishes its 50ms sleep, buffers the item, then
+///    loops back to `recv()` which returns `None`.
+/// 5. Stage flushes its 1 pending item and exits cooperatively.
+/// 6. Output receiver collects the item and then closes.
+#[tokio::test]
+async fn in_flight_work_completes() {
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+
+    let mut set: JoinSet<()> = JoinSet::new();
+
+    // Work delay of 50ms, buffer of 2 (so 1 item won't auto-flush)
+    let config = StageConfig {
+        work_delay: Duration::from_millis(50),
+        pending_capacity: 2,
+    };
+
+    let mut output_rx = spawn_stage(source_rx, config, &mut set);
+
+    // Send 1 item — stage receives it and starts 50ms sleep
+    source_tx.send(99).await.expect("send should succeed");
+
+    // Drop source immediately — channel closes while stage is mid-sleep
+    drop(source_tx);
+
+    // Wait for the in-flight item to complete and be flushed
+    let mut received = Vec::new();
+    while let Some(item) = output_rx.recv().await {
+        received.push(item);
+    }
+
+    assert_eq!(received, vec![99], "in-flight item should complete");
+
+    // Stage should exit cooperatively after flushing
+    let result = set.join_next().await.expect("task should exist");
+    assert!(result.is_ok(), "stage should exit cooperatively");
+}
+
+/// Three-stage pipeline (A → B → C) drains in cascade order.
+///
+/// When upstream closes, the first stage finishes first (no more input),
+/// then its channel closes triggering the second stage to finish, and so
+/// on. Each stage records its stage-id on exit in a shared vector.
+///
+/// 1. Three `spawn_stage` instances chained: source → A → B → C → sink.
+/// 2. Each stage pushes its id (1=A, 2=B, 3=C) into a shared `Vec` on exit.
+/// 3. Send items through the full pipeline.
+/// 4. Drop source sender — cascade: A exits → B exits → C exits.
+/// 5. Verify exit order: [1, 2, 3] (matches cascade direction).
+#[tokio::test]
+async fn multiple_stages_drain_sequentially() {
+    use std::sync::Mutex;
+
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+    let mut set: JoinSet<()> = JoinSet::new();
+
+    let exit_order: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let config = StageConfig {
+        work_delay: Duration::ZERO,
+        pending_capacity: 1,
+    };
+
+    // Stage A — pushes 1 on exit
+    let order_a = exit_order.clone();
+    let config_a = config.clone();
+    let stage_a_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(source_rx, config_a, tx).await;
+            order_a.lock().unwrap().push(1);
+        });
+        rx
+    };
+
+    // Stage B — pushes 2 on exit
+    let order_b = exit_order.clone();
+    let config_b = config.clone();
+    let stage_b_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(stage_a_output, config_b, tx).await;
+            order_b.lock().unwrap().push(2);
+        });
+        rx
+    };
+
+    // Stage C — pushes 3 on exit
+    let order_c = exit_order.clone();
+    let config_c = config.clone();
+    let mut stage_c_output = {
+        let (tx, rx) = mpsc::channel::<u32>(16);
+        set.spawn(async move {
+            spawn_stage_task(stage_b_output, config_c, tx).await;
+            order_c.lock().unwrap().push(3);
+        });
+        rx
+    };
+
+    // Send 3 items through the full pipeline
+    for i in 0..3 {
+        source_tx.send(i).await.expect("send should succeed");
+    }
+
+    // Drop source — triggers cascade: A→B→C
+    drop(source_tx);
+
+    // Drain final output
+    let mut received = Vec::new();
+    while let Some(item) = stage_c_output.recv().await {
+        received.push(item);
+    }
+
+    assert_eq!(received.len(), 3, "all items should be received");
+
+    // Wait for all stages to complete
+    let mut completed = 0usize;
+    while let Some(result) = set.join_next().await {
+        assert!(result.is_ok(), "stage should exit cooperatively");
+        completed += 1;
+    }
+
+    assert_eq!(completed, 3, "all three stages should complete");
+
+    // Verify cascade exit order: A first, then B, then C
+    let order = exit_order.lock().unwrap();
+    assert_eq!(
+        *order, vec![1, 2, 3],
+        "stages should exit in cascade order (A→B→C)"
+    );
+}
+
+/// Helper that runs the stage logic without spawning, so the caller can
+/// record exit order in the same task.
+async fn spawn_stage_task<T: Send + Clone + 'static>(
+    mut input_rx: mpsc::Receiver<T>,
+    config: StageConfig,
+    output_tx: mpsc::Sender<T>,
+) {
+    let mut pending = Vec::new();
+
+    while let Some(item) = input_rx.recv().await {
+        if config.work_delay > Duration::ZERO {
+            tokio::time::sleep(config.work_delay).await;
+        }
+
+        pending.push(item);
+        if pending.len() >= config.pending_capacity {
+            for buffered in pending.drain(..) {
+                let _ = output_tx.send(buffered).await;
+            }
+        }
+    }
+
+    for buffered in pending.drain(..) {
+        let _ = output_tx.send(buffered).await;
+    }
+}
+
+/// A oneshot signal stops ingestion and triggers channel-closure cascade,
+/// causing all downstream stages to exit.
+///
+/// This models a real-world pattern: an external signal (SIGTERM, HTTP
+/// shutdown endpoint, etc.) tells the ingestion task to stop producing.
+/// The ingestion task drops its sender, channels close in cascade, and
+/// every stage drains and exits cooperatively.
+///
+/// 1. Ingestion task: loops sending items until oneshot signal arrives.
+/// 2. Downstream stages: read from pipeline, forward through channels.
+/// 3. Fire oneshot — ingestion task stops and drops its sender.
+/// 4. Cascade propagates: all stages drain and exit.
+/// 5. Verify all items sent before signal are delivered.
+#[tokio::test]
+async fn oneshot_trigger_starts_cascade() {
+    let (source_tx, source_rx) = mpsc::channel::<u32>(16);
+
+    let mut set: JoinSet<()> = JoinSet::new();
+
+    // Two downstream stages
+    let config = StageConfig {
+        work_delay: Duration::ZERO,
+        pending_capacity: 1,
+    };
+    let stage_a_output = spawn_stage(source_rx, config.clone(), &mut set);
+    let mut stage_b_output = spawn_stage(stage_a_output, config, &mut set);
+
+    // Oneshot waiter task: fires a shared flag when signal arrives.
+    let (trigger_tx, trigger_rx) = oneshot::channel::<()>();
+    let done_flag = Arc::new(AtomicBool::new(false));
+    let done_for_signal = done_flag.clone();
+    set.spawn(async move {
+        let _ = trigger_rx.await;
+        done_for_signal.store(true, Ordering::SeqCst);
+    });
+
+    // Ingestion task: sends items until flag is set by oneshot waiter.
+    let done_for_ingestion = done_flag.clone();
+    set.spawn(async move {
+        let mut count = 0u32;
+        loop {
+            if done_for_ingestion.load(Ordering::SeqCst) {
+                break;
+            }
+            if source_tx.send(count).await.is_err() {
+                break;
+            }
+            count += 1;
+        }
+    });
+
+    // Let ingestion produce a few items
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Fire the oneshot — tells ingestion to stop
+    let _ = trigger_tx.send(());
+
+    // Drain all items from the pipeline
+    let mut received = Vec::new();
+    while let Some(item) = stage_b_output.recv().await {
+        received.push(item);
+    }
+
+    // Should have received several items (at least 1)
+    assert!(
+        !received.is_empty(),
+        "should have received items before shutdown"
+    );
+
+    // All stages plus ingestion task should exit cooperatively
+    let mut completed = 0usize;
+    while let Some(result) = set.join_next().await {
+        assert!(result.is_ok(), "task should exit cooperatively");
+        completed += 1;
+    }
+
+    assert_eq!(
+        completed,
+        4,
+        "signal waiter + ingestion + 2 stages should all complete"
+    );
 }
