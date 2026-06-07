@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-07
-> **Plan Added:** Generic Task Management Tests
+> **Last Updated:** 2026-06-08
+> **Plan Added:** lib.rs Composition Root and Inbound Adapter Tidy
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ⬜ Planned | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
 | 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
@@ -69,6 +70,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 17. lib.rs Composition Root and Inbound Adapter Tidy
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-08
+**Goal:** Remove dead `graceful_shutdown` from `lib.rs`, move composition root into `src/server.rs`, move HTTP handlers into `inbound/handlers.rs`, and split `inbound/mod.rs` (2211 lines) into `types.rs` + `handlers.rs` + `router.rs`.
+
+Full details in [lib-inbound-tidy.md](lib-inbound-tidy.md).
 
 ### 16. Generic Task Management Tests
 
