@@ -55,9 +55,9 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 - [x] Write `leaked_sender_prevents_shutdown` — extra `Sender` clone held outside pipeline → `recv()` never yields `None` → task hangs → timeout proves the hang
 
 ### Phase 2: In-flight work and multi-stage
-- [ ] Write `in_flight_work_completes` — stage is mid-`await` (sleep) when upstream closes → current work finishes → stage exits
-- [ ] Write `multiple_stages_drain_sequentially` — 3-stage pipeline (A → B → C), verify exit order matches cascade direction
-- [ ] Write `oneshot_trigger_starts_cascade` — oneshot signal stops ingestion, channel closures propagate, all stages exit
+- [x] Write `in_flight_work_completes` — stage is mid-`await` (sleep) when upstream closes → current work finishes → stage exits
+- [x] Write `multiple_stages_drain_sequentially` — 3-stage pipeline (A → B → C), verify exit order matches cascade direction
+- [x] Write `oneshot_trigger_starts_cascade` — oneshot signal stops ingestion, channel closures propagate, all stages exit
 
 ### Phase 3: Post-shutdown and safety net
 - [ ] Write `post_shutdown_hook_executes` — callback fires only after `join_next()` loop completes
