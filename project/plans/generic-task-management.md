@@ -60,10 +60,10 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 - [x] Write `oneshot_trigger_starts_cascade` — oneshot signal stops ingestion, channel closures propagate, all stages exit
 
 ### Phase 3: Post-shutdown and safety net
-- [ ] Write `post_shutdown_hook_executes` — callback fires only after `join_next()` loop completes
-- [ ] Write `abort_is_safety_net` — one stage intentionally hangs (never returns) → `JoinSet` Drop with timeout → hung task is aborted, others completed cleanly
-- [ ] Write `biased_select_prioritises_shutdown` — `select! { biased; }` with channel close branch fires at next `.await` when channel closes during active work
-- [ ] Run `cargo test --test generic_task_management` — all 10 tests pass
+- [x] Write `post_shutdown_hook_executes` — callback fires only after `join_next()` loop completes
+- [x] Write `abort_is_safety_net` — one stage intentionally hangs (never returns) → `JoinSet` Drop with timeout → hung task is aborted, others completed cleanly
+- [x] Write `biased_select_prioritises_shutdown` — `select! { biased; }` with channel close branch fires at next `.await` when channel closes during active work
+- [x] Run `cargo test --test generic_task_management` — all 10 tests pass
 
 ## Notes
 
