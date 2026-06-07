@@ -45,9 +45,9 @@ A new `tests/generic_task_management.rs` that imports **only `tokio`** (zero Kno
 ## Phases
 
 ### Phase 0: Scaffolding and core drain test
-- [ ] Create `tests/generic_task_management.rs`
-- [ ] Define `spawn_stage<T>()` helper: a generic stage that `recv()`s from input, does configurable async work, flushes pending on close, sends to output
-- [ ] Write `tasks_drain_on_shutdown` — two-stage pipeline (A → B), `JoinSet`, `while let Some join_next()` — all tasks complete cooperatively, no abort
+- [x] Create `tests/generic_task_management.rs`
+- [x] Define `spawn_stage<T>()` helper: a generic stage that `recv()`s from input, does configurable async work, flushes pending on close, sends to output
+- [x] Write `tasks_drain_on_shutdown` — two-stage pipeline (A → B), `JoinSet`, `while let Some join_next()` — all tasks complete cooperatively, no abort
 
 ### Phase 1: Channel cascade and flush
 - [ ] Write `channel_closure_propagates_cascade` — chain 2 channels, drop last sender, verify downstream `recv() → None` propagates
