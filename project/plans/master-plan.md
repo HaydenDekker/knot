@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 16 | [Generic Task Management Tests](generic-task-management.md) | ⬜ Planned | 2026-06-07 |
+| 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
 | 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
 | 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ✅ Complete | 2026-06-06 |
@@ -72,8 +72,9 @@ _Overview sections for active and recently completed plans go here._
 
 ### 16. Generic Task Management Tests
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-07
+**Completed:** 2026-06-07
 **Goal:** Create `tests/generic_task_management.rs` — 10 tokio-only tests validating the channel-cascade shutdown pattern (JoinSet ownership, cooperative drain, abort safety net) with zero Knot domain types.
 
 Full details in [generic-task-management.md](generic-task-management.md).
