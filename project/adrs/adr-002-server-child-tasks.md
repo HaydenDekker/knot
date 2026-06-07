@@ -194,6 +194,7 @@ Integration test suite `tests/task_management.rs` validates the cascade shutdown
 ## References
 
 - [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) — test-side pattern that motivated this change
+- [ADR-003: Channel-Cascade Shutdown Pattern](adr-003-channel-cascade-shutdown.md) — generic pattern documentation (this ADR covers Knot-specific wiring)
 - `src/lib.rs:340-430` — `start_server_with_shutdown` implementation
 - `src/lib.rs:85-125` — `start_event_pipeline` implementation
 - `src/application/debounce.rs:60-86` — `start_with_receiver` and `spawn_with_receiver`
