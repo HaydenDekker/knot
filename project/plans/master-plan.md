@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-08
-> **Plan Added:** Sync Integration Tests to Async Layer (ADR-002/003)
+> **Plan Added:** Knot Modification Observability and Path Resolution Consistency
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
@@ -72,6 +73,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 20. Knot Modification Observability and Path Resolution Consistency
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-08
+**Goal:** Make `KnotModified` filesystem changes observable via loom-log (`LoomEvent::KnotUpdated`), log parse failures to stderr, and ensure path resolution is consistent between initial load and file-watcher events.
+
+Full details in [plan-knot-modify-observability.md](plan-knot-modify-observability.md).
 
 ### 19. Fix KnotModified race and GET knot-status hang
 
