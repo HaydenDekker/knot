@@ -1067,6 +1067,12 @@ impl ConfigEventHandler {
     /// Updates the knot in the store, stops the old watcher if
     /// `strand_dir` changed, and starts a new watcher for the
     /// updated `strand_dir`.
+    ///
+    /// If the knot is not found in the loom (e.g., due to a race between
+    /// `LoomAdded` scanning a partially-written directory and a later
+    /// `KnotModified` with valid data), treats it as a new registration:
+    /// appends the knot, logs `KnotRegistered`, starts a watcher, and
+    /// emits a warning.
     fn handle_knot_modified(
         &self,
         loom_id: &LoomId,
@@ -1075,59 +1081,101 @@ impl ConfigEventHandler {
         let mut loom = self.store.get(loom_id)
             .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
 
-        let pos = loom.knots.iter()
-            .position(|k| k.id == knot.id)
-            .ok_or_else(|| PortError::LoomSaveFailed(format!(
-                "knot '{}' not found in loom '{}'",
-                knot.id.0,
-                loom_id.0
-            )))?;
+        let pos = loom.knots.iter().position(|k| k.id == knot.id);
 
-        // Check if strand_dir changed
-        let old_strand_dir = loom.knots[pos].strand_dir.clone();
-        let new_strand_dir = knot.strand_dir.clone();
-        let knot_id = knot.id.clone();
-        loom.knots[pos] = knot;
-        self.store.register(loom);
+        match pos {
+            Some(index) => {
+                // Existing knot — update in place
+                let old_strand_dir = loom.knots[index].strand_dir.clone();
+                let new_strand_dir = knot.strand_dir.clone();
+                let knot_id = knot.id.clone();
+                loom.knots[index] = knot;
+                self.store.register(loom);
 
-        // If strand_dir changed, stop old watcher and start new one
-        if old_strand_dir != new_strand_dir {
-            self.event_source.unwatch(&old_strand_dir)
-                .map_err(|e| {
-                    PortError::EventUnwatchFailed(format!(
-                        "failed to unwatch '{}': {}",
-                        old_strand_dir.display(),
-                        e
-                    ))
+                // If strand_dir changed, stop old watcher and start new one
+                if old_strand_dir != new_strand_dir {
+                    self.event_source.unwatch(&old_strand_dir)
+                        .map_err(|e| {
+                            PortError::EventUnwatchFailed(format!(
+                                "failed to unwatch '{}': {}",
+                                old_strand_dir.display(),
+                                e
+                            ))
+                        })?;
+
+                    self.event_source.set_loom_ids(
+                        &new_strand_dir,
+                        loom_id,
+                        &knot_id,
+                    );
+                    self.event_source.watch(&new_strand_dir)
+                        .map_err(|e| {
+                            PortError::EventWatchFailed(format!(
+                                "failed to watch '{}': {}",
+                                new_strand_dir.display(),
+                                e
+                            ))
+                        })?;
+
+                    logging::log_knot_event(
+                        "modified",
+                        &loom_id.0,
+                        &knot_id.0,
+                        "strand_dir changed, watcher updated",
+                    );
+                } else {
+                    logging::log_knot_event(
+                        "modified",
+                        &loom_id.0,
+                        &knot_id.0,
+                        "config updated (strand_dir unchanged)",
+                    );
+                }
+            }
+            None => {
+                // Knot not found — recover by registering as new.
+                // This handles the race where LoomAdded scanned before
+                // the knot file was fully written.
+                let knot_strand_dir = knot.strand_dir.clone();
+                let knot_id = knot.id.clone();
+                loom.knots.push(knot);
+                self.store.register(loom);
+
+                logging::log_knot_event(
+                    "warn:modified",  
+                    &loom_id.0,
+                    &knot_id.0,
+                    "knot not found, recovered by registering",
+                );
+
+                // Log KnotRegistered
+                self.log_port.append(LoomEvent::KnotRegistered {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
                 })?;
 
-            self.event_source.set_loom_ids(
-                &new_strand_dir,
-                loom_id,
-                &knot_id,
-            );
-            self.event_source.watch(&new_strand_dir)
-                .map_err(|e| {
-                    PortError::EventWatchFailed(format!(
-                        "failed to watch '{}': {}",
-                        new_strand_dir.display(),
-                        e
-                    ))
-                })?;
+                // Start watcher for knot's strand directory
+                self.event_source.set_loom_ids(
+                    &knot_strand_dir,
+                    loom_id,
+                    &knot_id,
+                );
+                self.event_source.watch(&knot_strand_dir)
+                    .map_err(|e| {
+                        PortError::EventWatchFailed(format!(
+                            "failed to watch '{}': {}",
+                            knot_strand_dir.display(),
+                            e
+                        ))
+                    })?;
 
-            logging::log_knot_event(
-                "modified",
-                &loom_id.0,
-                &knot_id.0,
-                "strand_dir changed, watcher updated",
-            );
-        } else {
-            logging::log_knot_event(
-                "modified",
-                &loom_id.0,
-                &knot_id.0,
-                "config updated (strand_dir unchanged)",
-            );
+                logging::log_knot_event(
+                    "added",
+                    &loom_id.0,
+                    &knot_id.0,
+                    "registered + watcher started (recovered from KnotModified)",
+                );
+            }
         }
 
         Ok(())
@@ -1799,8 +1847,10 @@ mod config_handler_tests {
         );
     }
 
-    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` returns
-    /// error when knot does not exist in the loom.
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` recovers
+    /// by registering the knot when it does not exist in the loom.
+    /// This handles the race where LoomAdded scanned before the knot
+    /// file was fully written, resulting in 0 knots registered.
     #[test]
     fn config_handler_knot_modified_not_found() {
         let loom_id = LoomId("test-loom".to_string());
@@ -1813,8 +1863,13 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_result: Arc::new(Mutex::new(vec![])),
         });
-        let (log_port, _) = MockLoomLogPort::new();
-        let (event_source, _, _, _) = TrackingEventSource::new();
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
 
         let handler = ConfigEventHandler::new(
             repo,
@@ -1826,16 +1881,164 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::KnotModified {
             loom_id: loom_id.clone(),
-            knot: build_knot("k_unknown"),
+            knot: build_knot("k_new"),
         });
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PortError::LoomSaveFailed(msg) => {
-                assert!(msg.contains("not found"));
+        // Should succeed — recovers by registering the knot
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom now has 2 knots (k1 + recovered k_new)
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+        let ids: Vec<_> = loom.knots.iter().map(|k| k.id.0.as_str()).collect();
+        assert!(ids.contains(&"k1"));
+        assert!(ids.contains(&"k_new"));
+
+        // Log: KnotRegistered for recovered knot
+        let events = logged_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotRegistered {
+                loom_id: lid,
+                knot_id,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k_new");
             }
-            other => panic!("Expected LoomSaveFailed, got {other:?}"),
+            other => panic!("Expected KnotRegistered, got {other:?}"),
         }
+
+        // Watcher started for recovered knot's strand directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], PathBuf::from("strands"));
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` for a
+    /// loom with 0 knots: recovers by registering the knot, logs
+    /// `KnotRegistered`, and starts a watcher.
+    #[test]
+    fn config_handler_knot_modified_new_knot_registers() {
+        let loom_id = LoomId("empty-loom".to_string());
+        // Loom registered with 0 knots (simulates race condition)
+        let empty_loom = build_loom("empty-loom", vec![]);
+
+        let store = LoomStore::new();
+        store.register(empty_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let new_knot = build_knot("k1");
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: new_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom now has 1 knot
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 1);
+        assert_eq!(loom.knots[0].id, KnotId("k1".to_string()));
+
+        // Log: KnotRegistered for the knot
+        let events = logged_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotRegistered {
+                loom_id: lid,
+                knot_id,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("Expected KnotRegistered, got {other:?}"),
+        }
+
+        // Watcher started for knot's strand directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], PathBuf::from("strands"));
+    }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` for a
+    /// missing knot emits a warning log and recovers. The warning is
+    /// verified by checking that the recovery path side-effects
+    /// (`KnotRegistered` log event, watcher started) are present.
+    #[test]
+    fn config_handler_knot_modified_warns_on_recovery() {
+        let loom_id = LoomId("warn-loom".to_string());
+        let empty_loom = build_loom("warn-loom", vec![]);
+
+        let store = LoomStore::new();
+        store.register(empty_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_result: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: build_knot("k_warn"),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Verify the warning was emitted by checking the log events:
+        // the recovery path logs KnotRegistered, proving the recovery
+        // branch was taken (which also emits the warning via eprintln)
+        let events = logged_events.lock().unwrap();
+        let has_registered = events.iter().any(|e| matches!(
+            e,
+            LoomEvent::KnotRegistered { .. }
+        ));
+        assert!(
+            has_registered,
+            "recovery path should emit KnotRegistered (warning logged to stderr)"
+        );
+
+        // Watcher started confirms full recovery path executed
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(
+            watches.len(),
+            1,
+            "recovery path should start a watcher"
+        );
+        assert_eq!(watches[0], PathBuf::from("strands"));
     }
 
     /// `ConfigEventHandler` with `ConfigEvent::KnotDeleted`: removes
