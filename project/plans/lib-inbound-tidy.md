@@ -80,9 +80,9 @@ src/adapters/inbound/
 ## Phases
 
 ### Phase 0: Remove dead code from lib.rs
-- [ ] Remove `graceful_shutdown` function (lines 276-310) — dead code per ADR-002, replaced by inline `JoinSet` drain in `start_server_with_shutdown`
-- [ ] Remove unused `use tokio::task::JoinHandle` import (if present)
-- [ ] Run `cargo test` — verify no breakage (nothing should call `graceful_shutdown`)
+- [x] Remove `graceful_shutdown` function (lines 276-310) — dead code per ADR-002, replaced by inline `JoinSet` drain in `start_server_with_shutdown`
+- [x] Remove unused `use tokio::task::JoinHandle` import (if present)
+- [x] Run `cargo test` — verify no breakage (nothing should call `graceful_shutdown`)
 
 ### Phase 1: Split inbound/mod.rs into types.rs + loom.rs + system.rs + router.rs
 - [ ] Create `src/adapters/inbound/types.rs` — extract `AppContext`, `RegisterLoomRequest`, `KnotRequest`, `RigConfigResponse`
