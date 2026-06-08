@@ -60,10 +60,10 @@ Add an integration test that:
 
 This proves the HTTP creation path is resilient to the notify race — either the HTTP handler registers directly, or auto-discovery pre-registers and the HTTP handler is idempotent.
 
-- [ ] Add integration test `http_post_loom_verifies_knot_registered` in `tests/auto_discovery_and_knot_crud.rs`
-- [ ] Test verifies loom registered with correct knot count after `POST /looms`
-- [ ] Test verifies `.loom-log` contains `KnotRegistered`
-- [ ] Compile and run tests
+- [x] Add integration test `http_post_loom_verifies_knot_registered` in `tests/auto_discovery_and_knot_crud.rs`
+- [x] Test verifies loom registered with correct knot count after `POST /looms`
+- [x] Test verifies `.loom-log` contains `KnotRegistered`
+- [x] Compile and run tests
 
 ### Phase 2: Filesystem loom creation race (integration test)
 
@@ -77,10 +77,10 @@ Add an integration test that reproduces the race:
 
 This proves the `KnotModified` recovery path works end-to-end. If the test consistently passes, the fix is verified.
 
-- [ ] Add integration test `filesystem_loom_creation_race_recovery` in `tests/auto_discovery_and_knot_crud.rs`
-- [ ] Test creates loom directory then immediately writes `.md` file
-- [ ] Test polls `GET /looms/{id}` until expected knot count
-- [ ] Compile and run tests
+- [x] Add integration test `filesystem_loom_creation_race_recovery` in `tests/auto_discovery_and_knot_crud.rs`
+- [x] Test creates loom directory then immediately writes `.md` file
+- [x] Test polls `GET /looms/{id}` until expected knot count
+- [x] Compile and run tests
 
 ### Phase 3: Prove and fix knot-status read blocking
 
