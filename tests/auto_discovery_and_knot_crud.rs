@@ -539,6 +539,96 @@ async fn runtime_knot_deletion() {
     let _ = shutdown_tx.send(());
 }
 
+/// Start server with empty rig → create `*-loom/` directory then
+/// immediately write `.md` file → poll until loom has expected knot
+/// count. Proves the `KnotModified` recovery path works end-to-end.
+///
+/// The notify watcher may fire `LoomAdded` before the knot file is fully
+/// written. If so, the loom registers with 0 knots. The subsequent
+/// `KnotModified` event should recover by registering the knot.
+#[tokio::test]
+async fn filesystem_loom_creation_race_recovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create rig directory (empty at startup)
+    fs::create_dir_all(&base_dir).unwrap();
+
+    let port = 32108;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
+        .expect("server should start listening");
+
+    // 1. GET /looms should be empty (no looms at startup)
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .await
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert!(
+        summaries.is_empty(),
+        "no looms should exist at startup"
+    );
+
+    // 2. Create loom directory
+    let loom_dir = base_dir.join("race-loom");
+    fs::create_dir_all(&loom_dir).unwrap();
+
+    // 3. Immediately write the knot .md file
+    let (knot_content, _strand_dir, _tie_off_dir) =
+        make_named_knot_content(
+            "race-knot",
+            "Race recovery test",
+            "openai",
+            "gpt-4o",
+            "Race test knot",
+            &base_dir,
+        );
+    fs::write(loom_dir.join("race-knot.md"), knot_content).unwrap();
+
+    // 4. Poll GET /looms/race-loom until it has 1 knot.
+    //    If the race occurred (LoomAdded before file write completed),
+    //    KnotModified should recover and register the knot.
+    assert!(
+        wait_for_knot_count(&host_port, "race-loom", 1).await,
+        "loom should eventually have 1 knot via KnotModified recovery"
+    );
+
+    // 5. Verify loom details: 1 knot with correct id
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/race-loom", 30, 100)
+            .await
+            .expect("get loom should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().unwrap();
+    assert_eq!(
+        knots.len(),
+        1,
+        "loom should have 1 knot (not 0) — KnotModified recovery must \
+         have registered the knot"
+    );
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "race-knot",
+        "knot id should match"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
 // ── POST /looms Registration Verification ────────────────────────────────
 
 /// `POST /looms` with empty rig → loom registered with correct knot count
