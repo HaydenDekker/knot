@@ -567,3 +567,180 @@ async fn full_pipeline_with_external_dirs() {
 
     let _ = shutdown_tx.send(());
 }
+
+// ── Concurrent Knot Status ──────────────────────────────────────────────
+
+/// `GET /looms/:id/knots/:name` does not hang under concurrent load
+/// while a slow agent is mid-processing.
+///
+/// Verifies that the `read_all()` filesystem read in the knot-status
+/// handler is offloaded off the tokio worker (via `spawn_blocking`),
+/// so concurrent status requests complete within a reasonable timeout
+/// even while the agent subprocess is running.
+///
+/// 1. Start server with a slow mock agent (`sleep 30` before output)
+/// 2. Create a strand to trigger processing
+/// 3. Wait for `KnotProcessing` to appear in loom-log
+/// 4. Fire 10 concurrent `GET /looms/:id/knots/:name` requests
+/// 5. Assert all 10 complete within 5 seconds
+#[tokio::test]
+async fn knot_status_during_processing_does_not_hang() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("concurrent-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    let (knot_content, strand_dir, _tie_off_dir) =
+        make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+
+    // Slow mock agent script: sleeps 30 seconds before writing output.
+    // This gives a wide window for concurrent status requests.
+    let slow_agent = base_dir.join("slow-agent");
+    fs::write(
+        &slow_agent,
+        "#!/bin/sh\nsleep 30\necho 'agent done'\n",
+    )
+    .expect("should write slow agent script");
+    fs::set_permissions(
+        &slow_agent,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("should set script as executable");
+
+    let port = 31995;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: slow_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
+        .expect("server should start listening");
+
+    // Verify loom is registered
+    let (status, _body) =
+        http_get_retry(&host_port, "/looms/concurrent-loom", 30, 100)
+            .await
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+
+    // Create strand to trigger processing (agent will sleep 30s)
+    let strand_path = strand_dir.join("concurrent-strand.md");
+    fs::write(&strand_path, "concurrent test content").unwrap();
+
+    // Wait for debounce + initial processing to begin.
+    // The debounce window is 100ms, then the agent sleeps 30s.
+    // Poll the knot-status endpoint until it reports "processing".
+    let mut found_processing = false;
+    for _ in 0..200 {
+        let path = "/looms/concurrent-loom/knots/review-knot";
+        match http_get(&host_port, path).await {
+            Ok((_st, body)) => {
+                let val: serde_json::Value =
+                    serde_json::from_str(&body).ok().unwrap_or_default();
+                let status =
+                    val.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                if status == "processing" {
+                    found_processing = true;
+                    break;
+                }
+                if status == "completed" || status == "failed" {
+                    break; // agent finished too fast — test will still run
+                }
+            }
+            Err(_) => {}
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Fire 10 concurrent GET requests to knot-status endpoint.
+    // All should complete within 5 seconds regardless of whether
+    // the agent is still running.
+    let mut handles = Vec::new();
+    for i in 0..10 {
+        let hp = host_port.clone();
+        let handle = tokio::spawn(async move {
+            let path = "/looms/concurrent-loom/knots/review-knot";
+            match http_get(&hp, path).await {
+                Ok((status, body)) => {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&body).ok().unwrap_or_default();
+                    let status_str = val
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string());
+                    (i, status, status_str)
+                }
+                Err(e) => (i, "error".to_string(), Some(e)),
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Collect all results with a 5-second timeout
+    let timeout = tokio::time::sleep(Duration::from_secs(5));
+    tokio::pin!(timeout);
+
+    let mut results = Vec::new();
+    for handle in handles {
+        tokio::select! {
+            result = handle => {
+                if let Ok(r) = result {
+                    results.push(r);
+                }
+            }
+            _ = &mut timeout => {
+                panic!(
+                    "knot-status request did not complete within 5s \
+                     (blocking read on tokio worker thread?)"
+                );
+            }
+        }
+    }
+
+    // All 10 requests should have completed
+    assert_eq!(
+        results.len(),
+        10,
+        "all 10 concurrent requests should complete within timeout"
+    );
+
+    // Each request should return 200 with a valid status
+    for (idx, status_line, status_val) in &results {
+        assert!(
+            status_line.contains("200"),
+            "request {} should return 200, got status={:?} val={:?}",
+            idx, status_line, status_val
+        );
+        let status = status_val.as_deref().unwrap_or("unknown");
+        assert!(
+            status == "idle"
+                || status == "processing"
+                || status == "completed"
+                || status == "failed",
+            "request {} should have valid status, got: {:?}",
+            idx, status_val
+        );
+    }
+
+    // If we found the processing state, verify concurrent reads didn't
+    // block each other (they should all return quickly)
+    if found_processing {
+        eprintln!(
+            "PASS: found processing state and all 10 concurrent requests \
+             completed without hanging"
+        );
+    }
+
+    let _ = shutdown_tx.send(());
+}

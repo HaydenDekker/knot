@@ -138,9 +138,20 @@ pub async fn get_knot_status(
     let loom_id_val = LoomId(loom_id);
     let use_case =
         GetKnotStatusUc::new(ctx.store.clone(), Arc::clone(&ctx.loom_log_port));
-    match use_case.execute(&loom_id_val, &knot_id) {
-        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "knot not found").into_response(),
+    let result = tokio::task::spawn_blocking(move || {
+        use_case.execute(&loom_id_val, &knot_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(status)) => (StatusCode::OK, Json(status)).into_response(),
+        Ok(Err(_)) => {
+            (StatusCode::NOT_FOUND, "knot not found").into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "task execution failed",
+        )
+            .into_response(),
     }
 }
 
