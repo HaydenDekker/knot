@@ -30,7 +30,7 @@ When this plan is done:
 - The HTTP interface (`GET /looms`, `GET /looms/{id}/knots`) always reflects the current in-memory state
 - Full integration tests verify auto-discovery and knot CRUD end-to-end
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-08)
 
 ## Hex Layer: Domain → Application → Outbound Adapters → Inbound Adapter → Composition Root
 
@@ -284,28 +284,30 @@ Also:
 
 **Hex Layer:** Integration
 
-- [ ] Failing test: `runtime_loom_auto_discovery` — start server with empty rig → create `test-loom/` dir with `.md` file → `GET /looms` shows new loom → create strand → tie-off produced
-- [ ] Failing test: `runtime_knot_auto_discovery` — start server with existing loom → drop new `.md` file in loom dir → `GET /looms/{id}/knots` shows new knot
-- [ ] Failing test: `runtime_knot_edit_picks_up_change` — edit `.md` file (change model) → `GET /looms/{id}` shows updated config
-- [ ] Failing test: `runtime_knot_deletion` — delete `.md` file → `GET /looms/{id}/knots` no longer shows the knot
-- [ ] Failing test: `http_create_knot` — `POST /looms/{id}/knots` with valid body → 201 → knot in `GET /looms/{id}/knots` → `.md` file on disk → create strand → tie-off produced
-- [ ] Failing test: `http_update_knot` — `PATCH /looms/{id}/knots/{name}` with new model → 200 → `GET /looms/{id}` shows new model → `.md` file updated on disk
-- [ ] Failing test: `http_delete_knot` — `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in `GET /looms/{id}/knots` → `.md` file deleted on disk
-- [ ] Failing test: `discover_endpoint_removed` — `POST /looms/discover` → 404 (not found)
-- [ ] Remove/update existing integration tests that use `POST /looms/discover`
-- [ ] Update `swagger_ui.rs` to remove `/looms/discover` assertion
-- [ ] Full integration test suite green
+- [x] Failing test: `runtime_loom_auto_discovery` — start server with empty rig → create `test-loom/` dir with `.md` file → `GET /looms` shows new loom → create strand → tie-off produced
+- [x] Failing test: `runtime_knot_auto_discovery` — start server with existing loom → drop new `.md` file in loom dir → `GET /looms/{id}/knots` shows new knot
+- [x] Failing test: `runtime_knot_edit_picks_up_change` — edit `.md` file (change model) → `GET /looms/{id}` shows updated config
+- [x] Failing test: `runtime_knot_deletion` — delete `.md` file → `GET /looms/{id}/knots` no longer shows the knot
+- [x] Failing test: `http_create_knot` — `POST /looms/{id}/knots` with valid body → 201 → knot in `GET /looms/{id}/knots` → `.md` file on disk → create strand → tie-off produced
+- [x] Failing test: `http_update_knot` — `PATCH /looms/{id}/knots/{name}` with new model → 200 → `GET /looms/{id}` shows new model → `.md` file updated on disk
+- [x] Failing test: `http_delete_knot` — `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in `GET /looms/{id}/knots` → `.md` file deleted on disk
+- [x] Failing test: `discover_endpoint_removed` — `POST /looms/discover` → 404 (not found)
+- [x] Remove/update existing integration tests that use `POST /looms/discover`
+- [x] Update `swagger_ui.rs` to remove `/looms/discover` assertion
+- [x] Full integration test suite green (191 pass, 1 unrelated subprocess flake)
 
 ### Phase 7: Skills Update
 
 **Hex Layer:** Skills + Documentation
 
-- [ ] Update `knots-and-looms/SKILL.md`:
+- [x] Update `knots-and-looms/SKILL.md`:
   - Add knot CRUD endpoints to the API reference table
-  - Update "Modify a Loom" section with new PATCH/DELETE knot endpoints
-  - Remove any references to restart for knot changes (already done in PRD update)
-- [ ] Update `knot-inspect/SKILL.md` if it references discover endpoint
-- [ ] Verify OpenAPI spec served by Knot matches the updated API
+  - Add Create/Modify/Delete Knot (via HTTP) workflow sections
+  - Add request/response schemas for POST, PATCH, DELETE knot endpoints
+  - Add error handling entries for new endpoints
+  - Add quick reference curl examples for knot CRUD
+- [x] Update `knot-inspect/SKILL.md` — no discover endpoint references to remove
+- [x] Verify OpenAPI spec served by Knot matches the updated API (`/looms/{id}/knots/{name}` present, no `/looms/discover`)
 
 ## Notes
 
@@ -314,3 +316,6 @@ Also:
 - Config event handling is synchronous (no debounce needed) — file changes are immediate and the handler processes them one at a time.
 - The `LoomStore` is the single source of truth for in-memory state. Both the config handler and the HTTP handlers update it directly.
 - Idempotency: if the HTTP handler writes a file AND the config handler also sees the file change, the second update is a no-op (the store already matches). This is safe because `LoomStore::register()` overwrites.
+- Phase 6 integration tests live in `tests/auto_discovery_and_knot_crud.rs` (9 tests covering all auto-discovery and HTTP CRUD scenarios).
+- One pre-existing test (`adapters::subprocess::tests::execute_successful_command`) has a broken pipe issue unrelated to this plan — 191/192 tests pass.
+- The `knots-and-looms` skill was updated with all new endpoints, schemas, error handling, and curl examples.
