@@ -108,7 +108,7 @@ src/adapters/inbound/
 - [x] Run `cargo test` — all tests pass, including handler unit tests
 
 ### Phase 3: Extract composition root into src/server.rs
-- [ ] Create `src/server.rs` with:
+- [x] Create `src/server.rs` with:
   - `AppConfig` struct + `default_config()` impl
   - `load_rig_config()` helper (private)
   - `build_app_context()`
@@ -117,13 +117,13 @@ src/adapters/inbound/
   - `ShutdownSignal` enum
   - `start_server()`
   - `start_server_with_shutdown()`
-- [ ] Update `lib.rs`:
+- [x] Update `lib.rs`:
   - Add `mod server;`
   - Re-export: `pub use server::{AppConfig, ShutdownSignal, start_server, start_server_with_shutdown, start_event_pipeline, build_app_context, run_startup};`
   - Remove the moved items
-- [ ] Update `src/main.rs` — imports should still resolve through `lib.rs` re-exports
-- [ ] Update `tests/` files — imports should still resolve through `lib.rs` re-exports (`knot::AppConfig`, `knot::start_server`, `knot::ShutdownSignal`)
-- [ ] Run `cargo test` — all tests pass
+- [x] Update `src/main.rs` — imports should still resolve through `lib.rs` re-exports
+- [x] Update `tests/` files — imports should still resolve through `lib.rs` re-exports (`knot::AppConfig`, `knot::start_server`, `knot::ShutdownSignal`)
+- [x] Run `cargo test` — all tests pass
 
 ### Phase 4: Verify and clean
 - [ ] Run full test suite: `cargo test` — all passing
