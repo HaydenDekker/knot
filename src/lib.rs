@@ -7,60 +7,15 @@ use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::{IntoResponse, Json, Response},
-};
 use domain::events::StrandEvent;
 use tokio::sync::mpsc;
 
 // Re-export inbound adapter types
 pub use adapters::inbound::{build_app, AppContext};
+pub use adapters::inbound::system::{health, list_agents};
 pub use adapters::subprocess::SubprocessAgentRunner;
 pub use domain::entities::Loom;
 pub use domain::value_objects::RigAgentConfig;
-
-/// HTTP handler — health check.
-#[utoipa::path(
-    get,
-    path = "/health",
-    responses(
-        (status = 200, description = "Health check ok"),
-    ),
-)]
-pub async fn health() -> impl IntoResponse {
-    (StatusCode::OK, "ok")
-}
-
-/// HTTP handler — list agents in a directory.
-#[utoipa::path(
-    get,
-    path = "/agents/{dir}",
-    params(
-        ("dir" = String, Path, description = "Directory to list agents in"),
-    ),
-    responses(
-        (status = 200, body = Vec<String>, description = "List of agent names"),
-        (status = 404, description = "Directory not found"),
-    ),
-)]
-pub async fn list_agents(Path(dir): Path<String>) -> Response {
-    let path = PathBuf::from(dir);
-    match std::fs::read_dir(&path) {
-        Ok(entries) => {
-            let names: Vec<String> = entries
-                .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-                .collect();
-            (StatusCode::OK, Json(names)).into_response()
-        }
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            format!("Directory not found: {e}"),
-        )
-            .into_response(),
-    }
-}
 
 // ── Composition Root ───────────────────────────────────────────────────────
 
