@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
@@ -71,6 +72,17 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 19. Fix KnotModified race and GET knot-status hang
+
+**Status:** ✅ Complete
+**Created:** 2026-06-08
+**Completed:** 2026-06-08
+**Goal:** Fix `KnotModified` recovery when `LoomAdded` fires before knot file is fully written (loom registered with 0 knots), and wrap `GET /looms/{id}/knots/{name}` in `spawn_blocking` to prevent blocking the axum worker thread.
+
+**Result:** `handle_knot_modified` now recovers by registering missing knots. `get_knot_status` uses `tokio::task::spawn_blocking`. 5 new tests (3 unit, 2 integration), all passing.
+
+Full details in [plan-bugfix-knot-race-and-status-hang.md](plan-bugfix-knot-race-and-status-hang.md).
 
 ### 18. Sync Integration Tests to Async Layer
 
