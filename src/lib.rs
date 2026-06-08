@@ -276,42 +276,6 @@ pub fn run_startup(
     Ok(looms)
 }
 
-/// Perform graceful shutdown of the Knot system.
-///
-/// This function:
-/// 1. Closes the debounce engine sender (stops accepting new events)
-/// 2. Waits for the processing pipeline to drain (in-flight events finish)
-/// 3. Writes `LoomStopped` to each loom's activity log
-///
-/// The `event_source` should already be dropped by the caller (which stops
-/// the notify watcher). The `process_handle` is the JoinHandle for the
-/// processing pipeline task — this function waits for it to complete.
-pub async fn graceful_shutdown(
-    ctx: &AppContext,
-    process_handle: tokio::task::JoinHandle<()>,
-) {
-    // Close the event sender to signal the debounce engine to stop.
-    // This drops the sender held by AppContext — the debounce engine's
-    // input receiver will see None and drain remaining events.
-    // We don't directly close event_sender here because it's cloned into
-    // the AppContext state; instead, we wait for the process task.
-    drop(ctx.event_sender.clone());
-
-    // Wait for the processing pipeline to drain.
-    // The debounce engine flushes remaining events when its input closes,
-    // then the ProcessStrand loop exits.
-    let _ = process_handle.await;
-
-    // Write LoomStopped to each loom's activity log.
-    for loom_id in &ctx.loom_ids {
-        let _ = ctx.loom_log_port.append(
-            domain::events::LoomEvent::LoomStopped {
-                loom_id: loom_id.clone(),
-            },
-        );
-    }
-}
-
 /// Start the Knot HTTP server with the given configuration.
 ///
 /// Builds the `AppContext`, wires the axum router, and binds to
