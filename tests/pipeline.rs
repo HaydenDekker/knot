@@ -19,8 +19,8 @@ use helpers::*;
 /// → `ProcessStrand` invoked → knot-state transitions to `completed`.
 /// Verifies the full pipeline:
 /// NotifyEventSource → mpsc → DebounceEngine → ProcessStrand.
-#[test]
-fn event_flows_through_pipeline() {
+#[tokio::test]
+async fn event_flows_through_pipeline() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -47,10 +47,10 @@ fn event_flows_through_pipeline() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Create a strand file in the watched source directory
@@ -63,6 +63,7 @@ fn event_flows_through_pipeline() {
     // Poll knot status — should reach terminal state (completed or failed)
     let status =
         poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100)
+            .await
             .expect("knot status should reach terminal state");
     assert_eq!(
         status["status"].as_str().unwrap(),
@@ -85,13 +86,13 @@ fn event_flows_through_pipeline() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Rapid file edits (3 writes within 50ms) → debounce coalesces into
 /// one event → only one `ProcessStrand` invocation → one tie-off produced.
-#[test]
-fn debounce_prevents_duplicate_processing() {
+#[tokio::test]
+async fn debounce_prevents_duplicate_processing() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -114,10 +115,10 @@ fn debounce_prevents_duplicate_processing() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Create initial file in the strand directory (watched by the loom)
@@ -140,6 +141,7 @@ fn debounce_prevents_duplicate_processing() {
     // Poll knot status — should reach terminal state
     let status =
         poll_knot_status(&host_port, "debounce-loom", "review-knot", 60, 100)
+            .await
             .expect("knot status should reach terminal state");
     let final_status = status["status"].as_str().unwrap();
     assert!(
@@ -186,7 +188,7 @@ fn debounce_prevents_duplicate_processing() {
         "should have at least 1 tie-off file"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── End-to-End Pipeline ────────────────────────────────────────────────────
@@ -200,8 +202,8 @@ fn debounce_prevents_duplicate_processing() {
 /// 2. Modify strand → tie-off overwritten
 /// 3. Delete strand → tie-off appended with Deleted header
 /// 4. HTTP: `/looms` lists loom, activity has `StrandProcessed`
-#[test]
-fn full_pipeline_create_modify_delete() {
+#[tokio::test]
+async fn full_pipeline_create_modify_delete() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -227,13 +229,14 @@ fn full_pipeline_create_modify_delete() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // — HTTP: loom is registered —
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -253,6 +256,7 @@ fn full_pipeline_create_modify_delete() {
             30,
             100,
         )
+        .await
         .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -269,7 +273,8 @@ fn full_pipeline_create_modify_delete() {
 
     // Poll until status is `completed`
     let status_result =
-        poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100);
+        poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100)
+            .await;
     assert!(
         status_result.is_ok(),
         "knot status should reach terminal state"
@@ -296,7 +301,11 @@ fn full_pipeline_create_modify_delete() {
 
     // — Step 2: Modify strand → tie-off overwritten —
     fs::write(&strand_path, "modified content").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+
+    // Poll until processing completes
+    poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100)
+        .await
+        .expect("knot status should reach terminal state after modify");
 
     let content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
@@ -307,7 +316,14 @@ fn full_pipeline_create_modify_delete() {
 
     // — Step 3: Delete strand → tie-off appended with Deleted header —
     fs::remove_file(&strand_path).unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+
+    // Allow file watcher to detect the deletion
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Poll until processing completes
+    poll_knot_status(&host_port, "pipeline-loom", "review-knot", 60, 100)
+        .await
+        .expect("knot status should reach terminal state after delete");
 
     assert!(
         tie_off_path.exists(),
@@ -323,11 +339,11 @@ fn full_pipeline_create_modify_delete() {
         content.contains("processed"),
         "tie-off should contain agent response, got: {content}"
     );
-    // Should have three sections now (Created, Modified, Deleted)
+    // Modified + Deleted sections (modify overwrites, delete appends)
     let delimiter_count = content.matches("---").count();
     assert!(
-        delimiter_count >= 4,
-        "should have 3 sections with delimiters, found {}: {}",
+        delimiter_count >= 3,
+        "should have 2 sections with delimiters, found {}: {}",
         delimiter_count, content
     );
 
@@ -337,6 +353,7 @@ fn full_pipeline_create_modify_delete() {
     // — HTTP: activity log contains `StrandProcessed` entry —
     let (status, body) =
         http_get_retry(&host_port, "/looms/pipeline-loom/activity", 30, 100)
+            .await
             .expect("activity endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let events: Vec<serde_json::Value> =
@@ -351,7 +368,7 @@ fn full_pipeline_create_modify_delete() {
         "activity log should contain StrandProcessed entry, got {events:?}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Pipeline with Subdirectory Rig ─────────────────────────────────────────
@@ -364,8 +381,8 @@ fn full_pipeline_create_modify_delete() {
 /// 1. Rig subdirectory scanned for looms
 /// 2. Loom discovered with correct id
 /// 3. Strand processed → tie-off produced with agent output
-#[test]
-fn full_pipeline_with_subdirectory_rig() {
+#[tokio::test]
+async fn full_pipeline_with_subdirectory_rig() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -395,13 +412,14 @@ fn full_pipeline_with_subdirectory_rig() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Verify loom is registered.
     let (status, body) =
         http_get_retry(&host_port, "/looms/config-loom", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -416,8 +434,10 @@ fn full_pipeline_with_subdirectory_rig() {
     let strand_path = strand_dir.join("external-strand.md");
     fs::write(&strand_path, "external strand content").unwrap();
 
-    // Wait for debounce + processing.
-    std::thread::sleep(Duration::from_millis(500));
+    // Wait for debounce + processing via polling
+    poll_knot_status(&host_port, "config-loom", "review-knot", 60, 100)
+        .await
+        .expect("knot status should reach terminal state");
 
     // Tie-off should appear in the loom's .knot-output directory.
     let tie_off_path = tie_off_dir.join("external-strand.md.output");
@@ -434,7 +454,7 @@ fn full_pipeline_with_subdirectory_rig() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Pipeline with External Directories ─────────────────────────────────────
@@ -450,8 +470,8 @@ fn full_pipeline_with_subdirectory_rig() {
 /// 3. Knot status `completed` with no error
 /// 4. Loom-log contains `StrandProcessed` referencing strand filename
 /// 5. Tie-off file written with agent output
-#[test]
-fn full_pipeline_with_external_dirs() {
+#[tokio::test]
+async fn full_pipeline_with_external_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -481,13 +501,14 @@ fn full_pipeline_with_external_dirs() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // 1. Verify loom discovered.
     let (status, _body) =
         http_get_retry(&host_port, "/looms/success-external-loom", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
@@ -495,16 +516,11 @@ fn full_pipeline_with_external_dirs() {
     let strand_path = strand_dir.join("success-strand.md");
     fs::write(&strand_path, "external success strand content").unwrap();
 
-    // Wait for debounce + processing.
-    std::thread::sleep(Duration::from_millis(500));
-
-    // 3. Verify knot status shows `completed`.
-    let (status, body) =
-        http_get(&host_port, "/looms/success-external-loom/knots/review-knot")
-            .expect("knot status endpoint should respond");
-    assert!(status.contains("200"), "expected 200, got: {status}");
+    // Wait for debounce + processing via polling
     let knot_status: serde_json::Value =
-        serde_json::from_str(&body).expect("should be JSON");
+        poll_knot_status(&host_port, "success-external-loom", "review-knot", 60, 100)
+            .await
+            .expect("knot status should reach terminal state");
     assert_eq!(
         knot_status["status"].as_str().unwrap(),
         "completed",
@@ -549,5 +565,5 @@ fn full_pipeline_with_external_dirs() {
          {tie_off_content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

@@ -28,8 +28,8 @@ use helpers::*;
 /// 5. Verify knot-state shows `Failed` with error message.
 /// 6. Verify loom-log contains `StrandProcessed` with error field.
 /// 7. Verify tie-off file written with `Processing failed` content.
-#[test]
-fn full_pipeline_agent_error_in_state_and_log() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_pipeline_agent_error_in_state_and_log() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -58,13 +58,14 @@ fn full_pipeline_agent_error_in_state_and_log() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // 1. Verify loom is discovered via HTTP.
     let (status, _body) =
         http_get_retry(&host_port, "/looms/error-loom", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
@@ -78,6 +79,7 @@ fn full_pipeline_agent_error_in_state_and_log() {
     // 3. Verify knot status shows `Failed` with error message.
     let (status, body) =
         http_get(&host_port, "/looms/error-loom/knots/review-knot")
+            .await
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -133,7 +135,7 @@ fn full_pipeline_agent_error_in_state_and_log() {
         "tie-off should contain error details, got: {tie_off_content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Stub pi CLI Integration Tests ──────────────────────────────────────
@@ -150,8 +152,8 @@ fn full_pipeline_agent_error_in_state_and_log() {
 /// 3. Create strand → tie-off contains system prompt + strand content
 /// 4. Verify knot-state is `completed`
 /// 5. Verify loom-log contains `StrandProcessed` with no error
-#[test]
-fn full_pipeline_with_pi_agent() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_pipeline_with_pi_agent() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -177,8 +179,8 @@ fn full_pipeline_with_pi_agent() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Create a strand file to trigger processing
@@ -221,6 +223,7 @@ fn full_pipeline_with_pi_agent() {
     // 2. Verify knot status is `completed`
     let (status, body) =
         http_get(&host_port, "/looms/pi-loom/knots/review-knot")
+            .await
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -245,7 +248,7 @@ fn full_pipeline_with_pi_agent() {
         "loom log should contain StrandProcessed entry"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Verify the stub `pi` CLI receives system prompt and strand content,
@@ -256,8 +259,8 @@ fn full_pipeline_with_pi_agent() {
 /// 3. Verify knot-state shows `failed` with error message
 /// 4. Verify tie-off contains error details
 /// 5. Verify loom-log contains `StrandProcessed` with error field
-#[test]
-fn pi_agent_receives_system_prompt_and_strand() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pi_agent_receives_system_prompt_and_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -293,8 +296,8 @@ fn pi_agent_receives_system_prompt_and_strand() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Create a strand file to trigger processing
@@ -308,6 +311,7 @@ fn pi_agent_receives_system_prompt_and_strand() {
     // 1. Verify knot status shows `failed` with error message
     let (status, body) =
         http_get(&host_port, "/looms/error-loom/knots/review-knot")
+            .await
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -362,5 +366,5 @@ fn pi_agent_receives_system_prompt_and_strand() {
         "loom log should contain error details, got: {log_content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

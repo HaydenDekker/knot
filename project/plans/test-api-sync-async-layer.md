@@ -34,7 +34,7 @@ All 8 test files compile and pass. The full integration test suite produces:
 
 The helper signatures in `helpers.rs` are **not** changed. The failing tests are updated to match the helpers that already exist.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-08)
 
 ## ADR Constraints
 
@@ -105,12 +105,12 @@ None — all behaviour is already tested. The failing tests define the correct e
 
 Smallest file, most directly related to the async layer. Validates the pattern works before touching larger files.
 
-- [ ] Replace `spawn_server(config)` → `spawn_server_with_shutdown(config)` (2 occurrences)
-- [ ] Replace `shutdown.send(())` → `shutdown_tx.send(())` (2 occurrences)
-- [ ] Replace `wait_for_port(&host_port, 100, 50)` → `wait_for_port(&host_port, 5000).await` (2 occurrences)
-- [ ] Add `.await` to `http_get()` calls (2 occurrences)
-- [ ] Run `cargo test --test shutdown` — verify both tests pass
-- [ ] Confirm tests validate ADR-002 cascade (LoomStopped written after drain)
+- [x] Replace `spawn_server(config)` → `spawn_server_with_shutdown(config)` (2 occurrences)
+- [x] Replace `shutdown.send(())` → `shutdown_tx.send(())` (2 occurrences)
+- [x] Replace `wait_for_port(&host_port, 100, 50)` → `wait_for_port(&host_port, 5000).await` (2 occurrences)
+- [x] Add `.await` to `http_get()` calls (2 occurrences)
+- [x] Run `cargo test --test shutdown` — verify both tests pass
+- [x] Confirm tests validate ADR-002 cascade (LoomStopped written after drain)
 
 **Gate:** If `shutdown.rs` tests fail, the helpers or `lib.rs` may have a deeper issue. Stop and diagnose.
 
@@ -118,59 +118,59 @@ Smallest file, most directly related to the async layer. Validates the pattern w
 
 No missing `.await` calls (simplest remaining file). Validates tie-off creation still works with the new spawn pattern.
 
-- [ ] Replace `spawn_server(config)` → `spawn_server_with_shutdown(config)` (2)
-- [ ] Replace `shutdown.send(())` → `shutdown_tx.send(())` (2)
-- [ ] Replace `wait_for_port(&host_port, 100, 50)` → `wait_for_port(&host_port, 5000).await` (2)
-- [ ] Run `cargo test --test tie_off` — verify both tests pass
+- [x] Replace `spawn_server(config)` → `spawn_server_with_shutdown(config)` (2)
+- [x] Replace `shutdown.send(())` → `shutdown_tx.send(())` (2)
+- [x] Replace `wait_for_port(&host_port, 100, 50)` → `wait_for_port(&host_port, 5000).await` (2)
+- [x] Run `cargo test --test tie_off` — verify both tests pass
 
 ### Phase 3: `multi_loom.rs` — Multi-loom scenarios (2 tests)
 
 Validates multi-loom registration and multi-knot processing with the new pattern.
 
-- [ ] Apply all 4 fixes (2+2+2+4 = 10 line edits)
-- [ ] Run `cargo test --test multi_loom` — verify both tests pass
+- [x] Apply all 4 fixes (2+2+2+4 = 10 line edits)
+- [x] Run `cargo test --test multi_loom` — verify both tests pass
 
 ### Phase 4: `loom_crud.rs` — HTTP CRUD (3 tests)
 
 Validates register/unregister/discover looms via HTTP with the new pattern.
 
-- [ ] Apply all 4 fixes (3+3+3+6 = 15 line edits)
-- [ ] Run `cargo test --test loom_crud` — verify all 3 tests pass
+- [x] Apply all 4 fixes (3+3+3+6 = 15 line edits)
+- [x] Run `cargo test --test loom_crud` — verify all 3 tests pass
 
 ### Phase 5: `agent_integration.rs` — Agent execution (3 tests)
 
 Validates subprocess agent invocation and error handling with the new pattern.
 
-- [ ] Apply all 4 fixes (3+3+3+4 = 13 line edits)
-- [ ] Run `cargo test --test agent_integration` — verify all 3 tests pass
+- [x] Apply all 4 fixes (3+3+3+4 = 13 line edits)
+- [x] Run `cargo test --test agent_integration` — verify all 3 tests pass
 
 ### Phase 6: `discovery.rs` — Loom discovery (4 tests)
 
 Validates rig scanning, config loading, and loom registration at startup.
 
-- [ ] Apply all 4 fixes (4+4+4+7 = 19 line edits)
-- [ ] Run `cargo test --test discovery` — verify all 4 tests pass
+- [x] Apply all 4 fixes (4+4+4+7 = 19 line edits)
+- [x] Run `cargo test --test discovery` — verify all 4 tests pass
 
 ### Phase 7: `rig_lifecycle.rs` — Server lifecycle (5 tests)
 
 Most complex — uses two servers in one test (`shutdown1`/`shutdown2`). Validates server restart and persistence.
 
-- [ ] Apply all 4 fixes (5+6+6+7 = 24 line edits)
-- [ ] Handle `shutdown1`/`shutdown2` variable naming carefully (two `spawn_server_with_shutdown` calls in one test)
-- [ ] Run `cargo test --test rig_lifecycle` — verify all 5 tests pass
+- [x] Apply all 4 fixes (5+6+6+7 = 24 line edits)
+- [x] Handle `shutdown1`/`shutdown2` variable naming carefully (two `spawn_server_with_shutdown` calls in one test)
+- [x] Run `cargo test --test rig_lifecycle` — verify all 5 tests pass
 
 ### Phase 8: `pipeline.rs` — Full pipeline (5 tests)
 
 Largest test file — event pipeline end-to-end. Validates debounce, processing, tie-off, and activity log.
 
-- [ ] Apply all 4 fixes (5+5+5+6 = 21 line edits)
-- [ ] Run `cargo test --test pipeline` — verify all 5 tests pass
+- [x] Apply all 4 fixes (5+5+5+6 = 21 line edits)
+- [x] Run `cargo test --test pipeline` — verify all 5 tests pass
 
 ### Phase 9: Full suite validation
 
-- [ ] Run full test suite: `cargo test --test '*'` (or `cargo test --tests`)
-- [ ] Verify expected results: all compile, expected pass/ignore count matches
-- [ ] Confirm no regressions in already-green tests (`generic_task_management`, `task_management`, `axum_server_test_integration`, `composition`, `demo`, `filesystem_interface`, `http_interface`, `server_startup_smoke`, `skill_integration`, `swagger_ui`)
+- [x] Run full test suite: `cargo test --test '*'` (or `cargo test --tests`)
+- [x] Verify expected results: all compile, expected pass/ignore count matches
+- [x] Confirm no regressions in already-green tests (`generic_task_management`, `task_management`, `axum_server_test_integration`, `composition`, `demo`, `filesystem_interface`, `http_interface`, `server_startup_smoke`, `skill_integration`, `swagger_ui`)
 
 ## Notes
 

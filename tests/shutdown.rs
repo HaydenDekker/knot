@@ -22,8 +22,8 @@ use helpers::*;
 /// 3. Waiting briefly for shutdown to complete
 /// 4. Creating a new strand file — should NOT produce a tie-off
 /// 5. Confirming the tie-off file does NOT exist
-#[test]
-fn graceful_shutdown_stops_watchers() {
+#[tokio::test]
+async fn graceful_shutdown_stops_watchers() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -50,22 +50,26 @@ fn graceful_shutdown_stops_watchers() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // Verify server is healthy before shutdown
     let (status, _) =
-        http_get(&host_port, "/health").expect("health should respond");
+        http_get(&host_port, "/health").await.expect("health should respond");
     assert!(status.contains("200"), "server should be healthy");
 
     // Send shutdown signal
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 
-    // Give shutdown time to complete (drop watcher, drain pipeline)
-    std::thread::sleep(Duration::from_millis(1000));
+    // Wait for the server task to complete (pipeline drain + cleanup)
+    tokio::time::timeout(Duration::from_secs(10), _handle)
+        .await
+        .expect("server should complete shutdown within timeout")
+        .expect("server task should not panic during shutdown");
 
     // Create a strand file AFTER shutdown — should NOT be processed
     let strand_path = strand_dir.join("post-shutdown-strand.md");
@@ -91,8 +95,8 @@ fn graceful_shutdown_stops_watchers() {
 /// 2. Sending shutdown signal
 /// 3. Reading the loom-log file
 /// 4. Confirming it contains `LoomStopped` event
-#[test]
-fn shutdown_logs_loom_stopped() {
+#[tokio::test]
+async fn shutdown_logs_loom_stopped() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -112,22 +116,26 @@ fn shutdown_logs_loom_stopped() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // Verify server is healthy before shutdown
     let (status, _) =
-        http_get(&host_port, "/health").expect("health should respond");
+        http_get(&host_port, "/health").await.expect("health should respond");
     assert!(status.contains("200"), "server should be healthy");
 
     // Send shutdown signal
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 
-    // Give shutdown time to complete (including LoomStopped log write)
-    std::thread::sleep(Duration::from_millis(1000));
+    // Wait for the server task to complete (including LoomStopped log write)
+    tokio::time::timeout(Duration::from_secs(10), _handle)
+        .await
+        .expect("server should complete shutdown within timeout")
+        .expect("server task should not panic during shutdown");
 
     // Read the loom-log file
     let log_file = loom_dir.join(".loom-log");

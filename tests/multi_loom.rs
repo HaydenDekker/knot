@@ -18,8 +18,8 @@ use helpers::*;
 /// 1. Create strand in loom A → tie-off in A's point only
 /// 2. Create strand in loom B → tie-off in B's point only
 /// 3. No cross-interference (A's knots don't process B's strands)
-#[test]
-fn multiple_looms_independent() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_looms_independent() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -67,13 +67,13 @@ fn multiple_looms_independent() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Verify both looms are registered
     let (status, body) =
-        http_get_retry(&host_port, "/looms", 30, 100)
+        http_get_retry(&host_port, "/looms", 30, 100).await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -95,7 +95,7 @@ fn multiple_looms_independent() {
     // 1. Create strand in loom A
     let strand_a_path = strand_dir_a.join("strand-a.md");
     fs::write(&strand_a_path, "content for A").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in A's output directory
     let tie_off_a = tie_off_dir_a.join("strand-a.md.output");
@@ -108,7 +108,7 @@ fn multiple_looms_independent() {
     // 2. Create strand in loom B
     let strand_b_path = strand_dir_b.join("strand-b.md");
     fs::write(&strand_b_path, "content for B").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in B's output directory
     let tie_off_b = tie_off_dir_b.join("strand-b.md.output");
@@ -143,7 +143,7 @@ fn multiple_looms_independent() {
         "loom B should not contain loom A's strand output, got {files_in_b:?}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Two knots in one loom, each with its own source directory.
@@ -154,8 +154,8 @@ fn multiple_looms_independent() {
 /// 4. Create a strand in knot A's source → processed by knot A only.
 /// 5. Create a strand in knot B's source → processed by knot B only.
 /// 6. Verify both knots reach `completed` status independently.
-#[test]
-fn server_starts_with_per_knot_source_dirs() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_starts_with_per_knot_source_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
@@ -235,13 +235,13 @@ prompt-template:
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Verify loom is discovered with 2 knots.
     let (status, body) =
-        http_get_retry(&host_port, "/looms/multi-knot-loom", 30, 100)
+        http_get_retry(&host_port, "/looms/multi-knot-loom", 30, 100).await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -266,7 +266,7 @@ prompt-template:
     // 1. Create a strand in source-a → should trigger knot-a.
     let strand_a_path = source_a.join("strand-a.md");
     fs::write(&strand_a_path, "content for A").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(800));
 
     // Verify knot-a reaches completed status.
     let (status, body) =
@@ -276,6 +276,7 @@ prompt-template:
             30,
             100,
         )
+        .await
         .expect("knot-a status should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_a_status: serde_json::Value =
@@ -289,7 +290,7 @@ prompt-template:
     // 2. Create a strand in source-b → should trigger knot-b.
     let strand_b_path = source_b.join("strand-b.md");
     fs::write(&strand_b_path, "content for B").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(800));
 
     // Verify knot-b reaches completed status.
     let (status, body) =
@@ -299,6 +300,7 @@ prompt-template:
             30,
             100,
         )
+        .await
         .expect("knot-b status should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_b_status: serde_json::Value =
@@ -327,5 +329,5 @@ prompt-template:
         "knot-b should reference strand-b.md, got: {knot_b_status:?}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

@@ -17,8 +17,8 @@ use helpers::*;
 /// Note: file watchers may coalesce create+write into a single Modified event,
 /// so we test the lifecycle as: first write (Modified) → second write (Modified)
 /// → delete (Deleted), verifying append mode preserves history across events.
-#[test]
-fn full_tie_off_history() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_tie_off_history() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -45,9 +45,8 @@ fn full_tie_off_history() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
-        .expect("server should start listening");
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("lifecycle-strand.md");
     let tie_off_path = tie_off_dir.join("lifecycle-strand.md.output");
@@ -128,7 +127,7 @@ fn full_tie_off_history() {
         "Deleted should come after earlier events"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Integration test: parse tie-off markdown sections and verify structure.
@@ -136,8 +135,8 @@ fn full_tie_off_history() {
 /// Creates a strand, modifies it, and verifies that the tie-off file
 /// contains properly formatted sections with event type, strand path,
 /// and timestamp metadata.
-#[test]
-fn tie_off_sections_readable() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tie_off_sections_readable() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -163,9 +162,8 @@ fn tie_off_sections_readable() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
-        .expect("server should start listening");
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("sections-strand.md");
     let tie_off_path = tie_off_dir.join("sections-strand.md.output");
@@ -271,5 +269,5 @@ fn tie_off_sections_readable() {
         content
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

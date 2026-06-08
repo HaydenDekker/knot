@@ -6,7 +6,6 @@
 mod helpers;
 
 use std::fs;
-use std::time::Duration;
 
 use knot::AppConfig;
 use knot::RigAgentConfig;
@@ -18,8 +17,8 @@ use helpers::*;
 ///
 /// Verifies end-to-end: HTTP → RegisterLoom → EventSource::watch() → file
 /// creation → debounce → agent → tie-off.
-#[test]
-fn http_register_then_process_strand() {
+#[tokio::test]
+async fn http_register_then_process_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -39,8 +38,8 @@ fn http_register_then_process_strand() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Create source directory AFTER server start so startup discovery
@@ -73,6 +72,7 @@ fn http_register_then_process_strand() {
     });
     let (status, _resp) =
         http_post_json(&host_port, "/looms", &body)
+            .await
             .expect("register loom should respond");
     assert!(
         status.contains("201"),
@@ -82,6 +82,7 @@ fn http_register_then_process_strand() {
     // 2. Verify loom is registered and has knots.
     let (status, body) =
         http_get_retry(&host_port, "/looms/http-reg-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -99,7 +100,7 @@ fn http_register_then_process_strand() {
     fs::write(&strand_path, "strand content via http").unwrap();
 
     // Wait for debounce + processing.
-    std::thread::sleep(Duration::from_millis(800));
+    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
     // 4. Verify tie-off was produced in tie_off_dir.
     let tie_off_path = tie_off_dir.join("new-strand.md.output");
@@ -123,6 +124,7 @@ fn http_register_then_process_strand() {
             30,
             100,
         )
+        .await
         .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -133,7 +135,7 @@ fn http_register_then_process_strand() {
         "knot status should be completed"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Create loom directory on disk → `POST /looms/discover` → create strand
@@ -141,8 +143,8 @@ fn http_register_then_process_strand() {
 ///
 /// Verifies the discover path: filesystem directory → HTTP discover →
 /// registration with watchers → processing.
-#[test]
-fn discover_then_process_strand() {
+#[tokio::test]
+async fn discover_then_process_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -169,13 +171,14 @@ fn discover_then_process_strand() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // 1. Loom was discovered at startup.
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -193,6 +196,7 @@ fn discover_then_process_strand() {
         "/looms/discover",
         &serde_json::json!({}),
     )
+    .await
     .expect("discover endpoint should respond");
     assert!(
         status.contains("200"),
@@ -211,7 +215,7 @@ fn discover_then_process_strand() {
     fs::write(&strand_path, "discovered strand content").unwrap();
 
     // Wait for debounce + processing.
-    std::thread::sleep(Duration::from_millis(800));
+    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
     // 4. Verify tie-off was produced.
     let tie_off_path = tie_off_dir.join("discover-strand.md.output");
@@ -235,6 +239,7 @@ fn discover_then_process_strand() {
             30,
             100,
         )
+        .await
         .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -245,15 +250,15 @@ fn discover_then_process_strand() {
         "knot status should be completed"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// `DELETE /looms/:id` stops processing — new strand files are NOT
 /// processed after unregistration (watcher removed).
 ///
 /// Verifies: Register → Unregister → create strand → no tie-off produced.
-#[test]
-fn unregister_stops_processing() {
+#[tokio::test]
+async fn unregister_stops_processing() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -280,19 +285,21 @@ fn unregister_stops_processing() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // 1. Verify loom was discovered at startup.
     let (status, _body) =
         http_get_retry(&host_port, "/looms/unreg-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
     // 2. DELETE /looms/:id to unregister the loom (stops watcher).
     let (status, _body) =
         http_delete(&host_port, "/looms/unreg-loom")
+            .await
             .expect("unregister should respond");
     assert!(
         status.contains("204"),
@@ -300,14 +307,14 @@ fn unregister_stops_processing() {
     );
 
     // Give a brief moment for the watcher to be removed.
-    std::thread::sleep(Duration::from_millis(200));
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // 3. Create a strand file AFTER unregistration.
     let strand_path = source_dir.join("post-unreg-strand.md");
     fs::write(&strand_path, "this should not be processed").unwrap();
 
     // Wait to confirm no processing happens.
-    std::thread::sleep(Duration::from_millis(800));
+    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
     // 4. Verify NO tie-off was produced.
     let tie_off_path =
@@ -321,6 +328,7 @@ fn unregister_stops_processing() {
     // 5. Verify loom is no longer in the list.
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -334,5 +342,5 @@ fn unregister_stops_processing() {
         "unregistered loom should not appear in list"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

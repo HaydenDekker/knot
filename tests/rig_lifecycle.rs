@@ -21,8 +21,8 @@ use helpers::*;
 /// 1. Start Knot in a temp directory with no `./rig/` subdirectory
 /// 2. Verify health endpoint responds
 /// 3. Verify `./rig/` directory was created
-#[test]
-fn rig_directory_auto_created() {
+#[tokio::test]
+async fn rig_directory_auto_created() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
 
@@ -35,14 +35,16 @@ fn rig_directory_auto_created() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // Verify health endpoint responds
     let (status, body) = http_get_retry(&host_port, "/health", 30, 100)
+        .await
         .expect("health endpoint should respond");
     assert!(status.contains("200"), "expected 200 OK, got: {status}");
     assert_eq!(body, "ok");
@@ -58,7 +60,7 @@ fn rig_directory_auto_created() {
         "rig path should be a directory"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Start Knot in dir with `./rig/` containing loom subdirectories;
@@ -67,8 +69,8 @@ fn rig_directory_auto_created() {
 /// 1. Create a temp dir with a `./rig/` subdirectory containing a loom
 /// 2. Start Knot with base_dir pointing to the rig
 /// 3. Verify looms are discovered via `GET /looms`
-#[test]
-fn rig_directory_scanned() {
+#[tokio::test]
+async fn rig_directory_scanned() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
 
@@ -88,10 +90,11 @@ fn rig_directory_scanned() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // Verify rig directory exists (already existed, but verify)
@@ -100,6 +103,7 @@ fn rig_directory_scanned() {
     // GET /looms should return the discovered loom
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
@@ -115,6 +119,7 @@ fn rig_directory_scanned() {
     // Verify rig config endpoint returns rig path
     let (status, body) =
         http_get_retry(&host_port, "/config/rig", 30, 100)
+            .await
             .expect("config endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let config_json: serde_json::Value =
@@ -128,14 +133,14 @@ fn rig_directory_scanned() {
         "rig_path should contain 'rig'"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Server Bootstrap ──────────────────────────────────────────────────────
 
 /// `main()` starts HTTP server, `GET /health` returns `200 ok`.
-#[test]
-fn app_starts_and_serves_health() {
+#[tokio::test]
+async fn app_starts_and_serves_health() {
     let port = 31984;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -144,27 +149,29 @@ fn app_starts_and_serves_health() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // GET /health → 200 ok
     let (status, body) = http_get_retry(&host_port, "/health", 30, 100)
+        .await
         .expect("health endpoint should respond");
 
     assert!(status.contains("200"), "expected 200 OK, got: {status}");
     assert_eq!(body, "ok", "health body should be 'ok'");
 
     // Graceful shutdown
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// `RigAgentConfig` is loaded with defaults (`pi` CLI); accessible
 /// in `AppContext` via the `/config/rig` HTTP endpoint.
-#[test]
-fn app_loads_rig_agent_config() {
+#[tokio::test]
+async fn app_loads_rig_agent_config() {
     let port = 31985;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -174,15 +181,17 @@ fn app_loads_rig_agent_config() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // GET /config/rig → 200 with JSON
     let (status, body) =
         http_get_retry(&host_port, "/config/rig", 30, 100)
+            .await
             .expect("config endpoint should respond");
 
     assert!(status.contains("200"), "expected 200 OK, got: {status}");
@@ -200,7 +209,7 @@ fn app_loads_rig_agent_config() {
     );
 
     // Graceful shutdown
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Register a loom via API, stop server, restart — loom re-discovered
@@ -212,8 +221,8 @@ fn app_loads_rig_agent_config() {
 /// 4. Shutdown server
 /// 5. Restart server with same rig directory
 /// 6. Verify loom is re-discovered via GET /looms with matching config
-#[test]
-fn api_register_then_discover_after_restart() {
+#[tokio::test]
+async fn api_register_then_discover_after_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
     let strand_dir = tmp.path().join("strands");
@@ -231,8 +240,9 @@ fn api_register_then_discover_after_restart() {
     };
 
     // --- First server instance ---
-    let shutdown1 = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle1, shutdown1) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server 1 should start listening");
 
     // POST /looms to register a new loom
@@ -256,6 +266,7 @@ fn api_register_then_discover_after_restart() {
 
     let (status, _body) =
         http_post_json(&host_port, "/looms", &post_body)
+            .await
             .expect("POST /looms should respond");
     assert!(
         status.contains("201"),
@@ -276,9 +287,11 @@ fn api_register_then_discover_after_restart() {
         knot_file.display()
     );
 
-    // Shutdown first server
+    // Shutdown first server and wait for port release
     let _ = shutdown1.send(());
-    std::thread::sleep(Duration::from_millis(1000));
+    tokio::time::timeout(Duration::from_secs(10), _handle1)
+        .await
+        .expect("server 1 should complete shutdown within timeout");
 
     // --- Second server instance (restart) ---
     let config2 = AppConfig {
@@ -287,13 +300,15 @@ fn api_register_then_discover_after_restart() {
         ..AppConfig::default_config()
     };
 
-    let shutdown2 = spawn_server(config2);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle2, shutdown2) = spawn_server_with_shutdown(config2);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server 2 should start listening");
 
     // GET /looms should re-discover the loom
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
@@ -309,6 +324,7 @@ fn api_register_then_discover_after_restart() {
     // Verify knot configuration matches
     let (status, body) =
         http_get_retry(&host_port, "/looms/persist-loom", 30, 100)
+            .await
             .expect("get loom endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =

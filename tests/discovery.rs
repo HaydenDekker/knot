@@ -15,8 +15,8 @@ use helpers::*;
 
 /// Given a rig with loom directories, startup discovers them and
 /// registers them in `LoomStore`. Verifiable via `GET /looms`.
-#[test]
-fn startup_discovers_looms() {
+#[tokio::test]
+async fn startup_discovers_looms() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -35,15 +35,15 @@ fn startup_discovers_looms() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // GET /looms should return the discovered loom
     let (status, body) =
-        http_get_retry(&host_port, "/looms", 30, 100)
+        http_get_retry(&host_port, "/looms", 30, 100).await
             .expect("looms endpoint should respond");
 
     assert!(status.contains("200"), "expected 200, got: {status}");
@@ -60,7 +60,7 @@ fn startup_discovers_looms() {
 
     // Verify loom has the knot via GET /looms/my-loom
     let (status, body) =
-        http_get(&host_port, "/looms/my-loom")
+        http_get(&host_port, "/looms/my-loom").await
             .expect("get loom endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -73,14 +73,14 @@ fn startup_discovers_looms() {
         "knot id should match"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// After startup, `NotifyEventSource` is watching all loom source
 /// directories. Verified by creating a file in the watched directory
 /// and confirming the server remains healthy.
-#[test]
-fn startup_starts_watchers() {
+#[tokio::test]
+async fn startup_starts_watchers() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -99,15 +99,15 @@ fn startup_starts_watchers() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Server is healthy at startup
     let (status, _) =
-        http_get(&host_port, "/health")
+        http_get(&host_port, "/health").await
             .expect("health should respond");
     assert!(status.contains("200"), "server should be healthy");
 
@@ -117,11 +117,11 @@ fn startup_starts_watchers() {
         .expect("should create file");
 
     // Give notify time to emit the event
-    std::thread::sleep(Duration::from_millis(500));
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Server should still be healthy (proves watcher is active)
     let (status, _) =
-        http_get_retry(&host_port, "/health", 30, 100)
+        http_get_retry(&host_port, "/health", 30, 100).await
             .expect("health should still respond");
     assert!(
         status.contains("200"),
@@ -130,20 +130,20 @@ fn startup_starts_watchers() {
 
     // Loom should still be discoverable
     let (status, body) =
-        http_get(&host_port, "/looms")
+        http_get(&host_port, "/looms").await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "looms endpoint should respond");
     let summaries: Vec<serde_json::Value> =
         serde_json::from_str(&body).expect("should be JSON array");
     assert_eq!(summaries.len(), 1, "loom should still be listed");
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// After startup, loom-log and knot-state files exist on disk for each
 /// loom/knot discovered during startup.
-#[test]
-fn startup_logs_knot_registration() {
+#[tokio::test]
+async fn startup_logs_knot_registration() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -162,10 +162,10 @@ fn startup_logs_knot_registration() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
 
     // Wait for server to start listening
-    wait_for_port(&host_port, 100, 50)
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // Verify loom log file exists on disk
@@ -196,6 +196,7 @@ fn startup_logs_knot_registration() {
             30,
             100,
         )
+        .await
         .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -206,7 +207,7 @@ fn startup_logs_knot_registration() {
         "knot status should be idle (from KnotRegistered event)"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Filtering ──────────────────────────────────────────────────────────────
@@ -216,8 +217,8 @@ fn startup_logs_knot_registration() {
 /// 1. Create rig with both `*-loom` and non-`*-loom` directories
 /// 2. Start Knot with base_dir pointing to the rig
 /// 3. Verify only `-loom` directories appear in `GET /looms`
-#[test]
-fn discovery_ignores_non_loom_directories() {
+#[tokio::test]
+async fn discovery_ignores_non_loom_directories() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
     fs::create_dir_all(&rig_path).unwrap();
@@ -251,13 +252,13 @@ fn discovery_ignores_non_loom_directories() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
     // GET /looms should return only the valid loom
     let (status, body) =
-        http_get_retry(&host_port, "/looms", 30, 100)
+        http_get_retry(&host_port, "/looms", 30, 100).await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
 
@@ -286,5 +287,5 @@ fn discovery_ignores_non_loom_directories() {
         "'phantom-id' directory (loom-log directory) should not be discovered as a loom"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
