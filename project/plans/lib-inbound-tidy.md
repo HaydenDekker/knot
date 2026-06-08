@@ -58,7 +58,7 @@ src/adapters/inbound/
 
 `health()` and `list_agents()` move from `lib.rs` into `inbound/system.rs`. They're HTTP handlers — inbound adapter concerns. `lib.rs` re-exports them for backwards compatibility.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -126,16 +126,16 @@ src/adapters/inbound/
 - [x] Run `cargo test` — all tests pass
 
 ### Phase 4: Verify and clean
-- [ ] Run full test suite: `cargo test` — all passing
-- [ ] Run `cargo clippy` — no new warnings
-- [ ] Verify `lib.rs` is ~60 lines (module declarations + re-exports only)
-- [ ] Verify `inbound/mod.rs` is ~15 lines (pub mod + pub use only)
-- [ ] Verify `inbound/loom.rs` has 8 loom handlers + helpers + all handler tests
-- [ ] Verify `inbound/system.rs` has 3 system handlers (no tests)
-- [ ] Verify `inbound/types.rs` has data structures only
-- [ ] Verify `inbound/router.rs` has ApiDoc + build_app only
-- [ ] Verify `server.rs` has all composition root logic
-- [ ] Verify no dead code warnings (`cargo test` + `cargo build`)
+- [x] Run full test suite: `cargo test` — all passing
+- [x] Run `cargo clippy` — no new warnings
+- [x] Verify `lib.rs` is ~60 lines (module declarations + re-exports only)
+- [x] Verify `inbound/mod.rs` is ~15 lines (pub mod + pub use only)
+- [x] Verify `inbound/loom.rs` has 8 loom handlers + helpers + all handler tests
+- [x] Verify `inbound/system.rs` has 3 system handlers (no tests)
+- [x] Verify `inbound/types.rs` has data structures only
+- [x] Verify `inbound/router.rs` has ApiDoc + build_app only
+- [x] Verify `server.rs` has all composition root logic
+- [x] Verify no dead code warnings (`cargo test` + `cargo build`)
 
 ## Notes
 
