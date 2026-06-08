@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ⬜ Planned | 2026-06-08 |
+| 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ⬜ Planned | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
@@ -74,9 +74,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 18. Sync Integration Tests to Async Layer
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-08
+**Completed:** 2026-06-08
 **Goal:** Fix 8 test files that use stale spawn_server/wait_for_port/HTTP helper signatures, bringing them up to the async layer API defined in ADR-002/003.
+
+**Result:** 241 tests pass (0 failed, 1 ignored), full suite in 11s.
 
 Full details in [test-api-sync-async-layer.md](test-api-sync-async-layer.md).
 
