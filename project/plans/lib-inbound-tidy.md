@@ -85,11 +85,11 @@ src/adapters/inbound/
 - [x] Run `cargo test` — verify no breakage (nothing should call `graceful_shutdown`)
 
 ### Phase 1: Split inbound/mod.rs into types.rs + loom.rs + system.rs + router.rs
-- [ ] Create `src/adapters/inbound/types.rs` — extract `AppContext`, `RegisterLoomRequest`, `KnotRequest`, `RigConfigResponse`
-- [ ] Create `src/adapters/inbound/loom.rs` — extract 8 loom handlers (`list_looms`, `get_loom`, `get_loom_activity`, `get_loom_knots`, `get_knot_status`, `register_loom`, `unregister_loom`, `discover_looms`) + helpers (`generate_knot_file`, `quote_yaml_scalar`) + full test module (mock ports, `TrackingEventSource`, `build_test_context`, Phase 0–4 tests)
-- [ ] Create `src/adapters/inbound/system.rs` — extract `health()`, `list_agents()`, `get_rig_config()` from `lib.rs` + `mod.rs`. No test module needed (trivial single-line delegations, covered by route wiring tests in `loom.rs`)
-- [ ] Create `src/adapters/inbound/router.rs` — extract `ApiDoc`, `build_app()`
-- [ ] Update `src/adapters/inbound/mod.rs` to be thin facade:
+- [x] Create `src/adapters/inbound/types.rs` — extract `AppContext`, `RegisterLoomRequest`, `KnotRequest`, `RigConfigResponse`
+- [x] Create `src/adapters/inbound/loom.rs` — extract 8 loom handlers (`list_looms`, `get_loom`, `get_loom_activity`, `get_loom_knots`, `get_knot_status`, `register_loom`, `unregister_loom`, `discover_looms`) + helpers (`generate_knot_file`, `quote_yaml_scalar`) + full test module (mock ports, `TrackingEventSource`, `build_test_context`, Phase 0–4 tests)
+- [x] Create `src/adapters/inbound/system.rs` — extract `health()`, `list_agents()`, `get_rig_config()` from `lib.rs` + `mod.rs`. No test module needed (trivial single-line delegations, covered by route wiring tests in `loom.rs`)
+- [x] Create `src/adapters/inbound/router.rs` — extract `ApiDoc`, `build_app()`
+- [x] Update `src/adapters/inbound/mod.rs` to be thin facade:
   ```rust
   pub mod types;
   pub mod loom;
@@ -101,11 +101,11 @@ src/adapters/inbound/
   pub use system::{health, list_agents, get_rig_config};
   pub use router::build_app;
   ```
-- [ ] Update `utoipa::paths()` in `ApiDoc` to use full paths:
+- [x] Update `utoipa::paths()` in `ApiDoc` to use full paths:
   - Loom handlers: `crate::adapters::inbound::loom::list_looms`, etc.
   - System handlers: `crate::adapters::inbound::system::health`, etc.
-- [ ] Update `lib.rs` imports — `pub use adapters::inbound::{build_app, AppContext}` should still work via re-exports; add `pub use adapters::inbound::system::{health, list_agents};` to preserve `crate::health` / `crate::list_agents`
-- [ ] Run `cargo test` — all tests pass, including handler unit tests
+- [x] Update `lib.rs` imports — `pub use adapters::inbound::{build_app, AppContext}` should still work via re-exports; add `pub use adapters::inbound::system::{health, list_agents};` to preserve `crate::health` / `crate::list_agents`
+- [x] Run `cargo test` — all tests pass, including handler unit tests
 
 ### Phase 3: Extract composition root into src/server.rs
 - [ ] Create `src/server.rs` with:
