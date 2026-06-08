@@ -41,6 +41,101 @@ fn make_named_knot_content(
     (content, strand_dir, tie_off_dir)
 }
 
+/// Helper: wait for auto-discovery to register a loom (poll GET /looms).
+async fn wait_for_loom_discovery(
+    host_port: &str,
+    expected_count: usize,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut attempt = 0;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let result = tokio::time::timeout(
+            Duration::from_millis(2000),
+            http_get(host_port, "/looms"),
+        )
+        .await;
+        let (st, body) = match result {
+            Ok(Ok(r)) => r,
+            _ => {
+                eprintln!(
+                    "DEBUG: wait_for_loom_discovery attempt {} - timeout or error",
+                    attempt
+                );
+                attempt += 1;
+                continue;
+            }
+        };
+        attempt += 1;
+        if st.contains("200") {
+            let summaries: Vec<serde_json::Value> =
+                serde_json::from_str(&body).unwrap_or_default();
+            eprintln!(
+                "DEBUG: attempt {} - {} looms (expected {})",
+                attempt,
+                summaries.len(),
+                expected_count
+            );
+            if summaries.len() == expected_count {
+                return true;
+            }
+        }
+    }
+    eprintln!(
+        "DEBUG: wait_for_loom_discovery timed out after {} attempts",
+        attempt
+    );
+    false
+}
+
+/// Helper: wait for a knot to appear in the loom's knot list.
+async fn wait_for_knot_count(
+    host_port: &str,
+    loom_id: &str,
+    expected: usize,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut attempt = 0;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let result = tokio::time::timeout(
+            Duration::from_millis(2000),
+            http_get(host_port, &format!("/looms/{loom_id}/knots")),
+        )
+        .await;
+        let (st, body) = match result {
+            Ok(Ok(r)) => r,
+            _ => {
+                eprintln!(
+                    "DEBUG: wait_for_knot_count attempt {} - timeout or error",
+                    attempt
+                );
+                attempt += 1;
+                continue;
+            }
+        };
+        attempt += 1;
+        if st.contains("200") {
+            let knots: Vec<String> =
+                serde_json::from_str(&body).unwrap_or_default();
+            eprintln!(
+                "DEBUG: wait_for_knot_count attempt {} - {} knots (expected {})",
+                attempt,
+                knots.len(),
+                expected
+            );
+            if knots.len() == expected {
+                return true;
+            }
+        }
+    }
+    eprintln!(
+        "DEBUG: wait_for_knot_count timed out after {} attempts",
+        attempt
+    );
+    false
+}
+
 // ── Auto-Discovery Tests ──────────────────────────────────────────────────
 
 /// Start server with empty rig → create `*-loom/` directory with `.md`
@@ -48,8 +143,8 @@ fn make_named_knot_content(
 ///
 /// Verifies that the rig directory watcher picks up new loom directories
 /// and the `ConfigEventHandler` registers them without restart.
-#[test]
-fn runtime_loom_auto_discovery() {
+#[tokio::test]
+async fn runtime_loom_auto_discovery() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -73,13 +168,15 @@ fn runtime_loom_auto_discovery() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. GET /looms should be empty (no looms at startup)
     let (status, body) =
         http_get_retry(&host_port, "/looms", 30, 100)
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -103,41 +200,17 @@ fn runtime_loom_auto_discovery() {
         );
     // File name must match knot name: review-knot.md
     fs::write(loom_dir.join("review-knot.md"), knot_content).unwrap();
-    eprintln!(
-        "DEBUG: Created loom at {:?}, knot file exists: {}",
-        loom_dir,
-        loom_dir.join("review-knot.md").exists()
-    );
 
     // 3. Wait for auto-discovery to pick up the new loom
-    // Use a loop to check progressively
-    for attempt in 0..20 {
-        std::thread::sleep(Duration::from_millis(200));
-        let (st, body) = match http_get(&host_port, "/looms") {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("DEBUG: attempt {} - GET failed: {}", attempt, e);
-                continue;
-            }
-        };
-        if st.contains("200") {
-            let summaries: Vec<serde_json::Value> =
-                serde_json::from_str(&body).unwrap_or_default();
-            eprintln!(
-                "DEBUG: attempt {} - {} looms found",
-                attempt,
-                summaries.len()
-            );
-            if summaries.len() == 1 {
-                // Success - break out
-                break;
-            }
-        }
-    }
+    assert!(
+        wait_for_loom_discovery(&host_port, 1).await,
+        "auto-discovery should have found the new loom"
+    );
 
     // 4. GET /looms should now show the new loom
     let (status, body) =
         http_get(&host_port, "/looms")
+            .await
             .expect("looms endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let summaries: Vec<serde_json::Value> =
@@ -152,6 +225,7 @@ fn runtime_loom_auto_discovery() {
     // 5. Verify the knot is present
     let (status, body) =
         http_get(&host_port, "/looms/test-loom")
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -169,7 +243,7 @@ fn runtime_loom_auto_discovery() {
     fs::write(&strand_path, "auto-discovered strand content").unwrap();
 
     // Wait for debounce + processing
-    std::thread::sleep(Duration::from_millis(800));
+    tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 7. Verify tie-off was produced
     let tie_off_path = tie_off_dir.join("test-strand.md.output");
@@ -185,7 +259,7 @@ fn runtime_loom_auto_discovery() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Start server with existing loom → drop new `.md` file in loom dir
@@ -193,8 +267,8 @@ fn runtime_loom_auto_discovery() {
 ///
 /// Verifies that the rig directory watcher detects new knot definition
 /// files and the `ConfigEventHandler` adds them to the loom.
-#[test]
-fn runtime_knot_auto_discovery() {
+#[tokio::test]
+async fn runtime_knot_auto_discovery() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -221,13 +295,15 @@ fn runtime_knot_auto_discovery() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify loom is discovered with 1 knot
     let (status, body) =
         http_get_retry(&host_port, "/looms/existing-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -255,11 +331,15 @@ fn runtime_knot_auto_discovery() {
     fs::write(loom_dir.join("summary-knot.md"), new_knot_content).unwrap();
 
     // 3. Wait for auto-discovery
-    std::thread::sleep(Duration::from_millis(2000));
+    assert!(
+        wait_for_knot_count(&host_port, "existing-loom", 2).await,
+        "auto-discovery should have found the new knot"
+    );
 
     // 4. GET /looms/{id}/knots should now show 2 knots
     let (status, body) =
         http_get_retry(&host_port, "/looms/existing-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -274,15 +354,15 @@ fn runtime_knot_auto_discovery() {
         "should now contain summary-knot"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Edit a `.md` file (change model) → `GET /looms/{id}` shows updated config.
 ///
 /// Verifies that modifying a knot definition file triggers an update
 /// in the in-memory store.
-#[test]
-fn runtime_knot_edit_picks_up_change() {
+#[tokio::test]
+async fn runtime_knot_edit_picks_up_change() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -309,13 +389,15 @@ fn runtime_knot_edit_picks_up_change() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify initial model
     let (status, body) =
         http_get_retry(&host_port, "/looms/edit-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -340,11 +422,12 @@ fn runtime_knot_edit_picks_up_change() {
     fs::write(loom_dir.join("review-knot.md"), updated_content).unwrap();
 
     // 3. Wait for auto-discovery to pick up the change
-    std::thread::sleep(Duration::from_millis(2000));
+    tokio::time::sleep(Duration::from_millis(2000)).await;
 
     // 4. GET /looms/{id} should show updated model
     let (status, body) =
         http_get_retry(&host_port, "/looms/edit-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -361,15 +444,15 @@ fn runtime_knot_edit_picks_up_change() {
         "updated provider should be anthropic"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// Delete a `.md` file → `GET /looms/{id}/knots` no longer shows the knot.
 ///
 /// Verifies that removing a knot definition file triggers deregistration
 /// from the in-memory store.
-#[test]
-fn runtime_knot_deletion() {
+#[tokio::test]
+async fn runtime_knot_deletion() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -411,13 +494,15 @@ fn runtime_knot_deletion() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify loom has 2 knots
     let (status, body) =
         http_get_retry(&host_port, "/looms/delete-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -428,11 +513,15 @@ fn runtime_knot_deletion() {
     fs::remove_file(loom_dir.join("second-knot.md")).unwrap();
 
     // 3. Wait for auto-discovery to pick up the deletion
-    std::thread::sleep(Duration::from_millis(2000));
+    assert!(
+        wait_for_knot_count(&host_port, "delete-loom", 1).await,
+        "auto-discovery should have detected the deleted knot"
+    );
 
     // 4. GET /looms/{id}/knots should show only 1 knot
     let (status, body) =
         http_get_retry(&host_port, "/looms/delete-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -447,7 +536,7 @@ fn runtime_knot_deletion() {
         "deleted knot should not be present"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── HTTP Knot CRUD Tests ──────────────────────────────────────────────────
@@ -455,8 +544,8 @@ fn runtime_knot_deletion() {
 /// `POST /looms/{id}/knots` creates a new knot → 201 → knot appears in
 /// `GET /looms/{id}/knots` → `.md` file on disk → create strand →
 /// tie-off produced.
-#[test]
-fn http_create_knot() {
+#[tokio::test]
+async fn http_create_knot() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -491,13 +580,15 @@ fn http_create_knot() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify initial state: 1 knot
     let (status, body) =
         http_get_retry(&host_port, "/looms/knot-crud-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -528,6 +619,7 @@ fn http_create_knot() {
 
     let (status, _resp) =
         http_post_json(&host_port, "/looms/knot-crud-loom/knots", &body)
+            .await
             .expect("create knot should respond");
     assert!(
         status.contains("201"),
@@ -537,6 +629,7 @@ fn http_create_knot() {
     // 3. Verify knot appears in GET /looms/{id}/knots
     let (status, body) =
         http_get_retry(&host_port, "/looms/knot-crud-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -557,7 +650,7 @@ fn http_create_knot() {
     // 5. Create a strand → should be processed
     let strand_path = strand_dir.join("crud-strand.md");
     fs::write(&strand_path, "crud strand content").unwrap();
-    std::thread::sleep(Duration::from_millis(800));
+    tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 6. Verify tie-off
     let tie_off_path = tie_off_dir.join("crud-strand.md.output");
@@ -567,13 +660,13 @@ fn http_create_knot() {
         tie_off_path.display()
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// `PATCH /looms/{id}/knots/{name}` updates knot config → 200 →
 /// `GET /looms/{id}` shows new model → `.md` file updated on disk.
-#[test]
-fn http_update_knot() {
+#[tokio::test]
+async fn http_update_knot() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -600,13 +693,15 @@ fn http_update_knot() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify initial model
     let (status, body) =
         http_get_retry(&host_port, "/looms/update-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -640,6 +735,7 @@ fn http_update_knot() {
         "/looms/update-loom/knots/review-knot",
         &body,
     )
+    .await
     .expect("update knot should respond");
     assert!(
         status.contains("200"),
@@ -649,6 +745,7 @@ fn http_update_knot() {
     // 3. GET /looms/{id} should show updated model
     let (status, body) =
         http_get_retry(&host_port, "/looms/update-loom", 30, 100)
+            .await
             .expect("get loom should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let loom: serde_json::Value =
@@ -680,13 +777,13 @@ fn http_update_knot() {
         file_content
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 /// `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in
 /// `GET /looms/{id}/knots` → `.md` file deleted on disk.
-#[test]
-fn http_delete_knot() {
+#[tokio::test]
+async fn http_delete_knot() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -728,13 +825,15 @@ fn http_delete_knot() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // 1. Verify initial state: 2 knots
     let (status, body) =
         http_get_retry(&host_port, "/looms/del-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -744,6 +843,7 @@ fn http_delete_knot() {
     // 2. DELETE /looms/{id}/knots/{name}
     let (status, _body) =
         http_delete(&host_port, "/looms/del-loom/knots/to-delete-knot")
+            .await
             .expect("delete knot should respond");
     assert!(
         status.contains("204"),
@@ -753,6 +853,7 @@ fn http_delete_knot() {
     // 3. GET /looms/{id}/knots should show only 1 knot
     let (status, body) =
         http_get_retry(&host_port, "/looms/del-loom/knots", 30, 100)
+            .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knots: Vec<String> =
@@ -774,15 +875,15 @@ fn http_delete_knot() {
         "knot .md file should be deleted from disk"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }
 
 // ── Discover Endpoint Removed ─────────────────────────────────────────────
 
 /// `POST /looms/discover` returns 404 or 405 because the endpoint has
 /// been removed in favour of runtime auto-discovery.
-#[test]
-fn discover_endpoint_removed() {
+#[tokio::test]
+async fn discover_endpoint_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -795,8 +896,9 @@ fn discover_endpoint_removed() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
         .expect("server should start listening");
 
     // POST /looms/discover should not be found (404 or 405).
@@ -807,6 +909,7 @@ fn discover_endpoint_removed() {
     let body = serde_json::json!({});
     let (status, _resp) =
         http_post_json(&host_port, "/looms/discover", &body)
+            .await
             .expect("discover endpoint should respond");
 
     assert!(
@@ -814,5 +917,5 @@ fn discover_endpoint_removed() {
         "POST /looms/discover should return 404 or 405, got: {status}"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
 }

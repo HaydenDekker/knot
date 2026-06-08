@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::adapters::logging;
 use crate::application::ports::{
     AgentRunner, ExecutionContext, EventSource, KnotEventType,
     LoomLogPort, LoomRepository, ProcessingStatus, PortError,
@@ -103,6 +104,11 @@ impl DiscoverLooms {
                 continue;
             }
 
+            logging::log_loom_event(
+                "discover",
+                &loom.id.0,
+                &format!("new loom found, {} knots", loom.knots.len()),
+            );
             self.register_single(loom)?;
             new_looms.push(loom.clone());
         }
@@ -185,14 +191,18 @@ impl RegisterLoom {
 
     /// Register the given loom.
     ///
-    /// Returns `PortError::LoomSaveFailed` if the loom ID already exists.
+    /// Idempotent — if the loom is already registered (e.g., by the
+    /// ConfigEventHandler auto-discovering the loom directory), this is
+    /// a no-op. Returns `PortError::LoomSaveFailed` only for write errors.
     pub fn execute(&self, loom: Loom) -> Result<(), PortError> {
-        // Check for duplicate ID before any side effects
+        // If already registered (e.g., auto-discovered), skip — idempotent
         if self.store.get(&loom.id).is_some() {
-            return Err(PortError::LoomSaveFailed(format!(
-                "loom '{}' already registered",
-                loom.id.0
-            )));
+            logging::log_loom_event(
+                "register",
+                &loom.id.0,
+                "already registered (idempotent, skip)",
+            );
+            return Ok(());
         }
 
         // Open the loom activity log
@@ -231,6 +241,11 @@ impl RegisterLoom {
                 })?;
         }
 
+        logging::log_loom_event(
+            "registered",
+            &loom.id.0,
+            &format!("{} knots, watchers started", loom.knots.len()),
+        );
         Ok(())
     }
 }
@@ -293,6 +308,11 @@ impl UnregisterLoom {
         // Remove from store
         self.store.unregister(id);
 
+        logging::log_loom_event(
+            "unregistered",
+            &id.0,
+            &format!("{} watchers stopped", loom.knots.len()),
+        );
         Ok(())
     }
 }
@@ -547,6 +567,16 @@ impl ProcessStrand {
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
         let (loom_id, knot_id, strand_path) = Self::extract_event_fields(&event);
 
+        let strand_kind = match &event {
+            StrandEvent::Created { .. } => "Created",
+            StrandEvent::Modified { .. } => "Modified",
+            StrandEvent::Deleted { .. } => "Deleted",
+        };
+        logging::log_strand_event(
+            &format!("{} processing start", strand_kind),
+            &strand_path.0,
+        );
+
         // Look up the loom and knot
         let loom = self
             .store
@@ -632,10 +662,14 @@ impl ProcessStrand {
                 // 6. Append StrandProcessed
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
-                    strand_path,
+                    strand_path: strand_path.clone(),
                     error: None,
                 })?;
 
+                logging::log_strand_event(
+                    &format!("{} completed", strand_kind),
+                    &strand_path.0,
+                );
                 Ok(())
             }
             Err(err) => {
@@ -663,10 +697,14 @@ impl ProcessStrand {
                 // 6. Append StrandProcessed with error details
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
-                    strand_path,
-                    error: Some(error_msg),
+                    strand_path: strand_path.clone(),
+                    error: Some(error_msg.clone()),
                 })?;
 
+                logging::log_strand_event(
+                    &format!("{} failed: {}", strand_kind, error_msg),
+                    &strand_path.0,
+                );
                 Ok(())
             }
         }
@@ -791,8 +829,14 @@ impl ManageKnot {
             )));
         }
 
-        loom.knots.push(knot);
+        loom.knots.push(knot.clone());
         self.store.register(loom);
+        logging::log_knot_event(
+            "created",
+            &loom_id.0,
+            &knot.id.0,
+            "store updated (watcher started by caller)",
+        );
         Ok(())
     }
 
@@ -812,8 +856,14 @@ impl ManageKnot {
                 loom_id.0
             )))?;
 
-        loom.knots[pos] = knot;
+        loom.knots[pos] = knot.clone();
         self.store.register(loom);
+        logging::log_knot_event(
+            "updated",
+            &loom_id.0,
+            &knot.id.0,
+            "store updated (watcher managed by caller)",
+        );
         Ok(())
     }
 
@@ -835,6 +885,12 @@ impl ManageKnot {
 
         loom.knots.remove(found);
         self.store.register(loom);
+        logging::log_knot_event(
+            "deleted",
+            &loom_id.0,
+            &knot_id.0,
+            "store updated (watcher stopped by caller)",
+        );
         Ok(())
     }
 }
@@ -885,17 +941,33 @@ impl ConfigEventHandler {
     /// Handle a single configuration event.
     pub fn execute(&self, event: ConfigEvent) -> Result<(), PortError> {
         match event {
-            ConfigEvent::LoomAdded { loom_id } => {
-                self.handle_loom_added(&loom_id)
+            ConfigEvent::LoomAdded { ref loom_id } => {
+                logging::log_config_event(
+                    "LoomAdded",
+                    &format!("loom={}", loom_id.0),
+                );
+                self.handle_loom_added(loom_id)
             }
-            ConfigEvent::KnotAdded { loom_id, knot } => {
-                self.handle_knot_added(&loom_id, knot)
+            ConfigEvent::KnotAdded { ref loom_id, ref knot } => {
+                logging::log_config_event(
+                    "KnotAdded",
+                    &format!("loom={} knot={}", loom_id.0, knot.id.0),
+                );
+                self.handle_knot_added(loom_id, knot.clone())
             }
-            ConfigEvent::KnotModified { loom_id, knot } => {
-                self.handle_knot_modified(&loom_id, knot)
+            ConfigEvent::KnotModified { ref loom_id, ref knot } => {
+                logging::log_config_event(
+                    "KnotModified",
+                    &format!("loom={} knot={}", loom_id.0, knot.id.0),
+                );
+                self.handle_knot_modified(loom_id, knot.clone())
             }
-            ConfigEvent::KnotDeleted { loom_id, knot_id } => {
-                self.handle_knot_deleted(&loom_id, &knot_id)
+            ConfigEvent::KnotDeleted { ref loom_id, ref knot_id } => {
+                logging::log_config_event(
+                    "KnotDeleted",
+                    &format!("loom={} knot={}", loom_id.0, knot_id.0),
+                );
+                self.handle_knot_deleted(loom_id, knot_id)
             }
         }
     }
@@ -908,6 +980,10 @@ impl ConfigEventHandler {
     fn handle_loom_added(&self, loom_id: &LoomId) -> Result<(), PortError> {
         // Skip if already registered
         if self.store.get(loom_id).is_some() {
+            logging::log_config_event(
+                "LoomAdded",
+                &format!("loom={} already registered (skip)", loom_id.0),
+            );
             return Ok(());
         }
 
@@ -918,7 +994,13 @@ impl ConfigEventHandler {
             .find(|l| l.id == *loom_id)
             .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
 
-        self.register_loom(&loom)
+        self.register_loom(&loom)?;
+        logging::log_loom_event(
+            "registered",
+            &loom_id.0,
+            &format!("{} knots", loom.knots.len()),
+        );
+        Ok(())
     }
 
     /// Handle `ConfigEvent::KnotAdded`.
@@ -936,6 +1018,12 @@ impl ConfigEventHandler {
         // Check for duplicate knot ID
         if loom.knots.iter().any(|k| k.id == knot.id) {
             // Idempotent — knot already present, skip
+            logging::log_knot_event(
+                "added",
+                &loom_id.0,
+                &knot.id.0,
+                "already present (skip)",
+            );
             return Ok(());
         }
 
@@ -965,6 +1053,12 @@ impl ConfigEventHandler {
                 ))
             })?;
 
+        logging::log_knot_event(
+            "added",
+            &loom_id.0,
+            &knot_id.0,
+            "registered + watcher started",
+        );
         Ok(())
     }
 
@@ -1020,6 +1114,20 @@ impl ConfigEventHandler {
                         e
                     ))
                 })?;
+
+            logging::log_knot_event(
+                "modified",
+                &loom_id.0,
+                &knot_id.0,
+                "strand_dir changed, watcher updated",
+            );
+        } else {
+            logging::log_knot_event(
+                "modified",
+                &loom_id.0,
+                &knot_id.0,
+                "config updated (strand_dir unchanged)",
+            );
         }
 
         Ok(())
@@ -1069,6 +1177,12 @@ impl ConfigEventHandler {
             knot_id: knot_id.clone(),
         })?;
 
+        logging::log_knot_event(
+            "deleted",
+            &loom_id.0,
+            &knot_id.0,
+            "removed + watcher stopped",
+        );
         Ok(())
     }
 
@@ -2032,9 +2146,11 @@ mod phase2_tests {
         assert!(store.get(&loom_id).is_some());
     }
 
-    /// `RegisterLoom` duplicate ID returns error without starting watchers.
+    /// `RegisterLoom` duplicate ID is idempotent — returns Ok without starting
+    /// new watchers or modifying the existing entry. This is necessary because
+    /// auto-discovery may pre-register a loom before the POST /looms arrives.
     #[test]
-    fn register_loom_duplicate_no_watchers() {
+    fn register_loom_duplicate_is_idempotent() {
         let loom1 = build_loom("dup", vec![build_knot("k1")]);
         let loom2 = build_loom("dup", vec![build_knot("k2")]);
 
@@ -2056,7 +2172,7 @@ mod phase2_tests {
             assert_eq!(watches.len(), 1);
         }
 
-        // Attempt duplicate registration
+        // Duplicate registration — should succeed (idempotent)
         let (event_source2, watch_calls2) = TrackingEventSource::new();
         let es2: Arc<dyn EventSource> = Arc::new(event_source2);
         let use_case = RegisterLoom::new(
@@ -2066,20 +2182,14 @@ mod phase2_tests {
         );
         let result = use_case.execute(loom2);
 
-        // Should fail with LoomSaveFailed
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PortError::LoomSaveFailed(msg) => {
-                assert!(msg.contains("already registered"));
-            }
-            other => panic!("Expected LoomSaveFailed, got {other:?}"),
-        }
+        // Idempotent: returns Ok(()) instead of Err
+        assert!(result.is_ok());
 
         // No new watchers started for the duplicate
         let watches = watch_calls2.lock().unwrap();
         assert!(watches.is_empty());
 
-        // Original store unchanged
+        // Original store unchanged (k2 was not added)
         let stored = store.get(&LoomId("dup".to_string())).unwrap();
         assert_eq!(stored.knots.len(), 1);
         assert_eq!(stored.knots[0].id, KnotId("k1".to_string()));

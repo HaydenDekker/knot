@@ -7,8 +7,8 @@ use axum::{
 use utoipa::OpenApi;
 
 use crate::adapters::inbound::loom::{
-    discover_looms, get_knot_status, get_loom, get_loom_activity,
-    get_loom_knots, list_looms, register_loom, unregister_loom,
+    create_knot, delete_knot, get_knot_status, get_loom, get_loom_activity,
+    get_loom_knots, list_looms, register_loom, unregister_loom, update_knot,
 };
 use crate::adapters::inbound::system::{get_rig_config, health, list_agents};
 use crate::adapters::inbound::types::AppContext;
@@ -40,8 +40,10 @@ use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
         crate::adapters::inbound::loom::list_looms,
         crate::adapters::inbound::loom::register_loom,
         crate::adapters::inbound::loom::unregister_loom,
-        crate::adapters::inbound::loom::discover_looms,
         crate::adapters::inbound::loom::get_loom,
+        crate::adapters::inbound::loom::create_knot,
+        crate::adapters::inbound::loom::update_knot,
+        crate::adapters::inbound::loom::delete_knot,
         crate::adapters::inbound::loom::get_loom_activity,
         crate::adapters::inbound::loom::get_loom_knots,
         crate::adapters::inbound::loom::get_knot_status,
@@ -101,11 +103,13 @@ pub fn build_app(ctx: AppContext) -> Router {
         // Loom endpoints
         .route("/looms", get(list_looms))
         .route("/looms", post(register_loom))
-        .route("/looms/discover", post(discover_looms))
         .route("/looms/{id}", get(get_loom))
         .route("/looms/{id}", delete(unregister_loom))
         .route("/looms/{id}/activity", get(get_loom_activity))
-        .route("/looms/{id}/knots", get(get_loom_knots))
-        .route("/looms/{id}/knots/{knot_name}", get(get_knot_status))
+        .route("/looms/{id}/knots", get(get_loom_knots).post(create_knot))
+        .route(
+            "/looms/{id}/knots/{name}",
+            get(get_knot_status).patch(update_knot).delete(delete_knot),
+        )
         .with_state(ctx)
 }

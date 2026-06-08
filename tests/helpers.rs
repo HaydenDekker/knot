@@ -251,6 +251,29 @@ pub async fn http_post_json_retry(
     ))
 }
 
+/// Simple async HTTP PATCH with JSON body using raw TCP.
+pub async fn http_patch_json(
+    host_port: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<(String, String), String> {
+    let body_str = body.to_string();
+    let mut stream = TcpStream::connect(host_port)
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let request = format!(
+        "PATCH {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: \
+         application/json\r\nContent-Length: {}\r\nConnection: \
+         close\r\n\r\n{body_str}",
+        body_str.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| format!("write failed: {e}"))?;
+    read_response(stream).await
+}
+
 /// Simple async HTTP DELETE using raw TCP.
 pub async fn http_delete(host_port: &str, path: &str) -> Result<(String, String), String> {
     let mut stream = TcpStream::connect(host_port)

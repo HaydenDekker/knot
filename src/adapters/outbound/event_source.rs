@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
+use crate::adapters::logging;
 use crate::application::ports::{EventSource, PortError};
 use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath};
 use crate::domain::events::{ConfigEvent, StrandEvent};
@@ -339,21 +340,40 @@ impl NotifyEventSource {
         let watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {
                 if let Ok(event) = result {
-                    eprintln!(
-                        "DEBUG NotifyEventSource callback: event kind={:?}, \
-                         paths={:?}",
-                        event.kind,
-                        event.paths
-                    );
                     let inner = state_clone.lock().unwrap();
                     let (strand_event, config_event) =
                         inner.map_event(&event);
-                    eprintln!(
-                        "DEBUG NotifyEventSource mapped: strand={:?}, \
-                         config={:?}",
-                        strand_event.is_some(),
-                        config_event.is_some()
-                    );
+                    // Log every mapped event for observability.
+                    // Volume is low (a few hundred/day), so log all of them.
+                    if let Some(ref se) = strand_event {
+                        if let Some(path) = event.paths.first() {
+                            let kind = match se {
+                                StrandEvent::Created { .. } => "Created",
+                                StrandEvent::Modified { .. } => "Modified",
+                                StrandEvent::Deleted { .. } => "Deleted",
+                            };
+                            let detail = format!(
+                                "{:?}",
+                                se
+                            );
+                            logging::log_notify_event(kind, path, &detail);
+                        }
+                    }
+                    if let Some(ref ce) = config_event {
+                        if let Some(path) = event.paths.first() {
+                            let kind = match ce {
+                                ConfigEvent::LoomAdded { .. } => "LoomAdded",
+                                ConfigEvent::KnotAdded { .. } => "KnotAdded",
+                                ConfigEvent::KnotModified { .. } => "KnotModified",
+                                ConfigEvent::KnotDeleted { .. } => "KnotDeleted",
+                            };
+                            let detail = format!(
+                                "{:?}",
+                                ce
+                            );
+                            logging::log_notify_event(kind, path, &detail);
+                        }
+                    }
                     // Use try_send to avoid blocking the notify callback
                     // thread. If the channel is full, the event is dropped
                     // — this is acceptable because:
@@ -385,10 +405,12 @@ impl NotifyEventSource {
     /// Call this before `watch()` so events carry the correct metadata
     /// and map to the right event type.
     pub fn register_watch(&self, path: PathBuf, watch_type: WatchType) {
-        eprintln!(
-            "DEBUG EventSource::register_watch path={:?}, type={:?}",
-            path, watch_type
-        );
+        let wt_label = match &watch_type {
+            WatchType::Strand(_, _) => "Strand",
+            WatchType::Rig => "Rig",
+            WatchType::Loom(_) => "Loom",
+        };
+        logging::log_watch_event("register", &path, wt_label);
         let mut inner = self.state.lock().unwrap();
         // Update if already present, otherwise push.
         if let Some(pos) = inner
@@ -396,10 +418,8 @@ impl NotifyEventSource {
             .iter()
             .position(|(p, _)| p == &path)
         {
-            eprintln!("  updating existing at pos {}", pos);
             inner.watched_dirs[pos].1 = watch_type;
         } else {
-            eprintln!("  adding new, count was {}", inner.watched_dirs.len());
             inner.watched_dirs.push((path, watch_type));
         }
     }
@@ -454,24 +474,13 @@ impl EventSource for NotifyEventSource {
 
     fn watch(&self, path: &Path) -> Result<(), PortError> {
         // Determine watch type and mode
-        eprintln!(
-            "DEBUG EventSource::watch path={:?}, watched_dirs count={}",
-            path,
-            self.state.lock().unwrap().watched_dirs.len()
-        );
         let watch_type = {
             let inner = self.state.lock().unwrap();
-            for (p, wt) in &inner.watched_dirs {
-                eprintln!("  watched_dir: {:?} -> {:?}", p, wt);
-            }
             inner
                 .watched_dirs
                 .iter()
                 .find(|(p, _)| p == path)
-                .map(|(_, wt)| {
-                    eprintln!("  MATCH found!");
-                    wt.clone()
-                })
+                .map(|(_, wt)| wt.clone())
                 // Fall back to default IDs if no per-directory mapping
                 .or_else(|| {
                     inner
@@ -482,28 +491,34 @@ impl EventSource for NotifyEventSource {
                 })
         };
 
-        let mut inner = self.state.lock().unwrap();
-        if let Some(ref wt) = watch_type {
-            // Ensure the path is in the map for event lookup
-            if let Some(pos) = inner
-                .watched_dirs
-                .iter()
-                .position(|(p, _)| p == path)
-            {
-                inner.watched_dirs[pos].1 = wt.clone();
+        // Update watched_dirs map, then drop lock BEFORE calling
+        // watcher.watch() — the notify system may trigger a directory
+        // scan on watch(), firing the callback which also needs the
+        // state lock. Dropping first avoids deadlock.
+        {
+            let mut inner = self.state.lock().unwrap();
+            if let Some(ref wt) = watch_type {
+                // Ensure the path is in the map for event lookup
+                if let Some(pos) = inner
+                    .watched_dirs
+                    .iter()
+                    .position(|(p, _)| p == path)
+                {
+                    inner.watched_dirs[pos].1 = wt.clone();
+                } else {
+                    inner.watched_dirs
+                        .push((path.to_path_buf(), wt.clone()));
+                }
             } else {
+                // Default: treat as strand watch with unknown IDs
+                let default = WatchType::Strand(
+                    LoomId("unknown".to_string()),
+                    KnotId("unknown".to_string()),
+                );
                 inner.watched_dirs
-                    .push((path.to_path_buf(), wt.clone()));
+                    .push((path.to_path_buf(), default));
             }
-        } else {
-            // Default: treat as strand watch with unknown IDs
-            let default = WatchType::Strand(
-                LoomId("unknown".to_string()),
-                KnotId("unknown".to_string()),
-            );
-            inner.watched_dirs
-                .push((path.to_path_buf(), default));
-        }
+        } // state lock dropped here — notify callback can now proceed
 
         // Rig watch uses recursive mode to detect both new loom directories
         // (at the rig root) and knot file changes (in loom subdirectories).
@@ -514,26 +529,50 @@ impl EventSource for NotifyEventSource {
             _ => RecursiveMode::Recursive,
         };
 
+        let wt_label = match &watch_type {
+            Some(WatchType::Strand(_, _)) => "Strand",
+            Some(WatchType::Rig) => "Rig",
+            Some(WatchType::Loom(_)) => "Loom",
+            None => "Default",
+        };
         self.watcher
             .lock()
             .unwrap()
             .watch(path, mode)
             .map_err(|e| PortError::EventWatchFailed(e.to_string()))?;
 
+        logging::log_watch_event("started", path, wt_label);
         Ok(())
     }
 
     fn unwatch(&self, path: &Path) -> Result<(), PortError> {
-        let mut inner = self.state.lock().unwrap();
-        inner
-            .watched_dirs
-            .retain(|(p, _)| p != path);
+        // Look up watch type and remove from map, then drop lock
+        // BEFORE calling watcher.unwatch() to avoid deadlock with
+        // the notify callback.
+        let watch_type = {
+            let mut inner = self.state.lock().unwrap();
+            let wt = inner
+                .watched_dirs
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, wt)| wt.clone());
+            inner.watched_dirs.retain(|(p, _)| p != path);
+            wt
+        }; // state lock dropped here
 
         self.watcher
             .lock()
             .unwrap()
             .unwatch(path)
             .map_err(|e| PortError::EventUnwatchFailed(e.to_string()))?;
+
+        let wt_label = match &watch_type {
+            Some(WatchType::Strand(_, _)) => "Strand",
+            Some(WatchType::Rig) => "Rig",
+            Some(WatchType::Loom(_)) => "Loom",
+            None => "Unknown",
+        };
+        logging::log_watch_event("stopped", path, wt_label);
 
         Ok(())
     }

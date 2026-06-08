@@ -10,8 +10,8 @@ pub mod system;
 pub mod types;
 
 pub use loom::{
-    discover_looms, get_knot_status, get_loom, get_loom_activity,
-    get_loom_knots, list_looms, register_loom, unregister_loom,
+    create_knot, delete_knot, get_knot_status, get_loom, get_loom_activity,
+    get_loom_knots, list_looms, register_loom, unregister_loom, update_knot,
 };
 pub use router::build_app;
 pub use system::{get_rig_config, health, list_agents};

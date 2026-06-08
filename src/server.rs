@@ -8,7 +8,8 @@ use crate::adapters::subprocess::SubprocessAgentRunner;
 use crate::application;
 use crate::domain;
 use crate::domain::entities::Loom;
-use crate::domain::events::StrandEvent;
+use crate::domain::events::{ConfigEvent, StrandEvent};
+use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::RigAgentConfig;
 
 use std::net::SocketAddr;
@@ -91,15 +92,22 @@ fn load_rig_config(
 /// - Outbound adapter instances (filesystem adapters, notify watcher, subprocess)
 /// - `LoomStore` (in-memory loom registry)
 /// - `AppContext` holding store, ports, and rig config
-/// - Event channel: sender goes into AppContext, receiver is returned
+/// - Event channels: strand sender and config sender go into AppContext,
+///   receivers are returned
 ///
-/// Returns `(AppContext, Receiver<StrandEvent>)` — the receiver is wired
-/// into the debounce engine by `start_event_pipeline`.
+/// Returns `(AppContext, Receiver<StrandEvent>, Receiver<ConfigEvent>)` —
+/// the strand receiver is wired into the debounce engine by
+/// `start_event_pipeline`, and the config receiver is wired into
+/// `start_config_pipeline`.
 ///
 /// This is the composition root — the only place where all layers meet.
 pub fn build_app_context(
     config: &AppConfig,
-) -> (AppContext, mpsc::Receiver<StrandEvent>) {
+) -> (
+    AppContext,
+    mpsc::Receiver<StrandEvent>,
+    mpsc::Receiver<ConfigEvent>,
+) {
     let store = application::store::LoomStore::new();
 
     // Load rig config from .rig-agent-config.yaml (falls back to defaults).
@@ -122,15 +130,20 @@ pub fn build_app_context(
             SubprocessAgentRunner::with_timeout(config.agent_timeout),
         );
 
-    // Event channel: NotifyEventSource sends raw StrandEvents here.
-    // The receiver is wired into the debounce engine.
-    let (event_tx, event_rx) = mpsc::channel(100);
+    // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
+    // Strand receiver is wired into the debounce engine.
+    // Config receiver is wired into the ConfigEventHandler.
+    let (strand_tx, strand_rx) = mpsc::channel(100);
+    let (config_tx, config_rx) = mpsc::channel(100);
 
     // File-system event source — created once, shared via AppContext.
     // Handlers can pass this to use cases for watch/unwatch.
     let event_source: Arc<dyn application::ports::EventSource> =
         Arc::new(
-            crate::adapters::outbound::NotifyEventSource::new(event_tx.clone()),
+            crate::adapters::outbound::NotifyEventSource::new(
+                strand_tx.clone(),
+                config_tx,
+            ),
         );
 
     (
@@ -140,13 +153,14 @@ pub fn build_app_context(
             loom_log_port,
             tie_off_sink,
             event_source,
-            event_sender: event_tx,
+            event_sender: strand_tx,
             agent_runner,
             rig_config,
             loom_ids: Vec::new(),
             base_dir: config.base_dir.clone(),
         },
-        event_rx,
+        strand_rx,
+        config_rx,
     )
 }
 
@@ -231,7 +245,53 @@ pub fn run_startup(
             std::io::Error::other(e.to_string())
         })?;
 
+    // Register rig directory watch — auto-discover new `*-loom` directories
+    // and knot changes within existing looms.
+    ctx.event_source
+        .register_watch(base_dir.to_path_buf(), WatchType::Rig);
+    if let Err(e) = ctx.event_source.watch(base_dir) {
+        eprintln!("WARNING: failed to watch rig dir: {e}");
+    }
+
     Ok(looms)
+}
+
+/// Start the config event processing pipeline.
+///
+/// Wires:
+/// NotifyEventSource → config_sender → config_rx → ConfigEventHandler
+///
+/// The `config_rx` parameter is the receiver from the channel that
+/// `NotifyEventSource` sends config events (new looms, knot changes)
+/// into. The handler updates `LoomStore`, manages watchers, and writes
+/// loom-log entries.
+///
+/// Spawns the config handler into the provided `JoinSet`.
+pub fn start_config_pipeline(
+    ctx: &AppContext,
+    mut config_rx: mpsc::Receiver<ConfigEvent>,
+    join_set: &mut tokio::task::JoinSet<()>,
+) {
+    let repository = Arc::clone(&ctx.loom_repo);
+    let log_port = Arc::clone(&ctx.loom_log_port);
+    let store = ctx.store.clone();
+    let event_source = Arc::clone(&ctx.event_source);
+    let rig_path = ctx.base_dir.clone();
+
+    join_set.spawn(async move {
+        let use_case = application::usecases::ConfigEventHandler::new(
+            repository,
+            log_port,
+            store,
+            event_source,
+            rig_path,
+        );
+        while let Some(event) = config_rx.recv().await {
+            if let Err(e) = use_case.execute(event) {
+                eprintln!("ConfigEventHandler error: {e}");
+            }
+        }
+    });
 }
 
 // ── Server Lifecycle ───────────────────────────────────────────────────────
@@ -271,13 +331,16 @@ pub async fn start_server_with_shutdown(
     config: AppConfig,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let (mut ctx, event_rx) = build_app_context(&config);
+    let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
 
     // JoinSet ties the pipeline task lifetimes to the server task.
     let mut join_set = tokio::task::JoinSet::new();
 
-    // Start the event pipeline: debounce + ProcessStrand (children of this task)
-    start_event_pipeline(&ctx, event_rx, &mut join_set);
+    // Start the config event pipeline: ConfigEventHandler (child of this task)
+    start_config_pipeline(&ctx, config_rx, &mut join_set);
+
+    // Start the strand event pipeline: debounce + ProcessStrand (child of this task)
+    start_event_pipeline(&ctx, strand_rx, &mut join_set);
 
     // Startup: discover looms, create state files, start watchers
     let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
@@ -334,10 +397,13 @@ pub async fn start_server_with_shutdown(
     // 4. ProcessStrand: finishes in-flight agent execution → writes
     //    tie-off → its debounce_rx.recv() yields None → exits naturally.
     //
-    // 5. JoinSet drained: `while let Some` loop waits for ALL tasks to
+    // 5. ConfigEventHandler: its config_rx.recv() yields None (config_tx
+    //    was dropped with NotifyEventSource) → task exits naturally.
+    //
+    // 6. JoinSet drained: `while let Some` loop waits for ALL tasks to
     //    complete. No tasks are aborted — they all exit cooperatively.
     //
-    // 6. LoomStopped written to each loom-log.
+    // 7. LoomStopped written to each loom-log.
     //
     // Safety net: if a task has a bug and never exits, the JoinSet Drop
     // will abort it. This is a last resort, not the primary mechanism.

@@ -13,6 +13,7 @@ pub use domain::value_objects::RigAgentConfig;
 
 // Re-export server lifecycle from composition root
 pub use server::{
-    AppConfig, build_app_context, run_startup, start_event_pipeline,
-    start_server, start_server_with_shutdown, ShutdownSignal,
+    AppConfig, build_app_context, run_startup, start_config_pipeline,
+    start_event_pipeline, start_server, start_server_with_shutdown,
+    ShutdownSignal,
 };

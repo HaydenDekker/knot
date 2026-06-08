@@ -182,8 +182,6 @@ async fn openapi_json_returns_valid_spec() {
     assert!(paths.contains_key("/looms/{id}"));
     assert!(paths.contains_key("/looms/{id}/activity"));
     assert!(paths.contains_key("/looms/{id}/knots"));
-    assert!(paths.contains_key("/looms/{loom_id}/knots/{knot_name}"));
-    // Knot CRUD paths
     assert!(paths.contains_key("/looms/{id}/knots/{name}"));
 
     // Verify key schemas are present

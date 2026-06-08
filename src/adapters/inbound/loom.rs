@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::adapters::inbound::types::{AppContext, KnotRequest, RegisterLoomRequest};
 use crate::adapters::outbound::FileSystemLoomRepository;
 use crate::application::usecases::{
-    DiscoverLooms, GetKnotStatus as GetKnotStatusUc, GetLoom as GetLoomUc,
+    GetKnotStatus as GetKnotStatusUc, GetLoom as GetLoomUc,
     GetLoomActivity, ListLooms, LoomSummary, RegisterLoom, UnregisterLoom,
 };
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
@@ -120,10 +120,10 @@ pub async fn get_loom_knots(
 /// Get status of a specific knot.
 #[utoipa::path(
     get,
-    path = "/looms/{loom_id}/knots/{knot_name}",
+    path = "/looms/{id}/knots/{name}",
     params(
-        ("loom_id" = String, Path, description = "Loom identifier"),
-        ("knot_name" = String, Path, description = "Knot identifier"),
+        ("id" = String, Path, description = "Loom identifier"),
+        ("name" = String, Path, description = "Knot identifier"),
     ),
     responses(
         (status = 200, body = KnotStatusDto, description = "Knot status"),
@@ -152,7 +152,8 @@ pub async fn get_knot_status(
     responses(
         (status = 201, description = "Loom registered successfully"),
         (status = 400, description = "Invalid request"),
-        (status = 409, description = "Loom already exists"),
+        // 409 removed — RegisterLoom is now idempotent (auto-discovery may pre-register)
+        // (status = 409, description = "Loom already exists"),
         (status = 500, description = "Internal server error"),
     ),
 )]
@@ -360,36 +361,354 @@ pub async fn unregister_loom(
     }
 }
 
-/// Discover looms in the rig directory and register any new ones.
+/// Create a new knot in a loom.
 ///
-/// Scans the rig directory for loom configurations. Already-registered
-/// looms are skipped — only new looms are returned. Each new loom
-/// gets its activity log initialised and file watchers started.
+/// Validates the loom exists, writes the `.md` file to the loom directory,
+/// and updates the in-memory store via `ManageKnot::Create`.
 #[utoipa::path(
     post,
-    path = "/looms/discover",
+    path = "/looms/{id}/knots",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+    ),
+    request_body = KnotRequest,
     responses(
-        (status = 200, body = Vec<LoomSummary>, description = "Newly discovered looms"),
-        (status = 500, description = "Discovery failed"),
+        (status = 201, description = "Knot created successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Loom not found"),
+        (status = 409, description = "Knot already exists"),
+        (status = 500, description = "Internal server error"),
     ),
 )]
-pub async fn discover_looms(State(ctx): State<AppContext>) -> Response {
-    let use_case = DiscoverLooms::new(
-        Arc::clone(&ctx.loom_repo),
-        Arc::clone(&ctx.loom_log_port),
-        ctx.store.clone(),
-        Arc::clone(&ctx.event_source),
+pub async fn create_knot(
+    Path(id): Path<String>,
+    State(ctx): State<AppContext>,
+    Json(body): Json<KnotRequest>,
+) -> Response {
+    let loom_id = LoomId(id);
+
+    // Validate knot has required fields
+    if body.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "knot name must not be empty"
+            })),
+        )
+            .into_response();
+    }
+    if body.strand_dir.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "strand_dir is required"
+            })),
+        )
+            .into_response();
+    }
+    if body.tie_off_dir.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "tie_off_dir is required"
+            })),
+        )
+            .into_response();
+    }
+
+    // Check loom exists
+    if ctx.store.get(&loom_id).is_none() {
+        return (StatusCode::NOT_FOUND, "loom not found").into_response();
+    }
+
+    // Write the knot .md file to the loom directory
+    let loom_dir = ctx.base_dir.join(&loom_id.0);
+    let content = generate_knot_file(&body);
+    let file_path = loom_dir.join(format!("{}.md", body.name));
+    if let Err(e) = std::fs::write(&file_path, content) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("failed to write knot file: {e}")
+            })),
+        )
+            .into_response();
+    }
+
+    // Build the Knot from request data
+    let project_root = ctx.base_dir.parent().unwrap_or(&ctx.base_dir);
+    let strand_dir = FileSystemLoomRepository::resolve_path(
+        project_root,
+        &std::path::PathBuf::from(&body.strand_dir),
     );
-    match use_case.execute(&ctx.base_dir) {
-        Ok(looms) => {
-            let summaries: Vec<LoomSummary> = looms
-                .into_iter()
-                .map(|loom| LoomSummary {
-                    id: loom.id,
-                    knot_count: loom.knots.len(),
-                })
-                .collect();
-            (StatusCode::OK, Json(summaries)).into_response()
+    let tie_off_dir = FileSystemLoomRepository::resolve_path(
+        project_root,
+        &std::path::PathBuf::from(&body.tie_off_dir),
+    );
+    let knot = Knot {
+        id: KnotId(body.name.clone()),
+        agent_config: body.agent_config.clone(),
+        prompt_template: body.prompt_template.clone(),
+        strand_dir,
+        tie_off_dir,
+    };
+
+    // Update the in-memory store
+    let knot_id = knot.id.clone();
+    let strand_dir = knot.strand_dir.clone();
+    let use_case = crate::application::usecases::ManageKnot::new(
+        ctx.store.clone(),
+    );
+    match use_case.execute(
+        crate::application::usecases::KnotAction::Create {
+            loom_id: loom_id.clone(),
+            knot,
+        },
+    ) {
+        Ok(()) => {
+            // Start file watcher for the knot's strand directory
+            ctx.event_source.set_loom_ids(
+                &strand_dir,
+                &loom_id,
+                &knot_id,
+            );
+            let _ = ctx.event_source.watch(&strand_dir);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "created": true })),
+            )
+                .into_response()
+        }
+        Err(crate::application::ports::PortError::LoomSaveFailed(msg)) => {
+            if msg.contains("already exists") {
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": msg })),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": msg })),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Update an existing knot's configuration.
+///
+/// Validates the loom and knot exist, writes the updated `.md` file,
+/// and updates the in-memory store via `ManageKnot::Update`.
+#[utoipa::path(
+    patch,
+    path = "/looms/{id}/knots/{name}",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+        ("name" = String, Path, description = "Knot identifier"),
+    ),
+    request_body = KnotRequest,
+    responses(
+        (status = 200, description = "Knot updated successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Loom or knot not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
+pub async fn update_knot(
+    Path((id, name)): Path<(String, String)>,
+    State(ctx): State<AppContext>,
+    Json(body): Json<KnotRequest>,
+) -> Response {
+    let loom_id = LoomId(id);
+
+    // Validate knot has required fields
+    if body.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "knot name must not be empty"
+            })),
+        )
+            .into_response();
+    }
+    if body.strand_dir.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "strand_dir is required"
+            })),
+        )
+            .into_response();
+    }
+    if body.tie_off_dir.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "tie_off_dir is required"
+            })),
+        )
+            .into_response();
+    }
+
+    // Check loom exists and contains the knot
+    let loom = match ctx.store.get(&loom_id) {
+        Some(loom) => loom,
+        None => {
+            return (StatusCode::NOT_FOUND, "loom not found").into_response();
+        }
+    };
+    if !loom.knots.iter().any(|k| k.id.0 == name) {
+        return (StatusCode::NOT_FOUND, "knot not found").into_response();
+    }
+
+    // Write the updated knot .md file
+    let loom_dir = ctx.base_dir.join(&loom_id.0);
+    let content = generate_knot_file(&body);
+    let file_path = loom_dir.join(format!("{}.md", name));
+    if let Err(e) = std::fs::write(&file_path, content) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("failed to write knot file: {e}")
+            })),
+        )
+            .into_response();
+    }
+
+    // Build the Knot from request data
+    let project_root = ctx.base_dir.parent().unwrap_or(&ctx.base_dir);
+    let strand_dir = FileSystemLoomRepository::resolve_path(
+        project_root,
+        &std::path::PathBuf::from(&body.strand_dir),
+    );
+    let tie_off_dir = FileSystemLoomRepository::resolve_path(
+        project_root,
+        &std::path::PathBuf::from(&body.tie_off_dir),
+    );
+    let knot = Knot {
+        id: KnotId(name),
+        agent_config: body.agent_config.clone(),
+        prompt_template: body.prompt_template.clone(),
+        strand_dir,
+        tie_off_dir,
+    };
+
+    // Update the in-memory store
+    let knot_id = knot.id.clone();
+    let new_strand_dir = knot.strand_dir.clone();
+    let use_case = crate::application::usecases::ManageKnot::new(
+        ctx.store.clone(),
+    );
+    match use_case.execute(
+        crate::application::usecases::KnotAction::Update {
+            loom_id: loom_id.clone(),
+            knot,
+        },
+    ) {
+        Ok(()) => {
+            // Update watcher: set new loom/knot ids and re-watch new strand dir
+            ctx.event_source.set_loom_ids(
+                &new_strand_dir,
+                &loom_id,
+                &knot_id,
+            );
+            let _ = ctx.event_source.watch(&new_strand_dir);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "updated": true })),
+            )
+                .into_response()
+        }
+        Err(crate::application::ports::PortError::LoomSaveFailed(msg)) => {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Remove a knot from a loom.
+///
+/// Deletes the `.md` file from the loom directory and removes the knot
+/// from the in-memory store via `ManageKnot::Delete`.
+#[utoipa::path(
+    delete,
+    path = "/looms/{id}/knots/{name}",
+    params(
+        ("id" = String, Path, description = "Loom identifier"),
+        ("name" = String, Path, description = "Knot identifier"),
+    ),
+    responses(
+        (status = 204, description = "Knot deleted"),
+        (status = 404, description = "Loom or knot not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
+pub async fn delete_knot(
+    Path((id, name)): Path<(String, String)>,
+    State(ctx): State<AppContext>,
+) -> Response {
+    let loom_id = LoomId(id);
+    let knot_id = KnotId(name);
+
+    // Check loom exists and contains the knot
+    let loom = match ctx.store.get(&loom_id) {
+        Some(loom) => loom,
+        None => {
+            return (StatusCode::NOT_FOUND, "loom not found").into_response();
+        }
+    };
+    if !loom.knots.iter().any(|k| k.id == knot_id) {
+        return (StatusCode::NOT_FOUND, "knot not found").into_response();
+    }
+
+    // Get the strand_dir before deletion so we can stop the watcher
+    let strand_dir = match loom.knots.iter().find(|k| k.id == knot_id) {
+        Some(k) => k.strand_dir.clone(),
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Delete the knot .md file
+    let loom_dir = ctx.base_dir.join(&loom_id.0);
+    let file_path = loom_dir.join(format!("{}.md", knot_id.0));
+    // Ignore errors if file doesn't exist (idempotent)
+    let _ = std::fs::remove_file(&file_path);
+
+    // Update the in-memory store
+    let use_case = crate::application::usecases::ManageKnot::new(
+        ctx.store.clone(),
+    );
+    match use_case.execute(
+        crate::application::usecases::KnotAction::Delete {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+        },
+    ) {
+        Ok(()) => {
+            // Stop watching the strand directory
+            let _ = ctx.event_source.unwatch(&strand_dir);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(crate::application::ports::PortError::LoomSaveFailed(msg)) => {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1092,9 +1411,13 @@ mod tests {
         assert_eq!(summaries[0].id, LoomId("new-loom".to_string()));
     }
 
-    /// Register same loom twice; second returns 409.
+    /// Register same loom twice; second returns 201 (idempotent).
+    ///
+    /// This reflects the reality that auto-discovery may pre-register a loom
+    /// before the POST arrives, and the POST should be a no-op rather than
+    /// a conflict.
     #[tokio::test]
-    async fn post_loom_duplicate_id() {
+    async fn post_loom_duplicate_id_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AppContext {
             store: LoomStore::new(),
@@ -1123,7 +1446,8 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
 
-        assert_eq!(resp.status(), 409);
+        // Idempotent: loom already registered → 201 (not 409)
+        assert_eq!(resp.status(), 201);
     }
 
     /// `POST /looms` with valid body returns 201 and mock `EventSource`
@@ -1248,7 +1572,7 @@ mod tests {
     }
 
     /// All 7 loom endpoints are accessible on a single router with shared
-    /// `AppContext`. Verifies GET returns 200/404, POST returns 201/400/409,
+    /// `AppContext`. Verifies GET returns 200/404, POST returns 201/400 (idempotent),
     /// and DELETE returns 204/404.
     #[tokio::test]
     async fn full_route_wiring() {
@@ -1386,7 +1710,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 400);
 
-        // 9. POST /looms -> 409 (duplicate ID)
+        // 9. POST /looms -> 201 (idempotent duplicate — auto-discovery may pre-register)
         let body = valid_register_body("wired-loom", 1);
         let resp = app
             .clone()
@@ -1400,7 +1724,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), 409);
+        assert_eq!(resp.status(), 201);
 
         // 10. DELETE /looms/:id -> 204 (found)
         let resp = app
@@ -1837,190 +2161,4 @@ mod tests {
         assert_eq!(unwatch[0], PathBuf::from("/loom1/src"));
     }
 
-    // ── Configurable Mock Repository ────────────────────────────────────
-
-    /// Mock `LoomRepository` that returns configurable scan results.
-    struct ConfigurableLoomRepository {
-        scan_result: Vec<Loom>,
-    }
-
-    impl LoomRepository for ConfigurableLoomRepository {
-        fn scan(
-            &self,
-            _rig: &std::path::Path,
-        ) -> Result<Vec<Loom>, PortError> {
-            Ok(self.scan_result.clone())
-        }
-
-        fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
-            Ok(None)
-        }
-
-        fn list(&self) -> Result<Vec<Loom>, PortError> {
-            Ok(vec![])
-        }
-
-        fn save(&self, _loom: Loom) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    /// Build an `AppContext` with a configurable repo and tracking event
-    /// source, returning the context plus handles to inspect watch calls.
-    fn build_test_context_with_repo_and_tracking(
-        looms: Vec<Loom>,
-        log_events: Vec<LoomEvent>,
-    ) -> (
-        AppContext,
-        StdArc<Mutex<Vec<PathBuf>>>,
-        StdArc<Mutex<Vec<PathBuf>>>,
-    ) {
-        let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
-        let _ = _event_rx;
-        let (event_source, watch_calls, unwatch_calls) =
-            TrackingEventSource::new();
-
-        (
-            AppContext {
-                store: LoomStore::new(),
-                loom_repo: Arc::new(ConfigurableLoomRepository {
-                    scan_result: looms,
-                }),
-                loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
-                tie_off_sink: Arc::new(MockTieOffSink),
-                event_source: Arc::new(event_source),
-                event_sender,
-                agent_runner: Arc::new(MockAgentRunner),
-                rig_config: RigAgentConfig::default_config(),
-                loom_ids: Vec::new(),
-                base_dir: PathBuf::from("./rig"),
-            },
-            watch_calls,
-            unwatch_calls,
-        )
-    }
-
-    // ── Phase 4 Tests ─────────────────────────────────────────────────
-
-    /// `POST /looms/discover` with a rig containing new loom directories
-    /// -> 200 with list of discovered IDs -> mock `EventSource` has `watch()`
-    /// calls -> looms appear in `GET /looms`.
-    #[tokio::test]
-    async fn discover_looms_scans_and_registers() {
-        let loom_a = build_test_loom("loom-a", &["k1"]);
-        let loom_b = build_test_loom("loom-b", &["k2", "k3"]);
-
-        let (ctx, watch_calls, _unwatch_calls) =
-            build_test_context_with_repo_and_tracking(
-                vec![loom_a.clone(), loom_b.clone()],
-                vec![],
-            );
-        let app = build_app(ctx);
-
-        // POST /looms/discover
-        let req = Request::builder()
-            .method("POST")
-            .uri("/looms/discover")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-
-        assert_eq!(resp.status(), 200);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let summaries: Vec<LoomSummary> =
-            serde_json::from_slice(&body).unwrap();
-
-        // Both looms discovered
-        assert_eq!(summaries.len(), 2);
-        let ids: Vec<_> =
-            summaries.iter().map(|s| s.id.0.as_str()).collect();
-        assert!(ids.contains(&"loom-a"));
-        assert!(ids.contains(&"loom-b"));
-
-        // Watchers started for each loom (each has knots, so source dirs)
-        let watches = watch_calls.lock().unwrap();
-        // loom_a has 1 knot -> 1 watch
-        // loom_b has 2 knots -> 2 watches
-        assert_eq!(watches.len(), 3);
-
-        // Verify looms are in the store via GET /looms
-        let ctx = build_test_context();
-        ctx.store.register(loom_a);
-        ctx.store.register(loom_b);
-        let app2 = build_app(ctx);
-        let req = Request::builder()
-            .uri("/looms")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app2.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), 200);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let all: Vec<LoomSummary> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(all.len(), 2);
-    }
-
-    /// `POST /looms/discover` when loom already registered -> 200 with
-    /// empty or partial list (no duplicates) -> no duplicate `watch()`
-    /// calls.
-    #[tokio::test]
-    async fn discover_looms_skips_existing() {
-        let existing = build_test_loom("existing", &["k1"]);
-        let new_loom = build_test_loom("new-discovered", &["k2"]);
-
-        // Pre-register existing loom in the store
-        let (ctx, watch_calls, _unwatch_calls) =
-            build_test_context_with_repo_and_tracking(
-                vec![existing.clone(), new_loom.clone()],
-                vec![],
-            );
-        ctx.store.register(existing.clone());
-        let app = build_app(ctx);
-
-        // POST /looms/discover
-        let req = Request::builder()
-            .method("POST")
-            .uri("/looms/discover")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-
-        assert_eq!(resp.status(), 200);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let summaries: Vec<LoomSummary> =
-            serde_json::from_slice(&body).unwrap();
-
-        // Only the new loom returned (existing skipped)
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(
-            summaries[0].id,
-            LoomId("new-discovered".to_string())
-        );
-
-        // Only 1 watch call (for the new loom's knots), not 2
-        let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-
-        // Verify no duplicate in store
-        let ctx = build_test_context();
-        ctx.store.register(existing);
-        ctx.store.register(new_loom);
-        let app2 = build_app(ctx);
-        let req = Request::builder()
-            .uri("/looms")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app2.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), 200);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let all: Vec<LoomSummary> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(all.len(), 2);
-    }
 }
