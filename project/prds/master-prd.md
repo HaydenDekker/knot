@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-06-04
+> **Last Updated:** 2026-06-09
 
 ## How to Add a PRD
 
@@ -19,12 +19,21 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [System Reliability — Messaging Control, Replay and Rollback](prd-system-reliability.md) | 🔵 Open | 2026-06-09 |
 | [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | ✅ Complete | 2026-06-04 |
 | [AI-Driven File Generation from Loom Events](prd-ai-driven-file-generation.md) | ✅ Complete | 2026-06-03 |
 
 ---
 
 ## PRD Summaries
+
+### System Reliability — Messaging Control, Replay and Rollback
+
+**Status:** 🔵 Open
+**Created:** 2026-06-09
+**Summary:** Rate limiting, concurrency caps, budget/token limits, usage visibility, event replay, and tie-off rollback to protect providers and control cost.
+
+Full details in [prd-system-reliability.md](prd-system-reliability.md).
 
 ### Knot Skills — AI-Driven Configuration via Skills
 
