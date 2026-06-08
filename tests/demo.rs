@@ -24,8 +24,8 @@ use helpers::*;
 /// 3. Start Knot with stub-pi agent
 /// 4. Verify tie-off is populated (contains system prompt + strand content)
 /// 5. Verify loom-log records `StrandProcessed` with no error
-#[test]
-fn demo_knot_test_processes_sample_document() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demo_knot_test_processes_sample_document() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -88,13 +88,14 @@ processing pipeline.
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 10000)
+        .await
         .expect("server should start listening");
 
     // Wait for initial file processing (file already exists at startup,
     // but notify may emit a Create event during discovery)
-    std::thread::sleep(Duration::from_millis(500));
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // If the initial file hasn't been processed yet (startup race),
     // create a new file to trigger processing explicitly.
@@ -106,7 +107,7 @@ processing pipeline.
             "# Sample Document for Knot Processing\n\n## Updated\n\nContent.",
         )
         .unwrap();
-        std::thread::sleep(Duration::from_millis(500));
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     // 1. Verify tie-off exists and contains populated content
@@ -141,6 +142,7 @@ processing pipeline.
     // 2. Verify knot status is `completed` via HTTP
     let (status, body) =
         http_get(&host_port, "/looms/knot-test-loom/knots/review-knot")
+            .await
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -169,15 +171,16 @@ processing pipeline.
         "loom log should reference sample-document.md"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
 }
 
 /// Demo verification: knot-test loom with tools configured.
 ///
 /// Uses a knot config with `tools: [fs, web]` to verify the
 /// `build_cli_args` path that emits `--tools fs,web`.
-#[test]
-fn demo_knot_test_with_tools() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -213,13 +216,14 @@ fn demo_knot_test_with_tools() {
         ..AppConfig::default_config()
     };
 
-    let shutdown = spawn_server(config);
-    wait_for_port(&host_port, 100, 50)
+    let (handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 10000)
+        .await
         .expect("server should start listening");
 
     // Create a strand file
     fs::write(&strand_dir.join("input.md"), "Document to review.").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify tie-off exists and contains the model from knot config
     let tie_off_path = tie_off_dir.join("input.md.output");
@@ -238,6 +242,7 @@ fn demo_knot_test_with_tools() {
     // Verify knot status is completed
     let (status, body) =
         http_get(&host_port, "/looms/knot-test-loom/knots/review-knot")
+            .await
             .expect("knot status endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
     let knot_status: serde_json::Value =
@@ -248,5 +253,6 @@ fn demo_knot_test_with_tools() {
         "knot status should be completed"
     );
 
-    let _ = shutdown.send(());
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
 }

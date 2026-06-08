@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-08
-> **Plan Added:** lib.rs Composition Root and Inbound Adapter Tidy
+> **Plan Added:** Sync Integration Tests to Async Layer (ADR-002/003)
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ⬜ Planned | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ⬜ Planned | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
@@ -70,6 +71,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 18. Sync Integration Tests to Async Layer
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-08
+**Goal:** Fix 8 test files that use stale spawn_server/wait_for_port/HTTP helper signatures, bringing them up to the async layer API defined in ADR-002/003.
+
+Full details in [test-api-sync-async-layer.md](test-api-sync-async-layer.md).
 
 ### 17. lib.rs Composition Root and Inbound Adapter Tidy
 
