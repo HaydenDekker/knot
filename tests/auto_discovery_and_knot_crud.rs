@@ -539,6 +539,154 @@ async fn runtime_knot_deletion() {
     let _ = shutdown_tx.send(());
 }
 
+// ── POST /looms Registration Verification ────────────────────────────────
+
+/// `POST /looms` with empty rig → loom registered with correct knot count
+/// → `.loom-log` contains `KnotRegistered` for the knot.
+///
+/// Proves the HTTP creation path is resilient to the notify race — either
+/// the HTTP handler registers directly, or auto-discovery pre-registers and
+/// the HTTP handler is idempotent.
+#[tokio::test]
+async fn http_post_loom_verifies_knot_registered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create rig directory (empty at startup — no looms)
+    fs::create_dir_all(&base_dir).unwrap();
+
+    let port = 32110;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        base_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    wait_for_port(&host_port, 5000)
+        .await
+        .expect("server should start listening");
+
+    // 1. GET /looms should be empty (no looms at startup)
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .await
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert!(
+        summaries.is_empty(),
+        "no looms should exist at startup"
+    );
+
+    // 2. Create strand/tie-off directories for the knot
+    let strand_dir = base_dir.join("verify-strands");
+    let tie_off_dir = base_dir.join("verify-tie-offs");
+    fs::create_dir_all(&strand_dir).unwrap();
+    fs::create_dir_all(&tie_off_dir).unwrap();
+
+    // 3. POST /looms to create a loom with 1 knot
+    let body = serde_json::json!({
+        "id": "verify-loom",
+        "knots": [
+            {
+                "name": "verify-knot",
+                "agent_config": {
+                    "goal": "Verify registration",
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "tools": []
+                },
+                "prompt_template": {
+                    "input_bundling": "full-file",
+                    "instructions": "Verify knot registration"
+                },
+                "strand_dir": strand_dir.to_string_lossy(),
+                "tie_off_dir": tie_off_dir.to_string_lossy()
+            }
+        ]
+    });
+
+    let (status, _resp) =
+        http_post_json(&host_port, "/looms", &body)
+            .await
+            .expect("POST /looms should respond");
+    assert!(
+        status.contains("201"),
+        "POST /looms should return 201, got: {status}"
+    );
+
+    // 4. Verify loom is registered with correct knot count (not 0)
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/verify-loom", 30, 100)
+            .await
+            .expect("get loom should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().expect("knots should be array");
+    assert_eq!(
+        knots.len(),
+        1,
+        "loom should have 1 knot (not 0) — race would produce 0 knots"
+    );
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "verify-knot",
+        "knot id should match"
+    );
+
+    // 5. Verify .loom-log contains KnotRegistered for the knot
+    let log_path = base_dir.join("verify-loom/.loom-log");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        log_path.exists(),
+        ".loom-log should exist after registration: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read .loom-log");
+    let log_lines: Vec<&str> = log_content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert!(
+        !log_lines.is_empty(),
+        ".loom-log should not be empty after registration"
+    );
+    // Parse each line and check for KnotRegistered event
+    let mut found_knot_registered = false;
+    for line in &log_lines {
+        let event: serde_json::Value =
+            serde_json::from_str(*line).expect("should parse JSON line");
+        if event.get("KnotRegistered").is_some() {
+            let reg = &event["KnotRegistered"];
+            assert_eq!(
+                reg["loom_id"].as_str().unwrap(),
+                "verify-loom",
+                "KnotRegistered loom_id should match"
+            );
+            assert_eq!(
+                reg["knot_id"].as_str().unwrap(),
+                "verify-knot",
+                "KnotRegistered knot_id should match"
+            );
+            found_knot_registered = true;
+        }
+    }
+    assert!(
+        found_knot_registered,
+        ".loom-log should contain KnotRegistered event for verify-knot.\
+         Log contents: {}",
+        log_content
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
 // ── HTTP Knot CRUD Tests ──────────────────────────────────────────────────
 
 /// `POST /looms/{id}/knots` creates a new knot → 201 → knot appears in
