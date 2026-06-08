@@ -1,6 +1,6 @@
 # Plan: Fix KnotModified race and GET knot-status hang
 
-**Status:** Draft
+**Status:** Complete (2026-06-08)
 **Branch:** `fix/knot-modified-race-and-status-read`
 
 ---
@@ -94,11 +94,11 @@ Add an integration test:
 
 If any request hangs/times out, the issue is confirmed. The fix is to wrap `read_all()` in `tokio::task::spawn_blocking` inside the handler.
 
-- [ ] Add integration test `knot_status_during_processing_does_not_hang`
-- [ ] Test uses slow mock agent, sends 10 concurrent knot-status requests
-- [ ] Test asserts all requests complete within 5 seconds
-- [ ] Apply `spawn_blocking` fix in `src/adapters/inbound/loom.rs` (as safety net even if not reproducible)
-- [ ] Compile and run tests
+- [x] Add integration test `knot_status_during_processing_does_not_hang`
+- [x] Test uses slow mock agent, sends 10 concurrent knot-status requests
+- [x] Test asserts all requests complete within 5 seconds
+- [x] Apply `spawn_blocking` fix in `src/adapters/inbound/loom.rs` (as safety net even if not reproducible)
+- [x] Compile and run tests
 
 **Handler fix** (if Phase 3 proves blocking):
 
