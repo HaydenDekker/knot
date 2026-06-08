@@ -42,11 +42,11 @@ Update existing test:
 |---------------|--------|
 | `config_handler_knot_modified_not_found` | Change from "returns error" to "recovers by registering the knot" |
 
-- [ ] Modify `handle_knot_modified` to treat missing knot as new registration: append knot to loom, log `KnotRegistered`, start watcher, emit warning
-- [ ] Add unit test `config_handler_knot_modified_new_knot_registers`
-- [ ] Add unit test `config_handler_knot_modified_warns_on_recovery`
-- [ ] Update existing test `config_handler_knot_modified_not_found` to expect recovery
-- [ ] Compile and run tests
+- [x] Modify `handle_knot_modified` to treat missing knot as new registration: append knot to loom, log `KnotRegistered`, start watcher, emit warning
+- [x] Add unit test `config_handler_knot_modified_new_knot_registers`
+- [x] Add unit test `config_handler_knot_modified_warns_on_recovery`
+- [x] Update existing test `config_handler_knot_modified_not_found` to expect recovery
+- [x] Compile and run tests
 
 ### Phase 1: HTTP `POST /looms` verifies auto-discovery (integration test)
 
