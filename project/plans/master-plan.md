@@ -51,7 +51,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
-| 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
+| 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ✅ Complete | 2026-06-07 |
 | 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ✅ Complete | 2026-06-06 |
 | 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ✅ Complete | 2026-06-05 |
 | 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ✅ Complete | 2026-06-05 |
@@ -114,9 +114,12 @@ Full details in [integration-test-refactor.md](integration-test-refactor.md).
 
 ### 14. Loom/Knot Auto-Discovery and Knot CRUD API
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-07
+**Completed:** 2026-06-08
 **Goal:** Watch the rig and loom directories for filesystem events so new looms, new knots, edited knots, and deleted knots are active in real time without restart. Add HTTP CRUD endpoints for individual knots. Remove `POST /looms/discover`.
+
+**Result:** `ConfigEvent` type and `ConfigEventHandler` use case process filesystem changes. `NotifyEventSource` watches rig and loom directories. `ManageKnot` use case and 3 new HTTP endpoints (POST/PATCH/DELETE `/looms/{id}/knots/{name}`). `POST /looms/discover` removed. 9 new integration tests in `tests/auto_discovery_and_knot_crud.rs`. 191/192 tests pass (1 pre-existing subprocess flake).
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
