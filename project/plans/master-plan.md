@@ -48,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
-| 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ⬜ Planned | 2026-06-08 |
+| 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
 | 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
 | 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
 | 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ⬜ Planned | 2026-06-07 |
@@ -85,9 +85,12 @@ Full details in [test-api-sync-async-layer.md](test-api-sync-async-layer.md).
 
 ### 17. lib.rs Composition Root and Inbound Adapter Tidy
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-08
-**Goal:** Remove dead `graceful_shutdown` from `lib.rs`, move composition root into `src/server.rs`, move HTTP handlers into `inbound/handlers.rs`, and split `inbound/mod.rs` (2211 lines) into `types.rs` + `handlers.rs` + `router.rs`.
+**Completed:** 2026-06-08
+**Goal:** Remove dead `graceful_shutdown` from `lib.rs`, extract composition root into `src/server.rs`, split `inbound/mod.rs` (2211 lines) into `types.rs` + `loom.rs` + `system.rs` + `router.rs`, and move `health`/`list_agents` handlers into `inbound/system.rs`.
+
+**Result:** `lib.rs` reduced from 440→18 lines, `inbound/mod.rs` from 2211→18 lines, all 224 tests pass.
 
 Full details in [lib-inbound-tidy.md](lib-inbound-tidy.md).
 

@@ -58,7 +58,7 @@ src/adapters/inbound/
 
 `health()` and `list_agents()` move from `lib.rs` into `inbound/system.rs`. They're HTTP handlers — inbound adapter concerns. `lib.rs` re-exports them for backwards compatibility.
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-08)
 
 ## Existing Tests
 
