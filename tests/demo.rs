@@ -85,7 +85,7 @@ processing pipeline.
         ..AppConfig::default_config()
     };
 
-    let (handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 10000)
         .await
         .expect("server should start listening");
@@ -151,7 +151,7 @@ processing pipeline.
     );
 
     // 3. Verify loom-log records successful processing
-    let log_path = base_dir.join("knot-test-loom/.loom-log");
+    let log_path = base_dir.join("output/knot-test-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -167,9 +167,6 @@ processing pipeline.
         log_content.contains("sample-document.md"),
         "loom log should reference sample-document.md"
     );
-
-    let _ = shutdown_tx.send(());
-    let _ = handle.await;
 }
 
 /// Demo verification: knot-test loom with tools configured.
@@ -210,7 +207,7 @@ async fn demo_knot_test_with_tools() {
         ..AppConfig::default_config()
     };
 
-    let (handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 10000)
         .await
         .expect("server should start listening");
@@ -246,7 +243,4 @@ async fn demo_knot_test_with_tools() {
         "completed",
         "knot status should be completed"
     );
-
-    let _ = shutdown_tx.send(());
-    let _ = handle.await;
 }

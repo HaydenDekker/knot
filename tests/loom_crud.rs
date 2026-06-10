@@ -38,7 +38,7 @@ async fn http_register_then_process_strand() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -144,7 +144,6 @@ async fn http_register_then_process_strand() {
         "knot status should be completed"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// `DELETE /looms/:id` stops processing — new strand files are NOT
@@ -179,7 +178,7 @@ async fn unregister_stops_processing() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -236,5 +235,4 @@ async fn unregister_stops_processing() {
         "unregistered loom should not appear in list"
     );
 
-    let _ = shutdown_tx.send(());
 }

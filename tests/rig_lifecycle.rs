@@ -35,7 +35,7 @@ async fn rig_directory_auto_created() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000)
@@ -59,8 +59,6 @@ async fn rig_directory_auto_created() {
         rig_path.is_dir(),
         "rig path should be a directory"
     );
-
-    let _ = shutdown_tx.send(());
 }
 
 /// Start Knot in dir with `./rig/` containing loom subdirectories;
@@ -78,7 +76,7 @@ async fn rig_directory_scanned() {
     fs::create_dir(&rig_path).unwrap();
     let loom_dir = rig_path.join("docs-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir) = make_knot_content_with_dirs(tmp.path());
+    let (knot_content, _strand_dir) = make_knot_content_with_dirs(tmp.path());
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31981;
@@ -90,7 +88,7 @@ async fn rig_directory_scanned() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000)
@@ -132,8 +130,6 @@ async fn rig_directory_scanned() {
         config_json["rig_path"].as_str().unwrap().contains("rig"),
         "rig_path should contain 'rig'"
     );
-
-    let _ = shutdown_tx.send(());
 }
 
 // ── Server Bootstrap ──────────────────────────────────────────────────────
@@ -149,7 +145,7 @@ async fn app_starts_and_serves_health() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000)
@@ -163,9 +159,6 @@ async fn app_starts_and_serves_health() {
 
     assert!(status.contains("200"), "expected 200 OK, got: {status}");
     assert_eq!(body, "ok", "health body should be 'ok'");
-
-    // Graceful shutdown
-    let _ = shutdown_tx.send(());
 }
 
 /// `RigAgentConfig` is loaded with defaults (`pi` CLI); accessible
@@ -181,7 +174,7 @@ async fn app_loads_rig_agent_config() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000)
@@ -207,9 +200,6 @@ async fn app_loads_rig_agent_config() {
         Some(0),
         "default cli_args should be empty"
     );
-
-    // Graceful shutdown
-    let _ = shutdown_tx.send(());
 }
 
 /// Register a loom via API, stop server, restart — loom re-discovered
@@ -297,7 +287,7 @@ async fn api_register_then_discover_after_restart() {
         ..AppConfig::default_config()
     };
 
-    let (_handle2, shutdown2) = spawn_server_with_shutdown(config2);
+    let (_handle2, _shutdown2) = spawn_server_with_shutdown(config2);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server 2 should start listening");
@@ -334,6 +324,4 @@ async fn api_register_then_discover_after_restart() {
         "persist-knot",
         "knot id should match after restart"
     );
-
-    let _ = shutdown2.send(());
 }

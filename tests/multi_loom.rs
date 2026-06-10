@@ -61,7 +61,7 @@ async fn multiple_looms_independent() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -139,7 +139,6 @@ async fn multiple_looms_independent() {
         "loom B should not contain loom A's strand output, got {files_in_b:?}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Two knots in one loom, each with its own source directory.
@@ -221,7 +220,7 @@ prompt-template:
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -315,5 +314,4 @@ prompt-template:
         "knot-b should reference strand-b.md, got: {knot_b_status:?}"
     );
 
-    let _ = shutdown_tx.send(());
 }

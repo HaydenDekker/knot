@@ -165,7 +165,7 @@ async fn runtime_loom_auto_discovery() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -256,7 +256,6 @@ async fn runtime_loom_auto_discovery() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Start server with existing loom → drop new `.md` file in loom dir
@@ -292,7 +291,7 @@ async fn runtime_knot_auto_discovery() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -348,7 +347,6 @@ async fn runtime_knot_auto_discovery() {
         "should now contain summary-knot"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Edit a `.md` file (change model) → `GET /looms/{id}` shows updated config.
@@ -383,7 +381,7 @@ async fn runtime_knot_edit_picks_up_change() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -437,7 +435,6 @@ async fn runtime_knot_edit_picks_up_change() {
         "updated provider should be anthropic"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Delete a `.md` file → `GET /looms/{id}/knots` no longer shows the knot.
@@ -484,7 +481,7 @@ async fn runtime_knot_deletion() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -526,7 +523,6 @@ async fn runtime_knot_deletion() {
         "deleted knot should not be present"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Start server with empty rig → create `*-loom/` directory then
@@ -553,7 +549,7 @@ async fn filesystem_loom_creation_race_recovery() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -616,7 +612,6 @@ async fn filesystem_loom_creation_race_recovery() {
         "knot id should match"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── POST /looms Registration Verification ────────────────────────────────
@@ -644,7 +639,7 @@ async fn http_post_loom_verifies_knot_registered() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -761,7 +756,6 @@ async fn http_post_loom_verifies_knot_registered() {
         log_content
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── HTTP Knot CRUD Tests ──────────────────────────────────────────────────
@@ -805,7 +799,7 @@ async fn http_create_knot() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -882,7 +876,6 @@ async fn http_create_knot() {
         tie_off_path.display()
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// `PATCH /looms/{id}/knots/{name}` updates knot config → 200 →
@@ -915,7 +908,7 @@ async fn http_update_knot() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -998,7 +991,6 @@ async fn http_update_knot() {
         file_content
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// `DELETE /looms/{id}/knots/{name}` → 204 → knot no longer in
@@ -1043,7 +1035,7 @@ async fn http_delete_knot() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -1093,7 +1085,6 @@ async fn http_delete_knot() {
         "knot .md file should be deleted from disk"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Discover Endpoint Removed ─────────────────────────────────────────────
@@ -1114,7 +1105,7 @@ async fn discover_endpoint_removed() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -1135,5 +1126,4 @@ async fn discover_endpoint_removed() {
         "POST /looms/discover should return 404 or 405, got: {status}"
     );
 
-    let _ = shutdown_tx.send(());
 }

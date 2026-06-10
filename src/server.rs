@@ -412,13 +412,31 @@ pub async fn start_server_with_shutdown(
     // Safety net: if a task has a bug and never exits, the JoinSet Drop
     // will abort it. This is a last resort, not the primary mechanism.
 
-    // Drain all pipeline tasks. Use `while let Some` to wait for every
-    // task to complete — not just the first one. This ensures ProcessStrand
-    // finishes in-flight agent work before the JoinSet is dropped.
-    while let Some(res) = join_set.join_next().await {
-        if let Err(e) = res {
-            eprintln!("Background task failed: {e}");
+    // Drain all pipeline tasks with a timeout safety net.
+    //
+    // The cooperative cascade (channel closure → recv()→None → exit) is
+    // the primary shutdown mechanism. But the notify background thread
+    // holds an Arc reference to the event senders, which can delay channel
+    // closure by tens of milliseconds. If the drain doesn't complete within
+    // the timeout, abort remaining tasks as a last resort.
+    //
+    // See ADR-003 pattern 4 for the timeout safety net rationale.
+    let drain_timeout = Duration::from_secs(5);
+    let drain_result = tokio::time::timeout(drain_timeout, async {
+        while let Some(res) = join_set.join_next().await {
+            if let Err(e) = res {
+                eprintln!("Background task failed: {e}");
+            }
         }
+    })
+    .await;
+
+    if drain_result.is_err() {
+        eprintln!(
+            "WARNING: pipeline tasks did not drain within {:?}, aborting",
+            drain_timeout
+        );
+        join_set.abort_all();
     }
 
     // Write LoomStopped to each loom's activity log.

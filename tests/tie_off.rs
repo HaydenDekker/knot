@@ -45,7 +45,7 @@ async fn full_tie_off_history() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("lifecycle-strand.md");
@@ -127,7 +127,6 @@ async fn full_tie_off_history() {
         "Deleted should come after earlier events"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Integration test: parse tie-off markdown sections and verify structure.
@@ -162,7 +161,7 @@ async fn tie_off_sections_readable() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("sections-strand.md");
@@ -269,5 +268,4 @@ async fn tie_off_sections_readable() {
         content
     );
 
-    let _ = shutdown_tx.send(());
 }

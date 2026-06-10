@@ -35,7 +35,7 @@ async fn startup_discovers_looms() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000).await
@@ -73,7 +73,6 @@ async fn startup_discovers_looms() {
         "knot id should match"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// After startup, `NotifyEventSource` is watching all loom source
@@ -99,7 +98,7 @@ async fn startup_starts_watchers() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000).await
@@ -137,7 +136,6 @@ async fn startup_starts_watchers() {
         serde_json::from_str(&body).expect("should be JSON array");
     assert_eq!(summaries.len(), 1, "loom should still be listed");
 
-    let _ = shutdown_tx.send(());
 }
 
 /// After startup, loom-log and knot-state files exist on disk for each
@@ -162,7 +160,7 @@ async fn startup_logs_knot_registration() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000).await
@@ -207,7 +205,6 @@ async fn startup_logs_knot_registration() {
         "knot status should be idle (from KnotRegistered event)"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Filtering ──────────────────────────────────────────────────────────────
@@ -252,7 +249,7 @@ async fn discovery_ignores_non_loom_directories() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -287,5 +284,4 @@ async fn discovery_ignores_non_loom_directories() {
         "'phantom-id' directory (loom-log directory) should not be discovered as a loom"
     );
 
-    let _ = shutdown_tx.send(());
 }

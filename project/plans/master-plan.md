@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ⬜ Planned | 2026-06-10 |
+| 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
@@ -77,9 +77,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 21. Static Output Paths and Log Timestamps
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-10
+**Completed:** 2026-06-11
 **Goal:** Make tie-off output paths and loom-log paths static (derived from loom/knot names under `rig/output/`), remove `tie-off-dir` from knot YAML, and add ISO 8601 timestamps to console logs and loom-log events.
+
+**Result:** `tie_off_dir` removed from domain and KnotFile. Paths statically derived: `rig/output/{loom-id}/{knot-name}/{strand}.output` and `rig/output/{loom-id}/.loom-log`. ISO 8601 timestamps on all console logs and LoomEvent variants. 278 tests pass (196 lib + 82 integration, 1 ignored).
 
 Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-timestamps.md).
 

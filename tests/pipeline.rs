@@ -47,7 +47,7 @@ async fn event_flows_through_pipeline() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000).await
@@ -86,7 +86,6 @@ async fn event_flows_through_pipeline() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Rapid file edits (3 writes within 50ms) → debounce coalesces into
@@ -115,7 +114,7 @@ async fn debounce_prevents_duplicate_processing() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
 
     // Wait for server to start listening
     wait_for_port(&host_port, 5000).await
@@ -188,7 +187,6 @@ async fn debounce_prevents_duplicate_processing() {
         "should have at least 1 tie-off file"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── End-to-End Pipeline ────────────────────────────────────────────────────
@@ -229,7 +227,7 @@ async fn full_pipeline_create_modify_delete() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -368,7 +366,6 @@ async fn full_pipeline_create_modify_delete() {
         "activity log should contain StrandProcessed entry, got {events:?}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Pipeline with Subdirectory Rig ─────────────────────────────────────────
@@ -412,7 +409,7 @@ async fn full_pipeline_with_subdirectory_rig() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -440,7 +437,7 @@ async fn full_pipeline_with_subdirectory_rig() {
         .expect("knot status should reach terminal state");
 
     // Tie-off should appear in the loom's .knot-output directory.
-    let tie_off_path = root.join("output/config-loom/review-knot/external-strand.md.output");
+    let tie_off_path = rig.join("output/config-loom/review-knot/external-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -454,7 +451,6 @@ async fn full_pipeline_with_subdirectory_rig() {
         "tie-off should contain agent output, got: {content}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Pipeline with External Directories ─────────────────────────────────────
@@ -501,7 +497,7 @@ async fn full_pipeline_with_external_dirs() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -565,7 +561,6 @@ async fn full_pipeline_with_external_dirs() {
          {tie_off_content}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Concurrent Knot Status ──────────────────────────────────────────────
@@ -622,7 +617,7 @@ async fn knot_status_during_processing_does_not_hang() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
@@ -742,5 +737,4 @@ async fn knot_status_during_processing_does_not_hang() {
         );
     }
 
-    let _ = shutdown_tx.send(());
 }

@@ -58,7 +58,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -135,7 +135,6 @@ async fn full_pipeline_agent_error_in_state_and_log() {
         "tie-off should contain error details, got: {tie_off_content}"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 // ── Stub pi CLI Integration Tests ──────────────────────────────────────
@@ -179,7 +178,7 @@ async fn full_pipeline_with_pi_agent() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -248,7 +247,6 @@ async fn full_pipeline_with_pi_agent() {
         "loom log should contain StrandProcessed entry"
     );
 
-    let _ = shutdown_tx.send(());
 }
 
 /// Verify the stub `pi` CLI receives system prompt and strand content,
@@ -293,7 +291,7 @@ async fn pi_agent_receives_system_prompt_and_strand() {
         ..AppConfig::default_config()
     };
 
-    let (_handle, shutdown_tx) = spawn_server_with_shutdown(config);
+    let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000).await
         .expect("server should start listening");
 
@@ -363,5 +361,4 @@ async fn pi_agent_receives_system_prompt_and_strand() {
         "loom log should contain error details, got: {log_content}"
     );
 
-    let _ = shutdown_tx.send(());
 }

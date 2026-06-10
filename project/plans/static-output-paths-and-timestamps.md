@@ -52,7 +52,7 @@ Each knot writes a single `output.md` file that appends all processing events. T
 - **Remove** `tie_off_dir` field from `KnotFile` and `Knot` domain entities
 - `strand-dir` remains required (strands live in project source, not in `rig/output/`)
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-11)
 
 ## Existing Tests
 
@@ -143,3 +143,4 @@ Hex layer: **Integration**
 - This is a **breaking change** for existing knot definitions that include `tie-off-dir`. The parser will ignore it (once the field is removed from `RawFrontmatter`). Users will need to remove `tie-off-dir` from their knot YAML files.
 - The `strand-dir` field remains required and configurable because strands live in project source directories (e.g., `project/prds/`), which genuinely varies per use case.
 - The `tie_off_sink` in `server.rs` is constructed with `base_dir` (the rig path). The sink's internal `tie_off_dir` is only used by `resolve_path()` which is not called during processing. The actual path comes from the usecase. After this change, the sink's constructor arg is still useful (it provides the rig root for `derive_tieoff_path`), so the constructor signature can stay the same.
+- **Post-merge fix:** Discovered that the notify background thread holds an Arc reference to event senders, blocking the cooperative cascade drain. Added 5-second timeout safety net to JoinSet drain (ADR-003 pattern 4) and switched tests to `spawn_server` pattern (ADR-001). 278 tests pass (1 ignored).
