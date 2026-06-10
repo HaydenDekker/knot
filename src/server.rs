@@ -44,7 +44,7 @@ impl AppConfig {
             base_dir,
             bind_addr: "127.0.0.1:3000".parse().unwrap(),
             rig_config: RigAgentConfig::default_config(),
-            agent_timeout: Duration::from_secs(120),
+            agent_timeout: Duration::from_secs(300),
         }
     }
 }
@@ -138,11 +138,13 @@ pub fn build_app_context(
 
     // File-system event source — created once, shared via AppContext.
     // Handlers can pass this to use cases for watch/unwatch.
+    let project_root = config.base_dir.clone();
     let event_source: Arc<dyn application::ports::EventSource> =
         Arc::new(
             crate::adapters::outbound::NotifyEventSource::new(
                 strand_tx.clone(),
                 config_tx,
+                project_root,
             ),
         );
 

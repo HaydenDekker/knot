@@ -6,6 +6,7 @@
 //! subscribes to the strand channel, and the `ConfigEventHandler`
 //! subscribes to the config channel.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +18,32 @@ use crate::application::ports::{EventSource, PortError};
 use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath};
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::domain::knot_file;
+
+// ── Path Resolution ────────────────────────────────────────────────────────
+
+/// Resolve a relative path against `project_root`, matching the logic
+/// in `FileSystemLoomRepository::resolve_path`.
+fn resolve_path(project_root: &Path, value: &PathBuf) -> PathBuf {
+    let path = if value.is_absolute() {
+        value.clone()
+    } else {
+        project_root.join(value)
+    };
+
+    fs::canonicalize(&path).unwrap_or_else(|_| {
+        let mut result = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    let _ = result.pop();
+                }
+                _ => result.push(component),
+            }
+        }
+        result
+    })
+}
 
 // ── WatchType ──────────────────────────────────────────────────────────────
 
@@ -46,6 +73,10 @@ struct InnerState {
     /// longest-path-first order — more specific (longer) paths
     /// always take priority over broader (shorter) parent paths.
     watched_dirs: Vec<(PathBuf, WatchType)>,
+    /// Project root directory. Used to resolve relative `strand_dir`
+    /// and `tie_off_dir` paths from knot config files during event
+    /// mapping, matching the resolution done during initial load.
+    project_root: PathBuf,
 }
 
 impl InnerState {
@@ -179,8 +210,14 @@ impl InnerState {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_config: knot_file.agent_config,
                                 prompt_template: knot_file.prompt_template,
-                                strand_dir: knot_file.strand_dir,
-                                tie_off_dir: knot_file.tie_off_dir,
+                                strand_dir: resolve_path(
+                                    &self.project_root,
+                                    &knot_file.strand_dir,
+                                ),
+                                tie_off_dir: resolve_path(
+                                    &self.project_root,
+                                    &knot_file.tie_off_dir,
+                                ),
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
@@ -245,8 +282,14 @@ impl InnerState {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_config: knot_file.agent_config,
                                 prompt_template: knot_file.prompt_template,
-                                strand_dir: knot_file.strand_dir,
-                                tie_off_dir: knot_file.tie_off_dir,
+                                strand_dir: resolve_path(
+                                    &self.project_root,
+                                    &knot_file.strand_dir,
+                                ),
+                                tie_off_dir: resolve_path(
+                                    &self.project_root,
+                                    &knot_file.tie_off_dir,
+                                ),
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
@@ -323,16 +366,21 @@ impl NotifyEventSource {
     /// watches. `config_sender` receives `ConfigEvent` from rig and
     /// loom directory watches.
     ///
+    /// `project_root` is used to resolve relative `strand_dir` and
+    /// `tie_off_dir` paths from knot config files during event mapping.
+    ///
     /// Uses `notify::Config` with a 50ms poll interval for consistent
     /// test behaviour across platforms.
     pub fn new(
         strand_sender: mpsc::Sender<StrandEvent>,
         config_sender: mpsc::Sender<ConfigEvent>,
+        project_root: PathBuf,
     ) -> Self {
         let state = Arc::new(Mutex::new(InnerState {
             strand_sender,
             config_sender,
             watched_dirs: Vec::new(),
+            project_root,
         }));
 
         let state_clone = state.clone();
@@ -633,7 +681,7 @@ mod tests {
     ) {
         let (strand_tx, strand_rx) = mpsc::channel(100);
         let (config_tx, config_rx) = mpsc::channel(100);
-        let source = NotifyEventSource::new(strand_tx, config_tx).with_ids(
+        let source = NotifyEventSource::new(strand_tx, config_tx, PathBuf::from("/tmp")).with_ids(
             LoomId(loom_id.to_string()),
             KnotId(knot_id.to_string()),
         );
@@ -649,7 +697,7 @@ mod tests {
     ) {
         let (strand_tx, strand_rx) = mpsc::channel(100);
         let (config_tx, config_rx) = mpsc::channel(100);
-        let source = NotifyEventSource::new(strand_tx, config_tx);
+        let source = NotifyEventSource::new(strand_tx, config_tx, PathBuf::from("/tmp"));
         (source, strand_rx, config_rx)
     }
 
