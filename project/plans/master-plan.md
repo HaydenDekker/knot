@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-10
-> **Plan Added:** Static Output Paths and Log Timestamps
+> **Last Updated:** 2026-06-11
+> **Plan Added:** Notify Sender Leak Fix
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
@@ -74,6 +75,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 22. Notify Sender Leak Fix — Immediate Cascade Drain
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-11
+**Goal:** Split `NotifyEventSource` senders from callback state so channels close immediately on drop, removing the 5-second timeout safety net.
+
+Full details in [notify-sender-leak-fix.md](notify-sender-leak-fix.md).
 
 ### 21. Static Output Paths and Log Timestamps
 
