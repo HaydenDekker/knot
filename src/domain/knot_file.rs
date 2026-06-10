@@ -20,8 +20,6 @@ pub enum KnotFileError {
     MissingPromptTemplate,
     /// The `strand-dir` field is missing or empty.
     MissingStrandDir,
-    /// The `tie-off-dir` field is missing or empty.
-    MissingTieOffDir,
     /// The frontmatter YAML could not be parsed.
     InvalidFormat,
 }
@@ -47,9 +45,6 @@ impl std::fmt::Display for KnotFileError {
             KnotFileError::MissingStrandDir => {
                 write!(f, "knot file is missing 'strand-dir' field")
             }
-            KnotFileError::MissingTieOffDir => {
-                write!(f, "knot file is missing 'tie-off-dir' field")
-            }
             KnotFileError::InvalidFormat => {
                 write!(f, "knot file frontmatter is not valid YAML")
             }
@@ -74,8 +69,6 @@ pub struct KnotFile {
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
     pub strand_dir: PathBuf,
-    /// Directory to write tie-off output (required).
-    pub tie_off_dir: PathBuf,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -88,8 +81,6 @@ struct RawFrontmatter {
     prompt_template: Option<RawPromptTemplate>,
     #[serde(rename = "strand-dir")]
     strand_dir: Option<String>,
-    #[serde(rename = "tie-off-dir")]
-    tie_off_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,19 +171,11 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
         .map(PathBuf::from)
         .ok_or(KnotFileError::MissingStrandDir)?;
 
-    // Parse required tie-off-dir
-    let tie_off_dir = raw
-        .tie_off_dir
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .ok_or(KnotFileError::MissingTieOffDir)?;
-
     Ok(KnotFile {
         name,
         agent_config,
         prompt_template,
         strand_dir,
-        tie_off_dir,
     })
 }
 

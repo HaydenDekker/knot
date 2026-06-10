@@ -52,14 +52,20 @@ pub enum LoomEvent {
     KnotRegistered {
         loom_id: LoomId,
         knot_id: KnotId,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// The Loom began processing its strands.
     LoomStarted {
         loom_id: LoomId,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// The Loom stopped processing.
     LoomStopped {
         loom_id: LoomId,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// A strand was processed (either produced output or failed).
     StrandProcessed {
@@ -67,12 +73,16 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// Error message if processing failed. `None` on success.
         error: Option<String>,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// A knot started processing a strand.
     KnotProcessing {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// A knot completed processing a strand successfully.
     KnotCompleted {
@@ -80,6 +90,8 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         tie_off_path: TieOffPath,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// A knot failed while processing a strand.
     KnotFailed {
@@ -87,11 +99,15 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         error: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
     /// A knot was deregistered from the loom.
     KnotDeregistered {
         loom_id: LoomId,
         knot_id: KnotId,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
     },
 }
 
@@ -254,20 +270,25 @@ mod tests {
         let knot_id = KnotId("review".to_string());
         let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
 
+        let ts = "2026-06-10T12:00:00Z".to_string();
         let knot_registered = LoomEvent::KnotRegistered {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
+            timestamp: ts.clone(),
         };
         let loom_started = LoomEvent::LoomStarted {
             loom_id: loom_id.clone(),
+            timestamp: ts.clone(),
         };
         let loom_stopped = LoomEvent::LoomStopped {
             loom_id: loom_id.clone(),
+            timestamp: ts.clone(),
         };
         let strand_processed = LoomEvent::StrandProcessed {
             loom_id: loom_id.clone(),
             strand_path: strand_path.clone(),
             error: None,
+            timestamp: ts.clone(),
         };
 
         // Verify KnotRegistered
@@ -275,25 +296,35 @@ mod tests {
             LoomEvent::KnotRegistered {
                 loom_id: ref lid,
                 knot_id: ref kid,
+                timestamp: ref ts,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*kid, knot_id);
+                assert_eq!(*ts, "2026-06-10T12:00:00Z");
             }
             _ => panic!("Expected KnotRegistered variant"),
         }
 
         // Verify LoomStarted
         match loom_started {
-            LoomEvent::LoomStarted { loom_id: ref lid } => {
+            LoomEvent::LoomStarted {
+                loom_id: ref lid,
+                timestamp: ref ts,
+            } => {
                 assert_eq!(*lid, loom_id);
+                assert_eq!(*ts, "2026-06-10T12:00:00Z");
             }
             _ => panic!("Expected LoomStarted variant"),
         }
 
         // Verify LoomStopped
         match loom_stopped {
-            LoomEvent::LoomStopped { loom_id: ref lid } => {
+            LoomEvent::LoomStopped {
+                loom_id: ref lid,
+                timestamp: ref ts,
+            } => {
                 assert_eq!(*lid, loom_id);
+                assert_eq!(*ts, "2026-06-10T12:00:00Z");
             }
             _ => panic!("Expected LoomStopped variant"),
         }
@@ -304,10 +335,12 @@ mod tests {
                 loom_id: ref lid,
                 strand_path: ref sp,
                 error,
+                timestamp: ref ts,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*sp, strand_path);
                 assert!(error.is_none());
+                assert_eq!(*ts, "2026-06-10T12:00:00Z");
             }
             _ => panic!("Expected StrandProcessed variant"),
         }
@@ -366,9 +399,11 @@ mod tests {
 
     #[test]
     fn loom_event_serialisation() {
+        let ts = "2026-06-10T12:00:00Z".to_string();
         let knot_registered = LoomEvent::KnotRegistered {
             loom_id: LoomId("prds".to_string()),
             knot_id: KnotId("review".to_string()),
+            timestamp: ts.clone(),
         };
         let json = serde_json::to_string(&knot_registered).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
@@ -376,6 +411,7 @@ mod tests {
 
         let loom_started = LoomEvent::LoomStarted {
             loom_id: LoomId("prds".to_string()),
+            timestamp: ts.clone(),
         };
         let json = serde_json::to_string(&loom_started).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
@@ -383,6 +419,7 @@ mod tests {
 
         let loom_stopped = LoomEvent::LoomStopped {
             loom_id: LoomId("prds".to_string()),
+            timestamp: ts.clone(),
         };
         let json = serde_json::to_string(&loom_stopped).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
@@ -392,6 +429,7 @@ mod tests {
             loom_id: LoomId("prds".to_string()),
             strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
             error: None,
+            timestamp: ts.clone(),
         };
         let json = serde_json::to_string(&strand_processed).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
@@ -404,6 +442,7 @@ mod tests {
             loom_id: LoomId("prds".to_string()),
             strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
             error: Some("agent crashed".to_string()),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
 
         // Verify error field is present
@@ -425,11 +464,13 @@ mod tests {
         let loom_id = LoomId("prds".to_string());
         let knot_id = KnotId("review".to_string());
         let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let ts = "2026-06-10T12:00:00Z".to_string();
 
         let event = LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
+            timestamp: ts.clone(),
         };
 
         // Verify fields via pattern matching
@@ -438,10 +479,12 @@ mod tests {
                 loom_id: lid,
                 knot_id: kid,
                 strand_path: sp,
+                timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*kid, knot_id);
                 assert_eq!(*sp, strand_path);
+                assert_eq!(t, &ts);
             }
             _ => panic!("Expected KnotProcessing variant"),
         }
@@ -458,12 +501,14 @@ mod tests {
         let knot_id = KnotId("review".to_string());
         let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
         let tie_off_path = TieOffPath(PathBuf::from("output/review.md"));
+        let ts = "2026-06-10T12:00:00Z".to_string();
 
         let event = LoomEvent::KnotCompleted {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             tie_off_path: tie_off_path.clone(),
+            timestamp: ts.clone(),
         };
 
         // Verify fields via pattern matching
@@ -473,11 +518,13 @@ mod tests {
                 knot_id: kid,
                 strand_path: sp,
                 tie_off_path: tp,
+                timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*kid, knot_id);
                 assert_eq!(*sp, strand_path);
                 assert_eq!(*tp, tie_off_path);
+                assert_eq!(t, &ts);
             }
             _ => panic!("Expected KnotCompleted variant"),
         }
@@ -494,12 +541,14 @@ mod tests {
         let knot_id = KnotId("review".to_string());
         let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
         let error = "Agent returned non-zero exit code".to_string();
+        let ts = "2026-06-10T12:00:00Z".to_string();
 
         let event = LoomEvent::KnotFailed {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             error: error.clone(),
+            timestamp: ts.clone(),
         };
 
         // Verify fields via pattern matching
@@ -509,11 +558,13 @@ mod tests {
                 knot_id: kid,
                 strand_path: sp,
                 error: msg,
+                timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*kid, knot_id);
                 assert_eq!(*sp, strand_path);
                 assert_eq!(msg.as_str(), error);
+                assert_eq!(t, &ts);
             }
             _ => panic!("Expected KnotFailed variant"),
         }
@@ -538,7 +589,6 @@ mod tests {
                 instructions: "Test instructions.".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -624,48 +674,57 @@ mod tests {
 
     #[test]
     fn loom_event_serialisation_all_variants() {
-        // Verify all 7 variants round-trip through JSON
+        // Verify all 8 variants round-trip through JSON
         let loom_id = LoomId("all".to_string());
         let knot_id = KnotId("k1".to_string());
         let strand_path = StrandPath(PathBuf::from("in.md"));
         let tie_off_path = TieOffPath(PathBuf::from("out.md"));
+        let ts = "2026-06-10T12:00:00Z".to_string();
 
         let events: Vec<LoomEvent> = vec![
             LoomEvent::KnotRegistered {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
+                timestamp: ts.clone(),
             },
             LoomEvent::LoomStarted {
                 loom_id: loom_id.clone(),
+                timestamp: ts.clone(),
             },
             LoomEvent::LoomStopped {
                 loom_id: loom_id.clone(),
+                timestamp: ts.clone(),
             },
             LoomEvent::StrandProcessed {
                 loom_id: loom_id.clone(),
                 strand_path: strand_path.clone(),
                 error: None,
+                timestamp: ts.clone(),
             },
             LoomEvent::KnotProcessing {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
+                timestamp: ts.clone(),
             },
             LoomEvent::KnotCompleted {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 tie_off_path: tie_off_path.clone(),
+                timestamp: ts.clone(),
             },
             LoomEvent::KnotFailed {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 error: "boom".to_string(),
+                timestamp: ts.clone(),
             },
             LoomEvent::KnotDeregistered {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
+                timestamp: ts.clone(),
             },
         ];
 

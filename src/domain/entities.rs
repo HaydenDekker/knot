@@ -53,9 +53,6 @@ pub struct Knot {
     /// Directory to watch for strand files (required).
     #[schema(value_type = String)]
     pub strand_dir: PathBuf,
-    /// Directory to write tie-off output (required).
-    #[schema(value_type = String)]
-    pub tie_off_dir: PathBuf,
 }
 
 /// A Loom orchestrates a collection of Knots.
@@ -113,18 +110,16 @@ mod tests {
             agent_config: agent_config.clone(),
             prompt_template: prompt_template.clone(),
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         };
 
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_config, agent_config);
         assert_eq!(knot.prompt_template, prompt_template);
         assert_eq!(knot.strand_dir, PathBuf::from("strands"));
-        assert_eq!(knot.tie_off_dir, PathBuf::from("tie-offs"));
     }
 
     #[test]
-    fn knot_construction_with_required_dirs() {
+    fn knot_construction_with_strand_dir() {
         let knot = Knot {
             id: KnotId("custom-dirs".to_string()),
             agent_config: AgentConfig {
@@ -138,16 +133,11 @@ mod tests {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("../custom-source"),
-            tie_off_dir: PathBuf::from("../custom-output"),
         };
 
         assert_eq!(
             knot.strand_dir,
             PathBuf::from("../custom-source")
-        );
-        assert_eq!(
-            knot.tie_off_dir,
-            PathBuf::from("../custom-output")
         );
     }
 
@@ -167,7 +157,6 @@ mod tests {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("project/prds"),
-            tie_off_dir: PathBuf::from("output/prds"),
         }];
 
         let loom = Loom {
@@ -249,7 +238,6 @@ mod tests {
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         };
 
         let json = serde_json::to_string(&knot).unwrap();
