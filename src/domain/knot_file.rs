@@ -20,8 +20,6 @@ pub enum KnotFileError {
     MissingPromptTemplate,
     /// The `strand-dir` field is missing or empty.
     MissingStrandDir,
-    /// The frontmatter YAML could not be parsed.
-    InvalidFormat,
 }
 
 impl std::fmt::Display for KnotFileError {
@@ -44,9 +42,6 @@ impl std::fmt::Display for KnotFileError {
             }
             KnotFileError::MissingStrandDir => {
                 write!(f, "knot file is missing 'strand-dir' field")
-            }
-            KnotFileError::InvalidFormat => {
-                write!(f, "knot file frontmatter is not valid YAML")
             }
         }
     }
@@ -81,6 +76,10 @@ struct RawFrontmatter {
     prompt_template: Option<RawPromptTemplate>,
     #[serde(rename = "strand-dir")]
     strand_dir: Option<String>,
+    /// Tie-off dir is accepted in YAML but ignored (output path is now static).
+    #[allow(dead_code)]
+    #[serde(rename = "tie-off-dir")]
+    tie_off_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +178,34 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     })
 }
 
+/// Derive the tie-off output path for a knot.
+///
+/// Returns `rig/output/{loom-id}/{knot-name}/output.md`.
+/// This is the statically-derived replacement for the per-knot
+/// `tie-off-dir` frontmatter field.
+pub fn derive_tieoff_path(
+    loom_id: &str,
+    knot_name: &str,
+    rig: &std::path::Path,
+) -> std::path::PathBuf {
+    rig.join("output")
+        .join(loom_id)
+        .join(knot_name)
+        .join("output.md")
+}
+
+/// Derive the loom-log path for a loom.
+///
+/// Returns `rig/output/{loom-id}/.loom-log`.
+/// Moved from `rig/{loom-id}/.loom-log` to separate outputs from definitions.
+pub fn derive_loom_log_path(
+    loom_id: &str,
+    rig: &std::path::Path,
+) -> std::path::PathBuf {
+    rig.join("output").join(loom_id).join(".loom-log")
+}
+}
+
 /// Extract the YAML portion between the first pair of `---` delimiters.
 fn extract_frontmatter(content: &str) -> Result<String, KnotFileError> {
     let trimmed = content.trim();
@@ -208,7 +235,6 @@ agent-config:
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"strands\"
-tie-off-dir: \"tie-offs\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -236,11 +262,10 @@ This knot reviews the goals section of PRD documents.
         assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
         assert_eq!(file.strand_dir, PathBuf::from("strands"));
-        assert_eq!(file.tie_off_dir, PathBuf::from("tie-offs"));
     }
 
     #[test]
-    fn knot_file_with_strand_and_tieoff_dirs() {
+    fn knot_file_with_custom_strand_dir() {
         let content = "---
 name: custom-dirs-knot
 agent-config:
@@ -248,7 +273,6 @@ agent-config:
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"../custom-source\"
-tie-off-dir: \"../custom-output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -262,10 +286,6 @@ Body.
         assert_eq!(
             file.strand_dir,
             PathBuf::from("../custom-source")
-        );
-        assert_eq!(
-            file.tie_off_dir,
-            PathBuf::from("../custom-output")
         );
     }
 
@@ -292,14 +312,17 @@ Body.
     }
 
     #[test]
-    fn missing_tieoff_dir_returns_error() {
+    fn tieoff_dir_in_yaml_is_accepted_but_ignored() {
+        // tie-off-dir in YAML frontmatter is accepted (for backward compat)
+        // but is not stored — output path is statically derived.
         let content = "---
-name: no-tieoff-dir-knot
+name: legacy-knot
 agent-config:
   goal: \"Review\"
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"../input\"
+tie-off-dir: \"../old-output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -308,21 +331,20 @@ prompt-template:
 Body.
 ";
 
-        let result = parse(content);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), KnotFileError::MissingTieOffDir);
+        let file = parse(content).unwrap();
+        assert_eq!(file.name, "legacy-knot");
+        assert_eq!(file.strand_dir, PathBuf::from("../input"));
     }
 
     #[test]
-    fn empty_dir_values_return_error() {
+    fn empty_strand_dir_returns_error() {
         let content = "---
-name: empty-dirs-knot
+name: empty-strand-knot
 agent-config:
   goal: \"Review\"
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"  \"
-tie-off-dir: \"\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -333,7 +355,6 @@ Body.
 
         let result = parse(content);
         assert!(result.is_err());
-        // strand-dir is checked first (alphabetical in frontmatter parsing)
         assert_eq!(result.unwrap_err(), KnotFileError::MissingStrandDir);
     }
 
@@ -349,7 +370,6 @@ agent-config:
     - fs
     - web
 strand-dir: \"strands\"
-tie-off-dir: \"tie-offs\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review the document\"
@@ -476,7 +496,6 @@ No frontmatter at all.";
             )
             .unwrap(),
             strand_dir: PathBuf::from("strands/test"),
-            tie_off_dir: PathBuf::from("tie-offs/test"),
         };
 
         let json = serde_json::to_string(&file).unwrap();
@@ -589,12 +608,26 @@ Body.
             "knot file is missing 'strand-dir' field"
         );
         assert_eq!(
-            KnotFileError::MissingTieOffDir.to_string(),
-            "knot file is missing 'tie-off-dir' field"
+            KnotFileError::MissingStrandDir.to_string(),
+            "knot file is missing 'strand-dir' field"
         );
+    }
+
+    #[test]
+    fn derive_tieoff_path_builds_correct_path() {
+        let path = derive_tieoff_path("my-loom", "review-knot", Path::new("/workspace/rig"));
         assert_eq!(
-            KnotFileError::InvalidFormat.to_string(),
-            "knot file frontmatter is not valid YAML"
+            path,
+            PathBuf::from("/workspace/rig/output/my-loom/review-knot/output.md")
+        );
+    }
+
+    #[test]
+    fn derive_loom_log_path_builds_correct_path() {
+        let path = derive_loom_log_path("my-loom", Path::new("/workspace/rig"));
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace/rig/output/my-loom/.loom-log")
         );
     }
 }
