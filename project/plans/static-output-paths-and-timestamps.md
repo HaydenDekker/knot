@@ -109,24 +109,25 @@ Hex layer: **Application**
 
 Hex layer: **Outbound Adapters**
 
-- [ ] Update `FileSystemLoomLog::log_path()` to use `rig/output/{loom-id}/.loom-log`
-- [ ] Update `FileSystemLoomLog::open_file()` to create `rig/output/{loom-id}/` directory
-- [ ] Update `SharedLoomLog::open_file()` similarly
-- [ ] Update `adapters/logging.rs`: prepend ISO 8601 timestamp to all `eprintln!` calls
-- [ ] Update outbound adapter unit tests
-- [ ] Update `loom_repository.rs`: remove `tie_off_dir` from `Knot` construction, remove `tie_off_dir` from `resolve_path` loop
+- [x] Update `FileSystemLoomLog::log_path()` to use `rig/output/{loom-id}/.loom-log`
+- [x] Update `FileSystemLoomLog::open_file()` to create `rig/output/{loom-id}/` directory
+- [x] Update `SharedLoomLog::open_file()` similarly
+- [x] Update `adapters/logging.rs`: prepend ISO 8601 timestamp to all `eprintln!` calls
+- [x] Update outbound adapter unit tests
+- [x] Update `loom_repository.rs`: remove `tie_off_dir` from `Knot` construction, remove `tie_off_dir` from `resolve_path` loop
 
 ### Phase 3: Integration Tests and Composition Root
 
 Hex layer: **Integration**
 
-- [ ] Update `server.rs` `build_app_context()`: no path changes needed (uses `base_dir` which is still `rig`)
-- [ ] Update integration tests that check output paths:
-  - Tie-off files now at `rig/output/{loom-id}/{knot-name}/output.md`
+- [x] Update `server.rs` `build_app_context()`: no path changes needed (uses `base_dir` which is still `rig`)
+- [x] Update `server.rs` `ProcessStrand` construction to pass `base_dir`
+- [x] Update integration tests that check output paths:
+  - Tie-off files now at `rig/output/{loom-id}/{knot-name}/{strand}.output`
   - Loom-log at `rig/output/{loom-id}/.loom-log`
-- [ ] Update integration tests that create knot YAML files: remove `tie-off-dir` from test fixtures
-- [ ] Update integration tests that check loom-log content: verify timestamp fields
-- [ ] Verify full test suite passes
+- [x] Update integration tests that create knot YAML files: remove `tie-off-dir` from test fixtures
+- [x] Update integration tests that check loom-log content: verify timestamp fields
+- [x] Verify full test suite passes (196 lib tests + all integration tests)
 
 ### Phase 4: Documentation Updates
 
