@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-08
-> **Plan Added:** Knot Modification Observability and Path Resolution Consistency
+> **Last Updated:** 2026-06-10
+> **Plan Added:** Static Output Paths and Log Timestamps
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ⬜ Planned | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
@@ -73,6 +74,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 21. Static Output Paths and Log Timestamps
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-10
+**Goal:** Make tie-off output paths and loom-log paths static (derived from loom/knot names under `rig/output/`), remove `tie-off-dir` from knot YAML, and add ISO 8601 timestamps to console logs and loom-log events.
+
+Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-timestamps.md).
 
 ### 20. Knot Modification Observability and Path Resolution Consistency
 
