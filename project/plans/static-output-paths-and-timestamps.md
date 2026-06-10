@@ -77,13 +77,13 @@ Each knot writes a single `output.md` file that appends all processing events. T
 
 Hex layer: **Domain**
 
-- [ ] Remove `tie_off_dir: PathBuf` from `Knot` entity in `src/domain/entities.rs`
-- [ ] Add `timestamp: String` field to all `LoomEvent` variants in `src/domain/events.rs`
-- [ ] Update `KnotFileError`: remove `MissingTieOffDir` variant
-- [ ] Update `KnotFile` struct: remove `tie_off_dir` field
-- [ ] Update `parse()` in `knot_file.rs`: remove `tie-off-dir` parsing/validation
-- [ ] Update `RawFrontmatter`: remove `tie_off_dir` optional field
-- [ ] Update all domain layer tests
+- [x] Remove `tie_off_dir: PathBuf` from `Knot` entity in `src/domain/entities.rs`
+- [x] Add `timestamp: String` field to all `LoomEvent` variants in `src/domain/events.rs`
+- [x] Update `KnotFileError`: remove `MissingTieOffDir` variant
+- [x] Update `KnotFile` struct: remove `tie_off_dir` field
+- [x] Update `parse()` in `knot_file.rs`: remove `tie-off-dir` parsing/validation
+- [x] Update `RawFrontmatter`: remove `tie_off_dir` optional field
+- [x] Update all domain layer tests
 
 **Rationale:** Domain is the core — change entities and events first, everything else follows.
 
