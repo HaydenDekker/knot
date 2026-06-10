@@ -29,19 +29,16 @@ async fn demo_knot_test_processes_sample_document() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Create strand and tie-off directories
+    // Create strand directory
     let strand_dir = base_dir.join("strands");
-    let tie_off_dir = base_dir.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     // Create knot-test-loom directory with provider/model in config
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review and summarize documents\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the provided document. Provide a concise summary\n    of its key points and any recommendations.\n---\n\n# Review Knot\n\nThis knot reviews and summarizes documents.\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review and summarize documents\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the provided document. Provide a concise summary\n    of its key points and any recommendations.\n---\n\n# Review Knot\n\nThis knot reviews and summarizes documents.\n",
+        strand_dir.display()
     );
     fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
 
@@ -99,7 +96,7 @@ processing pipeline.
 
     // If the initial file hasn't been processed yet (startup race),
     // create a new file to trigger processing explicitly.
-    let tie_off_path = tie_off_dir.join("sample-document.md.output");
+    let tie_off_path = base_dir.join("output/knot-test-loom/review-knot/sample-document.md.output");
     if !tie_off_path.exists() {
         // Touch the file to trigger a Modify event
         fs::write(
@@ -184,19 +181,16 @@ async fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Create strand and tie-off directories
+    // Create strand directory
     let strand_dir = base_dir.join("strands");
-    let tie_off_dir = base_dir.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     // Create knot-test-loom with tools in agent-config
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review with tools\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet-4-20250514\"\n  tools:\n    - fs\n    - web\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the document with tool access.\n---\n\n# Review Knot With Tools\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review with tools\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet-4-20250514\"\n  tools:\n    - fs\n    - web\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the document with tool access.\n---\n\n# Review Knot With Tools\n",
+        strand_dir.display()
     );
     fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
 
@@ -226,7 +220,7 @@ async fn demo_knot_test_with_tools() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify tie-off exists and contains the model from knot config
-    let tie_off_path = tie_off_dir.join("input.md.output");
+    let tie_off_path = base_dir.join("output/knot-test-loom/review-knot/input.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",

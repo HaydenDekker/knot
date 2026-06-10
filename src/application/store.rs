@@ -94,7 +94,6 @@ mod tests {
                     )
                     .unwrap(),
                     strand_dir: PathBuf::from("strands"),
-                    tie_off_dir: PathBuf::from("tie-offs"),
                 },
             ],
         }

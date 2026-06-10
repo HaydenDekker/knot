@@ -27,7 +27,7 @@ async fn event_flows_through_pipeline() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
@@ -72,7 +72,7 @@ async fn event_flows_through_pipeline() {
     );
 
     // Verify tie-off file was produced
-    let tie_off_path = tie_off_dir.join("test-strand.md.output");
+    let tie_off_path = base_dir.join("output/pipeline-loom/review-knot/test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off file should exist: {}",
@@ -99,7 +99,7 @@ async fn debounce_prevents_duplicate_processing() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("debounce-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31991;
@@ -154,7 +154,7 @@ async fn debounce_prevents_duplicate_processing() {
     // internals), so without debouncing we'd see 3-6+ StrandProcessed
     // events for the burst alone. With debouncing, the 3 rapid writes
     // coalesce to 1 debounced event.
-    let log_path = base_dir.join("debounce-loom/.loom-log");
+    let log_path = base_dir.join("output/debounce-loom/.loom-log");
     let log_content =
         fs::read_to_string(&log_path).expect("loom log should exist");
     let strand_processed_count = log_content
@@ -174,7 +174,7 @@ async fn debounce_prevents_duplicate_processing() {
     );
 
     // Tie-off directory exists and has at least one file for the strand
-    let tie_off_dir = tie_off_dir;
+    let tie_off_dir = base_dir.join("output/debounce-loom/review-knot");
     assert!(
         tie_off_dir.exists(),
         "tie-off directory should exist"
@@ -210,7 +210,7 @@ async fn full_pipeline_create_modify_delete() {
     // Create loom directory with knot definition
     let loom_dir = base_dir.join("pipeline-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
@@ -286,7 +286,7 @@ async fn full_pipeline_create_modify_delete() {
         "knot status should be completed after processing"
     );
 
-    let tie_off_path = tie_off_dir.join("test-strand.md.output");
+    let tie_off_path = base_dir.join("output/pipeline-loom/review-knot/test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after create: {}",
@@ -393,7 +393,7 @@ async fn full_pipeline_with_subdirectory_rig() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("config-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
@@ -440,7 +440,7 @@ async fn full_pipeline_with_subdirectory_rig() {
         .expect("knot status should reach terminal state");
 
     // Tie-off should appear in the loom's .knot-output directory.
-    let tie_off_path = tie_off_dir.join("external-strand.md.output");
+    let tie_off_path = root.join("output/config-loom/review-knot/external-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -482,7 +482,7 @@ async fn full_pipeline_with_external_dirs() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("success-external-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
@@ -532,7 +532,7 @@ async fn full_pipeline_with_external_dirs() {
     );
 
     // 4. Verify loom-log contains `StrandProcessed` with no error.
-    let log_path = rig.join("success-external-loom/.loom-log");
+    let log_path = rig.join("output/success-external-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -551,7 +551,7 @@ async fn full_pipeline_with_external_dirs() {
     );
 
     // 5. Verify tie-off file written with agent output.
-    let tie_off_path = tie_off_dir.join("success-strand.md.output");
+    let tie_off_path = rig.join("output/success-external-loom/review-knot/success-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -591,7 +591,7 @@ async fn knot_status_during_processing_does_not_hang() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("concurrent-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, _tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 

@@ -78,7 +78,7 @@ async fn rig_directory_scanned() {
     fs::create_dir(&rig_path).unwrap();
     let loom_dir = rig_path.join("docs-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(tmp.path());
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(tmp.path());
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31981;
@@ -226,9 +226,7 @@ async fn api_register_then_discover_after_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
     let strand_dir = tmp.path().join("strands");
-    let tie_off_dir = tmp.path().join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     let port = 32011;
     let host_port = format!("127.0.0.1:{port}");
@@ -259,8 +257,7 @@ async fn api_register_then_discover_after_restart() {
                 "input_bundling": "full-file",
                 "instructions": "Review this content."
             },
-            "strand_dir": strand_dir.to_string_lossy().to_string(),
-            "tie_off_dir": tie_off_dir.to_string_lossy().to_string()
+            "strand_dir": strand_dir.to_string_lossy().to_string()
         }]
     });
 

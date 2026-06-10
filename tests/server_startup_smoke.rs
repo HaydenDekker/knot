@@ -41,7 +41,7 @@ async fn server_starts_with_loom_directory() {
 
     let loom_dir = rig.join("test-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) = make_knot_content_with_dirs(root);
+    let (knot_content, _strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let config = AppConfig {

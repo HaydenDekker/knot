@@ -199,6 +199,7 @@ pub fn start_event_pipeline(
     let agent_runner = Arc::clone(&ctx.agent_runner);
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
     let rig_config = ctx.rig_config.clone();
+    let base_dir = ctx.base_dir.clone();
 
     join_set.spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
@@ -207,6 +208,7 @@ pub fn start_event_pipeline(
             agent_runner,
             tie_off_sink,
             rig_config,
+            base_dir,
         );
         while let Some(event) = debounce_rx.recv().await {
             if let Err(e) = use_case.execute(event) {
@@ -424,6 +426,7 @@ pub async fn start_server_with_shutdown(
         let _ = shutdown_log_port.append(
             domain::events::LoomEvent::LoomStopped {
                 loom_id: loom_id.clone(),
+                timestamp: application::usecases::format_timestamp(),
             },
         );
     }

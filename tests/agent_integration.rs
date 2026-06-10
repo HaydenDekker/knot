@@ -40,8 +40,8 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     // Loom directory with knot definition.
     let loom_dir = rig.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
-    // External source directories (strands and tie-offs live outside the rig).
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(root);
+    // External strand directory (tie-off paths are statically derived).
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31998;
@@ -100,7 +100,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     );
 
     // 4. Verify loom-log contains StrandProcessed with error field.
-    let log_path = rig.join("error-loom/.loom-log");
+    let log_path = rig.join("output/error-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -118,7 +118,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     );
 
     // 5. Verify tie-off file written with Failed content.
-    let tie_off_path = tie_off_dir.join("error-strand.md.output");
+    let tie_off_path = rig.join("output/error-loom/review-knot/error-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -160,7 +160,7 @@ async fn full_pipeline_with_pi_agent() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("pi-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Create the stub-pi script that echoes received args and content
@@ -192,7 +192,7 @@ async fn full_pipeline_with_pi_agent() {
     std::thread::sleep(Duration::from_millis(500));
 
     // 1. Verify tie-off exists and contains the agent output
-    let tie_off_path = tie_off_dir.join("test-strand.md.output");
+    let tie_off_path = base_dir.join("output/pi-loom/review-knot/test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -235,7 +235,7 @@ async fn full_pipeline_with_pi_agent() {
     );
 
     // 3. Verify loom-log contains StrandProcessed with no error
-    let log_path = base_dir.join("pi-loom/.loom-log");
+    let log_path = base_dir.join("output/pi-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -264,19 +264,16 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Create strand and tie-off directories
+    // Create strand directory (tie-off paths are statically derived)
     let strand_dir = base_dir.join("strands");
-    let tie_off_dir = base_dir.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     // Create a loom directory with a knot that uses a nonexistent model
     let loom_dir = base_dir.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review with nonexistent model\"\n  provider: \"openai\"\n  model: \"nonexistent-model-xyz\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Error Test Knot\n\nThis knot tests error handling.\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review with nonexistent model\"\n  provider: \"openai\"\n  model: \"nonexistent-model-xyz\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Error Test Knot\n\nThis knot tests error handling.\n",
+        strand_dir.display()
     );
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
@@ -333,7 +330,7 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     );
 
     // 2. Verify tie-off contains error details
-    let tie_off_path = tie_off_dir.join("error-strand.md.output");
+    let tie_off_path = base_dir.join("output/error-loom/review-knot/error-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -347,7 +344,7 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     );
 
     // 3. Verify loom-log contains StrandProcessed with error
-    let log_path = base_dir.join("error-loom/.loom-log");
+    let log_path = base_dir.join("output/error-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",

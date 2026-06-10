@@ -23,31 +23,25 @@ async fn multiple_looms_independent() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
-    // Loom A with its own strand and tie-off directories
+    // Loom A with its own strand directory
     let loom_a_dir = base_dir.join("loom-a-loom");
     fs::create_dir(&loom_a_dir).unwrap();
     let strand_dir_a = base_dir.join("loom-a-strands");
-    let tie_off_dir_a = base_dir.join("loom-a-tieoffs");
     fs::create_dir_all(&strand_dir_a).unwrap();
-    fs::create_dir_all(&tie_off_dir_a).unwrap();
     let knot_a_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
-        strand_dir_a.display(),
-        tie_off_dir_a.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+        strand_dir_a.display()
     );
     fs::write(loom_a_dir.join("review.md"), knot_a_content).unwrap();
 
-    // Loom B with its own strand and tie-off directories
+    // Loom B with its own strand directory
     let loom_b_dir = base_dir.join("loom-b-loom");
     fs::create_dir(&loom_b_dir).unwrap();
     let strand_dir_b = base_dir.join("loom-b-strands");
-    let tie_off_dir_b = base_dir.join("loom-b-tieoffs");
     fs::create_dir_all(&strand_dir_b).unwrap();
-    fs::create_dir_all(&tie_off_dir_b).unwrap();
     let knot_b_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
-        strand_dir_b.display(),
-        tie_off_dir_b.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+        strand_dir_b.display()
     );
     fs::write(loom_b_dir.join("review.md"), knot_b_content).unwrap();
 
@@ -98,7 +92,7 @@ async fn multiple_looms_independent() {
     std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in A's output directory
-    let tie_off_a = tie_off_dir_a.join("strand-a.md.output");
+    let tie_off_a = base_dir.join("output/loom-a-loom/review-knot/strand-a.md.output");
     assert!(
         tie_off_a.exists(),
         "tie-off should exist in loom A: {}",
@@ -111,7 +105,7 @@ async fn multiple_looms_independent() {
     std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in B's output directory
-    let tie_off_b = tie_off_dir_b.join("strand-b.md.output");
+    let tie_off_b = base_dir.join("output/loom-b-loom/review-knot/strand-b.md.output");
     assert!(
         tie_off_b.exists(),
         "tie-off should exist in loom B: {}",
@@ -120,6 +114,7 @@ async fn multiple_looms_independent() {
 
     // 3. No cross-interference
     // A's tie-off dir should NOT contain B's strand output
+    let tie_off_dir_a = base_dir.join("output/loom-a-loom/review-knot");
     let files_in_a: Vec<_> =
         fs::read_dir(&tie_off_dir_a)
             .expect("should read tie-off dir A")
@@ -132,6 +127,7 @@ async fn multiple_looms_independent() {
     );
 
     // B's tie-off dir should NOT contain A's strand output
+    let tie_off_dir_b = base_dir.join("output/loom-b-loom/review-knot");
     let files_in_b: Vec<_> =
         fs::read_dir(&tie_off_dir_b)
             .expect("should read tie-off dir B")
@@ -173,12 +169,6 @@ async fn server_starts_with_per_knot_source_dirs() {
     let source_b = root.join("source-b");
     fs::create_dir(&source_b).unwrap();
 
-    // Tie-off directories for each knot.
-    let tieoff_a = root.join("tieoff-a");
-    fs::create_dir(&tieoff_a).unwrap();
-    let tieoff_b = root.join("tieoff-b");
-    fs::create_dir(&tieoff_b).unwrap();
-
     // Knot A — watches source-a.
     let knot_a_content = format!(
         "---
@@ -188,14 +178,12 @@ agent-config:
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"{}\"
-tie-off-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review A\"
 ---
 ",
-        source_a.display(),
-        tieoff_a.display()
+        source_a.display()
     );
     fs::write(loom_dir.join("knot-a.md"), knot_a_content).unwrap();
 
@@ -208,14 +196,12 @@ agent-config:
   provider: \"openai\"
   model: \"gpt-4o\"
 strand-dir: \"{}\"
-tie-off-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review B\"
 ---
 ",
-        source_b.display(),
-        tieoff_b.display()
+        source_b.display()
     );
     fs::write(loom_dir.join("knot-b.md"), knot_b_content).unwrap();
 

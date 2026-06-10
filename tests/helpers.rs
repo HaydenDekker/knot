@@ -13,27 +13,24 @@ use tokio::time::{sleep, Duration};
 
 // ── Knot Fixtures ──────────────────────────────────────────────────────────
 
-/// Generate valid knot definition file content with absolute paths.
-/// Creates the strand and tie-off directories if they don't exist.
-/// Returns (knot_content, strand_dir, tie_off_dir).
+/// Generate valid knot definition file content with absolute strand path.
+/// Creates the strand directory if it doesn't exist.
+/// Returns (knot_content, strand_dir). Tie-off paths are statically derived.
 pub fn make_knot_content_with_dirs(
     project_root: &Path,
-) -> (String, std::path::PathBuf, std::path::PathBuf) {
+) -> (String, std::path::PathBuf) {
     let strand_dir = project_root.join("strands");
-    let tie_off_dir = project_root.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
     let content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals for clarity\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals for clarity\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
+        strand_dir.display()
     );
-    (content, strand_dir, tie_off_dir)
+    (content, strand_dir)
 }
 
 /// Generate valid knot definition file content (ignores returned paths).
 pub fn make_knot_content(project_root: &Path) -> String {
-    let (content, _, _) = make_knot_content_with_dirs(project_root);
+    let (content, _) = make_knot_content_with_dirs(project_root);
     content
 }
 

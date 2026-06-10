@@ -16,8 +16,8 @@ use knot::RigAgentConfig;
 use helpers::*;
 
 /// Generate knot `.md` content with the given knot name and absolute paths.
-/// Creates the strand and tie-off directories if they don't exist.
-/// Returns (content, strand_dir, tie_off_dir).
+/// Creates the strand directory if it doesn't exist.
+/// Returns (content, strand_dir). Tie-off paths are statically derived.
 fn make_named_knot_content(
     knot_name: &str,
     goal: &str,
@@ -25,20 +25,17 @@ fn make_named_knot_content(
     model: &str,
     instructions: &str,
     project_root: &std::path::Path,
-) -> (String, std::path::PathBuf, std::path::PathBuf) {
+) -> (String, std::path::PathBuf) {
     let strand_dir = project_root.join("strands");
-    let tie_off_dir = project_root.join("tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
     let content = format!(
         "---\nname: {knot_name}\nagent-config:\n  goal: \"{goal}\"\n  \
          provider: \"{provider}\"\n  model: \"{model}\"\nstrand-dir: \"{}\"\n\
-         tie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  \
+         prompt-template:\n  input-bundling: \"full-file\"\n  \
          instructions: \"{instructions}\"\n---\n\n# {knot_name}\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        strand_dir.display()
     );
-    (content, strand_dir, tie_off_dir)
+    (content, strand_dir)
 }
 
 /// Helper: wait for auto-discovery to register a loom (poll GET /looms).
@@ -189,7 +186,7 @@ async fn runtime_loom_auto_discovery() {
     // 2. Create a new loom directory with a knot definition file
     let loom_dir = base_dir.join("test-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review documents",
@@ -246,7 +243,7 @@ async fn runtime_loom_auto_discovery() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 7. Verify tie-off was produced
-    let tie_off_path = tie_off_dir.join("test-strand.md.output");
+    let tie_off_path = base_dir.join("output/test-loom/review-knot/test-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after auto-discovery processing: {}",
@@ -275,7 +272,7 @@ async fn runtime_knot_auto_discovery() {
     // Create a loom with one knot at startup
     let loom_dir = base_dir.join("existing-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review documents",
@@ -316,17 +313,14 @@ async fn runtime_knot_auto_discovery() {
 
     // 2. Drop a new .md file in the loom directory
     let strand_dir = base_dir.join("strands2");
-    let tie_off_dir = base_dir.join("tie-offs2");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
     let new_knot_content = format!(
         "---\nname: summary-knot\nagent-config:\n  goal: \"Summarize \
          content\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
-         \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \
+         \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"Summarize the document\"\n---\n\n# \
          Summary Knot\n",
-        strand_dir.display(),
-        tie_off_dir.display()
+        strand_dir.display()
     );
     fs::write(loom_dir.join("summary-knot.md"), new_knot_content).unwrap();
 
@@ -369,7 +363,7 @@ async fn runtime_knot_edit_picks_up_change() {
     // Create a loom with a knot at startup
     let loom_dir = base_dir.join("edit-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review PRD goals for clarity",
@@ -413,11 +407,10 @@ async fn runtime_knot_edit_picks_up_change() {
     let updated_content = format!(
         "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals \
          for clarity\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet\"\n\
-         strand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  \
+         strand-dir: \"{}\"\nprompt-template:\n  \
          input-bundling: \"full-file\"\n  instructions: \"Review the goals \
          section of this PRD\"\n---\n\n# review-knot\n",
-        base_dir.join("strands").display(),
-        base_dir.join("tie-offs").display()
+        base_dir.join("strands").display()
     );
     fs::write(loom_dir.join("review-knot.md"), updated_content).unwrap();
 
@@ -459,7 +452,7 @@ async fn runtime_knot_deletion() {
     // Create a loom with two knots at startup
     let loom_dir = base_dir.join("delete-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review documents",
@@ -472,16 +465,13 @@ async fn runtime_knot_deletion() {
 
     // Second knot
     let strand_dir2 = base_dir.join("strands2");
-    let tie_off_dir2 = base_dir.join("tie-offs2");
     fs::create_dir_all(&strand_dir2).unwrap();
-    fs::create_dir_all(&tie_off_dir2).unwrap();
     let second_knot = format!(
         "---\nname: second-knot\nagent-config:\n  goal: \"Second knot \
          goal\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
-         \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \
+         \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"Second knot\"\n---\n\n# second-knot\n",
-        strand_dir2.display(),
-        tie_off_dir2.display()
+        strand_dir2.display()
     );
     fs::write(loom_dir.join("second-knot.md"), second_knot).unwrap();
 
@@ -586,7 +576,7 @@ async fn filesystem_loom_creation_race_recovery() {
     fs::create_dir_all(&loom_dir).unwrap();
 
     // 3. Immediately write the knot .md file
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "race-knot",
             "Race recovery test",
@@ -672,11 +662,9 @@ async fn http_post_loom_verifies_knot_registered() {
         "no looms should exist at startup"
     );
 
-    // 2. Create strand/tie-off directories for the knot
+    // 2. Create strand directory for the knot
     let strand_dir = base_dir.join("verify-strands");
-    let tie_off_dir = base_dir.join("verify-tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     // 3. POST /looms to create a loom with 1 knot
     let body = serde_json::json!({
@@ -694,8 +682,7 @@ async fn http_post_loom_verifies_knot_registered() {
                     "input_bundling": "full-file",
                     "instructions": "Verify knot registration"
                 },
-                "strand_dir": strand_dir.to_string_lossy(),
-                "tie_off_dir": tie_off_dir.to_string_lossy()
+                "strand_dir": strand_dir.to_string_lossy()
             }
         ]
     });
@@ -730,7 +717,7 @@ async fn http_post_loom_verifies_knot_registered() {
     );
 
     // 5. Verify .loom-log contains KnotRegistered for the knot
-    let log_path = base_dir.join("verify-loom/.loom-log");
+    let log_path = base_dir.join("output/verify-loom/.loom-log");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
         log_path.exists(),
@@ -790,7 +777,7 @@ async fn http_create_knot() {
     // Create a loom with one knot at startup
     let loom_dir = base_dir.join("knot-crud-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review documents",
@@ -835,9 +822,7 @@ async fn http_create_knot() {
 
     // 2. POST /looms/{id}/knots to create a new knot
     let strand_dir = base_dir.join("crud-strands");
-    let tie_off_dir = base_dir.join("crud-tie-offs");
     fs::create_dir_all(&strand_dir).unwrap();
-    fs::create_dir_all(&tie_off_dir).unwrap();
 
     let body = serde_json::json!({
         "name": "new-knot",
@@ -851,8 +836,7 @@ async fn http_create_knot() {
             "input_bundling": "full-file",
             "instructions": "Process the document"
         },
-        "strand_dir": strand_dir.to_string_lossy(),
-        "tie_off_dir": tie_off_dir.to_string_lossy()
+        "strand_dir": strand_dir.to_string_lossy()
     });
 
     let (status, _resp) =
@@ -891,7 +875,7 @@ async fn http_create_knot() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 6. Verify tie-off
-    let tie_off_path = tie_off_dir.join("crud-strand.md.output");
+    let tie_off_path = base_dir.join("output/knot-crud-loom/new-knot/crud-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -911,7 +895,7 @@ async fn http_update_knot() {
     // Create a loom with one knot at startup
     let loom_dir = base_dir.join("update-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review PRD goals for clarity",
@@ -964,8 +948,7 @@ async fn http_update_knot() {
             "input_bundling": "full-file",
             "instructions": "Updated instructions"
         },
-        "strand_dir": strand_dir.to_string_lossy(),
-        "tie_off_dir": tie_off_dir.to_string_lossy()
+        "strand_dir": strand_dir.to_string_lossy()
     });
 
     let (status, _resp) = http_patch_json(
@@ -1028,7 +1011,7 @@ async fn http_delete_knot() {
     // Create a loom with two knots at startup
     let loom_dir = base_dir.join("del-loom");
     fs::create_dir_all(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_named_knot_content(
             "review-knot",
             "Review documents",
@@ -1041,16 +1024,13 @@ async fn http_delete_knot() {
 
     // Second knot (file name must match knot name)
     let strand_dir2 = base_dir.join("strands2");
-    let tie_off_dir2 = base_dir.join("tie-offs2");
     fs::create_dir_all(&strand_dir2).unwrap();
-    fs::create_dir_all(&tie_off_dir2).unwrap();
     let second_knot = format!(
         "---\nname: to-delete-knot\nagent-config:\n  goal: \"Will be \
          deleted\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
-         \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  input-bundling: \
+         \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"To delete\"\n---\n\n# to-delete-knot\n",
-        strand_dir2.display(),
-        tie_off_dir2.display()
+        strand_dir2.display()
     );
     fs::write(loom_dir.join("to-delete-knot.md"), second_knot).unwrap();
 

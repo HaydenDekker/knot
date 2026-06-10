@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 use crate::application::ports::{LoomLogPort, PortError};
 use crate::domain::entities::LoomId;
 use crate::domain::events::LoomEvent;
+use crate::domain::knot_file::derive_loom_log_path;
 
 /// Filesystem-backed implementation of `LoomLogPort`.
 ///
 /// Writes loom events as JSONL (one JSON object per line) to
-/// `<base_dir>/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
+/// `<base_dir>/output/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
 /// concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemLoomLog {
@@ -20,22 +21,22 @@ pub struct FileSystemLoomLog {
 impl FileSystemLoomLog {
     /// Create a new log adapter backed by `base_dir`.
     ///
-    /// Log files live at `<base_dir>/<loom_id>/.loom-log`.
+    /// Log files live at `<base_dir>/output/<loom_id>/.loom-log`.
     pub fn new(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }
 
     /// Resolve the log file path for a given loom.
     fn log_path(&self, loom_id: &LoomId) -> PathBuf {
-        self.base_dir.join(&loom_id.0).join(".loom-log")
+        derive_loom_log_path(&loom_id.0, &self.base_dir)
     }
 
     /// Open the log file for appending, creating directories as needed.
     fn open_file(loom_id: &LoomId, base_dir: &PathBuf) -> Result<File, PortError> {
-        let dir = base_dir.join(&loom_id.0);
+        let path = derive_loom_log_path(&loom_id.0, base_dir);
+        let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)
             .map_err(|e| PortError::LoomLogOpenFailed(e.to_string()))?;
-        let path = dir.join(".loom-log");
         OpenOptions::new()
             .create(true)
             .append(true)
@@ -56,8 +57,8 @@ impl LoomLogPort for FileSystemLoomLog {
         // We derive it from the event to find the correct log file.
         let loom_id = match &event {
             LoomEvent::KnotRegistered { loom_id, .. } => loom_id.clone(),
-            LoomEvent::LoomStarted { loom_id } => loom_id.clone(),
-            LoomEvent::LoomStopped { loom_id } => loom_id.clone(),
+            LoomEvent::LoomStarted { loom_id, .. } => loom_id.clone(),
+            LoomEvent::LoomStopped { loom_id, .. } => loom_id.clone(),
             LoomEvent::StrandProcessed { loom_id, .. } => loom_id.clone(),
             LoomEvent::KnotProcessing { loom_id, .. } => loom_id.clone(),
             LoomEvent::KnotCompleted { loom_id, .. } => loom_id.clone(),
@@ -125,10 +126,10 @@ impl SharedLoomLog {
     }
 
     fn open_file(loom_id: &LoomId, base_dir: &PathBuf) -> Result<File, PortError> {
-        let dir = base_dir.join(&loom_id.0);
+        let path = derive_loom_log_path(&loom_id.0, base_dir);
+        let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)
             .map_err(|e| PortError::LoomLogOpenFailed(e.to_string()))?;
-        let path = dir.join(".loom-log");
         OpenOptions::new()
             .create(true)
             .append(true)
@@ -179,12 +180,13 @@ mod tests {
         // append writes one line
         let event = LoomEvent::LoomStarted {
             loom_id: loom_id.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
         let result = log.append(event);
         assert!(result.is_ok(), "append should succeed");
 
-        // Verify the file has one JSONL entry
-        let log_path = dir.path().join("test-loom/.loom-log");
+        // Verify the file has one JSONL entry (rig/output/{loom-id}/.loom-log)
+        let log_path = dir.path().join("output/test-loom/.loom-log");
         assert!(log_path.exists(), "log file should exist");
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
@@ -193,7 +195,7 @@ mod tests {
         // Verify it parses back correctly
         let parsed: LoomEvent = serde_json::from_str(lines[0]).unwrap();
         match parsed {
-            LoomEvent::LoomStarted { loom_id: ref lid } => {
+            LoomEvent::LoomStarted { loom_id: ref lid, .. } => {
                 assert_eq!(*lid, loom_id);
             }
             _ => panic!("Expected LoomStarted event"),
@@ -209,15 +211,18 @@ mod tests {
         // Append 3 events
         log.append(LoomEvent::LoomStarted {
             loom_id: loom_id.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         })
         .unwrap();
         log.append(LoomEvent::KnotRegistered {
             loom_id: loom_id.clone(),
             knot_id: KnotId("k1".to_string()),
+            timestamp: "2026-06-10T12:00:01Z".to_string(),
         })
         .unwrap();
         log.append(LoomEvent::LoomStopped {
             loom_id: loom_id.clone(),
+            timestamp: "2026-06-10T12:00:02Z".to_string(),
         })
         .unwrap();
 
@@ -253,14 +258,17 @@ mod tests {
         let knot_registered = LoomEvent::KnotRegistered {
             loom_id: loom_id.clone(),
             knot_id: KnotId("review".to_string()),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
         let loom_started = LoomEvent::LoomStarted {
             loom_id: loom_id.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
         let strand_processed = LoomEvent::StrandProcessed {
             loom_id: loom_id.clone(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
             error: None,
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
 
         log.append(knot_registered.clone()).unwrap();
@@ -296,6 +304,7 @@ mod tests {
                 let event = LoomEvent::KnotRegistered {
                     loom_id,
                     knot_id,
+                    timestamp: "2026-06-10T12:00:00Z".to_string(),
                 };
                 shared.append(event).unwrap();
             });

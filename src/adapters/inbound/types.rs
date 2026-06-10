@@ -27,8 +27,8 @@ pub struct RegisterLoomRequest {
 
 /// A single knot definition within a `RegisterLoomRequest`.
 ///
-/// All fields are required — `strand_dir` and `tie_off_dir` are
-/// mandatory per the updated domain model.
+/// All fields are required — `strand_dir` is mandatory.
+/// Tie-off paths are now statically derived from loom ID and knot name.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct KnotRequest {
     /// The name of the knot (becomes the `KnotId`).
@@ -39,8 +39,6 @@ pub struct KnotRequest {
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
     pub strand_dir: String,
-    /// Directory to write tie-off output (required).
-    pub tie_off_dir: String,
 }
 
 /// Response for `GET /config/rig` — rig path info plus agent config.

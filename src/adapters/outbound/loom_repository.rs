@@ -12,9 +12,9 @@ use crate::domain::knot_file::{self as knot_file_parser, KnotFile};
 /// Scans a rig directory for looms (subdirectories) and parses
 /// `.md` knot definition files using `KnotFileParser` from the domain layer.
 ///
-/// Each knot defines its own `strand_dir` and `tie_off_dir` in its
-/// frontmatter (both required). Relative paths are resolved against the
-/// loom directory.
+/// Each knot defines its own `strand_dir` in its frontmatter (required).
+/// Relative paths are resolved against the loom directory.
+/// Tie-off paths are statically derived from loom ID and knot name.
 ///
 /// Also maintains an in-memory registry of saved looms for `get()`,
 /// `list()`, and `save()` operations.
@@ -114,7 +114,6 @@ impl LoomRepository for FileSystemLoomRepository {
             // (parent of the rig directory).
             for knot in &mut knots {
                 knot.strand_dir = Self::resolve_path(project_root, &knot.strand_dir);
-                knot.tie_off_dir = Self::resolve_path(project_root, &knot.tie_off_dir);
             }
 
             let loom = Loom {
@@ -159,7 +158,7 @@ impl FileSystemLoomRepository {
     /// # Returns
     ///
     /// Parsed `Knot` instances with unresolved paths (caller must resolve
-    /// `strand_dir` and `tie_off_dir` relative to the project root).
+    /// `strand_dir` relative to the project root).
     pub fn scan_knot_files(
         knot_dir: &Path,
     ) -> Result<Vec<Knot>, PortError> {
@@ -213,16 +212,15 @@ impl FileSystemLoomRepository {
 
     /// Convert a parsed `KnotFile` into a domain `Knot`.
     ///
-    /// The `strand_dir` and `tie_off_dir` fields carry raw paths from the
-    /// frontmatter (may be relative). Resolution to absolute paths is
-    /// performed by the caller in `scan()`.
+    /// The `strand_dir` field carries a raw path from the frontmatter
+    /// (may be relative). Resolution to absolute paths is performed
+    /// by the caller in `scan()`.
     fn knot_from_file(file: KnotFile) -> Knot {
         Knot {
             id: KnotId(file.name.clone()),
             agent_config: file.agent_config,
             prompt_template: file.prompt_template,
             strand_dir: file.strand_dir,
-            tie_off_dir: file.tie_off_dir,
         }
     }
 
@@ -357,7 +355,6 @@ This knot has custom source and tie-off directories.
         // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
         assert!(knot.strand_dir.is_absolute());
-        assert!(knot.tie_off_dir.is_absolute());
     }
 
     #[test]
@@ -633,19 +630,11 @@ broken: yaml: [
             custom_knot.strand_dir.is_absolute(),
             "custom knot strand_dir should be absolute"
         );
-        assert!(
-            custom_knot.tie_off_dir.is_absolute(),
-            "custom knot tie_off_dir should be absolute"
-        );
 
         // Default knot also has required directories (from frontmatter).
         assert!(
             default_knot.strand_dir.is_absolute(),
             "default knot strand_dir should be absolute"
-        );
-        assert!(
-            default_knot.tie_off_dir.is_absolute(),
-            "default knot tie_off_dir should be absolute"
         );
     }
 
@@ -706,11 +695,6 @@ Body.
             knot.strand_dir,
             external_source,
             "knot strand_dir should resolve relative to project root"
-        );
-        assert_eq!(
-            knot.tie_off_dir,
-            external_tie_off,
-            "knot tie_off_dir should resolve relative to loom dir"
         );
     }
 
@@ -819,7 +803,6 @@ Body.
         // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
         assert!(knot.strand_dir.is_absolute(), "strand_dir should be absolute");
-        assert!(knot.tie_off_dir.is_absolute(), "tie_off_dir should be absolute");
     }
 
     #[test]
@@ -919,7 +902,7 @@ Body.
     }
 
     #[test]
-    fn scan_requires_strand_and_tieoff_dirs() {
+    fn scan_requires_strand_dir() {
         let rig = tempfile::tempdir().unwrap();
 
         let loom_dir = rig.path().join("required-dirs-loom");
@@ -932,7 +915,6 @@ agent-config:
   goal: \"Review\"
   provider: \"openai\"
   model: \"gpt-4o\"
-tie-off-dir: \"../output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review\"
@@ -942,7 +924,7 @@ Body.
 ";
         create_knot_file(&loom_dir, "no-strand", no_strand_content).unwrap();
 
-        // Knot without tie-off-dir — should be skipped.
+        // Knot without tie-off-dir — valid (tie-off-dir is no longer required).
         let no_tieoff_content = "---
 name: no-tieoff-knot
 agent-config:
@@ -959,7 +941,7 @@ Body.
 ";
         create_knot_file(&loom_dir, "no-tieoff", no_tieoff_content).unwrap();
 
-        // Valid knot with both required dirs.
+        // Valid knot with strand-dir.
         create_knot_file(&loom_dir, "valid", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
@@ -969,18 +951,16 @@ Body.
         let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
 
-        // Only the valid knot should be present.
+        // Two valid knots (no-tieoff + valid), no-strand is skipped.
         let loom = &looms[0];
         assert_eq!(
             loom.knots.len(),
-            1,
-            "knots missing required dirs should be skipped"
+            2,
+            "knots missing strand-dir should be skipped, others accepted"
         );
-        assert_eq!(
-            loom.knots[0].id,
-            KnotId("review-knot".to_string()),
-            "only the valid knot should be registered"
-        );
+        let knot_names: Vec<_> = loom.knots.iter().map(|k| k.id.0.clone()).collect();
+        assert!(knot_names.contains(&"no-tieoff-knot".to_string()));
+        assert!(knot_names.contains(&"review-knot".to_string()));
     }
 
     #[test]

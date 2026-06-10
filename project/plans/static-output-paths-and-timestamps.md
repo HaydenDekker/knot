@@ -91,14 +91,19 @@ Hex layer: **Domain**
 
 Hex layer: **Application**
 
-- [ ] Add `derive_tieoff_path(loom_id: &LoomId, knot_id: &KnotId, rig: &Path) -> PathBuf` helper in `usecases.rs`
-  - Returns `rig/output/{loom-id}/{knot-name}/output.md`
-- [ ] Add `derive_loom_log_path(loom_id: &LoomId, rig: &Path) -> PathBuf` helper
+- [x] Add `derive_tieoff_path(loom_id: &str, knot_name: &str, rig: &Path) -> PathBuf` helper in `knot_file.rs`
+  - Returns `rig/output/{loom-id}/{knot-name}/` (directory for strand output files)
+- [x] Add `derive_loom_log_path(loom_id: &str, rig: &Path) -> PathBuf` helper
   - Returns `rig/output/{loom-id}/.loom-log`
-- [ ] Update `ProcessStrand::compute_tie_off_path()` to use `derive_tieoff_path` instead of `knot.tie_off_dir`
-- [ ] Add `format_timestamp() -> String` helper for ISO 8601 UTC timestamps
-- [ ] Update all `LoomEvent` construction sites in usecases to include timestamp
-- [ ] Update application layer unit tests
+- [x] Update `ProcessStrand::compute_tie_off_path()` to use `derive_tieoff_path` instead of `knot.tie_off_dir`
+- [x] Add `format_timestamp() -> String` helper for ISO 8601 UTC timestamps
+- [x] Update all `LoomEvent` construction sites in usecases to include timestamp
+- [x] Update `FileSystemLoomLog::log_path()` and `open_file()` to use `rig/output/{loom-id}/.loom-log`
+- [x] Update `SharedLoomLog::open_file()` similarly
+- [x] Update `adapters/logging.rs`: prepend ISO 8601 timestamp to all `eprintln!` calls
+- [x] Remove `tie_off_dir` from `KnotRequest`, `Knot` construction in inbound adapters
+- [x] Update all unit and integration tests
+- [x] Update test fixtures: remove `tie-off-dir` from all knot YAML content
 
 ### Phase 2: Outbound Adapters — Loom Log Path, Console Log Timestamps
 

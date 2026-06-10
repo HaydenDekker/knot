@@ -74,7 +74,7 @@ struct InnerState {
     /// always take priority over broader (shorter) parent paths.
     watched_dirs: Vec<(PathBuf, WatchType)>,
     /// Project root directory. Used to resolve relative `strand_dir`
-    /// and `tie_off_dir` paths from knot config files during event
+    /// and `strand_dir` paths from knot config files during event
     /// mapping, matching the resolution done during initial load.
     project_root: PathBuf,
 }
@@ -214,10 +214,6 @@ impl InnerState {
                                     &self.project_root,
                                     &knot_file.strand_dir,
                                 ),
-                                tie_off_dir: resolve_path(
-                                    &self.project_root,
-                                    &knot_file.tie_off_dir,
-                                ),
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
@@ -285,10 +281,6 @@ impl InnerState {
                                 strand_dir: resolve_path(
                                     &self.project_root,
                                     &knot_file.strand_dir,
-                                ),
-                                tie_off_dir: resolve_path(
-                                    &self.project_root,
-                                    &knot_file.tie_off_dir,
                                 ),
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
@@ -366,8 +358,8 @@ impl NotifyEventSource {
     /// watches. `config_sender` receives `ConfigEvent` from rig and
     /// loom directory watches.
     ///
-    /// `project_root` is used to resolve relative `strand_dir` and
-    /// `tie_off_dir` paths from knot config files during event mapping.
+    /// `project_root` is used to resolve relative `strand_dir`
+    /// paths from knot config files during event mapping.
     ///
     /// Uses `notify::Config` with a 50ms poll interval for consistent
     /// test behaviour across platforms.

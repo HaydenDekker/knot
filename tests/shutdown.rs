@@ -30,7 +30,7 @@ async fn graceful_shutdown_stops_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("shutdown-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
@@ -80,7 +80,7 @@ async fn graceful_shutdown_stops_watchers() {
 
     // Tie-off file should NOT exist (watcher was stopped)
     let tie_off_path =
-        tie_off_dir.join("post-shutdown-strand.md.output");
+        base_dir.join("output/shutdown-loom/review-knot/post-shutdown-strand.md.output");
     assert!(
         !tie_off_path.exists(),
         "tie-off should NOT exist after shutdown: {}",
@@ -103,7 +103,7 @@ async fn shutdown_logs_loom_stopped() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("log-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, _strand_dir, _tie_off_dir) =
+    let (knot_content, _strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
@@ -111,7 +111,7 @@ async fn shutdown_logs_loom_stopped() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir,
+        base_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -138,7 +138,7 @@ async fn shutdown_logs_loom_stopped() {
         .expect("server task should not panic during shutdown");
 
     // Read the loom-log file
-    let log_file = loom_dir.join(".loom-log");
+    let log_file = base_dir.join("output/log-loom/.loom-log");
     assert!(
         log_file.exists(),
         "loom log file should exist: {}",

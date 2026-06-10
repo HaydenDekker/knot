@@ -23,7 +23,7 @@ async fn startup_discovers_looms() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("my-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31986;
@@ -87,7 +87,7 @@ async fn startup_starts_watchers() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("watch-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31987;
@@ -150,7 +150,7 @@ async fn startup_logs_knot_registration() {
     // Create a loom directory with a knot definition file
     let loom_dir = base_dir.join("state-loom");
     fs::create_dir(&loom_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(&base_dir);
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     let port = 31988;
@@ -169,7 +169,7 @@ async fn startup_logs_knot_registration() {
         .expect("server should start listening");
 
     // Verify loom log file exists on disk
-    let log_file = base_dir.join("state-loom/.loom-log");
+    let log_file = base_dir.join("output/state-loom/.loom-log");
     assert!(
         log_file.exists(),
         "loom log file should exist: {}",
@@ -226,7 +226,7 @@ async fn discovery_ignores_non_loom_directories() {
     // Create a valid loom directory (ends in `-loom`)
     let valid_loom = rig_path.join("valid-loom");
     fs::create_dir(&valid_loom).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) = make_knot_content_with_dirs(tmp.path());
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(tmp.path());
     fs::write(valid_loom.join("review.md"), knot_content).unwrap();
 
     // Create non-loom directories that should be ignored

@@ -46,7 +46,7 @@ async fn http_register_then_process_strand() {
     // doesn't find it — we test POST /looms registration path.
     let source_dir = base_dir.join("http-reg-loom");
     fs::create_dir(&source_dir).unwrap();
-    let (knot_content, strand_dir, tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(source_dir.join("review.md"), knot_content).unwrap();
 
@@ -65,8 +65,7 @@ async fn http_register_then_process_strand() {
                     "input_bundling": "full-file",
                     "instructions": "Review docs"
                 },
-                "strand_dir": strand_dir.to_string_lossy(),
-                "tie_off_dir": tie_off_dir.to_string_lossy()
+                "strand_dir": strand_dir.to_string_lossy()
             }
         ]
     });
@@ -112,8 +111,8 @@ async fn http_register_then_process_strand() {
     // Wait for debounce + processing.
     tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
-    // 4. Verify tie-off was produced in tie_off_dir.
-    let tie_off_path = tie_off_dir.join("new-strand.md.output");
+    // 4. Verify tie-off was produced (static path: rig/output/{loom}/{knot}/).
+    let tie_off_path = base_dir.join("output/http-reg-loom/review-knot/new-strand.md.output");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -160,7 +159,7 @@ async fn unregister_stops_processing() {
     // Create source directory with knot definition file.
     let source_dir = base_dir.join("unreg-loom");
     fs::create_dir(&source_dir).unwrap();
-    let (knot_content, strand_dir, _tie_off_dir) =
+    let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(source_dir.join("review.md"), knot_content).unwrap();
 
@@ -213,7 +212,7 @@ async fn unregister_stops_processing() {
 
     // 4. Verify NO tie-off was produced.
     let tie_off_path =
-        source_dir.join(".knot-output/post-unreg-strand.md.output");
+        base_dir.join("output/unreg-loom/review-knot/post-unreg-strand.md.output");
     assert!(
         !tie_off_path.exists(),
         "tie-off should NOT exist after unregister: {}",

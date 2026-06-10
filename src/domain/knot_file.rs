@@ -20,6 +20,8 @@ pub enum KnotFileError {
     MissingPromptTemplate,
     /// The `strand-dir` field is missing or empty.
     MissingStrandDir,
+    /// The frontmatter YAML could not be parsed.
+    InvalidFormat,
 }
 
 impl std::fmt::Display for KnotFileError {
@@ -42,6 +44,9 @@ impl std::fmt::Display for KnotFileError {
             }
             KnotFileError::MissingStrandDir => {
                 write!(f, "knot file is missing 'strand-dir' field")
+            }
+            KnotFileError::InvalidFormat => {
+                write!(f, "knot file frontmatter is not valid YAML")
             }
         }
     }
@@ -182,16 +187,17 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
 ///
 /// Returns `rig/output/{loom-id}/{knot-name}/output.md`.
 /// This is the statically-derived replacement for the per-knot
-/// `tie-off-dir` frontmatter field.
+/// Derive the tie-off output directory for a knot.
+///
+/// Returns `rig/output/{loom-id}/{knot-name}/`.
+/// Each strand's output file (e.g., `strand.md.output`) is placed
+/// inside this directory.
 pub fn derive_tieoff_path(
     loom_id: &str,
     knot_name: &str,
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
-    rig.join("output")
-        .join(loom_id)
-        .join(knot_name)
-        .join("output.md")
+    rig.join("output").join(loom_id).join(knot_name)
 }
 
 /// Derive the loom-log path for a loom.
@@ -203,7 +209,6 @@ pub fn derive_loom_log_path(
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
     rig.join("output").join(loom_id).join(".loom-log")
-}
 }
 
 /// Extract the YAML portion between the first pair of `---` delimiters.
@@ -227,6 +232,7 @@ fn extract_frontmatter(content: &str) -> Result<String, KnotFileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const VALID_KNOT: &str = "---
 name: prd-goals-review
@@ -618,7 +624,7 @@ Body.
         let path = derive_tieoff_path("my-loom", "review-knot", Path::new("/workspace/rig"));
         assert_eq!(
             path,
-            PathBuf::from("/workspace/rig/output/my-loom/review-knot/output.md")
+            PathBuf::from("/workspace/rig/output/my-loom/review-knot")
         );
     }
 

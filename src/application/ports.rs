@@ -430,6 +430,7 @@ mod tests {
 
         let event = LoomEvent::LoomStarted {
             loom_id: loom_id.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
         let append_result = port.append(event);
         assert!(append_result.is_ok());

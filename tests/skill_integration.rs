@@ -139,7 +139,6 @@ fn build_context_with_loom() -> AppContext {
                 instructions: "Review this document.".to_string(),
             },
             strand_dir: PathBuf::from("src/docs"),
-            tie_off_dir: PathBuf::from("output/docs"),
         }],
     };
     ctx.store.register(test_loom);
@@ -559,10 +558,12 @@ async fn knot_inspect_loom_activity() {
     let events = vec![
         LoomEvent::LoomStarted {
             loom_id: LoomId("test-loom".to_string()),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         },
         LoomEvent::KnotRegistered {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("review".to_string()),
+            timestamp: "2026-06-10T12:00:01Z".to_string(),
         },
     ];
 
@@ -654,12 +655,14 @@ async fn knot_inspect_knot_status_with_state() {
         LoomEvent::KnotRegistered {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("review".to_string()),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
         },
         LoomEvent::KnotCompleted {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("review".to_string()),
             strand_path: StrandPath(PathBuf::from("src/input.md")),
             tie_off_path: TieOffPath(PathBuf::from("output/output.md")),
+            timestamp: "2026-06-10T12:00:01Z".to_string(),
         },
     ];
 
@@ -710,7 +713,6 @@ async fn knot_inspect_knot_status_with_state() {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("src/docs"),
-            tie_off_dir: PathBuf::from("output/docs"),
         }],
     });
     let app = knot::adapters::inbound::build_app(ctx);

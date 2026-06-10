@@ -16,7 +16,38 @@ use crate::application::ports::{
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
 use crate::domain::events::{ConfigEvent, LoomEvent, StrandEvent};
+use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::RigAgentConfig;
+
+/// Generate an ISO 8601 UTC timestamp string.
+pub fn format_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+    // Compute UTC date/time from Unix epoch (good enough for ISO 8601)
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hh = time_of_day / 3600;
+    let mm = (time_of_day % 3600) / 60;
+    let ss = time_of_day % 60;
+    // Convert days since 1970-01-01 to Y-M-D (Gregorian)
+    let z = days_since_epoch as i64 + 719468;
+    let a = z + 305;
+    let b = (4 * a + 3) / 146097;
+    let c = a - (146097 * b) / 4;
+    let d = (4 * c + 3) / 1461;
+    let e = c - (1461 * d) / 4;
+    let m = (5 * e + 2) / 153;
+    let day = e - (153 * m + 2) / 5 + 1;
+    let month = m + 3 - 12 * (m / 10);
+    let year = 100 * b + d - 4800 + m / 10;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hh, mm, ss
+    )
+}
 
 // ── Query Result Types ───────────────────────────────────────────────────
 
@@ -126,12 +157,14 @@ impl DiscoverLooms {
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
+                timestamp: format_timestamp(),
             })?;
         }
 
         // Append LoomStarted event
         self.log_port.append(LoomEvent::LoomStarted {
             loom_id: loom.id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // Store the loom
@@ -213,12 +246,14 @@ impl RegisterLoom {
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
+                timestamp: format_timestamp(),
             })?;
         }
 
         // Append LoomStarted event
         self.log_port.append(LoomEvent::LoomStarted {
             loom_id: loom.id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // Store the loom
@@ -303,6 +338,7 @@ impl UnregisterLoom {
         // Append LoomStopped event
         self.log_port.append(LoomEvent::LoomStopped {
             loom_id: id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // Remove from store
@@ -540,6 +576,8 @@ pub struct ProcessStrand {
     agent_runner: Arc<dyn AgentRunner>,
     tie_off_sink: Arc<dyn TieOffSink>,
     rig_config: RigAgentConfig,
+    /// Base (rig) directory — used to derive static output paths.
+    base_dir: PathBuf,
 }
 
 impl ProcessStrand {
@@ -550,6 +588,7 @@ impl ProcessStrand {
         agent_runner: Arc<dyn AgentRunner>,
         tie_off_sink: Arc<dyn TieOffSink>,
         rig_config: RigAgentConfig,
+        base_dir: PathBuf,
     ) -> Self {
         Self {
             store,
@@ -557,6 +596,7 @@ impl ProcessStrand {
             agent_runner,
             tie_off_sink,
             rig_config,
+            base_dir,
         }
     }
 
@@ -602,14 +642,15 @@ impl ProcessStrand {
             KnotEventType::Deleted => "Deleted".to_string(),
         };
 
-        // Determine tie-off path (knot-level tie_off_dir if set, else loom-level)
-        let tie_off_path = Self::compute_tie_off_path(&loom, knot, &strand_path);
+        // Determine tie-off path (statically derived from loom + knot)
+        let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
         // 1. Append KnotProcessing to loom-log
         self.log_port.append(LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // 2. Build CLI args from knot's agent config + prompt template
@@ -657,6 +698,7 @@ impl ProcessStrand {
                     knot_id: knot_id.clone(),
                     strand_path: strand_path.clone(),
                     tie_off_path: tie_off_path.clone(),
+                    timestamp: format_timestamp(),
                 })?;
 
                 // 6. Append StrandProcessed
@@ -664,6 +706,7 @@ impl ProcessStrand {
                     loom_id,
                     strand_path: strand_path.clone(),
                     error: None,
+                    timestamp: format_timestamp(),
                 })?;
 
                 logging::log_strand_event(
@@ -692,6 +735,7 @@ impl ProcessStrand {
                     knot_id: knot_id.clone(),
                     strand_path: strand_path.clone(),
                     error: error_msg.clone(),
+                    timestamp: format_timestamp(),
                 })?;
 
                 // 6. Append StrandProcessed with error details
@@ -699,6 +743,7 @@ impl ProcessStrand {
                     loom_id,
                     strand_path: strand_path.clone(),
                     error: Some(error_msg.clone()),
+                    timestamp: format_timestamp(),
                 })?;
 
                 logging::log_strand_event(
@@ -734,9 +779,10 @@ impl ProcessStrand {
     }
 
     /// Compute the tie-off output path from knot + strand path.
-    /// Uses the knot's required `tie_off_dir`.
+    /// Uses statically derived path: `rig/output/{loom-id}/{knot-name}/output.md`.
     fn compute_tie_off_path(
-        _loom: &Loom,
+        &self,
+        loom: &Loom,
         knot: &Knot,
         strand_path: &StrandPath,
     ) -> TieOffPath {
@@ -745,7 +791,8 @@ impl ProcessStrand {
             .file_name()
             .map(|f| format!("{}.output", f.to_string_lossy()))
             .unwrap_or_else(|| "output".to_string());
-        TieOffPath(knot.tie_off_dir.join(filename))
+        let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.base_dir);
+        TieOffPath(base.join(filename))
     }
 
 }
@@ -1036,6 +1083,7 @@ impl ConfigEventHandler {
         self.log_port.append(LoomEvent::KnotRegistered {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // Start watcher for knot's strand directory
@@ -1152,6 +1200,7 @@ impl ConfigEventHandler {
                 self.log_port.append(LoomEvent::KnotRegistered {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
+                    timestamp: format_timestamp(),
                 })?;
 
                 // Start watcher for knot's strand directory
@@ -1223,6 +1272,7 @@ impl ConfigEventHandler {
         self.log_port.append(LoomEvent::KnotDeregistered {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         logging::log_knot_event(
@@ -1244,12 +1294,14 @@ impl ConfigEventHandler {
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
+                timestamp: format_timestamp(),
             })?;
         }
 
         // Append LoomStarted event
         self.log_port.append(LoomEvent::LoomStarted {
             loom_id: loom.id.clone(),
+            timestamp: format_timestamp(),
         })?;
 
         // Store the loom
@@ -1430,7 +1482,6 @@ mod config_handler_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -1507,21 +1558,21 @@ mod config_handler_tests {
             "should log KnotRegistered x2 + LoomStarted"
         );
         match &events[0] {
-            LoomEvent::KnotRegistered { loom_id: lid, knot_id } => {
+            LoomEvent::KnotRegistered { loom_id: lid, knot_id, .. } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(knot_id.0, "k1");
             }
             other => panic!("Expected KnotRegistered, got {other:?}"),
         }
         match &events[1] {
-            LoomEvent::KnotRegistered { loom_id: lid, knot_id } => {
+            LoomEvent::KnotRegistered { loom_id: lid, knot_id, .. } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(knot_id.0, "k2");
             }
             other => panic!("Expected KnotRegistered, got {other:?}"),
         }
         match &events[2] {
-            LoomEvent::LoomStarted { loom_id: lid } => {
+            LoomEvent::LoomStarted { loom_id: lid, .. } => {
                 assert_eq!(*lid, loom_id);
             }
             other => panic!("Expected LoomStarted, got {other:?}"),
@@ -1638,6 +1689,7 @@ mod config_handler_tests {
             LoomEvent::KnotRegistered {
                 loom_id: lid,
                 knot_id,
+                ..
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(knot_id.0, "k2");
@@ -1901,6 +1953,7 @@ mod config_handler_tests {
             LoomEvent::KnotRegistered {
                 loom_id: lid,
                 knot_id,
+                ..
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(knot_id.0, "k_new");
@@ -1966,6 +2019,7 @@ mod config_handler_tests {
             LoomEvent::KnotRegistered {
                 loom_id: lid,
                 knot_id,
+                ..
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(knot_id.0, "k1");
@@ -2109,6 +2163,7 @@ mod config_handler_tests {
             LoomEvent::KnotDeregistered {
                 loom_id: lid,
                 knot_id: kid,
+                ..
             } => {
                 assert_eq!(*lid, loom_id);
                 assert_eq!(*kid, knot_id);
@@ -2277,7 +2332,6 @@ mod phase2_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -2497,7 +2551,6 @@ mod phase3_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -2719,7 +2772,6 @@ mod phase4_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 
@@ -2863,7 +2915,6 @@ mod manage_knot_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
-            tie_off_dir: PathBuf::from("tie-offs"),
         }
     }
 

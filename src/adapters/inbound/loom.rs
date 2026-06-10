@@ -201,11 +201,6 @@ pub async fn register_loom(
                 "error": format!("knot[{}] strand_dir is required", i)
             }))).into_response();
         }
-        if knot.tie_off_dir.trim().is_empty() {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": format!("knot[{}] tie_off_dir is required", i)
-            }))).into_response();
-        }
     }
 
     // Create the loom directory: <rig>/<id>/
@@ -250,16 +245,11 @@ pub async fn register_loom(
                 project_root,
                 &std::path::PathBuf::from(&k.strand_dir),
             );
-            let tie_off_dir = FileSystemLoomRepository::resolve_path(
-                project_root,
-                &std::path::PathBuf::from(&k.tie_off_dir),
-            );
             Knot {
                 id: KnotId(k.name.clone()),
                 agent_config: k.agent_config.clone(),
                 prompt_template: k.prompt_template.clone(),
                 strand_dir,
-                tie_off_dir,
             }
         })
         .collect();
@@ -314,14 +304,13 @@ fn generate_knot_file(knot: &KnotRequest) -> String {
     };
 
     format!(
-        "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\ntie-off-dir: {6}\nprompt-template:\n  input-bundling: {7}\n  instructions: {8}\n---\n\n# {9}\n",
+        "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\nprompt-template:\n  input-bundling: {6}\n  instructions: {7}\n---\n\n# {8}\n",
         knot.name,
         quote_yaml_scalar(&knot.agent_config.goal),
         quote_yaml_scalar(&knot.agent_config.provider),
         quote_yaml_scalar(&knot.agent_config.model),
         tools_yaml,
         quote_yaml_scalar(&knot.strand_dir),
-        quote_yaml_scalar(&knot.tie_off_dir),
         quote_yaml_scalar(&knot.prompt_template.input_bundling),
         quote_yaml_scalar(&knot.prompt_template.instructions),
         knot.name,
@@ -417,15 +406,6 @@ pub async fn create_knot(
         )
             .into_response();
     }
-    if body.tie_off_dir.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "tie_off_dir is required"
-            })),
-        )
-            .into_response();
-    }
 
     // Check loom exists
     if ctx.store.get(&loom_id).is_none() {
@@ -452,16 +432,11 @@ pub async fn create_knot(
         project_root,
         &std::path::PathBuf::from(&body.strand_dir),
     );
-    let tie_off_dir = FileSystemLoomRepository::resolve_path(
-        project_root,
-        &std::path::PathBuf::from(&body.tie_off_dir),
-    );
     let knot = Knot {
         id: KnotId(body.name.clone()),
         agent_config: body.agent_config.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
-        tie_off_dir,
     };
 
     // Update the in-memory store
@@ -558,16 +533,6 @@ pub async fn update_knot(
         )
             .into_response();
     }
-    if body.tie_off_dir.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "tie_off_dir is required"
-            })),
-        )
-            .into_response();
-    }
-
     // Check loom exists and contains the knot
     let loom = match ctx.store.get(&loom_id) {
         Some(loom) => loom,
@@ -599,16 +564,11 @@ pub async fn update_knot(
         project_root,
         &std::path::PathBuf::from(&body.strand_dir),
     );
-    let tie_off_dir = FileSystemLoomRepository::resolve_path(
-        project_root,
-        &std::path::PathBuf::from(&body.tie_off_dir),
-    );
     let knot = Knot {
         id: KnotId(name),
         agent_config: body.agent_config.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
-        tie_off_dir,
     };
 
     // Update the in-memory store
@@ -981,7 +941,6 @@ mod tests {
                         instructions: "check it".to_string(),
                     },
                     strand_dir: PathBuf::from("strands"),
-                    tie_off_dir: PathBuf::from("tie-offs"),
                 })
                 .collect(),
         }
@@ -1110,15 +1069,18 @@ mod tests {
         let events = vec![
             LoomEvent::LoomStarted {
                 loom_id: LoomId("active-loom".to_string()),
+                timestamp: "2026-06-10T12:00:00Z".to_string(),
             },
             LoomEvent::KnotRegistered {
                 loom_id: LoomId("active-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
+                timestamp: "2026-06-10T12:00:01Z".to_string(),
             },
             LoomEvent::StrandProcessed {
                 loom_id: LoomId("active-loom".to_string()),
                 strand_path: StrandPath(PathBuf::from("src/file.md")),
                 error: None,
+                timestamp: "2026-06-10T12:00:02Z".to_string(),
             },
         ];
 
@@ -1138,13 +1100,13 @@ mod tests {
         let returned: Vec<LoomEvent> = serde_json::from_slice(&body).unwrap();
         assert_eq!(returned.len(), 3);
         match &returned[0] {
-            LoomEvent::LoomStarted { loom_id } => {
+            LoomEvent::LoomStarted { loom_id, .. } => {
                 assert_eq!(*loom_id, LoomId("active-loom".to_string()));
             }
             _ => panic!("Expected LoomStarted"),
         }
         match &returned[1] {
-            LoomEvent::KnotRegistered { loom_id, knot_id } => {
+            LoomEvent::KnotRegistered { loom_id, knot_id, .. } => {
                 assert_eq!(*loom_id, LoomId("active-loom".to_string()));
                 assert_eq!(*knot_id, KnotId("k1".to_string()));
             }
@@ -1160,12 +1122,14 @@ mod tests {
             LoomEvent::KnotRegistered {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
+                timestamp: "2026-06-10T12:00:00Z".to_string(),
             },
             LoomEvent::KnotCompleted {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
                 strand_path: StrandPath(PathBuf::from("src/input.md")),
                 tie_off_path: TieOffPath(PathBuf::from("out/output.md")),
+                timestamp: "2026-06-10T12:00:01Z".to_string(),
             },
         ];
 
@@ -1210,11 +1174,13 @@ mod tests {
             LoomEvent::KnotRegistered {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
+                timestamp: "2026-06-10T12:00:00Z".to_string(),
             },
             LoomEvent::KnotProcessing {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
                 strand_path: StrandPath(PathBuf::from("src/current.md")),
+                timestamp: "2026-06-10T12:00:01Z".to_string(),
             },
         ];
 
@@ -1254,12 +1220,14 @@ mod tests {
             LoomEvent::KnotRegistered {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
+                timestamp: "2026-06-10T12:00:00Z".to_string(),
             },
             LoomEvent::KnotFailed {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
                 strand_path: StrandPath(PathBuf::from("src/bad.md")),
                 error: "agent timeout".to_string(),
+                timestamp: "2026-06-10T12:00:01Z".to_string(),
             },
         ];
 
@@ -1294,6 +1262,7 @@ mod tests {
             LoomEvent::KnotRegistered {
                 loom_id: LoomId("my-loom".to_string()),
                 knot_id: KnotId("k1".to_string()),
+                timestamp: "2026-06-10T12:00:00Z".to_string(),
             },
         ];
 
@@ -1357,7 +1326,6 @@ mod tests {
                     "instructions": "check it"
                 },
                 "strand_dir": "strands",
-                "tie_off_dir": "tie-offs"
             }));
         }
         serde_json::json!({
@@ -1703,7 +1671,6 @@ mod tests {
                         "instructions": "do it"
                     },
                     "strand_dir": "strands",
-                    "tie_off_dir": "tie-offs"
                 }
             ]
         });
@@ -1812,7 +1779,6 @@ mod tests {
                         "instructions": "check a"
                     },
                     "strand_dir": "strands",
-                    "tie_off_dir": "tie-offs"
                 },
                 {
                     "name": "knot-b",
@@ -1827,7 +1793,6 @@ mod tests {
                         "instructions": "check b"
                     },
                     "strand_dir": "strands-b",
-                    "tie_off_dir": "tie-offs-b"
                 }
             ]
         });
@@ -1853,7 +1818,6 @@ mod tests {
         assert!(content_a.contains("name: knot-a"));
         assert!(content_a.contains("review a"));
         assert!(content_a.contains("strand-dir:"));
-        assert!(content_a.contains("tie-off-dir:"));
 
         let content_b =
             std::fs::read_to_string(loom_dir.join("knot-b.md")).unwrap();
@@ -1883,7 +1847,6 @@ mod tests {
                         "instructions": "do it"
                     },
                     "strand_dir": "",
-                    "tie_off_dir": "output"
                 }
             ]
         });
@@ -1905,14 +1868,14 @@ mod tests {
         assert!(msg.contains("strand_dir"));
     }
 
-    /// `POST /looms` with missing `tie_off_dir` on a knot returns 400.
+    /// `POST /looms` without `tie_off_dir` succeeds (it's now statically derived).
     #[tokio::test]
-    async fn post_loom_missing_tieoff_dir_returns_400() {
+    async fn post_loom_without_tieoff_dir_succeeds() {
         let (ctx, _tmp) = build_test_context_with_temp_dir();
         let app = build_app(ctx);
 
         let body = serde_json::json!({
-            "id": "bad-loom",
+            "id": "no-tieoff-loom",
             "knots": [
                 {
                     "name": "k1",
@@ -1927,7 +1890,6 @@ mod tests {
                         "instructions": "do it"
                     },
                     "strand_dir": "strands",
-                    "tie_off_dir": ""
                 }
             ]
         });
@@ -1939,14 +1901,7 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
 
-        assert_eq!(resp.status(), 400);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(err.get("error").is_some());
-        let msg = err["error"].as_str().unwrap();
-        assert!(msg.contains("tie_off_dir"));
+        assert_eq!(resp.status(), 201);
     }
 
     /// `POST /looms` with empty `knots` array returns 400.
@@ -1999,7 +1954,6 @@ mod tests {
                         "instructions": "do it"
                     },
                     "strand_dir": "strands",
-                    "tie_off_dir": "tie-offs"
                 }
             ]
         });
