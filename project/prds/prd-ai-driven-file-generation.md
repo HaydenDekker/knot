@@ -13,20 +13,20 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 > - **Knot** — A configured artifact composed of three parts:
 >   1. **Agent Profile** — The configuration that determines *which agent* runs: the LLM provider to use, the skills available to the agent (driving the prompt), the tools available to the agent (executing the prompt), and the agent's initial system prompt.
 >   2. **Prompt Template** — The *how* of file processing: the goal description and the rules for how the input file(s) should be bundled into the prompt sent to the agent.
->   3. **Directories** — `strand_dir` (where strands to watch live, **required**) and `tie_off_dir` (where output is written, **required**).
+>   3. **Directories** — `strand_dir` (where strands to watch live, **required**). The tie-off output path is **statically derived** as `rig/output/{loom-id}/{knot-name}/output.md` — no `tie-off-dir` configuration is needed.
 >   The knot is where it all comes together, ready for processing.
 >
 > - **Loom** — A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). Contains one or more `.md` knot definition files at its first level. Knot auto-discovers looms by watching the rig directory: when a new `*-loom` directory is created it is immediately registered with file watchers and begins processing. Loom directories can also be created via the HTTP `POST /looms` endpoint, which writes the directory to disk and triggers the same registration flow. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API beyond creation. The loom directory holds knot definitions — **not** strands. Strands live in each knot's `strand_dir`.
 >
 > - **Strand Directory** — The directory a knot watches for strand file events. Configured per-knot as `strand_dir` in the knot's YAML frontmatter. This is where raw input files (**strands**) live. Distinct from the loom directory.
 >
-> - **Tie-off** — The final response or error produced by a knot at the end of its session. Each processing event is appended to the tie-off file, so the document grows over time and tells the complete story of the knot's work. The tie-off lands in the configured **tie-off directory** (e.g. a summary, a list of documents, an error report). During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
+> - **Tie-off** — The final response or error produced by a knot at the end of its session. Each processing event is appended to a single `output.md` file at `rig/output/{loom-id}/{knot-name}/output.md`, so the document grows over time and tells the complete story of the knot's work. The event metadata in each section identifies which strand was processed. During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
 >
-> - **Tie-off Directory** — The directory location where tie-offs land. Configured per-knot as `tie_off_dir` in the knot's YAML frontmatter.
+> - **Tie-off Directory** — Statically derived path under `rig/output/{loom-id}/{knot-name}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed).
 >
 > - **Strand** — A file in a knot's strand directory. When a strand is created, modified, or deleted, the knot that watches that directory is triggered to process it. The strand is the raw input fed into a knot.
 >
-> - **Loom-log** — A file that holds a loom's activity log. Lives inside the loom directory at `<rig>/<loom-id>/.loom-log`. Records which knots are detected and registered, and all loom and knot events for that loom. Users check this to confirm a loom is configured correctly and to trace processing history.
+> - **Loom-log** — A file that holds a loom's activity log. Lives at `<rig>/output/<loom-id>/.loom-log` — outside the loom directory itself, keeping the rig clean of non-loom directories. Records which knots are detected and registered, and all loom and knot events for that loom. Users check this to confirm a loom is configured correctly and to trace processing history.
 >
 > - **Knot-state** — A per-knot file that records processing events and status for that knot. Contains event type, strand path, tie-off path, and any errors. All knot-level HTTP status is sourced from this file.
 

@@ -131,12 +131,12 @@ Hex layer: **Integration**
 
 ### Phase 4: Documentation Updates
 
-- [ ] Update `project/domain-glossary.md`:
+- [x] Update `project/domain-glossary.md`:
   - **Tie-off Directory**: Change to "Statically derived path under `rig/output/{loom-id}/{knot-name}/`."
   - **Loom-log**: Change path to `<rig>/output/<loom-id>/.loom-log`
   - **Tie-off**: Mention single `output.md` per knot
-- [ ] Update PRD `prd-ai-driven-file-generation.md` glossary section to match
-- [ ] Update term relationships diagram
+- [x] Update PRD `prd-ai-driven-file-generation.md` glossary section to match
+- [x] Update term relationships diagram
 
 ## Notes
 
