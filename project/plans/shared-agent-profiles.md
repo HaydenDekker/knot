@@ -70,9 +70,11 @@ prompt-template:
 ---
 ```
 
-## Implementation Status: ✅ Complete (2026-06-11)
+## Implementation Status: 🟡 In Progress (2026-06-11)
 
-**Result:** 352 tests pass (270 unit + 82 integration). All 4 fix phases (6-9) completed, resolving all 13 code review issues. New files: `src/adapters/outbound/profile_repo.rs` (FileSystemAgentProfileRepository), `tests/shared_agent_profiles.rs` (10 integration tests). Domain: `AgentProfile` entity + parser, `KnotFile` extends with `agent_profile_ref`, `KnotFileError::BothProfileAndConfig` + `MissingAgentConfigOrProfileRef`. Outbound: `AgentProfileRepository` trait + file-system impl. Application: `ProcessStrand` resolves profiles at processing time with inline overrides. Inbound: CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`.
+Phases 0–9 complete. Phases 10–11 remaining — remove inline `agent-config` from knots (profile is the only source) and fix remaining clippy issues.
+
+**Result so far:** 352 tests pass (270 unit + 82 integration). New files: `src/adapters/outbound/profile_repo.rs` (FileSystemAgentProfileRepository), `tests/shared_agent_profiles.rs` (10 integration tests). Domain: `AgentProfile` entity + parser, `KnotFile` extends with `agent_profile_ref`, `KnotFileError::BothProfileAndConfig` + `MissingAgentConfigOrProfileRef`. Outbound: `AgentProfileRepository` trait + file-system impl. Application: `ProcessStrand` resolves profiles at processing time with inline overrides. Inbound: CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`.
 
 ## Issues Found in Code Review
 
@@ -334,6 +336,107 @@ Fixes issues #6, #7, #8, #9, #10, #11, #12, #13.
 - [x] Fix `profile_not_found_logs_error` integration test — assert `processing` or `failed` status, check `last_error` for profile name
 - [x] Add test: pure profile-ref knot creation via HTTP (no inline `agent_config`) — `create_pure_profile_ref_knot`
 - [x] `cargo test` passes
+
+### Phase 10: Remove Inline `agent-config` — Profile Is The Only Source
+
+**Layer:** Domain — Application — Inbound — All tests
+
+Remove the ability to declare `agent-config` inline in a knot. Every knot must reference a shared agent profile via `agent-profile-ref`. The profile holds all agent configuration (`provider`, `model`, `tools`, `system-prompt`). The knot's `prompt-template.instructions` provides task-specific direction appended to the profile's system prompt.
+
+**Rationale:** Inline config defeats the DRY principle that profiles solve. The in-memory vs. on-disk inconsistency (handler stored both fields, file wrote only profile ref) revealed that mutual exclusivity validation was fragile. Removing inline config entirely eliminates the ambiguity.
+
+- [ ] **Domain — `KnotFile`:**
+  - Remove `agent_config: Option<AgentConfig>` field from `KnotFile` struct
+  - Change `agent_profile_ref: Option<String>` to `agent_profile_ref: String` (required)
+  - Remove `agent-config` parsing from `RawFrontmatter` and `parse()`
+  - Make `agent-profile-ref` required — parse error if absent
+  - Remove `KnotFileError::BothProfileAndConfig` (no longer possible)
+  - Remove `KnotFileError::MissingAgentConfigOrProfileRef` — replace with `KnotFileError::MissingProfileRef`
+  - Remove `KnotFileError::EmptyGoal`, `EmptyProvider`, `EmptyModel` (profile-level concerns)
+  - Update `derive_tieoff_path` doc comment — remove merged duplicate lines (issue #6)
+  - Update unit tests: valid knot now requires `agent-profile-ref`, no agent-config tests
+  - `cargo test` passes
+
+- [ ] **Domain — `Knot` entity:**
+  - Remove `agent_config: Option<AgentConfig>` field
+  - Change `agent_profile_ref: Option<String>` to `agent_profile_ref: String` (required)
+  - Update entity tests
+  - `cargo test` passes
+
+- [ ] **Application — `ProcessStrand`:**
+  - Simplify `resolve_agent_config()` — single path: load profile, build `AgentConfig` from it
+  - Remove `(None, Some(config))` branch (inline config)
+  - Remove `(Some, Some(inline_config))` branch (both set)
+  - Remove `(None, None)` branch (impossible with required field)
+  - If profile not found → `PortError::ProfileNotFound`
+  - System prompt merge strategy unchanged: profile `system_prompt` + knot `prompt_template.instructions`
+  - Update unit tests for `resolve_agent_config`
+  - `cargo test` passes
+
+- [ ] **Application — `Knot` construction in use cases:**
+  - `ConfigEventHandler::handle_knot_added` — `Knot` now has `agent_profile_ref: String`
+  - `ConfigEventHandler::handle_knot_modified` — same
+  - `ManageKnot` — same
+  - `DiscoverLooms` / `RegisterLoom` — pass through from parsed `KnotFile`
+
+- [ ] **Inbound — `KnotRequest`:**
+  - Remove `agent_config: Option<AgentConfig>` field entirely
+  - Change `agent_profile_ref: Option<String>` to `agent_profile_ref: String` (required)
+  - Remove `#[serde(default)]` from `agent_profile_ref` — it is now mandatory
+  - Update OpenAPI schema
+
+- [ ] **Inbound — `generate_knot_file()`:**
+  - Simplify: always writes `agent-profile-ref` only (no conditional on profile-ref vs inline)
+  - Remove `agent-config` YAML generation path
+  - Remove `quote_yaml_scalar` calls for agent config fields
+  - Update unit test: `generate_knot_file` round-trips through `KnotFile::parse()`
+
+- [ ] **Inbound — handlers:**
+  - `register_loom` — build `Knot` with `agent_profile_ref` from request (no agent_config)
+  - `create_knot` — same, remove `agent_config` from Knot construction
+  - `update_knot` — same
+  - Add HTTP validation: `agent_profile_ref` must be non-empty
+
+- [ ] **Integration tests — `shared_agent_profiles.rs`:**
+  - Update all knot creation payloads: remove `agent_config`, keep only `agent_profile_ref`
+  - `create_pure_profile_ref_knot` — unchanged (already pure profile-ref)
+  - `create_knot_with_agent_profile_ref` — remove agent_config from body, add assertion that file has NO `agent-config`
+  - `profile_override_at_processing_time` — **rename to `profile_resolution_at_processing_time`**, remove override concept (no inline override possible). Test verifies profile is resolved and strand processed.
+  - `dynamic_profile_update_at_processing_time` — update knot body to be profile-ref only
+  - `profile_not_found_logs_error` — update knot body
+  - `backward_compat_inline_config` — **remove entirely** (no backward compat path)
+  - Add test: `POST /looms` with missing `agent_profile_ref` → 400 bad request
+  - `cargo test` passes
+
+- [ ] **Integration tests — other modules:**
+  - `tests/auto_discovery_and_knot_crud.rs` — update knot creation payloads
+  - `tests/loom_crud.rs` — update knot creation payloads
+  - `tests/pipeline.rs` — update knot creation payloads
+  - `tests/rig_lifecycle.rs` — update knot creation payloads
+  - `tests/helpers.rs` — update `make_knot_content` to use `agent-profile-ref`
+  - Any test helpers that create inline-config knots must be updated
+  - `cargo test` passes (full suite)
+
+### Phase 11: Clippy Cleanup + Remaining Fixes
+
+**Layer:** All (lint)
+
+Fix remaining clippy issues that survived Phase 9.
+
+- [ ] Fix `src/application/debounce.rs:253` — `i % 1` (modulo_one deny). Change to literal `0` or `i % 1` with `#[allow(clippy::modulo_one)]` on the test. Prefer: use `0` directly since the intent is all-same-file.
+- [ ] Fix `src/application/usecases.rs:1841` — redundant field name `knot: knot` → `knot`
+- [ ] Fix `src/application/debounce.rs:310` — redundant closure `|e| event_path(e)` → `event_path`
+- [ ] Fix `src/domain/knot_file.rs:991` — useless `format!(...)` → `.to_string()`
+- [ ] Fix `src/application/ports.rs` — `MockAgentRunner::default()` → `MockAgentRunner` (unit struct), same for `MockEventSource`, `MockLoomLogPort`
+- [ ] Fix `MockLoomRepository::save` in `ports.rs` test module — store in internal `HashMap` so `get`/`list` return saved data (issue #8, ports-level)
+- [ ] Fix `tests/shared_agent_profiles.rs` — useless `format!` calls (lines 760, 1070)
+- [ ] Fix `tests/helpers.rs` unused functions — add `#[allow(dead_code)]` on `mod helpers` or remove truly dead helpers
+- [ ] Fix `tests/generic_task_management.rs:764` — `MutexGuard` held across await point (drop guard before await)
+- [ ] Fix `tests/pipeline.rs` — `single_match` → `if let`, needless borrows
+- [ ] Fix `tests/discovery.rs`, `tests/demo.rs`, `tests/loom_crud.rs` — unused variables, needless borrows
+- [ ] Fix `tests/rig_lifecycle.rs:279` — unused `Result` from `tokio::time::timeout`
+- [ ] `cargo clippy --all-targets` passes with zero warnings
+- [ ] `cargo test` passes (full suite)
 
 ## Notes
 
