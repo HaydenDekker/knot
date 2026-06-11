@@ -208,9 +208,9 @@ Add REST API for profile CRUD and update knot handlers to support `agent_profile
 
 Wire `AgentProfileRepository` into the application and write end-to-end tests.
 
-- [ ] Update composition root (`lib.rs` / `server.rs`) to instantiate `FileSystemAgentProfileRepository`
-- [ ] Pass it into `AppContext` and `ProcessStrand`
-- [ ] Write integration tests in `tests/shared_agent_profiles.rs`:
+- [x] Update composition root (`lib.rs` / `server.rs`) to instantiate `FileSystemAgentProfileRepository`
+- [x] Pass it into `AppContext` and `ProcessStrand`
+- [x] Write integration tests in `tests/shared_agent_profiles.rs`:
   - Test: create profile via `POST /profiles/{name}` → verify `GET /profiles/{name}` returns it
   - Test: list profiles via `GET /profiles` → returns all profiles
   - Test: delete profile via `DELETE /profiles/{name}` → verify 404 on subsequent get
@@ -218,10 +218,10 @@ Wire `AgentProfileRepository` into the application and write end-to-end tests.
   - Test: profile resolved at processing time — profile updated on disk, next strand uses new model
   - Test: profile not found → strand processing logs error, tie-off records failure
   - Test: backward compat — knot without profile ref still processes with inline config
-- [ ] Wire profile repository into `build_test_context()` for handler tests
-- [ ] Update all existing tests that create `AppContext` to include mock profile repo (no-op implementation)
-- [ ] Run full test suite — all passing
-- [ ] `cargo test` passes (including integration tests)
+- [x] Wire profile repository into `build_test_context()` for handler tests
+- [x] Update all existing tests that create `AppContext` to include mock profile repo (no-op implementation)
+- [x] Run full test suite — all passing
+- [x] `cargo test` passes (including integration tests)
 
 ## Notes
 
