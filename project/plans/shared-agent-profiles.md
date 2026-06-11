@@ -103,14 +103,14 @@ prompt-template:
 
 Build the `AgentProfile` entity and parser. This is the foundation — everything else depends on it.
 
-- [ ] Add `AgentProfile` to `value_objects.rs` with fields: `name`, `provider`, `model`, `tools` (Vec), `system_prompt`
-- [ ] Implement `AgentProfile::new()` with validation (all required fields non-empty)
-- [ ] Add `parse_agent_profile(content: &str) -> Result<AgentProfile, AgentProfileError>` to `knot_file.rs`
-- [ ] `AgentProfileError` enum: `MissingName`, `EmptyProvider`, `EmptyModel`, `MissingSystemPrompt`, `InvalidFormat`
-- [ ] Profile file format: YAML frontmatter with `name`, `provider`, `model`, optional `tools`, required `system-prompt`. No `prompt-template` section needed (that lives in the knot).
-- [ ] Unit tests in `value_objects.rs` for `AgentProfile` construction, serialization, validation errors
-- [ ] Unit tests in `knot_file.rs` for profile parsing: valid profiles, missing fields, malformed YAML
-- [ ] `cargo test` passes
+- [x] Add `AgentProfile` to `value_objects.rs` with fields: `name`, `provider`, `model`, `tools` (Vec), `system_prompt`
+- [x] Implement `AgentProfile::new()` with validation (all required fields non-empty)
+- [x] Add `parse_agent_profile(content: &str) -> Result<AgentProfile, AgentProfileError>` to `knot_file.rs`
+- [x] `AgentProfileError` enum: `MissingName`, `EmptyProvider`, `EmptyModel`, `MissingSystemPrompt`, `InvalidFormat`
+- [x] Profile file format: YAML frontmatter with `name`, `provider`, `model`, optional `tools`, required `system-prompt`. No `prompt-template` section needed (that lives in the knot).
+- [x] Unit tests in `value_objects.rs` for `AgentProfile` construction, serialization, validation errors
+- [x] Unit tests in `knot_file.rs` for profile parsing: valid profiles, missing fields, malformed YAML
+- [x] `cargo test` passes
 
 ### Phase 1: Domain — Knot Parser Extension for `agent-profile-ref`
 
