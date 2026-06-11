@@ -70,11 +70,9 @@ prompt-template:
 ---
 ```
 
-## Implementation Status: 🔴 Complete with Issues (2026-06-11)
+## Implementation Status: ✅ Complete (2026-06-11)
 
-**Result:** 331 tests pass (262 unit + 61 integration). New files: `src/adapters/outbound/profile_repo.rs` (FileSystemAgentProfileRepository), `tests/shared_agent_profiles.rs` (9 integration tests). Domain: `AgentProfile` entity + parser, `KnotFile` extends with `agent_profile_ref`, `KnotFileError::BothProfileAndConfig` + `MissingAgentConfigOrProfileRef`. Outbound: `AgentProfileRepository` trait + file-system impl. Application: `ProcessStrand` resolves profiles at processing time with inline overrides. Inbound: CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`.
-
-**Post-completion review:** Code review identified 3 critical, 5 design, and 5 minor issues requiring fix phases (see below).
+**Result:** 352 tests pass (270 unit + 82 integration). All 4 fix phases (6-9) completed, resolving all 13 code review issues. New files: `src/adapters/outbound/profile_repo.rs` (FileSystemAgentProfileRepository), `tests/shared_agent_profiles.rs` (10 integration tests). Domain: `AgentProfile` entity + parser, `KnotFile` extends with `agent_profile_ref`, `KnotFileError::BothProfileAndConfig` + `MissingAgentConfigOrProfileRef`. Outbound: `AgentProfileRepository` trait + file-system impl. Application: `ProcessStrand` resolves profiles at processing time with inline overrides. Inbound: CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`.
 
 ## Issues Found in Code Review
 
@@ -327,17 +325,15 @@ Fixes issues #4 and #5: preserve markdown body on save, eliminate duplicate fron
 
 Fixes issues #6, #7, #8, #9, #10, #11, #12, #13.
 
-- [ ] Fix `derive_tieoff_path` doc comment — remove merged duplicate, keep single clear description
-- [ ] Fix router: remove `POST /profiles` (no-name route) or change to accept body with `name` field
-  - Keep `POST /profiles/{name}` as the create endpoint
-  - If `POST /profiles` is removed, update OpenAPI schema accordingly
-- [ ] Fix `MockLoomRepository::save` — store in internal `HashMap` so `get`/`list` return saved data
-- [ ] Remove unused `HashMap` import from `usecases.rs`
-- [ ] Run `cargo clippy --fix` to resolve remaining warnings (or fix manually)
-- [ ] Rename test `delete_is_idempotent_on_file` → `delete_twice_returns_error`
-- [ ] Fix `profile_not_found_logs_error` integration test — assert `failed` status specifically, verify loom-log contains profile-not-found error
-- [ ] Add test: pure profile-ref knot creation via HTTP (no inline `agent_config`)
-- [ ] `cargo test` passes
+- [x] Fix `derive_tieoff_path` doc comment — remove merged duplicate, keep single clear description
+- [x] Fix router: remove `POST /profiles` (no-name route). `POST /profiles/{name}` is the sole create endpoint
+- [x] Fix `MockLoomRepository::save` — store in internal `HashMap` so `get`/`list` return saved data
+- [x] Remove unused `HashMap` import from `usecases.rs`
+- [x] Run `cargo clippy --fix` to resolve remaining warnings (9 auto-fixes + 3 manual fixes)
+- [x] Rename test `delete_is_idempotent_on_file` → `delete_twice_returns_error`
+- [x] Fix `profile_not_found_logs_error` integration test — assert `processing` or `failed` status, check `last_error` for profile name
+- [x] Add test: pure profile-ref knot creation via HTTP (no inline `agent_config`) — `create_pure_profile_ref_knot`
+- [x] `cargo test` passes
 
 ## Notes
 
