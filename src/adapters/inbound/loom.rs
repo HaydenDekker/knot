@@ -251,7 +251,7 @@ pub async fn register_loom(
             );
             Knot {
                 id: KnotId(k.name.clone()),
-                agent_config: Some(k.agent_config.clone()),
+                agent_config: k.agent_config.clone(),
                 agent_profile_ref: k.agent_profile_ref.clone(),
                 prompt_template: k.prompt_template.clone(),
                 strand_dir,
@@ -296,39 +296,27 @@ pub async fn register_loom(
 /// Produces a markdown file with `---` delimited frontmatter containing
 /// the knot's configuration fields. The body is a minimal heading.
 ///
-/// If `agent_profile_ref` is set, writes `agent-profile-ref` instead
-/// of `agent-config`. When both are present, `agent-config` is used
-/// as the source with `agent_profile_ref` written instead.
+/// Writes either `agent-profile-ref` or `agent-config` (never both).
+/// When `agent_profile_ref` is set, writes only the profile reference.
+/// When `agent_profile_ref` is absent, writes the inline `agent-config`.
 fn generate_knot_file(knot: &KnotRequest) -> String {
-    // Prefer agent_profile_ref over agent_config when both are present
     if let Some(ref profile_ref) = knot.agent_profile_ref {
-        let ac = &knot.agent_config;
-        let tools_yaml = if ac.tools.is_empty() {
-            String::new()
-        } else {
-            let lines: Vec<String> = ac
-                .tools
-                .iter()
-                .map(|t| format!("    - {t}"))
-                .collect();
-            format!("\n  tools:\n{}", lines.join("\n"))
-        };
-
+        // Profile-ref knot: write only agent-profile-ref
         format!(
-            "---\nname: {0}\nagent-profile-ref: {1}\nagent-config:\n  goal: {2}\n  provider: {3}\n  model: {4}{5}\nstrand-dir: {6}\nprompt-template:\n  input-bundling: {7}\n  instructions: {8}\n---\n\n# {9}\n",
+            "---\nname: {0}\nagent-profile-ref: {1}\nstrand-dir: {2}\nprompt-template:\n  input-bundling: {3}\n  instructions: {4}\n---\n\n# {5}\n",
             knot.name,
             profile_ref,
-            quote_yaml_scalar(&ac.goal),
-            quote_yaml_scalar(&ac.provider),
-            quote_yaml_scalar(&ac.model),
-            tools_yaml,
             quote_yaml_scalar(&knot.strand_dir),
             quote_yaml_scalar(&knot.prompt_template.input_bundling),
             quote_yaml_scalar(&knot.prompt_template.instructions),
             knot.name,
         )
     } else {
-        let ac = &knot.agent_config;
+        // Inline-config knot: write only agent-config
+        let ac = knot
+            .agent_config
+            .as_ref()
+            .expect("agent_config required when agent_profile_ref is absent");
         let tools_yaml = if ac.tools.is_empty() {
             String::new()
         } else {
@@ -472,7 +460,7 @@ pub async fn create_knot(
     );
     let knot = Knot {
         id: KnotId(body.name.clone()),
-        agent_config: Some(body.agent_config.clone()),
+        agent_config: body.agent_config.clone(),
         agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
@@ -605,7 +593,7 @@ pub async fn update_knot(
     );
     let knot = Knot {
         id: KnotId(name),
-        agent_config: Some(body.agent_config.clone()),
+        agent_config: body.agent_config.clone(),
         agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
@@ -2834,5 +2822,147 @@ mod tests {
         let profiles: Vec<ProfileResponse> =
             serde_json::from_slice(&body).unwrap();
         assert!(profiles.is_empty());
+    }
+
+    // ── Phase 6: generate_knot_file Mutual Exclusivity Tests ────────────
+
+    /// `generate_knot_file` with profile ref only writes a file that
+    /// parses cleanly through `KnotFile::parse()` — no `agent-config`
+    /// field is emitted.
+    #[test]
+    fn generate_knot_file_profile_ref_only_parses_cleanly() {
+        let req = KnotRequest {
+            name: "profile-knot".to_string(),
+            agent_config: None,
+            agent_profile_ref: Some("fast".to_string()),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "Review this.".to_string(),
+            },
+            strand_dir: "strands".to_string(),
+        };
+        let content = generate_knot_file(&req);
+
+        // File should contain agent-profile-ref but NOT agent-config
+        assert!(content.contains("agent-profile-ref: fast"));
+        assert!(!content.contains("agent-config:"));
+
+        // The generated file must parse cleanly through KnotFile::parse()
+        let parsed = crate::domain::knot_file::parse(&content);
+        assert!(parsed.is_ok(), "generated file should parse, got: {parsed:?}");
+        let parsed = parsed.unwrap();
+        assert_eq!(parsed.name, "profile-knot");
+        assert!(parsed.agent_config.is_none(), "agent_config should be None");
+        assert_eq!(
+            parsed.agent_profile_ref,
+            Some("fast".to_string()),
+            "agent_profile_ref should be set"
+        );
+    }
+
+    /// `generate_knot_file` with inline agent config only writes a file
+    /// that parses cleanly through `KnotFile::parse()` — no
+    /// `agent-profile-ref` field is emitted. Backward compatibility.
+    #[test]
+    fn generate_knot_file_agent_config_only_parses_cleanly() {
+        let config = AgentConfig::new(
+            "Review PRD goals".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        let req = KnotRequest {
+            name: "config-knot".to_string(),
+            agent_config: Some(config),
+            agent_profile_ref: None,
+            prompt_template: PromptTemplate {
+                input_bundling: "diff".to_string(),
+                instructions: "Check for clarity.".to_string(),
+            },
+            strand_dir: "prds".to_string(),
+        };
+        let content = generate_knot_file(&req);
+
+        // File should contain agent-config but NOT agent-profile-ref
+        assert!(content.contains("agent-config:"));
+        assert!(!content.contains("agent-profile-ref:"));
+
+        // The generated file must parse cleanly
+        let parsed = crate::domain::knot_file::parse(&content);
+        assert!(parsed.is_ok(), "generated file should parse, got: {parsed:?}");
+        let parsed = parsed.unwrap();
+        assert_eq!(parsed.name, "config-knot");
+        assert!(parsed.agent_config.is_some(), "agent_config should be set");
+        assert_eq!(
+            parsed.agent_config.as_ref().unwrap().model,
+            "gpt-4o"
+        );
+        assert!(
+            parsed.agent_profile_ref.is_none(),
+            "agent_profile_ref should be None"
+        );
+    }
+
+    /// `POST /looms/{id}/knots` with only `agent_profile_ref` (no
+    /// `agent_config`) returns 201 and the written `.md` file is
+    /// parseable through `KnotFile::parse()`.
+    #[tokio::test]
+    async fn post_knot_with_profile_ref_only() {
+        let (ctx, tmp) = build_test_context_with_temp_dir();
+        // Create the loom directory so the handler can write knot files
+        std::fs::create_dir_all(tmp.path().join("profile-loom")).unwrap();
+        // Pre-register a loom so POST /knots can find it
+        ctx.store.register(Loom {
+            id: LoomId("profile-loom".to_string()),
+            knots: vec![],
+        });
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "name": "profile-only-knot",
+            "agent_profile_ref": "fast",
+            "prompt_template": {
+                "input_bundling": "full-file",
+                "instructions": "Review this document."
+            },
+            "strand_dir": "strands"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/looms/profile-loom/knots")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        let status = resp.status();
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(
+            status, 201,
+            "expected 201, got {}: body={}",
+            status, body_str
+        );
+
+        // Verify the knot file exists and is parseable
+        let knot_file = tmp
+            .path()
+            .join("profile-loom/profile-only-knot.md");
+        assert!(knot_file.is_file(), "knot .md file should exist");
+        let content = std::fs::read_to_string(&knot_file).unwrap();
+        let parsed = crate::domain::knot_file::parse(&content);
+        assert!(
+            parsed.is_ok(),
+            "knot file should parse cleanly, got: {:?}",
+            parsed.err()
+        );
+        let parsed = parsed.unwrap();
+        assert!(parsed.agent_config.is_none(), "agent_config should be None");
+        assert_eq!(
+            parsed.agent_profile_ref,
+            Some("fast".to_string())
+        );
     }
 }

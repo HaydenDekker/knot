@@ -4,7 +4,6 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
