@@ -605,13 +605,19 @@ impl ProcessStrand {
         }
     }
 
-    /// Resolve the effective `AgentConfig` for a knot.
+    /// Resolve the effective `AgentConfig` for a knot, along with the
+    /// system prompt to use for `--system-prompt`.
+    ///
+    /// Returns a tuple of `(AgentConfig, String)` where the `String` is the
+    /// system prompt that should be used for the CLI `--system-prompt` flag.
     ///
     /// - If the knot has `agent_profile_ref` (and no inline `agent_config`):
     ///   load the profile from the repository and build an `AgentConfig`
-    ///   from it, using the knot's prompt instructions as the goal.
+    ///   from it, using the profile's `system_prompt` (merged with the
+    ///   knot's prompt instructions) as the system prompt for CLI args.
     /// - If the knot has inline `agent_config` (and no profile ref):
-    ///   return the inline config as-is (backward compat).
+    ///   return the inline config as-is (backward compat), using
+    ///   `template.instructions` as the system prompt.
     /// - If both are present (shouldn't happen via mutual exclusivity at
     ///   parse time, but may occur for programmatic Knot construction):
     ///   profile is the base; inline config overrides specific fields
@@ -620,7 +626,7 @@ impl ProcessStrand {
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
-    ) -> Result<AgentConfig, PortError> {
+    ) -> Result<(AgentConfig, String), PortError> {
         match (&knot.agent_profile_ref, &knot.agent_config) {
             (Some(profile_name), None) => {
                 // Profile ref only — load and build AgentConfig from profile.
@@ -634,16 +640,40 @@ impl ProcessStrand {
                         PortError::ProfileNotFound(profile_name.clone())
                     })?;
 
-                Ok(AgentConfig {
-                    goal: knot.prompt_template.instructions.clone(),
-                    provider: profile.provider.clone(),
-                    model: profile.model.clone(),
-                    tools: profile.tools.clone(),
-                })
+                // Merge profile's system_prompt with knot's instructions.
+                // Profile system_prompt is the base (agent persona/instructions),
+                // knot instructions are appended as task-specific direction.
+                let merged_system_prompt = if knot
+                    .prompt_template
+                    .instructions
+                    .trim()
+                    .is_empty()
+                {
+                    profile.system_prompt.clone()
+                } else {
+                    format!(
+                        "{}\n\n{}",
+                        profile.system_prompt,
+                        knot.prompt_template.instructions
+                    )
+                };
+
+                Ok((
+                    AgentConfig {
+                        goal: knot.prompt_template.instructions.clone(),
+                        provider: profile.provider.clone(),
+                        model: profile.model.clone(),
+                        tools: profile.tools.clone(),
+                    },
+                    merged_system_prompt,
+                ))
             }
             (None, Some(config)) => {
                 // Inline config only — use as-is (backward compat).
-                Ok(config.clone())
+                Ok((
+                    config.clone(),
+                    knot.prompt_template.instructions.clone(),
+                ))
             }
             (Some(profile_name), Some(inline_config)) => {
                 // Both set — profile is the base, inline config overrides.
@@ -656,7 +686,10 @@ impl ProcessStrand {
                     &knot.id.0,
                     "knot has both profile-ref and inline config; inline wins",
                 );
-                Ok(inline_config.clone())
+                Ok((
+                    inline_config.clone(),
+                    knot.prompt_template.instructions.clone(),
+                ))
             }
             (None, None) => Err(PortError::AgentExecutionFailed(
                 format!(
@@ -721,8 +754,9 @@ impl ProcessStrand {
         })?;
 
         // 2. Resolve effective agent config (profile or inline) and build CLI args
-        let agent_config = self.resolve_agent_config(knot)?;
-        let mut cli_args = agent_config.build_cli_args(&knot.prompt_template);
+        let (agent_config, system_prompt) = self.resolve_agent_config(knot)?;
+        let mut cli_args = agent_config
+            .build_cli_args(&knot.prompt_template, Some(&system_prompt));
         // Append strand content reference using pi's @file syntax
         cli_args.push(
             format!("@{}", strand_path.0.display()),
@@ -3414,6 +3448,7 @@ mod phase3_profile_resolution_tests {
 
     /// Profile ref resolves to profile fields: provider, model, tools.
     /// Goal comes from the knot's prompt template instructions.
+    /// System prompt comes from the profile (merged with knot instructions).
     #[test]
     fn resolve_agent_config_from_profile() {
         let store = LoomStore::new();
@@ -3444,7 +3479,8 @@ mod phase3_profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
-        let config = use_case.resolve_agent_config(&profile_knot).unwrap();
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&profile_knot).unwrap();
 
         // Resolved config should use profile values
         assert_eq!(config.provider, "openai");
@@ -3455,6 +3491,9 @@ mod phase3_profile_resolution_tests {
             config.goal,
             profile_knot.prompt_template.instructions
         );
+        // System prompt should contain profile's system_prompt + knot instructions
+        assert!(system_prompt.contains("You are fast."));
+        assert!(system_prompt.contains("check with profile"));
     }
 
     /// Inline agent-config is returned as-is (backward compat).
@@ -3474,13 +3513,16 @@ mod phase3_profile_resolution_tests {
         );
 
         let inline_knot = build_inline_knot("k1");
-        let config = use_case.resolve_agent_config(&inline_knot).unwrap();
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&inline_knot).unwrap();
 
         // Inline config should be used as-is
         assert_eq!(config.provider, "openai");
         assert_eq!(config.model, "gpt-4o");
         assert_eq!(config.tools, vec!["fs"]);
         assert_eq!(config.goal, "review");
+        // System prompt is the knot's instructions (backward compat)
+        assert_eq!(system_prompt, "check it");
     }
 
     /// Profile ref resolves to profile values even when inline config
@@ -3533,11 +3575,14 @@ mod phase3_profile_resolution_tests {
         };
 
         // When both are set, inline config overrides (full override)
-        let config = use_case.resolve_agent_config(&knot).unwrap();
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&knot).unwrap();
         assert_eq!(config.provider, "anthropic");
         assert_eq!(config.model, "claude-sonnet");
         assert_eq!(config.tools, vec!["web"]);
         assert_eq!(config.goal, "override goal");
+        // System prompt is the knot's instructions
+        assert_eq!(system_prompt, "check");
     }
 
     /// Profile not found returns PortError::ProfileNotFound.
@@ -3639,8 +3684,10 @@ mod phase3_profile_resolution_tests {
         let knot1 = build_profile_knot("k1", "detailed");
         let knot2 = build_profile_knot("k2", "detailed");
 
-        let config1 = use_case.resolve_agent_config(&knot1).unwrap();
-        let config2 = use_case.resolve_agent_config(&knot2).unwrap();
+        let (config1, system_prompt1) =
+            use_case.resolve_agent_config(&knot1).unwrap();
+        let (config2, system_prompt2) =
+            use_case.resolve_agent_config(&knot2).unwrap();
 
         // Both should resolve to the same profile values
         assert_eq!(config1.provider, "anthropic");
@@ -3650,9 +3697,11 @@ mod phase3_profile_resolution_tests {
         assert_eq!(config1.tools, vec!["fs", "web"]);
         assert_eq!(config2.tools, vec!["fs", "web"]);
 
-        // But goals differ (from each knot's prompt template)
-        assert_eq!(config1.goal, "check with profile");
-        assert_eq!(config2.goal, "check with profile");
+        // System prompts contain profile system_prompt + knot instructions
+        assert!(system_prompt1.contains("Be thorough."));
+        assert!(system_prompt1.contains("check with profile"));
+        assert!(system_prompt2.contains("Be thorough."));
+        assert!(system_prompt2.contains("check with profile"));
     }
 
     /// Dynamic profile pickup: adding a profile to the repository
@@ -3689,9 +3738,95 @@ mod phase3_profile_resolution_tests {
         profile_repo.save(profile).unwrap();
 
         // Now the same knot should resolve successfully
-        let config = use_case.resolve_agent_config(&profile_knot).unwrap();
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&profile_knot).unwrap();
         assert_eq!(config.provider, "openai");
         assert_eq!(config.model, "gpt-4o");
         assert_eq!(config.tools, vec!["fs"]);
+        // System prompt contains profile's system_prompt + knot instructions
+        assert!(system_prompt.contains("You are new."));
+        assert!(system_prompt.contains("check with profile"));
+    }
+
+    /// Profile system_prompt flows into CLI --system-prompt arg.
+    ///
+    /// Verifies that when a profile-ref knot is resolved, the resulting
+    /// CLI args contain the profile's system_prompt as the --system-prompt
+    /// value (merged with knot instructions).
+    #[test]
+    fn profile_ref_cli_args_include_system_prompt() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([(
+                "reviewer".to_string(),
+                AgentProfile::new(
+                    "reviewer".to_string(),
+                    "openai".to_string(),
+                    "gpt-4o".to_string(),
+                    "You are a careful reviewer. Be precise and concise.".to_string(),
+                )
+                .unwrap(),
+            )]))),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+        );
+
+        let profile_knot = build_profile_knot("k1", "reviewer");
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&profile_knot).unwrap();
+        let args = config.build_cli_args(&profile_knot.prompt_template, Some(&system_prompt));
+
+        // CLI args should contain the merged system prompt
+        let system_prompt_index = args.iter().position(|a| a == "--system-prompt").expect("--system-prompt flag missing");
+        let system_prompt_value = &args[system_prompt_index + 1];
+        assert!(
+            system_prompt_value.contains("careful reviewer"),
+            "system prompt should contain profile instructions: {system_prompt_value}"
+        );
+        assert!(
+            system_prompt_value.contains("check with profile"),
+            "system prompt should contain knot instructions: {system_prompt_value}"
+        );
+        // Should also have the model arg
+        let model_index = args.iter().position(|a| a == "--model").expect("--model flag missing");
+        assert_eq!(args[model_index + 1], "gpt-4o");
+    }
+
+    /// Inline config knot uses knot instructions as system prompt (backward compat).
+    ///
+    /// Verifies that knots with inline agent-config continue to use
+    /// prompt_template.instructions for --system-prompt.
+    #[test]
+    fn inline_config_cli_args_use_template_instructions() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository::default());
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+        );
+
+        let inline_knot = build_inline_knot("k1");
+        let (config, system_prompt) =
+            use_case.resolve_agent_config(&inline_knot).unwrap();
+        let args = config.build_cli_args(&inline_knot.prompt_template, Some(&system_prompt));
+
+        // CLI args should use knot's instructions as system prompt
+        let system_prompt_index = args.iter().position(|a| a == "--system-prompt").expect("--system-prompt flag missing");
+        let system_prompt_value = &args[system_prompt_index + 1];
+        assert_eq!(system_prompt_value, "check it");
     }
 }
