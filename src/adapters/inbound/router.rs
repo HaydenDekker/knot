@@ -122,10 +122,11 @@ pub fn build_app(ctx: AppContext) -> Router {
             get(get_knot_status).patch(update_knot).delete(delete_knot),
         )
         // Profile endpoints
-        .route("/profiles", get(list_profiles).post(create_profile))
+        .route("/profiles", get(list_profiles))
+        .route("/profiles", post(create_profile))
         .route(
             "/profiles/{name}",
-            get(get_profile).delete(delete_profile),
+            get(get_profile).delete(delete_profile).post(create_profile),
         )
         .with_state(ctx)
 }

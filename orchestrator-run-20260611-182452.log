@@ -1,0 +1,492 @@
+=== Orchestrator run log (20260611-182452) ===
+
+--- stdout ---
+running 262 tests
+test adapters::inbound::loom::tests::app_context_has_event_source ... ok
+test adapters::inbound::loom::tests::build_test_context_with_tracking_records_calls ... ok
+test adapters::inbound::loom::tests::delete_loom_not_found ... ok
+test adapters::inbound::loom::tests::delete_loom_stops_watcher ... ok
+test adapters::inbound::loom::tests::create_profile_empty_model_returns_400 ... FAILED
+test adapters::inbound::loom::tests::create_profile_empty_system_prompt_returns_400 ... FAILED
+test adapters::inbound::loom::tests::delete_profile_not_found ... ok
+test adapters::inbound::loom::tests::delete_profile_success ... ok
+test adapters::inbound::loom::tests::create_profile_success ... FAILED
+test adapters::inbound::loom::tests::mock_event_source_tracks_watches ... ok
+test adapters::inbound::loom::tests::create_profile_empty_provider_returns_400 ... FAILED
+test adapters::inbound::loom::tests::get_knot_status_from_loom_log ... ok
+test adapters::inbound::loom::tests::get_knot_status_idle_from_loom_log ... ok
+test adapters::inbound::loom::tests::delete_loom_success ... ok
+test adapters::inbound::loom::tests::get_knot_status_failed_from_loom_log ... ok
+test adapters::inbound::loom::tests::post_loom_requires_knots ... ok
+test adapters::inbound::loom::tests::post_loom_missing_strand_dir_returns_400 ... ok
+test adapters::inbound::loom::tests::post_loom_id_must_end_in_loom ... ok
+test adapters::inbound::loom::tests::post_loom_duplicate_id_is_idempotent ... ok
+test adapters::inbound::loom::tests::post_loom_starts_watcher ... ok
+test adapters::inbound::loom::tests::post_loom_creates_loom_directory ... ok
+test adapters::inbound::loom::tests::handlers_module_compiles ... ok
+test adapters::inbound::loom::tests::full_route_wiring ... ok
+test adapters::inbound::loom::tests::post_loom_writes_knot_files ... ok
+test adapters::inbound::loom::tests::state_extractor_available ... ok
+test adapters::outbound::event_source::tests::watcher_starts ... ok
+test adapters::outbound::loom_log::tests::loom_log_create_and_append ... ok
+test adapters::inbound::loom::tests::post_loom_success ... ok
+test adapters::outbound::loom_log::tests::loom_log_multiple_events ... ok
+test adapters::outbound::loom_log::tests::loom_log_concurrent_writes ... ok
+test adapters::outbound::loom_log::tests::loom_log_read_all_empty ... ok
+test adapters::outbound::loom_log::tests::loom_log_trait_object_safe ... ok
+test adapters::outbound::loom_repository::tests::get_nonexistent_loom ... ok
+test adapters::outbound::loom_log::tests::loom_log_read_all ... ok
+test adapters::outbound::loom_repository::tests::resolve_path_absolute_uses_as_is ... ok
+test adapters::outbound::loom_repository::tests::resolve_path_nonexistent_joins_without_canonicalise ... ok
+test adapters::outbound::loom_repository::tests::save_and_list_loom ... ok
+test adapters::outbound::loom_repository::tests::resolve_path_relative_joins_to_loom_dir ... ok
+test adapters::outbound::loom_repository::tests::scan_empty_rig ... ok
+test adapters::outbound::loom_repository::tests::scan_knot_gets_required_dirs ... ok
+test adapters::outbound::loom_repository::tests::scan_ignores_loom_log_directory ... ok
+test adapters::outbound::loom_repository::tests::scan_multiple_knots_different_source_dirs ... ok
+test adapters::outbound::loom_repository::tests::scan_parses_knot_definition_files ... ok
+test adapters::outbound::loom_repository::tests::scan_parses_per_knot_source_and_tieoff_dirs ... ok
+test adapters::outbound::loom_repository::tests::scan_per_knot_source_dir_resolved_to_external ... ok
+test adapters::outbound::loom_repository::tests::scan_rig_with_absolute_path ... ok
+test adapters::outbound::loom_repository::tests::scan_requires_strand_dir ... ok
+test adapters::outbound::loom_repository::tests::scan_rig_with_one_loom ... ok
+test adapters::outbound::loom_repository::tests::scan_rig_with_multiple_looms ... ok
+test adapters::outbound::loom_repository::tests::scan_rig_with_relative_path ... ok
+test adapters::outbound::profile_repo::tests::clone_repository ... ok
+test adapters::outbound::loom_repository::tests::scan_skips_invalid_knot_files ... ok
+test adapters::outbound::loom_repository::tests::scan_skips_non_loom_directories ... ok
+test adapters::outbound::profile_repo::tests::delete_existing_profile ... ok
+test adapters::outbound::profile_repo::tests::delete_is_idempotent_on_file ... ok
+test adapters::outbound::profile_repo::tests::delete_nonexistent_profile_returns_error ... ok
+test adapters::outbound::profile_repo::tests::get_nonexistent_profile_returns_none ... ok
+test adapters::outbound::profile_repo::tests::get_profile_from_nonexistent_dir_returns_none ... ok
+test adapters::outbound::profile_repo::tests::get_existing_profile_returns_profile ... ok
+test adapters::outbound::profile_repo::tests::list_empty_profiles_dir ... ok
+test adapters::outbound::profile_repo::tests::full_lifecycle ... ok
+test adapters::outbound::profile_repo::tests::list_profiles_from_nonexistent_dir ... ok
+test adapters::outbound::profile_repo::tests::list_multiple_profiles ... ok
+test adapters::outbound::profile_repo::tests::list_skips_non_md_files ... ok
+test adapters::outbound::profile_repo::tests::list_skips_malformed_profile_files ... ok
+test adapters::outbound::profile_repo::tests::save_creates_profiles_dir_and_file ... ok
+test adapters::outbound::profile_repo::tests::save_then_get_roundtrip ... ok
+test adapters::outbound::profile_repo::tests::save_overwrites_existing_profile ... ok
+test adapters::outbound::profile_repo::tests::save_with_tools ... ok
+test adapters::outbound::tieoff_sink::tests::append_mode_adds_section ... ok
+test adapters::outbound::tieoff_sink::tests::append_mode_creates_file ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_complex_extension ... ok
+test adapters::outbound::tieoff_sink::tests::append_mode_preserves_history ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_create_parent_dirs ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_derived_from_strand ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_filename_no_extension ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_resolve_path ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_overwrite_existing ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_sink_trait_object_safe ... ok
+test adapters::outbound::tieoff_sink::tests::tieoff_write_new_file ... ok
+test adapters::subprocess::tests::execute_captures_stderr ... ok
+test adapters::subprocess::tests::execute_nonzero_exit_error ... ok
+test adapters::subprocess::tests::execute_captures_stdout ... ok
+test adapters::subprocess::tests::execute_successful_command ... ok
+test adapters::subprocess::tests::runner_passes_event_metadata ... ok
+test adapters::subprocess::tests::runner_passes_prompt_via_stdin ... ok
+test adapters::subprocess::tests::runner_passes_strand_via_at_syntax ... ok
+test adapters::subprocess::tests::execute_command_not_found ... ok
+test adapters::inbound::loom::tests::existing_routes_preserved ... ok
+test adapters::inbound::loom::tests::get_looms_returns_json ... ok
+test adapters::inbound::loom::tests::profile_lifecycle ... FAILED
+test adapters::inbound::loom::tests::get_loom_knots ... ok
+test adapters::inbound::loom::tests::get_loom_by_id ... ok
+test adapters::inbound::loom::tests::get_profile_not_found ... ok
+test application::ports::tests::agent_output_fields ... ok
+test application::ports::tests::agent_profile_repository_contract ... ok
+test application::ports::tests::agent_runner_contract ... ok
+test adapters::inbound::loom::tests::get_knot_status_processing_from_loom_log ... ok
+test application::ports::tests::event_source_contract ... ok
+test adapters::inbound::loom::tests::get_loom_activity ... ok
+test adapters::inbound::loom::tests::get_knot_status_not_found ... ok
+test application::ports::tests::execution_context_fields ... ok
+test application::ports::tests::knot_state_fields ... ok
+test adapters::inbound::loom::tests::get_profiles_returns_json ... ok
+test adapters::inbound::loom::tests::post_loom_without_tieoff_dir_succeeds ... ok
+test adapters::inbound::loom::tests::get_profiles_empty ... ok
+test application::ports::tests::loom_log_port_contract ... ok
+test application::ports::tests::knot_event_type_variants ... ok
+test application::ports::tests::loom_repository_contract ... ok
+test application::ports::tests::port_error_display ... ok
+test application::ports::tests::port_error_is_std_error ... ok
+test application::ports::tests::processing_status_variants ... ok
+test application::ports::tests::tieoff_sink_contract ... ok
+test adapters::inbound::loom::tests::get_looms_empty ... ok
+test application::store::tests::get_loom_by_id ... ok
+test adapters::inbound::loom::tests::get_loom_not_found ... ok
+test adapters::inbound::loom::tests::get_profile_by_name ... ok
+test application::store::tests::get_nonexistent_returns_none ... ok
+test application::store::tests::register_loom ... ok
+test application::store::tests::list_looms ... ok
+test application::store::tests::unregister_loom ... ok
+test application::usecases::config_handler_tests::config_handler_knot_added ... ok
+test application::usecases::config_handler_tests::config_handler_knot_added_loom_not_found ... ok
+test application::usecases::config_handler_tests::config_handler_knot_added_duplicate ... ok
+test application::usecases::config_handler_tests::config_handler_knot_deleted_loom_not_found ... ok
+test application::usecases::config_handler_tests::config_handler_knot_deleted_not_found ... ok
+test application::usecases::config_handler_tests::config_handler_knot_deleted ... ok
+test application::usecases::config_handler_tests::config_handler_knot_modified ... ok
+test application::usecases::config_handler_tests::config_handler_knot_modified_new_knot_registers ... ok
+test application::usecases::config_handler_tests::config_handler_knot_modified_same_strand_dir ... ok
+test application::usecases::config_handler_tests::config_handler_knot_modified_not_found ... ok
+test application::usecases::config_handler_tests::config_handler_knot_modified_warns_on_recovery ... ok
+test application::usecases::config_handler_tests::config_handler_loom_added_already_registered ... ok
+test application::usecases::config_handler_tests::config_handler_loom_added ... ok
+test application::usecases::manage_knot_tests::manage_knot_create_duplicate ... ok
+test application::usecases::manage_knot_tests::manage_knot_create ... ok
+test application::usecases::manage_knot_tests::manage_knot_create_loom_not_found ... ok
+test application::usecases::manage_knot_tests::manage_knot_delete ... ok
+test application::usecases::manage_knot_tests::manage_knot_delete_loom_not_found ... ok
+test application::usecases::manage_knot_tests::manage_knot_delete_not_found ... ok
+test application::usecases::manage_knot_tests::manage_knot_update ... ok
+test application::usecases::manage_knot_tests::manage_knot_update_not_found ... ok
+test application::usecases::phase2_tests::register_loom_duplicate_is_idempotent ... ok
+test application::usecases::phase2_tests::register_loom_starts_watcher_empty_knots ... ok
+test application::usecases::phase2_tests::register_loom_starts_watchers ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_dynamic_profile_pickup ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_from_profile ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_neither_set ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_inline_backward_compat ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_profile_not_found ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_profile_with_inline_override ... ok
+test application::usecases::phase3_profile_resolution_tests::resolve_agent_config_same_profile_multiple_knots ... ok
+test application::usecases::phase3_tests::unregister_loom_not_found_no_unwatch ... ok
+test application::usecases::phase3_tests::unregister_loom_stops_watcher_empty_knots ... ok
+test application::usecases::phase3_tests::unregister_loom_stops_watchers ... ok
+test application::usecases::phase4_tests::discover_looms_empty_scan ... ok
+test application::usecases::phase4_tests::discover_looms_all_registered_returns_empty ... ok
+test domain::entities::tests::knot_construction ... ok
+test domain::entities::tests::knot_construction_with_strand_dir ... ok
+test application::usecases::phase4_tests::discover_looms_runtime_skips_registered ... ok
+test domain::entities::tests::knot_id_newtype ... ok
+test domain::entities::tests::loom_construction ... ok
+test domain::entities::tests::loom_id_newtype ... ok
+test domain::entities::tests::knot_serialization ... ok
+test domain::entities::tests::loom_serialization ... ok
+test domain::entities::tests::strand_construction ... ok
+test domain::entities::tests::strand_path_newtype ... ok
+test domain::entities::tests::strand_serialization ... ok
+test domain::entities::tests::tieoff_construction ... ok
+test domain::entities::tests::tieoff_path_newtype ... ok
+test domain::entities::tests::tieoff_serialization ... ok
+test domain::entities::tests::tieoff_status_failed ... ok
+test domain::events::tests::knot_registered_event ... ok
+test domain::events::tests::loom_event_knot_completed ... ok
+test domain::events::tests::loom_event_knot_failed ... ok
+test domain::events::tests::loom_event_knot_processing ... ok
+test domain::events::tests::config_event_types ... ok
+test domain::events::tests::loom_event_types ... ok
+test domain::events::tests::loom_event_strand_processed_with_error ... ok
+test domain::events::tests::loom_event_serialisation ... ok
+test domain::events::tests::strand_event_types ... ok
+test domain::events::tests::processing_failed_event ... ok
+test domain::events::tests::tieoff_produced_event ... ok
+test domain::knot_file::tests::agent_profile_error_display ... ok
+test domain::events::tests::loom_event_serialisation_all_variants ... ok
+test domain::knot_file::tests::derive_loom_log_path_builds_correct_path ... ok
+test domain::knot_file::tests::derive_tieoff_path_builds_correct_path ... ok
+test domain::events::tests::strand_event_serialisation ... ok
+test domain::knot_file::tests::knot_file_error_display ... ok
+test domain::knot_file::tests::knot_file_serialization ... ok
+test domain::knot_file::tests::empty_goal_returns_error ... ok
+test domain::knot_file::tests::empty_strand_dir_returns_error ... ok
+test domain::knot_file::tests::knot_file_with_custom_strand_dir ... ok
+test domain::knot_file::tests::knot_file_with_provider_model_tools ... ok
+test domain::knot_file::tests::knot_with_agent_profile_ref_only_parses ... ok
+test domain::knot_file::tests::malformed_yaml_returns_error ... ok
+test domain::knot_file::tests::missing_name_returns_error ... ok
+test domain::knot_file::tests::knot_with_agent_config_only_still_works ... ok
+test domain::knot_file::tests::missing_agent_config_returns_error ... ok
+test domain::knot_file::tests::knot_with_both_profile_and_config_returns_error ... ok
+test domain::knot_file::tests::missing_model_returns_error ... ok
+test domain::knot_file::tests::no_frontmatter_returns_error ... ok
+test domain::knot_file::tests::missing_provider_returns_error ... ok
+test domain::knot_file::tests::missing_strand_dir_returns_error ... ok
+test domain::knot_file::tests::parse_profile_empty_system_prompt ... ok
+test domain::knot_file::tests::parse_profile_malformed_yaml ... ok
+test domain::knot_file::tests::parse_profile_missing_model ... ok
+test domain::knot_file::tests::parse_profile_missing_name ... ok
+test domain::knot_file::tests::parse_profile_missing_provider ... ok
+test domain::knot_file::tests::parse_profile_no_closing_delimiter ... ok
+test domain::knot_file::tests::parse_profile_no_frontmatter ... ok
+test domain::knot_file::tests::parse_profile_missing_system_prompt ... ok
+test domain::knot_file::tests::missing_prompt_template_returns_error ... ok
+test domain::knot_file::tests::parse_profile_whitespace_fields ... ok
+test domain::knot_file::tests::parse_profile_empty_name ... ok
+test domain::knot_file::tests::parse_profile_with_multiple_tools ... ok
+test domain::knot_file::tests::parse_profile_with_multiline_system_prompt ... ok
+test domain::knot_file::tests::parse_profile_without_tools ... ok
+test domain::knot_file::tests::parse_valid_agent_profile ... ok
+test domain::value_objects::tests::agent_config_build_cli_args_basic ... ok
+test domain::knot_file::tests::tieoff_dir_in_yaml_is_accepted_but_ignored ... ok
+test domain::value_objects::tests::agent_config_build_cli_args_with_tools ... ok
+test domain::knot_file::tests::valid_knot_file_parse ... ok
+test domain::value_objects::tests::agent_config_defaults ... ok
+test domain::knot_file::tests::whitespace_only_goal_returns_error ... ok
+test domain::value_objects::tests::agent_config_with_provider_and_model ... ok
+test domain::value_objects::tests::agent_profile_empty_model ... ok
+test domain::value_objects::tests::agent_config_serialization ... ok
+test domain::value_objects::tests::agent_profile_empty_provider ... ok
+test domain::value_objects::tests::agent_profile_empty_system_prompt ... ok
+test domain::value_objects::tests::agent_profile_error_display ... ok
+test domain::value_objects::tests::agent_profile_missing_name ... ok
+test domain::value_objects::tests::agent_profile_new_valid ... ok
+test domain::value_objects::tests::agent_profile_serialization ... ok
+test domain::value_objects::tests::agent_profile_whitespace_name ... ok
+test domain::value_objects::tests::agent_profile_serialization_with_tools ... ok
+test domain::value_objects::tests::agent_profile_whitespace_system_prompt ... ok
+test domain::value_objects::tests::agent_profile_with_multiline_system_prompt ... ok
+test domain::value_objects::tests::agent_profile_with_tools ... ok
+test domain::value_objects::tests::prompt_template_fields ... ok
+test domain::value_objects::tests::prompt_template_serialization ... ok
+test domain::value_objects::tests::rig_agent_config_defaults ... ok
+test domain::value_objects::tests::rig_agent_config_serialization ... ok
+test adapters::subprocess::tests::execute_timeout ... ok
+test application::debounce::tests::single_event_emits_after_window ... ok
+test application::debounce::tests::different_files_emit_independently ... ok
+test application::debounce::tests::delete_after_modify_emits_delete ... ok
+test application::debounce::tests::rapid_events_emit_only_last ... ok
+test adapters::outbound::event_source::tests::modify_event_emitted ... ok
+test adapters::outbound::event_source::tests::delete_event_emitted ... ok
+test adapters::outbound::event_source::tests::create_event_emitted ... ok
+test adapters::outbound::event_source::tests::loom_dir_subdirectory_creation_ignored ... ok
+test adapters::outbound::event_source::tests::loom_dir_malformed_knot_ignored ... ok
+test adapters::outbound::event_source::tests::loom_dir_non_md_file_ignored ... ok
+test adapters::outbound::event_source::tests::rig_dir_new_loom_emits_config_event ... ok
+test adapters::outbound::event_source::tests::event_outside_source_dir_filtered ... ok
+test adapters::outbound::event_source::tests::rig_dir_non_loom_directory_ignored ... ok
+test adapters::outbound::event_source::tests::loom_dir_new_knot_emits_config_event ... ok
+test adapters::outbound::event_source::tests::loom_dir_delete_knot_emits_config_event ... ok
+test adapters::outbound::event_source::tests::loom_dir_edit_knot_emits_config_event ... ok
+test adapters::outbound::event_source::tests::directory_events_filtered ... ok
+test adapters::outbound::event_source::tests::event_mapping_correct_types ... ok
+
+failures:
+
+---- adapters::inbound::loom::tests::create_profile_empty_model_returns_400 stdout ----
+
+thread 'adapters::inbound::loom::tests::create_profile_empty_model_returns_400' (83486) panicked at src/adapters/inbound/loom.rs:2674:9:
+assertion `left == right` failed
+  left: 405
+ right: 400
+
+---- adapters::inbound::loom::tests::create_profile_empty_system_prompt_returns_400 stdout ----
+
+thread 'adapters::inbound::loom::tests::create_profile_empty_system_prompt_returns_400' (83488) panicked at src/adapters/inbound/loom.rs:2622:9:
+assertion `left == right` failed
+  left: 405
+ right: 400
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- adapters::inbound::loom::tests::create_profile_success stdout ----
+
+thread 'adapters::inbound::loom::tests::create_profile_success' (83489) panicked at src/adapters/inbound/loom.rs:2583:9:
+assertion `left == right` failed
+  left: 405
+ right: 201
+
+---- adapters::inbound::loom::tests::create_profile_empty_provider_returns_400 stdout ----
+
+thread 'adapters::inbound::loom::tests::create_profile_empty_provider_returns_400' (83487) panicked at src/adapters/inbound/loom.rs:2651:9:
+assertion `left == right` failed
+  left: 405
+ right: 400
+
+---- adapters::inbound::loom::tests::profile_lifecycle stdout ----
+
+thread 'adapters::inbound::loom::tests::profile_lifecycle' (83524) panicked at src/adapters/inbound/loom.rs:2765:9:
+assertion `left == right` failed
+  left: 405
+ right: 201
+
+
+failures:
+    adapters::inbound::loom::tests::create_profile_empty_model_returns_400
+    adapters::inbound::loom::tests::create_profile_empty_provider_returns_400
+    adapters::inbound::loom::tests::create_profile_empty_system_prompt_returns_400
+    adapters::inbound::loom::tests::create_profile_success
+    adapters::inbound::loom::tests::profile_lifecycle
+
+test result: FAILED. 257 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+--- stderr ---
+warning: unused import: `std::collections::HashMap`
+ --> src/application/usecases.rs:7:5
+  |
+7 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `build_loom` is never used
+    --> src/application/usecases.rs:3407:8
+     |
+3407 |     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+     |        ^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `knot` (lib) generated 1 warning (run `cargo fix --lib -p knot` to apply 1 suggestion)
+warning: `knot` (lib test) generated 2 warnings (1 duplicate)
+warning: unused variable: `strand_dir`
+  --> tests/discovery.rs:26:24
+   |
+26 |     let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
+   |                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_strand_dir`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `strand_dir`
+  --> tests/discovery.rs:89:24
+   |
+89 |     let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
+   |                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_strand_dir`
+
+warning: unused variable: `strand_dir`
+   --> tests/discovery.rs:151:24
+    |
+151 |     let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
+    |                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_strand_dir`
+
+warning: unused variable: `strand_dir`
+   --> tests/discovery.rs:226:24
+    |
+226 |     let (knot_content, strand_dir) = make_knot_content_with_dirs(tmp.path());
+    |                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_strand_dir`
+
+warning: function `make_knot_content` is never used
+  --> tests/helpers.rs:32:8
+   |
+32 | pub fn make_knot_content(project_root: &Path) -> String {
+   |        ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `create_mock_agent` is never used
+  --> tests/helpers.rs:40:8
+   |
+40 | pub fn create_mock_agent(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `create_stub_pi_agent` is never used
+  --> tests/helpers.rs:67:8
+   |
+67 | pub fn create_stub_pi_agent(dir: &Path) -> std::path::PathBuf {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `http_post_json` is never used
+   --> tests/helpers.rs:209:14
+    |
+209 | pub async fn http_post_json(
+    |              ^^^^^^^^^^^^^^
+
+warning: function `http_post_json_retry` is never used
+   --> tests/helpers.rs:232:14
+    |
+232 | pub async fn http_post_json_retry(
+    |              ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `http_patch_json` is never used
+   --> tests/helpers.rs:252:14
+    |
+252 | pub async fn http_patch_json(
+    |              ^^^^^^^^^^^^^^^
+
+warning: function `http_delete` is never used
+   --> tests/helpers.rs:275:14
+    |
+275 | pub async fn http_delete(host_port: &str, path: &str) -> Result<(String, String), String> {
+    |              ^^^^^^^^^^^
+
+warning: function `spawn_server_with_shutdown` is never used
+   --> tests/helpers.rs:326:8
+    |
+326 | pub fn spawn_server_with_shutdown(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `poll_knot_status` is never used
+   --> tests/helpers.rs:344:14
+    |
+344 | pub async fn poll_knot_status(
+    |              ^^^^^^^^^^^^^^^^
+
+warning: function `http_get_retry` is never used
+   --> tests/helpers.rs:190:14
+    |
+190 | pub async fn http_get_retry(
+    |              ^^^^^^^^^^^^^^
+
+warning: function `make_knot_content_with_dirs` is never used
+  --> tests/helpers.rs:19:8
+   |
+19 | pub fn make_knot_content_with_dirs(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `make_knot_content` is never used
+  --> tests/helpers.rs:32:8
+   |
+32 | pub fn make_knot_content(project_root: &Path) -> String {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `strand_dir`
+   --> tests/loom_crud.rs:161:24
+    |
+161 |     let (knot_content, strand_dir) =
+    |                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_strand_dir`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused `Result` that must be used
+   --> tests/rig_lifecycle.rs:279:5
+    |
+279 | /     tokio::time::timeout(Duration::from_secs(10), _handle1)
+280 | |         .await
+281 | |         .expect("server 1 should complete shutdown within timeout");
+    | |___________________________________________________________________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+279 |     let _ = tokio::time::timeout(Duration::from_secs(10), _handle1)
+    |     +++++++
+
+warning: function `spawn_server` is never used
+   --> tests/helpers.rs:312:8
+    |
+312 | pub fn spawn_server(config: AppConfig) -> tokio::task::JoinHandle<()> {
+    |        ^^^^^^^^^^^^
+
+warning: function `read_response` is never used
+   --> tests/helpers.rs:141:10
+    |
+141 | async fn read_response(mut stream: TcpStream) -> Result<(String, String), String> {
+    |          ^^^^^^^^^^^^^
+
+warning: function `http_get` is never used
+   --> tests/helpers.rs:175:14
+    |
+175 | pub async fn http_get(host_port: &str, path: &str) -> Result<(String, String), String> {
+    |              ^^^^^^^^
+
+warning: `knot` (test "discovery") generated 13 warnings (run `cargo fix --test "discovery" -p knot` to apply 4 suggestions)
+warning: `knot` (test "server_startup_smoke") generated 10 warnings (9 duplicates)
+warning: `knot` (test "auto_discovery_and_knot_crud") generated 6 warnings (4 duplicates)
+warning: `knot` (test "loom_crud") generated 7 warnings (6 duplicates) (run `cargo fix --test "loom_crud" -p knot` to apply 1 suggestion)
+warning: `knot` (test "demo") generated 10 warnings (10 duplicates)
+warning: `knot` (test "rig_lifecycle") generated 8 warnings (7 duplicates)
+warning: `knot` (test "pipeline") generated 7 warnings (7 duplicates)
+warning: `knot` (test "multi_loom") generated 9 warnings (9 duplicates)
+warning: `knot` (test "shutdown") generated 10 warnings (9 duplicates)
+warning: `knot` (test "task_management") generated 9 warnings (9 duplicates)
+warning: `knot` (test "tie_off") generated 11 warnings (9 duplicates)
+warning: `knot` (test "agent_integration") generated 8 warnings (8 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/knot-6a929a0e1d0ba6ed)
+error: test failed, to rerun pass `--lib`
