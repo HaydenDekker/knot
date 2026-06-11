@@ -205,6 +205,7 @@ pub struct AgentProfile {
     #[serde(default)]
     pub tools: Vec<String>,
     /// The system prompt given to the agent.
+    #[serde(rename = "system-prompt")]
     pub system_prompt: String,
 }
 
