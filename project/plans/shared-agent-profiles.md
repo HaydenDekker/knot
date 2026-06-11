@@ -307,19 +307,19 @@ Fixes issue #3: the profile's `system_prompt` must flow into the agent CLI invoc
 
 Fixes issues #4 and #5: preserve markdown body on save, eliminate duplicate frontmatter extraction.
 
-- [ ] Refactor `knot_file.rs`:
+- [x] Refactor `knot_file.rs`:
   - Extract shared `extract_frontmatter(content: &str) -> Result<(String, Option<String>), &str>` helper
   - Returns the YAML text and optional body (markdown after closing `---`)
   - Both `parse()` and `parse_agent_profile()` call the shared helper
-- [ ] Update `AgentProfileError` — add `InvalidFormat` variant for structural errors (no frontmatter, no closing delimiter)
-- [ ] Update `FileSystemAgentProfileRepository::save()`:
+- [x] Update `AgentProfileError` — add `InvalidFormat` variant for structural errors (no frontmatter, no closing delimiter)
+- [x] Update `FileSystemAgentProfileRepository::save()`:
   - When overwriting, read the existing file first (if it exists)
   - Preserve the existing body (markdown after closing `---`)
   - Write: `---\n<new_yaml>---\n\n<preserved_body>`
   - On create (no existing file), use current minimal body
-- [ ] Add unit test: save profile that already has body → body preserved after round-trip
-- [ ] Add unit test: `parse_agent_profile` with no frontmatter → returns `InvalidFormat` error
-- [ ] `cargo test` passes
+- [x] Add unit test: save profile that already has body → body preserved after round-trip
+- [x] Add unit test: `parse_agent_profile` with no frontmatter → returns `InvalidFormat` error
+- [x] `cargo test` passes
 
 ### Phase 9: Fix — Route Cleanup + Clippy + Test Polish
 
