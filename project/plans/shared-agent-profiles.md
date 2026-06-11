@@ -159,21 +159,21 @@ Create the port trait and filesystem-backed implementation for profile storage a
 
 Wire `AgentProfileRepository` into `ProcessStrand` and resolve profiles at processing time. This is the critical phase — it makes profiles dynamic.
 
-- [ ] Add `Arc<dyn AgentProfileRepository>` to `ProcessStrand` struct
-- [ ] Update `ProcessStrand::execute()`:
+- [x] Add `Arc<dyn AgentProfileRepository>` to `ProcessStrand` struct
+- [x] Update `ProcessStrand::execute()`:
   - If knot has `agent_profile_ref`: load profile from repo
   - Merge profile fields into agent config (profile is the base)
   - Inline `agent-config` fields override profile fields
   - If no profile ref: use inline `agent-config` as-is (backward compat)
   - Build CLI args from resolved config + prompt template (existing logic)
-- [ ] Add `resolve_agent_config(knot: &Knot, profile_repo: &dyn AgentProfileRepository) -> Result<AgentConfig, PortError>` helper
-- [ ] Profile resolution errors: profile not found → log error, return `PortError::ProfileNotFound`
-- [ ] Add test: knot with profile ref → resolved config uses profile fields
-- [ ] Add test: knot with profile ref + inline model override → resolved config uses profile provider/tools but inline model
-- [ ] Add test: knot without profile ref → uses inline agent-config (backward compat)
-- [ ] Add test: knot with profile ref but profile doesn't exist → error
-- [ ] Update `usecases.rs` to wire `AgentProfileRepository` into composition (where `ProcessStrand` is constructed)
-- [ ] `cargo test` passes
+- [x] Add `resolve_agent_config(knot: &Knot, profile_repo: &dyn AgentProfileRepository) -> Result<AgentConfig, PortError>` helper
+- [x] Profile resolution errors: profile not found → log error, return `PortError::ProfileNotFound`
+- [x] Add test: knot with profile ref → resolved config uses profile fields
+- [x] Add test: knot with profile ref + inline model override → resolved config uses profile provider/tools but inline model
+- [x] Add test: knot without profile ref → uses inline agent-config (backward compat)
+- [x] Add test: knot with profile ref but profile doesn't exist → error
+- [x] Update `usecases.rs` to wire `AgentProfileRepository` into composition (where `ProcessStrand` is constructed)
+- [x] `cargo test` passes
 
 ### Phase 4: Inbound — HTTP Endpoints for Profiles
 
