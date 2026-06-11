@@ -133,13 +133,13 @@ Extend knot parsing to accept `agent-profile-ref` and handle mutual exclusivity.
 
 Create the port trait and filesystem-backed implementation for profile storage and lookup.
 
-- [ ] Add `AgentProfileRepository` trait to `ports.rs`:
+- [x] Add `AgentProfileRepository` trait to `ports.rs`:
   - `get(name: &str) -> Result<Option<AgentProfile>, PortError>`
   - `list() -> Result<Vec<AgentProfile>, PortError>`
   - `save(profile: AgentProfile) -> Result<(), PortError>`
   - `delete(name: &str) -> Result<(), PortError>`
-- [ ] Add `PortError::ProfileNotFound(String)` variant
-- [ ] Implement `FileSystemAgentProfileRepository` in `adapters/outbound/profile_repo.rs`:
+- [x] Add `PortError::ProfileNotFound(String)` variant
+- [x] Implement `FileSystemAgentProfileRepository` in `adapters/outbound/profile_repo.rs`:
   - Profiles stored in `{rig}/profiles/` directory
   - File naming: `{profile-name}.md`
   - `get()`: read `{rig}/profiles/{name}.md`, parse with `parse_agent_profile()`
@@ -147,11 +147,11 @@ Create the port trait and filesystem-backed implementation for profile storage a
   - `save()`: write YAML frontmatter to `{rig}/profiles/{name}.md`
   - `delete()`: remove file
   - Handle non-existent profiles directory gracefully (return empty for list, None for get)
-- [ ] Update `adapters/outbound/mod.rs` to export `profile_repo` module
-- [ ] Update `adapters/inbound/types.rs` — import `AgentProfile` from domain
-- [ ] Mock `AgentProfileRepository` in `ports.rs` tests (follow existing mock pattern)
-- [ ] Unit tests for `FileSystemAgentProfileRepository`: create/get/list/delete profiles, non-existent dir handling, file parsing
-- [ ] `cargo test` passes
+- [x] Update `adapters/outbound/mod.rs` to export `profile_repo` module
+- [x] Update `adapters/inbound/types.rs` — import `AgentProfile` from domain
+- [x] Mock `AgentProfileRepository` in `ports.rs` tests (follow existing mock pattern)
+- [x] Unit tests for `FileSystemAgentProfileRepository`: create/get/list/delete profiles, non-existent dir handling, file parsing
+- [x] `cargo test` passes
 
 ### Phase 3: Application — Profile Resolution in ProcessStrand
 
