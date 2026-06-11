@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ⬜ Planned | 2026-06-11 |
+| 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
@@ -79,10 +79,13 @@ _Overview sections for active and recently completed plans go here._
 
 ### 23. Shared Agent Profiles
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-11
+**Completed:** 2026-06-11
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 **Goal:** Allow multiple knots to reference shared agent profiles stored as `rig/profiles/{name}.md` files, with profile resolution at processing time so updates are picked up dynamically.
+
+**Result:** 331 tests pass (262 unit + 61 integration). `AgentProfile` entity + parser, `KnotFile` extends with `agent-profile-ref` + mutual exclusivity validation, `AgentProfileRepository` port + file-system impl, `ProcessStrand` resolves profiles at processing time with inline overrides, CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`, 9 integration tests.
 
 Full details in [shared-agent-profiles.md](shared-agent-profiles.md).
 
