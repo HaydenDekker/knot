@@ -70,9 +70,45 @@ prompt-template:
 ---
 ```
 
-## Implementation Status: ✅ Complete (2026-06-11)
+## Implementation Status: 🔴 Complete with Issues (2026-06-11)
 
 **Result:** 331 tests pass (262 unit + 61 integration). New files: `src/adapters/outbound/profile_repo.rs` (FileSystemAgentProfileRepository), `tests/shared_agent_profiles.rs` (9 integration tests). Domain: `AgentProfile` entity + parser, `KnotFile` extends with `agent_profile_ref`, `KnotFileError::BothProfileAndConfig` + `MissingAgentConfigOrProfileRef`. Outbound: `AgentProfileRepository` trait + file-system impl. Application: `ProcessStrand` resolves profiles at processing time with inline overrides. Inbound: CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`.
+
+**Post-completion review:** Code review identified 3 critical, 5 design, and 5 minor issues requiring fix phases (see below).
+
+## Issues Found in Code Review
+
+### Critical (blockers)
+
+1. **`generate_knot_file` writes both `agent-profile-ref` AND `agent-config`** — When a knot has `agent_profile_ref` set, `generate_knot_file()` produces a `.md` file containing both fields. But `KnotFile::parse()` rejects files with both as `KnotFileError::BothProfileAndConfig`. Any knot created via the HTTP API with a profile ref produces an unparsable file — the knot cannot be recovered on restart or by `ConfigEventHandler`.
+
+2. **`KnotRequest.agent_config` is not optional** — `agent_config: AgentConfig` is a required field. The plan spec and target show a pure profile-ref knot with no inline config, but the HTTP API forces the caller to always supply `agent_config`. There is no way to create a knot that has *only* a profile reference through the API.
+
+3. **`resolve_agent_config` silently discards `system_prompt`** — When resolving a profile-ref knot, `resolve_agent_config` builds `AgentConfig` from the profile's `provider`, `model`, `tools` — but uses `knot.prompt_template.instructions` as the `goal`, completely discarding the profile's `system_prompt`. The `system_prompt` is the profile's primary value (the agent's instructions/personality), and it is never passed to the CLI. `build_cli_args` always uses `template.instructions` for `--system-prompt`.
+
+### Design
+
+4. **Profile save loses markdown body** — `FileSystemAgentProfileRepository::save()` overwrites the file with minimal frontmatter + heading + system_prompt as body. Any custom markdown documentation the user wrote is lost.
+
+5. **`extract_frontmatter_for_profile` duplicates `extract_frontmatter`** — Two nearly identical frontmatter extraction functions exist. The profile version mislabels structural errors (no frontmatter, no closing delimiter) as `AgentProfileError::MissingName`.
+
+6. **`derive_tieoff_path` doc comment is a bad merge** — Two overlapping descriptions concatenated into one doc comment.
+
+7. **Route: `POST /profiles` has no name** — Router wires `POST /profiles` → `create_profile` with no path parameter. The handler needs a name from the URL, so this route cannot work. The `create_profile` handler uses `Path(name)` which requires a path segment.
+
+8. **`MockLoomRepository::save` is no-op** — Returns `Ok(())` without storing data. Tests won't detect save-path bugs.
+
+### Minor
+
+9. **Unused import `HashMap` in `usecases.rs`** line 7.
+
+10. **14 clippy warnings** — collapsible `if`, manual `Option::map`, `&PathBuf` → `&Path`, same-type cast, iterator-on-map-values.
+
+11. **Test `delete_is_idempotent_on_file` is misnamed** — Tests that second delete fails, but name implies idempotency (second call should succeed).
+
+12. **`profile_not_found_logs_error` has vague assertion** — Accepts `idle` as valid status, passes even if processing never started.
+
+13. **No test for pure profile-ref knot** — All tests create knots with profile refs that also supply inline `agent_config`.
 
 ## Existing Tests
 
@@ -224,6 +260,84 @@ Wire `AgentProfileRepository` into the application and write end-to-end tests.
 - [x] Update all existing tests that create `AppContext` to include mock profile repo (no-op implementation)
 - [x] Run full test suite — all passing
 - [x] `cargo test` passes (including integration tests)
+
+### Phase 6: Fix — `generate_knot_file` Mutual Exclusivity + `KnotRequest` Shape
+
+**Layer:** Inbound adapter (types, handlers) — Domain (knot file format)
+
+Fixes issues #1 and #2: make `agent_config` optional in `KnotRequest` and fix `generate_knot_file` to respect mutual exclusivity.
+
+- [ ] Make `KnotRequest.agent_config` optional: `agent_config: Option<AgentConfig>`
+- [ ] Update `KnotRequest` deserialization: `#[serde(default)]` on `agent_config`
+- [ ] Fix `generate_knot_file()` — when `agent_profile_ref` is set:
+  - Write **only** `agent-profile-ref` in frontmatter (no `agent-config`)
+  - When `agent_profile_ref` is absent, write `agent-config` as before
+  - Knot file output must pass `KnotFile::parse()` — add a test that round-trips the generated file through the parser
+- [ ] Fix `register_loom`, `create_knot`, `update_knot` handlers:
+  - Build `Knot` entity with `agent_config: body.agent_config.clone()` (Option, not Some)
+  - When only `agent_profile_ref` is provided, `agent_config` is `None`
+- [ ] Add unit test: `generate_knot_file` with profile ref only → parses cleanly through `KnotFile::parse()`
+- [ ] Add unit test: `generate_knot_file` with agent config only → parses cleanly (backward compat)
+- [ ] Add integration test: `POST /looms/{id}/knots` with only `agent_profile_ref` (no `agent_config`) → 201, file is parseable
+- [ ] `cargo test` passes
+
+### Phase 7: Fix — `resolve_agent_config` Uses Profile `system_prompt`
+
+**Layer:** Application (use cases) — Domain (CLI args)
+
+Fixes issue #3: the profile's `system_prompt` must flow into the agent CLI invocation.
+
+- [ ] Update `resolve_agent_config()` in `ProcessStrand`:
+  - When profile ref resolves, merge profile's `system_prompt` into the execution context
+  - The `system_prompt` from the profile should become the `--system-prompt` CLI argument
+  - The knot's `prompt_template.instructions` can still provide additional instructions (concatenated or used as context)
+  - Decision: profile `system_prompt` is the base; knot `prompt_template.instructions` appends as task-specific direction
+- [ ] Update `ProcessStrand::execute()`:
+  - Pass the resolved system prompt through to `ExecutionContext` (new field or modified `cli_args`)
+  - `build_cli_args` receives the merged system prompt
+- [ ] Decision on merge strategy: `--system-prompt "{profile_system_prompt}\n\n{knot_instructions}"` or use knot instructions as `goal` and profile system_prompt as the `--system-prompt`
+- [ ] Add unit test: profile ref knot → CLI args contain profile's `system_prompt` as `--system-prompt`
+- [ ] Add unit test: profile ref knot → CLI args also include knot's `prompt_template.instructions`
+- [ ] Add integration test: profile with distinct system_prompt → processed strand output reflects profile's instructions (use mock agent that echoes `--system-prompt` value)
+- [ ] `cargo test` passes
+
+### Phase 8: Fix — Profile Save Preserves Body + Frontmatter Extraction Cleanup
+
+**Layer:** Outbound adapter — Domain (parser)
+
+Fixes issues #4 and #5: preserve markdown body on save, eliminate duplicate frontmatter extraction.
+
+- [ ] Refactor `knot_file.rs`:
+  - Extract shared `extract_frontmatter(content: &str) -> Result<(String, Option<String>), &str>` helper
+  - Returns the YAML text and optional body (markdown after closing `---`)
+  - Both `parse()` and `parse_agent_profile()` call the shared helper
+- [ ] Update `AgentProfileError` — add `InvalidFormat` variant for structural errors (no frontmatter, no closing delimiter)
+- [ ] Update `FileSystemAgentProfileRepository::save()`:
+  - When overwriting, read the existing file first (if it exists)
+  - Preserve the existing body (markdown after closing `---`)
+  - Write: `---\n<new_yaml>---\n\n<preserved_body>`
+  - On create (no existing file), use current minimal body
+- [ ] Add unit test: save profile that already has body → body preserved after round-trip
+- [ ] Add unit test: `parse_agent_profile` with no frontmatter → returns `InvalidFormat` error
+- [ ] `cargo test` passes
+
+### Phase 9: Fix — Route Cleanup + Clippy + Test Polish
+
+**Layer:** Inbound adapter (router) — All layers (lint)
+
+Fixes issues #6, #7, #8, #9, #10, #11, #12, #13.
+
+- [ ] Fix `derive_tieoff_path` doc comment — remove merged duplicate, keep single clear description
+- [ ] Fix router: remove `POST /profiles` (no-name route) or change to accept body with `name` field
+  - Keep `POST /profiles/{name}` as the create endpoint
+  - If `POST /profiles` is removed, update OpenAPI schema accordingly
+- [ ] Fix `MockLoomRepository::save` — store in internal `HashMap` so `get`/`list` return saved data
+- [ ] Remove unused `HashMap` import from `usecases.rs`
+- [ ] Run `cargo clippy --fix` to resolve remaining warnings (or fix manually)
+- [ ] Rename test `delete_is_idempotent_on_file` → `delete_twice_returns_error`
+- [ ] Fix `profile_not_found_logs_error` integration test — assert `failed` status specifically, verify loom-log contains profile-not-found error
+- [ ] Add test: pure profile-ref knot creation via HTTP (no inline `agent_config`)
+- [ ] `cargo test` passes
 
 ## Notes
 
