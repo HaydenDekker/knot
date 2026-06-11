@@ -267,19 +267,19 @@ Wire `AgentProfileRepository` into the application and write end-to-end tests.
 
 Fixes issues #1 and #2: make `agent_config` optional in `KnotRequest` and fix `generate_knot_file` to respect mutual exclusivity.
 
-- [ ] Make `KnotRequest.agent_config` optional: `agent_config: Option<AgentConfig>`
-- [ ] Update `KnotRequest` deserialization: `#[serde(default)]` on `agent_config`
-- [ ] Fix `generate_knot_file()` — when `agent_profile_ref` is set:
+- [x] Make `KnotRequest.agent_config` optional: `agent_config: Option<AgentConfig>`
+- [x] Update `KnotRequest` deserialization: `#[serde(default)]` on `agent_config`
+- [x] Fix `generate_knot_file()` — when `agent_profile_ref` is set:
   - Write **only** `agent-profile-ref` in frontmatter (no `agent-config`)
   - When `agent_profile_ref` is absent, write `agent-config` as before
   - Knot file output must pass `KnotFile::parse()` — add a test that round-trips the generated file through the parser
-- [ ] Fix `register_loom`, `create_knot`, `update_knot` handlers:
+- [x] Fix `register_loom`, `create_knot`, `update_knot` handlers:
   - Build `Knot` entity with `agent_config: body.agent_config.clone()` (Option, not Some)
   - When only `agent_profile_ref` is provided, `agent_config` is `None`
-- [ ] Add unit test: `generate_knot_file` with profile ref only → parses cleanly through `KnotFile::parse()`
-- [ ] Add unit test: `generate_knot_file` with agent config only → parses cleanly (backward compat)
-- [ ] Add integration test: `POST /looms/{id}/knots` with only `agent_profile_ref` (no `agent_config`) → 201, file is parseable
-- [ ] `cargo test` passes
+- [x] Add unit test: `generate_knot_file` with profile ref only → parses cleanly through `KnotFile::parse()`
+- [x] Add unit test: `generate_knot_file` with agent config only → parses cleanly (backward compat)
+- [x] Add integration test: `POST /looms/{id}/knots` with only `agent_profile_ref` (no `agent_config`) → 201, file is parseable
+- [x] `cargo test` passes
 
 ### Phase 7: Fix — `resolve_agent_config` Uses Profile `system_prompt`
 
