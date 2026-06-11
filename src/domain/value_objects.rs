@@ -19,6 +19,40 @@ impl std::fmt::Display for DomainError {
 
 impl std::error::Error for DomainError {}
 
+// ── AgentProfile Errors ────────────────────────────────────────────────────
+
+/// Errors produced when creating or validating an `AgentProfile`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentProfileError {
+    /// The profile has no name.
+    MissingName,
+    /// The provider is empty or whitespace-only.
+    EmptyProvider,
+    /// The model is empty or whitespace-only.
+    EmptyModel,
+    /// The system prompt is empty or whitespace-only.
+    MissingSystemPrompt,
+}
+
+impl std::fmt::Display for AgentProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentProfileError::MissingName => write!(f, "agent profile must have a name"),
+            AgentProfileError::EmptyProvider => {
+                write!(f, "agent profile provider must not be empty")
+            }
+            AgentProfileError::EmptyModel => {
+                write!(f, "agent profile model must not be empty")
+            }
+            AgentProfileError::MissingSystemPrompt => {
+                write!(f, "agent profile system_prompt must not be empty")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AgentProfileError {}
+
 // ── Value Objects ──────────────────────────────────────────────────────────
 
 /// Configuration for the agent that runs a Knot.
@@ -151,6 +185,89 @@ impl RigAgentConfig {
             ));
         }
         Ok(Self { cli_path, cli_args })
+    }
+}
+
+/// Shared agent configuration that multiple knots can reference.
+///
+/// Stored as a `.md` file in `profiles/{name}.md` with YAML frontmatter.
+/// Knots reference it by `agent-profile-ref: {name}` and may override
+/// individual fields (model, tools) inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AgentProfile {
+    /// Profile name (becomes the filename: `profiles/{name}.md`).
+    pub name: String,
+    /// The LLM provider identifier (e.g. "openai", "anthropic").
+    pub provider: String,
+    /// The model name to use (e.g. "gpt-4o").
+    pub model: String,
+    /// Optional list of tool identifiers to enable.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// The system prompt given to the agent.
+    pub system_prompt: String,
+}
+
+impl AgentProfile {
+    /// Create a new `AgentProfile` with all required fields.
+    ///
+    /// `tools` defaults to an empty list.
+    ///
+    /// Returns `AgentProfileError` if any required field is blank.
+    pub fn new(
+        name: String,
+        provider: String,
+        model: String,
+        system_prompt: String,
+    ) -> Result<Self, AgentProfileError> {
+        if name.trim().is_empty() {
+            return Err(AgentProfileError::MissingName);
+        }
+        if provider.trim().is_empty() {
+            return Err(AgentProfileError::EmptyProvider);
+        }
+        if model.trim().is_empty() {
+            return Err(AgentProfileError::EmptyModel);
+        }
+        if system_prompt.trim().is_empty() {
+            return Err(AgentProfileError::MissingSystemPrompt);
+        }
+        Ok(Self {
+            name,
+            provider,
+            model,
+            tools: Vec::new(),
+            system_prompt,
+        })
+    }
+
+    /// Create a new `AgentProfile` with tools.
+    pub fn with_tools(
+        name: String,
+        provider: String,
+        model: String,
+        tools: Vec<String>,
+        system_prompt: String,
+    ) -> Result<Self, AgentProfileError> {
+        if name.trim().is_empty() {
+            return Err(AgentProfileError::MissingName);
+        }
+        if provider.trim().is_empty() {
+            return Err(AgentProfileError::EmptyProvider);
+        }
+        if model.trim().is_empty() {
+            return Err(AgentProfileError::EmptyModel);
+        }
+        if system_prompt.trim().is_empty() {
+            return Err(AgentProfileError::MissingSystemPrompt);
+        }
+        Ok(Self {
+            name,
+            provider,
+            model,
+            tools,
+            system_prompt,
+        })
     }
 }
 
@@ -346,5 +463,180 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
+    }
+
+    // ── AgentProfile Tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn agent_profile_new_valid() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are a fast reviewer.".to_string(),
+        );
+        assert!(profile.is_ok());
+        let profile = profile.unwrap();
+        assert_eq!(profile.name, "fast");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model, "gpt-4o");
+        assert!(profile.tools.is_empty());
+        assert_eq!(profile.system_prompt, "You are a fast reviewer.");
+    }
+
+    #[test]
+    fn agent_profile_with_tools() {
+        let profile = AgentProfile::with_tools(
+            "full-stack".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+            vec!["fs".to_string(), "web".to_string()],
+            "You are a full-stack reviewer.".to_string(),
+        );
+        assert!(profile.is_ok());
+        let profile = profile.unwrap();
+        assert_eq!(profile.name, "full-stack");
+        assert_eq!(profile.tools, vec!["fs", "web"]);
+    }
+
+    #[test]
+    fn agent_profile_missing_name() {
+        let result = AgentProfile::new(
+            "".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "system prompt".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn agent_profile_whitespace_name() {
+        let result = AgentProfile::new(
+            "   ".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "system prompt".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn agent_profile_empty_provider() {
+        let result = AgentProfile::new(
+            "fast".to_string(),
+            "".to_string(),
+            "gpt-4o".to_string(),
+            "system prompt".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyProvider);
+    }
+
+    #[test]
+    fn agent_profile_empty_model() {
+        let result = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "".to_string(),
+            "system prompt".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyModel);
+    }
+
+    #[test]
+    fn agent_profile_empty_system_prompt() {
+        let result = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::MissingSystemPrompt
+        );
+    }
+
+    #[test]
+    fn agent_profile_whitespace_system_prompt() {
+        let result = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "   ".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::MissingSystemPrompt
+        );
+    }
+
+    #[test]
+    fn agent_profile_serialization() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+    }
+
+    #[test]
+    fn agent_profile_serialization_with_tools() {
+        let profile = AgentProfile::with_tools(
+            "full".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            vec!["fs".to_string(), "web".to_string()],
+            "You are full.".to_string(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+        assert_eq!(deserialized.tools, vec!["fs", "web"]);
+    }
+
+    #[test]
+    fn agent_profile_error_display() {
+        assert_eq!(
+            AgentProfileError::MissingName.to_string(),
+            "agent profile must have a name"
+        );
+        assert_eq!(
+            AgentProfileError::EmptyProvider.to_string(),
+            "agent profile provider must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::EmptyModel.to_string(),
+            "agent profile model must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::MissingSystemPrompt.to_string(),
+            "agent profile system_prompt must not be empty"
+        );
+    }
+
+    #[test]
+    fn agent_profile_with_multiline_system_prompt() {
+        let profile = AgentProfile::new(
+            "detailed".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are a detailed reviewer.\n\nKeep responses thorough.".to_string(),
+        );
+        assert!(profile.is_ok());
+        let profile = profile.unwrap();
+        assert!(profile.system_prompt.contains("\n\n"));
     }
 }

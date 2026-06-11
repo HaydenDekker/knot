@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
+
+pub use crate::domain::value_objects::AgentProfileError;
+
+// Re-export AgentProfileError at the knot_file level for convenient access.
 
 // ── Errors ─────────────────────────────────────────────────────────────────
 
@@ -223,6 +227,87 @@ fn extract_frontmatter(content: &str) -> Result<String, KnotFileError> {
     let closing_pos = rest
         .find("---")
         .ok_or(KnotFileError::InvalidFormat)?;
+
+    Ok(rest[..closing_pos].trim().to_string())
+}
+
+// ── Agent Profile Parsing ──────────────────────────────────────────────────
+
+/// Internal YAML structure for agent profile frontmatter parsing.
+#[derive(Debug, Deserialize)]
+struct RawProfileFrontmatter {
+    name: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    #[serde(rename = "system-prompt")]
+    system_prompt: Option<String>,
+    #[serde(default)]
+    tools: Option<Vec<String>>,
+}
+
+/// Parse an agent profile file from its string content.
+///
+/// Extracts and validates the YAML frontmatter. The body (markdown after the
+/// closing `---`) is not parsed — it is documentation only.
+///
+/// Required fields: `name`, `provider`, `model`, `system-prompt`.
+/// Optional field: `tools`.
+pub fn parse_agent_profile(
+    content: &str,
+) -> Result<AgentProfile, AgentProfileError> {
+    // Re-use extract_frontmatter via KnotFileError (it returns the same YAML)
+    let yaml_text = extract_frontmatter_for_profile(content)?;
+    let raw: RawProfileFrontmatter = serde_yaml::from_str(&yaml_text).map_err(|_| {
+        AgentProfileError::MissingName // Invalid YAML → report missing name as generic
+    })?;
+
+    // Validate name
+    let name = raw
+        .name
+        .filter(|n| !n.trim().is_empty())
+        .ok_or(AgentProfileError::MissingName)?;
+
+    // Validate provider
+    let provider = raw
+        .provider
+        .filter(|p| !p.trim().is_empty())
+        .ok_or(AgentProfileError::EmptyProvider)?;
+
+    // Validate model
+    let model = raw
+        .model
+        .filter(|m| !m.trim().is_empty())
+        .ok_or(AgentProfileError::EmptyModel)?;
+
+    // Validate system-prompt
+    let system_prompt = raw
+        .system_prompt
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(AgentProfileError::MissingSystemPrompt)?;
+
+    // Build profile with optional tools
+    AgentProfile::with_tools(
+        name,
+        provider,
+        model,
+        raw.tools.unwrap_or_default(),
+        system_prompt,
+    )
+}
+
+/// Extract YAML frontmatter for agent profile parsing.
+///
+/// Returns `AgentProfileError::MissingName` for structural errors
+/// (no frontmatter delimiters, no closing delimiter) since we don't
+/// have a dedicated "InvalidFormat" variant.
+fn extract_frontmatter_for_profile(content: &str) -> Result<String, AgentProfileError> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return Err(AgentProfileError::MissingName);
+    }
+
+    let rest = &trimmed[3..];
+    let closing_pos = rest.find("---").ok_or(AgentProfileError::MissingName)?;
 
     Ok(rest[..closing_pos].trim().to_string())
 }
@@ -635,5 +720,239 @@ Body.
             path,
             PathBuf::from("/workspace/rig/output/my-loom/.loom-log")
         );
+    }
+
+    // ── Agent Profile Parsing Tests ──────────────────────────────────────────
+
+    const VALID_PROFILE: &str = "---
+name: fast
+provider: openai
+model: gpt-4o
+tools:
+  - fs
+system-prompt: |
+  You are a fast reviewer. Keep responses concise and direct.
+---
+
+# Fast Profile
+
+Lightweight profile for quick reviews.
+";
+
+    #[test]
+    fn parse_valid_agent_profile() {
+        let result = parse_agent_profile(VALID_PROFILE);
+        assert!(result.is_ok(), "valid profile should parse without error");
+
+        let profile = result.unwrap();
+        assert_eq!(profile.name, "fast");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.tools, vec!["fs"]);
+        assert!(profile.system_prompt.contains("fast reviewer"));
+    }
+
+    #[test]
+    fn parse_profile_without_tools() {
+        let content = "---
+name: minimal
+provider: anthropic
+model: claude-sonnet-4-20250514
+system-prompt: Review the document.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.name, "minimal");
+        assert_eq!(profile.provider, "anthropic");
+        assert_eq!(profile.model, "claude-sonnet-4-20250514");
+        assert!(profile.tools.is_empty());
+        assert_eq!(profile.system_prompt, "Review the document.");
+    }
+
+    #[test]
+    fn parse_profile_with_multiline_system_prompt() {
+        let content = "---
+name: detailed
+provider: openai
+model: gpt-4o
+system-prompt: |
+  You are a detailed reviewer.
+
+  Keep responses thorough.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert!(profile.system_prompt.contains("detailed reviewer"));
+        assert!(profile.system_prompt.contains("thorough"));
+    }
+
+    #[test]
+    fn parse_profile_missing_name() {
+        let content = "---
+provider: openai
+model: gpt-4o
+system-prompt: Review.
+---
+
+Body.
+";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn parse_profile_empty_name() {
+        let content = "---\nname: \nprovider: openai\nmodel: gpt-4o\nsystem-prompt: Review.\n---\n\nBody.\n";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn parse_profile_missing_provider() {
+        let content = "---
+name: test
+model: gpt-4o
+system-prompt: Review.
+---
+
+Body.
+";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyProvider);
+    }
+
+    #[test]
+    fn parse_profile_missing_model() {
+        let content = "---
+name: test
+provider: openai
+system-prompt: Review.
+---
+
+Body.
+";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyModel);
+    }
+
+    #[test]
+    fn parse_profile_missing_system_prompt() {
+        let content = "---
+name: test
+provider: openai
+model: gpt-4o
+---
+
+Body.
+";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::MissingSystemPrompt
+        );
+    }
+
+    #[test]
+    fn parse_profile_empty_system_prompt() {
+        let content = "---\nname: test\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: \n---\n\nBody.\n";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::MissingSystemPrompt
+        );
+    }
+
+    #[test]
+    fn parse_profile_whitespace_fields() {
+        let content = format!(
+            "---\nname:    \nprovider:    \nmodel:    \nsystem-prompt:      \n---\n\nBody.\n"
+        );
+        let result = parse_agent_profile(&content);
+        assert!(result.is_err());
+        // name is checked first
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn parse_profile_no_frontmatter() {
+        let content = "# Just a markdown file\n\nNo frontmatter.";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn parse_profile_no_closing_delimiter() {
+        let content = "---
+name: test
+provider: openai";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn parse_profile_malformed_yaml() {
+        let content = "---
+name: test
+  broken: yaml: [
+provider: openai
+model: gpt-4o
+system-prompt: Review.
+---
+
+Body.
+";
+        let result = parse_agent_profile(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn agent_profile_error_display() {
+        assert_eq!(
+            AgentProfileError::MissingName.to_string(),
+            "agent profile must have a name"
+        );
+        assert_eq!(
+            AgentProfileError::EmptyProvider.to_string(),
+            "agent profile provider must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::EmptyModel.to_string(),
+            "agent profile model must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::MissingSystemPrompt.to_string(),
+            "agent profile system_prompt must not be empty"
+        );
+    }
+
+    #[test]
+    fn parse_profile_with_multiple_tools() {
+        let content = "---
+name: full-stack
+provider: openai
+model: gpt-4o
+tools:
+  - fs
+  - web
+  - sql
+system-prompt: Full stack review.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.tools, vec!["fs", "web", "sql"]);
     }
 }
