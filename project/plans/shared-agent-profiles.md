@@ -118,14 +118,14 @@ Build the `AgentProfile` entity and parser. This is the foundation — everythin
 
 Extend knot parsing to accept `agent-profile-ref` and handle mutual exclusivity.
 
-- [ ] Add `agent_profile_ref: Option<String>` to knot frontmatter parsing (`RawFrontmatter`)
-- [ ] Add `KnotFileError::BothProfileAndConfig` — validation error when both `agent-profile-ref` and `agent-config` are present
-- [ ] Update `parse()` to emit `BothProfileAndConfig` error when both fields exist
-- [ ] Add tests for mutual exclusivity validation
-- [ ] Add test for valid knot with `agent-profile-ref` (no `agent-config`)
-- [ ] Add test for valid knot with both (should fail)
-- [ ] Add test for existing knot with `agent-config` only (should still work — backward compat)
-- [ ] `cargo test` passes
+- [x] Add `agent_profile_ref: Option<String>` to knot frontmatter parsing (`RawFrontmatter`)
+- [x] Add `KnotFileError::BothProfileAndConfig` — validation error when both `agent-profile-ref` and `agent-config` are present
+- [x] Update `parse()` to emit `BothProfileAndConfig` error when both fields exist
+- [x] Add tests for mutual exclusivity validation
+- [x] Add test for valid knot with `agent-profile-ref` (no `agent-config`)
+- [x] Add test for valid knot with both (should fail)
+- [x] Add test for existing knot with `agent-config` only (should still work — backward compat)
+- [x] `cargo test` passes
 
 ### Phase 2: Outbound — AgentProfileRepository Port + Implementation
 
