@@ -141,7 +141,7 @@ impl DebounceEngine {
         pending: &HashMap<StrandPath, (StrandEvent, tokio::time::Instant)>,
         output_tx: &mpsc::Sender<StrandEvent>,
     ) {
-        for (_, (event, _)) in pending {
+        for (event, _) in pending.values() {
             let _ = output_tx.send(event.clone()).await;
         }
     }

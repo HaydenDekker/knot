@@ -10,6 +10,6 @@ async fn main() -> std::io::Result<()> {
         print_version();
         return Ok(());
     }
-    let _addr = knot::start_server(AppConfig::default_config()).await?;
+    knot::start_server(AppConfig::default_config()).await?;
     Ok(())
 }

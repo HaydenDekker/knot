@@ -123,12 +123,13 @@ impl AgentConfig {
         system_prompt: Option<&str>,
     ) -> Vec<String> {
         let system_prompt = system_prompt.unwrap_or(&template.instructions);
-        let mut args: Vec<String> = Vec::new();
-        args.push("-p".to_string());
-        args.push("--model".to_string());
-        args.push(self.model.clone());
-        args.push("--system-prompt".to_string());
-        args.push(system_prompt.to_string());
+        let mut args: Vec<String> = vec![
+            "-p".to_string(),
+            "--model".to_string(),
+            self.model.clone(),
+            "--system-prompt".to_string(),
+            system_prompt.to_string(),
+        ];
         if !self.tools.is_empty() {
             args.push("--tools".to_string());
             args.push(self.tools.join(","));

@@ -982,7 +982,23 @@ mod tests {
 
     // ── Mock Port Implementations ──────────────────────────────────────
 
-    struct MockLoomRepository;
+    struct MockLoomRepository {
+        looms: Arc<Mutex<HashMap<LoomId, Loom>>>,
+    }
+
+    impl Default for MockLoomRepository {
+        fn default() -> Self {
+            Self {
+                looms: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+    }
+
+    impl MockLoomRepository {
+        fn new() -> Self {
+            Self::default()
+        }
+    }
 
     impl LoomRepository for MockLoomRepository {
         fn scan(
@@ -992,15 +1008,19 @@ mod tests {
             Ok(vec![])
         }
 
-        fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
-            Ok(None)
+        fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
+            Ok(self.looms.lock().unwrap().get(id).cloned())
         }
 
         fn list(&self) -> Result<Vec<Loom>, PortError> {
-            Ok(vec![])
+            Ok(self.looms.lock().unwrap().values().cloned().collect())
         }
 
-        fn save(&self, _loom: Loom) -> Result<(), PortError> {
+        fn save(&self, loom: Loom) -> Result<(), PortError> {
+            self.looms
+                .lock()
+                .unwrap()
+                .insert(loom.id.clone(), loom);
             Ok(())
         }
     }
@@ -1143,7 +1163,7 @@ mod tests {
 
         AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(event_source),
@@ -1173,7 +1193,7 @@ mod tests {
         (
             AppContext {
                 store: LoomStore::new(),
-                loom_repo: Arc::new(MockLoomRepository),
+                loom_repo: Arc::new(MockLoomRepository::new()),
                 loom_log_port: Arc::new(MockLoomLogPort { events: log_events }),
                 tie_off_sink: Arc::new(MockTieOffSink),
                 event_source: Arc::new(event_source),
@@ -1634,7 +1654,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(TrackingEventSource::new().0),
@@ -1695,7 +1715,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(TrackingEventSource::new().0),
@@ -1734,7 +1754,7 @@ mod tests {
             TrackingEventSource::new();
         let ctx = AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(event_source),
@@ -1831,7 +1851,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(TrackingEventSource::new().0),
@@ -2444,7 +2464,7 @@ mod tests {
 
         AppContext {
             store: LoomStore::new(),
-            loom_repo: Arc::new(MockLoomRepository),
+            loom_repo: Arc::new(MockLoomRepository::new()),
             loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
             tie_off_sink: Arc::new(MockTieOffSink),
             event_source: Arc::new(TrackingEventSource::new().0),

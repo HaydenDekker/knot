@@ -123,7 +123,6 @@ pub fn build_app(ctx: AppContext) -> Router {
         )
         // Profile endpoints
         .route("/profiles", get(list_profiles))
-        .route("/profiles", post(create_profile))
         .route(
             "/profiles/{name}",
             get(get_profile).delete(delete_profile).post(create_profile),

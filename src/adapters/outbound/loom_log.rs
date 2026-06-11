@@ -32,7 +32,7 @@ impl FileSystemLoomLog {
     }
 
     /// Open the log file for appending, creating directories as needed.
-    fn open_file(loom_id: &LoomId, base_dir: &PathBuf) -> Result<File, PortError> {
+    fn open_file(loom_id: &LoomId, base_dir: &std::path::Path) -> Result<File, PortError> {
         let path = derive_loom_log_path(&loom_id.0, base_dir);
         let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)
@@ -125,7 +125,7 @@ impl SharedLoomLog {
         })
     }
 
-    fn open_file(loom_id: &LoomId, base_dir: &PathBuf) -> Result<File, PortError> {
+    fn open_file(loom_id: &LoomId, base_dir: &std::path::Path) -> Result<File, PortError> {
         let path = derive_loom_log_path(&loom_id.0, base_dir);
         let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)

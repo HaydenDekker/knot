@@ -229,13 +229,11 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     })
 }
 
-/// Derive the tie-off output path for a knot.
-///
-/// Returns `rig/output/{loom-id}/{knot-name}/output.md`.
-/// This is the statically-derived replacement for the per-knot
 /// Derive the tie-off output directory for a knot.
 ///
-/// Returns `rig/output/{loom-id}/{knot-name}/`.
+/// Returns `rig/output/{loom-id}/{knot-name}/`. Individual strand
+/// output files (e.g. `strand.md.output`) are placed inside this
+/// directory by `ProcessStrand`.
 /// Each strand's output file (e.g., `strand.md.output`) is placed
 /// inside this directory.
 pub fn derive_tieoff_path(

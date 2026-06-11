@@ -682,7 +682,7 @@ impl ProcessStrand {
                 // Knot construction where mutual exclusivity is bypassed.
                 logging::log_knot_event(
                     "warn:profile-override",
-                    &profile_name.as_str(),
+                    profile_name.as_str(),
                     &knot.id.0,
                     "knot has both profile-ref and inline config; inline wins",
                 );

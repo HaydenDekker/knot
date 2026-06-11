@@ -168,17 +168,14 @@ impl InnerState {
         // Case 1: New loom directory at the rig root level.
         // Detects `*-loom` directory creation and emits `ConfigEvent::LoomAdded`.
         if path.is_dir() {
-            if matches!(event.kind, EventKind::Create(_)) {
-                if let Some(name) = path
+            if matches!(event.kind, EventKind::Create(_))
+                && let Some(name) = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                {
-                    if name.ends_with("-loom") {
+                    && name.ends_with("-loom") {
                         let loom_id = LoomId(name.to_string());
                         return (None, Some(ConfigEvent::LoomAdded { loom_id }));
                     }
-                }
-            }
             // Directory events that don't match the above are ignored.
             return (None, None);
         }
@@ -234,17 +231,12 @@ impl InnerState {
                 }
             }
             EventKind::Remove(_) => {
-                if let Some(name) = path
+                path
                     .file_stem()
-                    .and_then(|n| n.to_str())
-                {
-                    Some(ConfigEvent::KnotDeleted {
+                    .and_then(|n| n.to_str()).map(|name| ConfigEvent::KnotDeleted {
                         loom_id,
                         knot_id: KnotId(name.to_string()),
                     })
-                } else {
-                    None
-                }
             }
             _ => None,
         };
@@ -308,17 +300,12 @@ impl InnerState {
             }
             EventKind::Remove(_) => {
                 // Extract knot name from filename (remove .md extension)
-                if let Some(name) = path
+                path
                     .file_stem()
-                    .and_then(|n| n.to_str())
-                {
-                    Some(ConfigEvent::KnotDeleted {
+                    .and_then(|n| n.to_str()).map(|name| ConfigEvent::KnotDeleted {
                         loom_id: loom_id.clone(),
                         knot_id: KnotId(name.to_string()),
                     })
-                } else {
-                    None
-                }
             }
             _ => None,
         };
@@ -387,8 +374,8 @@ impl NotifyEventSource {
                         inner.map_event(&event);
                     // Log every mapped event for observability.
                     // Volume is low (a few hundred/day), so log all of them.
-                    if let Some(ref se) = strand_event {
-                        if let Some(path) = event.paths.first() {
+                    if let Some(ref se) = strand_event
+                        && let Some(path) = event.paths.first() {
                             let kind = match se {
                                 StrandEvent::Created { .. } => "Created",
                                 StrandEvent::Modified { .. } => "Modified",
@@ -400,9 +387,8 @@ impl NotifyEventSource {
                             );
                             logging::log_notify_event(kind, path, &detail);
                         }
-                    }
-                    if let Some(ref ce) = config_event {
-                        if let Some(path) = event.paths.first() {
+                    if let Some(ref ce) = config_event
+                        && let Some(path) = event.paths.first() {
                             let kind = match ce {
                                 ConfigEvent::LoomAdded { .. } => "LoomAdded",
                                 ConfigEvent::KnotAdded { .. } => "KnotAdded",
@@ -415,7 +401,6 @@ impl NotifyEventSource {
                             );
                             logging::log_notify_event(kind, path, &detail);
                         }
-                    }
                     // Use try_send to avoid blocking the notify callback
                     // thread. If the channel is full, the event is dropped
                     // — this is acceptable because:

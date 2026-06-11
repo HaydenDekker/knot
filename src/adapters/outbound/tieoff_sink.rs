@@ -147,7 +147,7 @@ impl FileSystemTieOffSink {
         let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
         let y = yoe as u64 + era as u64 * 400;
         let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy as i64 + 2) / 153;
+        let mp = (5 * doy + 2) / 153;
         let day = doy - (153 * mp + 2) / 5 + 1;
         let month = mp + if mp < 10 { 3 } else { -9 };
         let year = y + if month <= 2 { 1 } else { 0 };

@@ -609,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_is_idempotent_on_file() {
+    fn delete_twice_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
         let profiles_dir = tmp.path().join("profiles");
         fs::create_dir(&profiles_dir).unwrap();
