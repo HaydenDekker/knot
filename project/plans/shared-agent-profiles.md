@@ -181,26 +181,26 @@ Wire `AgentProfileRepository` into `ProcessStrand` and resolve profiles at proce
 
 Add REST API for profile CRUD and update knot handlers to support `agent_profile_ref`.
 
-- [ ] Add profile types to `adapters/inbound/types.rs`:
+- [x] Add profile types to `adapters/inbound/types.rs`:
   - `ProfileRequest`: `provider`, `model`, `tools`, `system_prompt` (name derived from URL path)
   - `ProfileResponse`: `name`, `provider`, `model`, `tools`, `system_prompt`
-- [ ] Add profile handler functions in `adapters/inbound/loom.rs` (or new file `profiles.rs`):
+- [x] Add profile handler functions in `adapters/inbound/loom.rs` (or new file `profiles.rs`):
   - `list_profiles` — `GET /profiles`
   - `get_profile` — `GET /profiles/{name}`
   - `create_profile` — `POST /profiles/{name}`
   - `delete_profile` — `DELETE /profiles/{name}`
-- [ ] Each handler uses `AgentProfileRepository` port via `AppContext`
-- [ ] `create_profile` validates mutual exclusivity of `system_prompt` (required, non-empty)
-- [ ] `delete_profile` returns 404 if profile not found
-- [ ] Update `AppContext` in `types.rs` to include `Arc<dyn AgentProfileRepository>`
-- [ ] Update router in `router.rs`:
+- [x] Each handler uses `AgentProfileRepository` port via `AppContext`
+- [x] `create_profile` validates mutual exclusivity of `system_prompt` (required, non-empty)
+- [x] `delete_profile` returns 404 if profile not found
+- [x] Update `AppContext` in `types.rs` to include `Arc<dyn AgentProfileRepository>`
+- [x] Update router in `router.rs`:
   - Add profile routes: `/profiles`, `/profiles/{name}`
   - Add `AgentProfileRepository` to `AppContext` state
   - Register OpenAPI schema for `AgentProfile`
-- [ ] Update knot handlers (`create_knot`, `update_knot`) to accept optional `agent_profile_ref` field in `KnotRequest`
-- [ ] Update `generate_knot_file()` to write `agent-profile-ref` instead of `agent-config` when profile ref is present
-- [ ] Unit tests for profile handlers (mock `AgentProfileRepository`)
-- [ ] `cargo test` passes
+- [x] Update knot handlers (`create_knot`, `update_knot`) to accept optional `agent_profile_ref` field in `KnotRequest`
+- [x] Update `generate_knot_file()` to write `agent-profile-ref` instead of `agent-config` when profile ref is present
+- [x] Unit tests for profile handlers (mock `AgentProfileRepository`)
+- [x] `cargo test` passes
 
 ### Phase 5: Composition Root + Integration Tests
 
