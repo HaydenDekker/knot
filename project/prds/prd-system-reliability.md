@@ -18,6 +18,7 @@ Knot needs **operational safety controls** so the user can protect their provide
 - [ ] Users can roll back their tie-off output to an earlier point in time, discarding later processing events
 - [ ] Users are alerted when a knot-to-knot (k2k) recursive feedback loop is detected, whether self-recursive or cross-knot
 - [ ] Users can set a maximum iteration limit for k2k feedback loops so that refinement cycles terminate automatically if agents do not converge
+- [ ] Users can set a per-agent-profile session timeout so that a hung or excessively slow agent session is terminated automatically
 
 ## Non-Goals
 
@@ -107,6 +108,17 @@ A typical example: a plan knot and an architecture review knot iterate on each o
 5. Given a feedback loop has been exceeded, when I check the HTTP interface, then I see which knots are in the cycle, how many iterations occurred, and the option to raise the limit or break the cycle
 6. Given a single knot's tie-off directory overlaps with its own strand directory, when Knot starts, then it detects the self-recursive configuration at registration time and reports it as an error or warning (depending on configuration)
 
+### Story 8: Agent Session Timeout
+
+As a user, I want to define an agent timeout value based on my agent profile so that I can allow a slower model sufficient time to complete while limiting damage from a severe failure (e.g. a hung session that never returns).
+
+**Scenarios:**
+
+1. Given I have set `timeout` to 300 seconds on an agent profile, when an agent session exceeds that duration, then Knot terminates the session and records a `TimeoutExceeded` error in the tie-off and knot-state
+2. Given I have two agent profiles — one using a fast model (60s timeout) and one using a slow model (600s timeout) — when each knot processes a strand, then each session uses the timeout configured on its profile
+3. Given I have not set a timeout on an agent profile, when an agent session runs, then Knot uses a sensible default (e.g. 300 seconds) to prevent indefinite hangs
+4. Given an agent session times out, when I check the HTTP interface, then I can see the timed-out event with its duration and the option to replay
+
 ## Success Criteria
 
 - [ ] A user can configure `max_concurrent` (per knot or loom) and burst events are queued rather than all firing simultaneously
@@ -117,6 +129,7 @@ A typical example: a plan knot and an architecture review knot iterate on each o
 - [ ] A user can roll back a loom to a previous event position via the HTTP interface, and tie-off files are restored accordingly
 - [ ] Replay and rollback events are recorded in the loom-log with distinct event types for auditability
 - [ ] Feedback loops (self-recursive and cross-knot) are detected and logged with a `FeedbackLoopDetected` event; exceeding `max_k2k_iterations` produces a `FeedbackLoopExceeded` event and stops processing
+- [ ] A user can configure `timeout` (per agent profile) and hung sessions are terminated with a `TimeoutExceeded` error
 - [ ] All new configuration fields are validatable in the knot file parser (domain layer) — invalid values reject at parse time
 
 ## Dependencies & Constraints
@@ -127,5 +140,6 @@ A typical example: a plan knot and an architecture review knot iterate on each o
 - **External dependency:** Cost estimation is based on token counts and known per-token pricing for the configured provider/model. Exact billing integration with provider APIs is out of scope.
 - **Configuration constraint:** New limits (`max_concurrent`, `rate_limit`, `max_tokens`, `max_k2k_iterations`) are optional — Knot operates without them if not configured (backwards compatible).
 - **Technical constraint:** Feedback loop detection requires Knot to track the event propagation graph — which knot's output wrote to which other knot's input directory — and detect cycles in that graph at runtime. Self-recursive loops (strand_dir overlaps tie_off_dir) can be detected statically at knot registration time.
+- **Technical constraint:** Agent session timeout requires the subprocess runner to track session start time and be capable of killing the child process on timeout. The current `SubprocessAgentRunner` waits for completion with no interrupt path.
 
 ## Implementation Status: 🔵 Open

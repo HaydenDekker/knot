@@ -36,12 +36,13 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - [ ] When a strand is processed (create/modify/delete), the tie-off file records the full event history — each agent response is appended as a new section with metadata (event type, strand path, timestamp) separated by `---` delimiters, so the output document tells the complete story of what has happened. (*Plan 12*)
 - [ ] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. Looms created as directories on disk (or via `POST /looms`) are auto-discovered at runtime: a rig directory watcher detects new `*-loom` directories and registers them with file watchers immediately. Knots defined as `.md` files inside a loom directory are auto-discovered: new `.md` files are parsed and the knot is registered for processing, edited `.md` files update the in-memory knot config, and deleted `.md` files deregister the knot. The HTTP interface (`GET /looms`, `GET /looms/{id}/knots`) reflects the current in-memory state, which is always in sync with the filesystem. (*Planned*)
 - [x] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors. (*Plans 2, 4*)
+- [ ] Users can watch a parent directory and invoke a knot for every child event within that directory, so that the knot can make a judgement call with respect to the whole (e.g. a new plan subdirectory triggers processing for each file it contains).
+- [ ] Users can define agent profiles as shared, named entities outside of any single knot, so that multiple knots reference the same profile and the LLM target can be changed dynamically from one place.
 
 ## Non-Goals
 
 - Real-time collaborative editing or live preview of generated files.
 - Support for arbitrary CI/CD pipelines or cloud deployment targets.
-- Fine-grained per-file AI model or prompt configuration (one knot per loom is sufficient for this feature).
 - Conflict resolution when multiple events overlap on the same file.
 - Support for non-file data sources (e.g., databases, APIs) as inputs.
 
@@ -101,6 +102,28 @@ As a user, I want the tie-off document to tell the complete story of what has ha
 2. Given a strand was deleted, when I read the tie-off document, then I see the deletion event appended as a new section with the agent's assessment of what was removed and what remains.
 3. Given I am reviewing a tie-off document, when I see the `---` section separators, then I can quickly scan the history of what has happened to the strand without losing context from earlier events.
 
+### Story 7: Parent Directory Strand — Child Event Fan-Out
+
+As a user, I want to take a strand of a parent directory to invoke a knot for every child event, so that the knot can make a judgement call with respect to the whole. For example, I want to listen for a new plan in a subdirectory where the plan title (and therefore subdirectory folder) may not have been created yet. This allows breaking down a plan into further smaller chunks.
+
+**Scenarios:**
+
+1. Given I have a knot watching a parent directory (e.g. `plans/`), when a new subdirectory is created (e.g. `plans/new-feature-plan/`), then the knot is triggered once with the directory as the strand context, and the agent can inspect all files within that directory to make a holistic judgement
+2. Given a subdirectory contains multiple `.md` files, when the parent strand event fires, then each child file is available to the agent as part of the strand context so the agent can consider them together
+3. Given the subdirectory name is not known in advance (e.g. derived from the plan title), when the directory is created, then the knot still triggers on it — the strand is the directory itself, not a pre-known file
+4. Given the agent produces output that creates further subdirectories, when those child directories are created, then the knot can recursively process them if configured (respecting k2k iteration limits from the System Reliability PRD)
+
+### Story 8: Shared Agent Profiles
+
+As a user, I want to swap out a model to re-run a phase or undertake some work on future changes. I need to create an agent profile and then use the agent profile in the knot. That way multiple knots could use the same agent profile and I could set the profile LLM targets dynamically.
+
+**Scenarios:**
+
+1. Given I have defined an agent profile (provider, model, skills, tools, system prompt) as a shared resource, when I reference that profile from multiple knot definitions, then each knot uses the profile's configuration at processing time
+2. Given a shared agent profile is used by three knots, when I update the profile's model (e.g. from `gpt-4o` to `claude-sonnet`), then the next strand event processed by any of the three knots uses the updated model
+3. Given a strand was processed with model A and produced an unsatisfactory tie-off, when I update the shared agent profile to model B and replay the event, then the replay uses model B — I don't need to edit the knot definition itself
+4. Given I have two shared profiles — `fast-profile` (gpt-4o, 60s timeout) and `thorough-profile` (claude-sonnet, 600s timeout) — when I switch a knot's profile reference from one to the other, then future processing uses the new profile's provider, model, and timeout
+
 ## Success Criteria
 
 - [x] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
@@ -111,6 +134,9 @@ As a user, I want the tie-off document to tell the complete story of what has ha
 - [ ] Knot discovers the rig directory automatically: `./rig/` in the current working directory. If it doesn't exist, Knot creates it on first run.
 - [x] Multiple configured looms operate independently without cross-interference.
 - [ ] Tie-off files append new agent responses as `---`-separated sections with event metadata headers, preserving the full processing history (*Plan 12*).
+- [ ] A knot can watch a parent directory and be triggered by subdirectory creation, receiving child file context for holistic processing
+- [ ] Agent profiles are shareable, named entities that multiple knots can reference
+- [ ] Updating a shared agent profile's LLM target is reflected in all knots that reference it on their next invocation
 
 ## Dependencies & Constraints
 
@@ -119,6 +145,8 @@ As a user, I want the tie-off document to tell the complete story of what has ha
 - **Technical dependency:** Knot uses the `notify` crate for file system watching.
 - **External dependency:** Knot calls an external agent CLI to execute knots. Initially this is **pi** (`pi.dev` CLI). The user configures `agent-config` in the knot with CLI arguments (e.g. `--no-tools`), and Knot parses the knot config to construct the full CLI invocation (provider, model, skills, tools, system prompt).
 - **Configuration constraint:** Knot is started with respect to its rig directory. Looms and knots are discovered by watching the rig and loom directories for filesystem events (directory creation, `.md` file creation/modification/deletion), not by periodic scanning. No separate top-level config file is required.
+- **Technical constraint:** Parent directory strand processing requires directory creation events to trigger knots (currently filtered out). The `map_strand_event` method in `NotifyEventSource` skips directory events — a new event type or watch mode is needed.
+- **Technical constraint:** Shared agent profiles require a new domain entity and a reference mechanism in the knot definition (e.g. `agent-profile-ref` instead of inline `agent-config`). Profile resolution at processing time replaces the current inline config lookup.
 
 ## Implementation Status: ✅ Complete (2026-06-04)
 

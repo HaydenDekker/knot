@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-11
-> **Plan Added:** Notify Sender Leak Fix
+> **Plan Added:** Shared Agent Profiles
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ⬜ Planned | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
@@ -75,6 +76,15 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 23. Shared Agent Profiles
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-11
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+**Goal:** Allow multiple knots to reference shared agent profiles stored as `rig/profiles/{name}.md` files, with profile resolution at processing time so updates are picked up dynamically.
+
+Full details in [shared-agent-profiles.md](shared-agent-profiles.md).
 
 ### 22. Notify Sender Leak Fix — Immediate Cascade Drain
 
