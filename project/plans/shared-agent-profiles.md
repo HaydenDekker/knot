@@ -287,19 +287,19 @@ Fixes issues #1 and #2: make `agent_config` optional in `KnotRequest` and fix `g
 
 Fixes issue #3: the profile's `system_prompt` must flow into the agent CLI invocation.
 
-- [ ] Update `resolve_agent_config()` in `ProcessStrand`:
+- [x] Update `resolve_agent_config()` in `ProcessStrand`:
   - When profile ref resolves, merge profile's `system_prompt` into the execution context
   - The `system_prompt` from the profile should become the `--system-prompt` CLI argument
   - The knot's `prompt_template.instructions` can still provide additional instructions (concatenated or used as context)
   - Decision: profile `system_prompt` is the base; knot `prompt_template.instructions` appends as task-specific direction
-- [ ] Update `ProcessStrand::execute()`:
+- [x] Update `ProcessStrand::execute()`:
   - Pass the resolved system prompt through to `ExecutionContext` (new field or modified `cli_args`)
   - `build_cli_args` receives the merged system prompt
-- [ ] Decision on merge strategy: `--system-prompt "{profile_system_prompt}\n\n{knot_instructions}"` or use knot instructions as `goal` and profile system_prompt as the `--system-prompt`
-- [ ] Add unit test: profile ref knot → CLI args contain profile's `system_prompt` as `--system-prompt`
-- [ ] Add unit test: profile ref knot → CLI args also include knot's `prompt_template.instructions`
-- [ ] Add integration test: profile with distinct system_prompt → processed strand output reflects profile's instructions (use mock agent that echoes `--system-prompt` value)
-- [ ] `cargo test` passes
+- [x] Decision on merge strategy: `--system-prompt "{profile_system_prompt}\n\n{knot_instructions}"` — profile system_prompt is the base, knot instructions appended
+- [x] Add unit test: profile ref knot → CLI args contain profile's `system_prompt` as `--system-prompt`
+- [x] Add unit test: profile ref knot → CLI args also include knot's `prompt_template.instructions`
+- [x] Add integration test: profile with distinct system_prompt → processed strand output reflects profile's instructions (use mock agent that echoes `--system-prompt` value)
+- [x] `cargo test` passes
 
 ### Phase 8: Fix — Profile Save Preserves Body + Frontmatter Extraction Cleanup
 
