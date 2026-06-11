@@ -654,8 +654,16 @@ impl ProcessStrand {
         })?;
 
         // 2. Build CLI args from knot's agent config + prompt template
-        let mut cli_args =
-            knot.agent_config.build_cli_args(&knot.prompt_template);
+        let agent_config = knot
+            .agent_config
+            .as_ref()
+            .ok_or_else(|| {
+                PortError::AgentExecutionFailed(format!(
+                    "knot '{}' has no agent_config (profile resolution not yet implemented)",
+                    knot.id.0
+                ))
+            })?;
+        let mut cli_args = agent_config.build_cli_args(&knot.prompt_template);
         // Append strand content reference using pi's @file syntax
         cli_args.push(
             format!("@{}", strand_path.0.display()),
@@ -1471,12 +1479,13 @@ mod config_handler_tests {
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -1881,7 +1890,9 @@ mod config_handler_tests {
 
         // Update knot with same strand_dir (only config changed)
         let mut updated_knot = build_knot("k1");
-        updated_knot.agent_config.model = "claude-sonnet".to_string();
+        if let Some(ref mut ac) = updated_knot.agent_config {
+            ac.model = "claude-sonnet".to_string();
+        }
 
         let result = handler.execute(ConfigEvent::KnotModified {
             loom_id: loom_id.clone(),
@@ -2321,12 +2332,13 @@ mod phase2_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2540,12 +2552,13 @@ mod phase3_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2761,12 +2774,13 @@ mod phase4_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2904,12 +2918,13 @@ mod manage_knot_tests {
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2954,7 +2969,7 @@ mod manage_knot_tests {
             .find(|k| k.id == KnotId("k2".to_string()));
         assert!(found.is_some());
         let k = found.unwrap();
-        assert_eq!(k.agent_config.model, "gpt-4o");
+        assert_eq!(k.agent_config.as_ref().unwrap().model, "gpt-4o");
         assert_eq!(k.strand_dir, PathBuf::from("strands"));
     }
 
@@ -3016,7 +3031,9 @@ mod manage_knot_tests {
         let use_case = ManageKnot::new(store.clone());
         // Update k1 with a new model
         let mut updated_knot = build_knot("k1");
-        updated_knot.agent_config.model = "claude-sonnet".to_string();
+        if let Some(ref mut ac) = updated_knot.agent_config {
+            ac.model = "claude-sonnet".to_string();
+        }
         updated_knot.prompt_template.instructions = "new instructions".to_string();
 
         let result = use_case.execute(KnotAction::Update {
@@ -3035,7 +3052,7 @@ mod manage_knot_tests {
         let k1 = loom.knots.iter()
             .find(|k| k.id == KnotId("k1".to_string()))
             .unwrap();
-        assert_eq!(k1.agent_config.model, "claude-sonnet");
+        assert_eq!(k1.agent_config.as_ref().unwrap().model, "claude-sonnet");
         assert_eq!(
             k1.prompt_template.instructions,
             "new instructions"
@@ -3045,7 +3062,7 @@ mod manage_knot_tests {
         let k2 = loom.knots.iter()
             .find(|k| k.id == KnotId("k2".to_string()))
             .unwrap();
-        assert_eq!(k2.agent_config.model, "gpt-4o");
+        assert_eq!(k2.agent_config.as_ref().unwrap().model, "gpt-4o");
     }
 
     /// `ManageKnot` with `KnotAction::Update` returns error when knot

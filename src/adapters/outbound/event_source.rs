@@ -209,6 +209,7 @@ impl InnerState {
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_config: knot_file.agent_config,
+                                agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
                                 strand_dir: resolve_path(
                                     &self.project_root,
@@ -277,6 +278,7 @@ impl InnerState {
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_config: knot_file.agent_config,
+                                agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
                                 strand_dir: resolve_path(
                                     &self.project_root,
@@ -1015,7 +1017,7 @@ prompt-template:
             } => {
                 assert_eq!(lid.0, "test-loom");
                 assert_eq!(knot.id.0, "new-knot");
-                assert_eq!(knot.agent_config.provider, "openai");
+                assert_eq!(knot.agent_config.as_ref().unwrap().provider, "openai");
             }
             other => panic!(
                 "Expected ConfigEvent::KnotAdded, got: {:?}",
@@ -1103,7 +1105,7 @@ prompt-template:
             } => {
                 assert_eq!(lid.0, "test-loom");
                 assert_eq!(knot.id.0, "existing-knot");
-                assert_eq!(knot.agent_config.model, "claude-sonnet");
+                assert_eq!(knot.agent_config.as_ref().unwrap().model, "claude-sonnet");
             }
             other => panic!(
                 "Expected ConfigEvent::KnotModified, got: {:?}",

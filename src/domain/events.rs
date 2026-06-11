@@ -578,12 +578,13 @@ mod tests {
     fn make_knot(id: &str) -> Knot {
         Knot {
             id: KnotId(id.to_string()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "Test goal".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Test instructions.".to_string(),

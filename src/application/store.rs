@@ -82,12 +82,13 @@ mod tests {
             knots: vec![
                 crate::domain::entities::Knot {
                     id: crate::domain::entities::KnotId("k1".to_string()),
-                    agent_config: AgentConfig::new(
+                    agent_config: Some(AgentConfig::new(
                         "review".to_string(),
                         "openai".to_string(),
                         "gpt-4o".to_string(),
                     )
-                    .unwrap(),
+                    .unwrap()),
+                    agent_profile_ref: None,
                     prompt_template: PromptTemplate::new(
                         "full-file".to_string(),
                         "check it".to_string(),

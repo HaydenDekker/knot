@@ -128,12 +128,13 @@ fn build_context_with_loom() -> AppContext {
         id: LoomId("test-loom".to_string()),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "Review documents".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Review this document.".to_string(),
@@ -702,12 +703,13 @@ async fn knot_inspect_knot_status_with_state() {
         id: LoomId("test-loom".to_string()),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
-            agent_config: AgentConfig {
+            agent_config: Some(AgentConfig {
                 goal: "Review".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 tools: Vec::new(),
-            },
+            }),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),

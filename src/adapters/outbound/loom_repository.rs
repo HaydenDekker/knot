@@ -219,6 +219,7 @@ impl FileSystemLoomRepository {
         Knot {
             id: KnotId(file.name.clone()),
             agent_config: file.agent_config,
+            agent_profile_ref: file.agent_profile_ref,
             prompt_template: file.prompt_template,
             strand_dir: file.strand_dir,
         }
@@ -444,7 +445,10 @@ broken: yaml: [
 
         // Verify agent config parsed from frontmatter.
         assert_eq!(
-            knot.agent_config.goal,
+            knot.agent_config
+                .as_ref()
+                .unwrap()
+                .goal,
             "Review PRD goals for clarity"
         );
 

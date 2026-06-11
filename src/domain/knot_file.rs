@@ -26,6 +26,10 @@ pub enum KnotFileError {
     MissingStrandDir,
     /// The frontmatter YAML could not be parsed.
     InvalidFormat,
+    /// Both `agent-profile-ref` and `agent-config` are present (mutually exclusive).
+    BothProfileAndConfig,
+    /// Neither `agent-profile-ref` nor `agent-config` is present.
+    MissingAgentConfigOrProfileRef,
 }
 
 impl std::fmt::Display for KnotFileError {
@@ -52,6 +56,18 @@ impl std::fmt::Display for KnotFileError {
             KnotFileError::InvalidFormat => {
                 write!(f, "knot file frontmatter is not valid YAML")
             }
+            KnotFileError::BothProfileAndConfig => {
+                write!(
+                    f,
+                    "knot file cannot have both 'agent-profile-ref' and 'agent-config'"
+                )
+            }
+            KnotFileError::MissingAgentConfigOrProfileRef => {
+                write!(
+                    f,
+                    "knot file must have either 'agent-profile-ref' or 'agent-config'"
+                )
+            }
         }
     }
 }
@@ -67,8 +83,15 @@ impl std::error::Error for KnotFileError {}
 pub struct KnotFile {
     /// The name of the knot (becomes the `KnotId`).
     pub name: String,
-    /// Agent configuration extracted from frontmatter.
-    pub agent_config: AgentConfig,
+    /// Agent configuration extracted from frontmatter (inline).
+    ///
+    /// `None` when the knot references an agent profile instead
+    /// (`agent_profile_ref` is set).
+    pub agent_config: Option<AgentConfig>,
+    /// Reference to a named agent profile stored in `profiles/{name}.md`.
+    ///
+    /// When set, `agent_config` must be `None` (mutually exclusive).
+    pub agent_profile_ref: Option<String>,
     /// Prompt template extracted from frontmatter.
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
@@ -81,6 +104,8 @@ struct RawFrontmatter {
     name: Option<String>,
     #[serde(rename = "agent-config")]
     agent_config: Option<RawAgentConfig>,
+    #[serde(rename = "agent-profile-ref")]
+    agent_profile_ref: Option<String>,
     #[serde(rename = "prompt-template")]
     prompt_template: Option<RawPromptTemplate>,
     #[serde(rename = "strand-dir")]
@@ -111,6 +136,9 @@ struct RawPromptTemplate {
 ///
 /// Extracts and validates the YAML frontmatter. The body (markdown after the
 /// closing `---`) is not parsed — it is documentation only.
+///
+/// A knot file must have either `agent-config` (inline) or
+/// `agent-profile-ref` (reference to a shared profile), but not both.
 pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     // Split on frontmatter delimiters
     let yaml_text = extract_frontmatter(content)?;
@@ -123,37 +151,50 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
         .filter(|n| !n.trim().is_empty())
         .ok_or(KnotFileError::MissingName)?;
 
-    // Validate agent-config fields
-    let ac = raw
-        .agent_config
-        .as_ref()
-        .ok_or(KnotFileError::EmptyGoal)?;
-    let goal = ac
-        .goal
-        .as_ref()
-        .filter(|g| !g.trim().is_empty())
-        .ok_or(KnotFileError::EmptyGoal)?;
-    let provider = ac
-        .provider
-        .as_ref()
-        .filter(|p| !p.trim().is_empty())
-        .ok_or(KnotFileError::EmptyProvider)?;
-    let model = ac
-        .model
-        .as_ref()
-        .filter(|m| !m.trim().is_empty())
-        .ok_or(KnotFileError::EmptyModel)?;
-
-    let mut agent_config = AgentConfig::new(
-        goal.clone(),
-        provider.clone(),
-        model.clone(),
-    )
-    .map_err(|_| KnotFileError::EmptyGoal)?;
-    // Apply optional tools
-    if let Some(tools) = &ac.tools {
-        agent_config.tools = tools.clone();
+    // Mutual exclusivity: agent-config and agent-profile-ref cannot coexist.
+    let has_config = raw.agent_config.is_some();
+    let has_profile_ref = raw.agent_profile_ref.is_some();
+    if has_config && has_profile_ref {
+        return Err(KnotFileError::BothProfileAndConfig);
     }
+
+    // At least one of agent-config or agent-profile-ref must be present.
+    if !has_config && !has_profile_ref {
+        return Err(KnotFileError::MissingAgentConfigOrProfileRef);
+    }
+
+    // Parse agent configuration (optional — profile-ref is the alternative)
+    let agent_config = if let Some(ac) = raw.agent_config {
+        let goal = ac
+            .goal
+            .as_ref()
+            .filter(|g| !g.trim().is_empty())
+            .ok_or(KnotFileError::EmptyGoal)?;
+        let provider = ac
+            .provider
+            .as_ref()
+            .filter(|p| !p.trim().is_empty())
+            .ok_or(KnotFileError::EmptyProvider)?;
+        let model = ac
+            .model
+            .as_ref()
+            .filter(|m| !m.trim().is_empty())
+            .ok_or(KnotFileError::EmptyModel)?;
+
+        let mut agent_config = AgentConfig::new(
+            goal.clone(),
+            provider.clone(),
+            model.clone(),
+        )
+        .map_err(|_| KnotFileError::EmptyGoal)?;
+        // Apply optional tools
+        if let Some(tools) = &ac.tools {
+            agent_config.tools = tools.clone();
+        }
+        Some(agent_config)
+    } else {
+        None
+    };
 
     // Validate prompt-template
     let raw_template = raw
@@ -182,6 +223,7 @@ pub fn parse(content: &str) -> Result<KnotFile, KnotFileError> {
     Ok(KnotFile {
         name,
         agent_config,
+        agent_profile_ref: raw.agent_profile_ref,
         prompt_template,
         strand_dir,
     })
@@ -346,10 +388,10 @@ This knot reviews the goals section of PRD documents.
 
         let file = result.unwrap();
         assert_eq!(file.name, "prd-goals-review");
-        assert_eq!(file.agent_config.goal, "Review PRD goals for clarity, completeness, and alignment");
-        assert_eq!(file.agent_config.provider, "openai");
-        assert_eq!(file.agent_config.model, "gpt-4o");
-        assert!(file.agent_config.tools.is_empty());
+        assert_eq!(file.agent_config.as_ref().unwrap().goal, "Review PRD goals for clarity, completeness, and alignment");
+        assert_eq!(file.agent_config.as_ref().unwrap().provider, "openai");
+        assert_eq!(file.agent_config.as_ref().unwrap().model, "gpt-4o");
+        assert!(file.agent_config.as_ref().unwrap().tools.is_empty());
         assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
         assert_eq!(file.strand_dir, PathBuf::from("strands"));
@@ -471,9 +513,9 @@ Body.
 
         let file = parse(content).unwrap();
         assert_eq!(file.name, "review-knot");
-        assert_eq!(file.agent_config.provider, "anthropic");
-        assert_eq!(file.agent_config.model, "claude-sonnet-4-20250514");
-        assert_eq!(file.agent_config.tools, vec!["fs", "web"]);
+        assert_eq!(file.agent_config.as_ref().unwrap().provider, "anthropic");
+        assert_eq!(file.agent_config.as_ref().unwrap().model, "claude-sonnet-4-20250514");
+        assert_eq!(file.agent_config.as_ref().unwrap().tools, vec!["fs", "web"]);
     }
 
     #[test]
@@ -575,12 +617,13 @@ No frontmatter at all.";
     fn knot_file_serialization() {
         let file = KnotFile {
             name: "test".to_string(),
-            agent_config: AgentConfig::new(
+            agent_config: Some(AgentConfig::new(
                 "test goal".to_string(),
                 "openai".to_string(),
                 "gpt-4o".to_string(),
             )
-            .unwrap(),
+            .unwrap()),
+            agent_profile_ref: None,
             prompt_template: PromptTemplate::new(
                 "full-file".to_string(),
                 "do it".to_string(),
@@ -629,7 +672,10 @@ Body.
 
         let result = parse(content);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), KnotFileError::EmptyGoal);
+        assert_eq!(
+            result.unwrap_err(),
+            KnotFileError::MissingAgentConfigOrProfileRef
+        );
     }
 
     #[test]
@@ -702,6 +748,14 @@ Body.
             KnotFileError::MissingStrandDir.to_string(),
             "knot file is missing 'strand-dir' field"
         );
+        assert_eq!(
+            KnotFileError::BothProfileAndConfig.to_string(),
+            "knot file cannot have both 'agent-profile-ref' and 'agent-config'"
+        );
+        assert_eq!(
+            KnotFileError::MissingAgentConfigOrProfileRef.to_string(),
+            "knot file must have either 'agent-profile-ref' or 'agent-config'"
+        );
     }
 
     #[test]
@@ -719,6 +773,82 @@ Body.
         assert_eq!(
             path,
             PathBuf::from("/workspace/rig/output/my-loom/.loom-log")
+        );
+    }
+
+    // ── Mutual Exclusivity Validation Tests ──────────────────────────────
+
+    const KNOT_WITH_PROFILE_REF: &str = r#"---
+name: profile-ref-knot
+agent-profile-ref: fast
+strand-dir: "strands"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: |
+    Review the document for clarity.
+---
+
+# Profile Ref Knot
+
+This knot references an agent profile.
+"#;
+
+    #[test]
+    fn knot_with_agent_profile_ref_only_parses() {
+        let result = parse(KNOT_WITH_PROFILE_REF);
+        assert!(result.is_ok(), "knot with profile ref should parse");
+
+        let file = result.unwrap();
+        assert_eq!(file.name, "profile-ref-knot");
+        assert!(file.agent_config.is_none(), "agent_config should be None");
+        assert_eq!(
+            file.agent_profile_ref,
+            Some("fast".to_string()),
+            "agent_profile_ref should be set"
+        );
+        assert_eq!(file.prompt_template.input_bundling, "full-file");
+        assert_eq!(file.strand_dir, PathBuf::from("strands"));
+    }
+
+    #[test]
+    fn knot_with_both_profile_and_config_returns_error() {
+        let content = r#"---
+name: both-knot
+agent-profile-ref: fast
+agent-config:
+  goal: "Some goal"
+  provider: "openai"
+  model: "gpt-4o"
+strand-dir: "strands"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: "Do something"
+---
+
+Body.
+"#;
+
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            KnotFileError::BothProfileAndConfig
+        );
+    }
+
+    #[test]
+    fn knot_with_agent_config_only_still_works() {
+        // Backward compatibility: knots with agent-config (no profile ref) parse normally
+        let result = parse(VALID_KNOT);
+        assert!(result.is_ok());
+
+        let file = result.unwrap();
+        assert_eq!(file.name, "prd-goals-review");
+        assert!(file.agent_config.is_some());
+        assert_eq!(
+            file.agent_profile_ref,
+            None,
+            "agent_profile_ref should be None when only agent-config is present"
         );
     }
 

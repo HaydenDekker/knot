@@ -247,7 +247,8 @@ pub async fn register_loom(
             );
             Knot {
                 id: KnotId(k.name.clone()),
-                agent_config: k.agent_config.clone(),
+                agent_config: Some(k.agent_config.clone()),
+                agent_profile_ref: None,
                 prompt_template: k.prompt_template.clone(),
                 strand_dir,
             }
@@ -291,11 +292,11 @@ pub async fn register_loom(
 /// Produces a markdown file with `---` delimited frontmatter containing
 /// the knot's configuration fields. The body is a minimal heading.
 fn generate_knot_file(knot: &KnotRequest) -> String {
-    let tools_yaml = if knot.agent_config.tools.is_empty() {
+    let ac = &knot.agent_config;
+    let tools_yaml = if ac.tools.is_empty() {
         String::new()
     } else {
-        let lines: Vec<String> = knot
-            .agent_config
+        let lines: Vec<String> = ac
             .tools
             .iter()
             .map(|t| format!("    - {t}"))
@@ -306,9 +307,9 @@ fn generate_knot_file(knot: &KnotRequest) -> String {
     format!(
         "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\nprompt-template:\n  input-bundling: {6}\n  instructions: {7}\n---\n\n# {8}\n",
         knot.name,
-        quote_yaml_scalar(&knot.agent_config.goal),
-        quote_yaml_scalar(&knot.agent_config.provider),
-        quote_yaml_scalar(&knot.agent_config.model),
+        quote_yaml_scalar(&ac.goal),
+        quote_yaml_scalar(&ac.provider),
+        quote_yaml_scalar(&ac.model),
         tools_yaml,
         quote_yaml_scalar(&knot.strand_dir),
         quote_yaml_scalar(&knot.prompt_template.input_bundling),
@@ -434,7 +435,8 @@ pub async fn create_knot(
     );
     let knot = Knot {
         id: KnotId(body.name.clone()),
-        agent_config: body.agent_config.clone(),
+        agent_config: Some(body.agent_config.clone()),
+        agent_profile_ref: None,
         prompt_template: body.prompt_template.clone(),
         strand_dir,
     };
@@ -566,7 +568,8 @@ pub async fn update_knot(
     );
     let knot = Knot {
         id: KnotId(name),
-        agent_config: body.agent_config.clone(),
+        agent_config: Some(body.agent_config.clone()),
+        agent_profile_ref: None,
         prompt_template: body.prompt_template.clone(),
         strand_dir,
     };
@@ -930,12 +933,13 @@ mod tests {
                 .iter()
                 .map(|k| Knot {
                     id: KnotId(k.to_string()),
-                    agent_config: AgentConfig {
+                    agent_config: Some(AgentConfig {
                         goal: "review".to_string(),
                         provider: "openai".to_string(),
                         model: "gpt-4o".to_string(),
                         tools: Vec::new(),
-                    },
+                    }),
+                    agent_profile_ref: None,
                     prompt_template: PromptTemplate {
                         input_bundling: "full-file".to_string(),
                         instructions: "check it".to_string(),
