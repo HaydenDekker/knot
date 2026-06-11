@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    AgentRunner, EventSource, LoomLogPort, LoomRepository, TieOffSink,
+    AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
+    LoomRepository, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::LoomId;
@@ -75,6 +76,8 @@ pub struct AppContext {
     pub event_sender: mpsc::Sender<StrandEvent>,
     /// Agent runner for subprocess execution.
     pub agent_runner: Arc<dyn AgentRunner>,
+    /// Agent profile repository for dynamic profile resolution.
+    pub profile_repo: Arc<dyn AgentProfileRepository>,
     /// Rig-level agent configuration.
     pub rig_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).

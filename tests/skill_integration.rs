@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
-    AgentRunner, EventSource, LoomLogPort,
+    AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
     LoomRepository, ProcessingStatus, PortError, TieOffSink,
 };
 use knot::application::store::LoomStore;
@@ -19,7 +19,9 @@ use knot::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
 };
 use knot::domain::events::{LoomEvent, StrandEvent};
-use knot::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+use knot::domain::value_objects::{
+    AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::util::ServiceExt;
@@ -94,6 +96,29 @@ impl AgentRunner for MockAgentRunner {
     }
 }
 
+struct MockProfileRepository;
+
+impl AgentProfileRepository for MockProfileRepository {
+    fn get(
+        &self,
+        _name: &str,
+    ) -> Result<Option<AgentProfile>, PortError> {
+        Ok(None)
+    }
+    fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+        Ok(vec![])
+    }
+    fn save(
+        &self,
+        _profile: AgentProfile,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn delete(&self, _name: &str) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
 struct MockEventSource;
 
 impl EventSource for MockEventSource {
@@ -118,6 +143,7 @@ fn build_context_with_loom() -> AppContext {
         event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
+        profile_repo: Arc::new(MockProfileRepository),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),
@@ -598,6 +624,7 @@ async fn knot_inspect_loom_activity() {
         event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
+        profile_repo: Arc::new(MockProfileRepository),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),
@@ -695,6 +722,7 @@ async fn knot_inspect_knot_status_with_state() {
         event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
+        profile_repo: Arc::new(MockProfileRepository),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),

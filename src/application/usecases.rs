@@ -4,20 +4,21 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::adapters::logging;
 use crate::application::ports::{
-    AgentRunner, ExecutionContext, EventSource, KnotEventType,
-    LoomLogPort, LoomRepository, ProcessingStatus, PortError,
-    TieOffSink,
+    AgentProfileRepository, AgentRunner, ExecutionContext, EventSource,
+    KnotEventType, LoomLogPort, LoomRepository, ProcessingStatus,
+    PortError, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
 use crate::domain::events::{ConfigEvent, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
-use crate::domain::value_objects::RigAgentConfig;
+use crate::domain::value_objects::{AgentConfig, RigAgentConfig};
 
 /// Generate an ISO 8601 UTC timestamp string.
 pub fn format_timestamp() -> String {
@@ -565,11 +566,12 @@ impl GetKnotStatus {
 ///
 /// 1. Receive `StrandEvent` (Created / Modified / Deleted)
 /// 2. Append `KnotProcessing` to loom-log
-/// 3. Build execution context from `RigAgentConfig` + `Knot`
-/// 4. Call `AgentRunner::execute()` (skipped for Deleted events)
-/// 5. Call `TieOffSink::write()` with result
-/// 6. Append `KnotCompleted` or `KnotFailed` to loom-log
-/// 7. Append `StrandProcessed` to loom-log
+/// 3. Resolve agent config (profile ref → load profile, merge, or inline)
+/// 4. Build execution context from resolved config + `RigAgentConfig`
+/// 5. Call `AgentRunner::execute()` (skipped for Deleted events)
+/// 6. Call `TieOffSink::write()` with result
+/// 7. Append `KnotCompleted` or `KnotFailed` to loom-log
+/// 8. Append `StrandProcessed` to loom-log
 pub struct ProcessStrand {
     store: LoomStore,
     log_port: Arc<dyn LoomLogPort>,
@@ -578,6 +580,8 @@ pub struct ProcessStrand {
     rig_config: RigAgentConfig,
     /// Base (rig) directory — used to derive static output paths.
     base_dir: PathBuf,
+    /// Profile repository for dynamic profile resolution at processing time.
+    profile_repo: Arc<dyn AgentProfileRepository>,
 }
 
 impl ProcessStrand {
@@ -589,6 +593,7 @@ impl ProcessStrand {
         tie_off_sink: Arc<dyn TieOffSink>,
         rig_config: RigAgentConfig,
         base_dir: PathBuf,
+        profile_repo: Arc<dyn AgentProfileRepository>,
     ) -> Self {
         Self {
             store,
@@ -597,6 +602,69 @@ impl ProcessStrand {
             tie_off_sink,
             rig_config,
             base_dir,
+            profile_repo,
+        }
+    }
+
+    /// Resolve the effective `AgentConfig` for a knot.
+    ///
+    /// - If the knot has `agent_profile_ref` (and no inline `agent_config`):
+    ///   load the profile from the repository and build an `AgentConfig`
+    ///   from it, using the knot's prompt instructions as the goal.
+    /// - If the knot has inline `agent_config` (and no profile ref):
+    ///   return the inline config as-is (backward compat).
+    /// - If both are present (shouldn't happen via mutual exclusivity at
+    ///   parse time, but may occur for programmatic Knot construction):
+    ///   profile is the base; inline config overrides specific fields
+    ///   (provider, model, tools).
+    /// - If neither is present: return `PortError::AgentExecutionFailed`.
+    pub fn resolve_agent_config(
+        &self,
+        knot: &Knot,
+    ) -> Result<AgentConfig, PortError> {
+        match (&knot.agent_profile_ref, &knot.agent_config) {
+            (Some(profile_name), None) => {
+                // Profile ref only — load and build AgentConfig from profile.
+                let profile = self
+                    .profile_repo
+                    .get(profile_name)
+                    .map_err(|e| {
+                        PortError::ProfileNotFound(e.to_string())
+                    })?
+                    .ok_or_else(|| {
+                        PortError::ProfileNotFound(profile_name.clone())
+                    })?;
+
+                Ok(AgentConfig {
+                    goal: knot.prompt_template.instructions.clone(),
+                    provider: profile.provider.clone(),
+                    model: profile.model.clone(),
+                    tools: profile.tools.clone(),
+                })
+            }
+            (None, Some(config)) => {
+                // Inline config only — use as-is (backward compat).
+                Ok(config.clone())
+            }
+            (Some(profile_name), Some(inline_config)) => {
+                // Both set — profile is the base, inline config overrides.
+                // Since AgentConfig requires all fields, inline fully
+                // overrides the profile. This path handles programmatic
+                // Knot construction where mutual exclusivity is bypassed.
+                logging::log_knot_event(
+                    "warn:profile-override",
+                    &profile_name.as_str(),
+                    &knot.id.0,
+                    "knot has both profile-ref and inline config; inline wins",
+                );
+                Ok(inline_config.clone())
+            }
+            (None, None) => Err(PortError::AgentExecutionFailed(
+                format!(
+                    "knot '{}' has neither agent-profile-ref nor agent-config",
+                    knot.id.0
+                ),
+            )),
         }
     }
 
@@ -653,16 +721,8 @@ impl ProcessStrand {
             timestamp: format_timestamp(),
         })?;
 
-        // 2. Build CLI args from knot's agent config + prompt template
-        let agent_config = knot
-            .agent_config
-            .as_ref()
-            .ok_or_else(|| {
-                PortError::AgentExecutionFailed(format!(
-                    "knot '{}' has no agent_config (profile resolution not yet implemented)",
-                    knot.id.0
-                ))
-            })?;
+        // 2. Resolve effective agent config (profile or inline) and build CLI args
+        let agent_config = self.resolve_agent_config(knot)?;
         let mut cli_args = agent_config.build_cli_args(&knot.prompt_template);
         // Append strand content reference using pi's @file syntax
         cli_args.push(
@@ -3163,5 +3223,476 @@ mod manage_knot_tests {
             }
             other => panic!("Expected LoomNotFound, got {other:?}"),
         }
+    }
+}
+
+// ── Phase 3: Profile Resolution Tests ─────────────────────────────
+
+#[cfg(test)]
+mod phase3_profile_resolution_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Mock LoomLogPort ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock AgentRunner ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockAgentRunner;
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            Ok(AgentOutput {
+                stdout: "mock output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Mock TieOffSink ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockTieOffSink {
+        content: std::sync::RwLock<HashMap<String, String>>,
+    }
+
+    impl TieOffSink for MockTieOffSink {
+        fn write(
+            &self,
+            tie_off: TieOff,
+        ) -> Result<(), PortError> {
+            self.content
+                .write()
+                .unwrap()
+                .insert(tie_off.path.0.display().to_string(), tie_off.content);
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.write(tie_off)
+        }
+
+        fn read_content(
+            &self,
+            path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(self
+                .content
+                .read()
+                .unwrap()
+                .get(&path.0.display().to_string())
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    #[derive(Default)]
+    struct MockProfileRepository {
+        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
+        }
+
+        fn save(
+            &self,
+            profile: AgentProfile,
+        ) -> Result<(), PortError> {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
+            Ok(())
+        }
+
+        fn delete(&self, name: &str) -> Result<(), PortError> {
+            let mut map = self.profiles.lock().unwrap();
+            if map.remove(name).is_none() {
+                return Err(PortError::ProfileNotFound(name.to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Build a knot with agent-config only (no profile ref).
+    fn build_inline_knot(id: impl Into<String>) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_config: Some(AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec!["fs".to_string()],
+            }),
+            agent_profile_ref: None,
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        }
+    }
+
+    /// Build a knot with profile ref only.
+    fn build_profile_knot(
+        id: impl Into<String>,
+        profile_name: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_config: None,
+            agent_profile_ref: Some(profile_name.to_string()),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check with profile".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        }
+    }
+
+    /// Build a loom with the given ID and knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    // ── resolve_agent_config Tests ───────────────────────────────────
+
+    /// Profile ref resolves to profile fields: provider, model, tools.
+    /// Goal comes from the knot's prompt template instructions.
+    #[test]
+    fn resolve_agent_config_from_profile() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                (
+                    "fast".to_string(),
+                    AgentProfile::with_tools(
+                        "fast".to_string(),
+                        "openai".to_string(),
+                        "gpt-4o".to_string(),
+                        vec!["fs".to_string(), "web".to_string()],
+                        "You are fast.".to_string(),
+                    )
+                    .unwrap(),
+                ),
+            ]))),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+        );
+
+        let profile_knot = build_profile_knot("k1", "fast");
+        let config = use_case.resolve_agent_config(&profile_knot).unwrap();
+
+        // Resolved config should use profile values
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "gpt-4o");
+        assert_eq!(config.tools, vec!["fs", "web"]);
+        // Goal comes from prompt template instructions
+        assert_eq!(
+            config.goal,
+            profile_knot.prompt_template.instructions
+        );
+    }
+
+    /// Inline agent-config is returned as-is (backward compat).
+    #[test]
+    fn resolve_agent_config_inline_backward_compat() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository::default());
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+        );
+
+        let inline_knot = build_inline_knot("k1");
+        let config = use_case.resolve_agent_config(&inline_knot).unwrap();
+
+        // Inline config should be used as-is
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "gpt-4o");
+        assert_eq!(config.tools, vec!["fs"]);
+        assert_eq!(config.goal, "review");
+    }
+
+    /// Profile ref resolves to profile values even when inline config
+    /// is also present (inline overrides — mutual exclusivity bypassed).
+    #[test]
+    fn resolve_agent_config_profile_with_inline_override() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                (
+                    "fast".to_string(),
+                    AgentProfile::with_tools(
+                        "fast".to_string(),
+                        "openai".to_string(),
+                        "gpt-4o".to_string(),
+                        vec!["fs".to_string()],
+                        "You are fast.".to_string(),
+                    )
+                    .unwrap(),
+                ),
+            ]))),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+        );
+
+        // Build a knot with BOTH profile ref AND inline config
+        // (simulates programmatic construction bypassing mutual exclusivity)
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_config: Some(AgentConfig {
+                goal: "override goal".to_string(),
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                tools: vec!["web".to_string()],
+            }),
+            agent_profile_ref: Some("fast".to_string()),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        };
+
+        // When both are set, inline config overrides (full override)
+        let config = use_case.resolve_agent_config(&knot).unwrap();
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.model, "claude-sonnet");
+        assert_eq!(config.tools, vec!["web"]);
+        assert_eq!(config.goal, "override goal");
+    }
+
+    /// Profile not found returns PortError::ProfileNotFound.
+    #[test]
+    fn resolve_agent_config_profile_not_found() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository::default());
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+        );
+
+        let profile_knot = build_profile_knot("k1", "nonexistent");
+        let result = use_case.resolve_agent_config(&profile_knot);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::ProfileNotFound(name) => {
+                assert_eq!(name, "nonexistent");
+            }
+            other => panic!("Expected ProfileNotFound, got {other:?}"),
+        }
+    }
+
+    /// Neither profile ref nor inline config returns error.
+    #[test]
+    fn resolve_agent_config_neither_set() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository::default());
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+        );
+
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_config: None,
+            agent_profile_ref: None,
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        };
+
+        let result = use_case.resolve_agent_config(&knot);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::AgentExecutionFailed(msg) => {
+                assert!(msg.contains("neither"));
+            }
+            other => panic!("Expected AgentExecutionFailed, got {other:?}"),
+        }
+    }
+
+    /// Multiple knots reference the same profile — each resolves
+    /// to the same profile values independently.
+    #[test]
+    fn resolve_agent_config_same_profile_multiple_knots() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                (
+                    "detailed".to_string(),
+                    AgentProfile::with_tools(
+                        "detailed".to_string(),
+                        "anthropic".to_string(),
+                        "claude-sonnet-4-20250514".to_string(),
+                        vec!["fs".to_string(), "web".to_string()],
+                        "Be thorough.".to_string(),
+                    )
+                    .unwrap(),
+                ),
+            ]))),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+        );
+
+        let knot1 = build_profile_knot("k1", "detailed");
+        let knot2 = build_profile_knot("k2", "detailed");
+
+        let config1 = use_case.resolve_agent_config(&knot1).unwrap();
+        let config2 = use_case.resolve_agent_config(&knot2).unwrap();
+
+        // Both should resolve to the same profile values
+        assert_eq!(config1.provider, "anthropic");
+        assert_eq!(config1.model, "claude-sonnet-4-20250514");
+        assert_eq!(config2.provider, "anthropic");
+        assert_eq!(config2.model, "claude-sonnet-4-20250514");
+        assert_eq!(config1.tools, vec!["fs", "web"]);
+        assert_eq!(config2.tools, vec!["fs", "web"]);
+
+        // But goals differ (from each knot's prompt template)
+        assert_eq!(config1.goal, "check with profile");
+        assert_eq!(config2.goal, "check with profile");
+    }
+
+    /// Dynamic profile pickup: adding a profile to the repository
+    /// mid-lifecycle makes it available to knots on next resolution.
+    #[test]
+    fn resolve_agent_config_dynamic_profile_pickup() {
+        let store = LoomStore::new();
+        let profile_repo = Arc::new(MockProfileRepository::default());
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+        );
+
+        // Profile doesn't exist yet — should error
+        let profile_knot = build_profile_knot("k1", "new-profile");
+        let result = use_case.resolve_agent_config(&profile_knot);
+        assert!(result.is_err());
+
+        // Add the profile to the repository (simulates file created on disk)
+        let profile = AgentProfile::with_tools(
+            "new-profile".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            vec!["fs".to_string()],
+            "You are new.".to_string(),
+        )
+        .unwrap();
+        profile_repo.save(profile).unwrap();
+
+        // Now the same knot should resolve successfully
+        let config = use_case.resolve_agent_config(&profile_knot).unwrap();
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "gpt-4o");
+        assert_eq!(config.tools, vec!["fs"]);
     }
 }

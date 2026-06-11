@@ -129,6 +129,12 @@ pub fn build_app_context(
         Arc::new(
             SubprocessAgentRunner::with_timeout(config.agent_timeout),
         );
+    let profile_repo: Arc<dyn application::ports::AgentProfileRepository> =
+        Arc::new(
+            crate::adapters::outbound::FileSystemAgentProfileRepository::new(
+                config.base_dir.join("profiles"),
+            ),
+        );
 
     // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
     // Strand receiver is wired into the debounce engine.
@@ -157,6 +163,7 @@ pub fn build_app_context(
             event_source,
             event_sender: strand_tx,
             agent_runner,
+            profile_repo,
             rig_config,
             loom_ids: Vec::new(),
             base_dir: config.base_dir.clone(),
@@ -200,6 +207,7 @@ pub fn start_event_pipeline(
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
     let rig_config = ctx.rig_config.clone();
     let base_dir = ctx.base_dir.clone();
+    let profile_repo = Arc::clone(&ctx.profile_repo);
 
     join_set.spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
@@ -209,6 +217,7 @@ pub fn start_event_pipeline(
             tie_off_sink,
             rig_config,
             base_dir,
+            profile_repo,
         );
         while let Some(event) = debounce_rx.recv().await {
             if let Err(e) = use_case.execute(event) {

@@ -700,8 +700,8 @@ mod tests {
     use crate::adapters::inbound::router::build_app;
     use crate::adapters::inbound::types::AppContext;
     use crate::application::ports::{
-        AgentRunner, EventSource, LoomLogPort, LoomRepository, PortError,
-        TieOffSink,
+        AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
+        LoomRepository, PortError, TieOffSink,
     };
     use crate::application::store::LoomStore;
     use crate::application::usecases::LoomSummary;
@@ -709,7 +709,9 @@ mod tests {
         Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
     };
     use crate::domain::events::{LoomEvent, StrandEvent};
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+    use crate::domain::value_objects::{
+        AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
+    };
     use axum::{body::Body, http::Request};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc as StdArc, Mutex};
@@ -845,6 +847,33 @@ mod tests {
         }
     }
 
+    /// In-memory mock of `AgentProfileRepository`.
+    struct MockProfileRepository;
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            _name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(vec![])
+        }
+
+        fn save(
+            &self,
+            _profile: AgentProfile,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn delete(&self, _name: &str) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
     fn build_test_context_with_events(
         log_events: Vec<LoomEvent>,
     ) -> AppContext {
@@ -861,6 +890,7 @@ mod tests {
             event_source: Arc::new(event_source),
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(MockProfileRepository),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),
@@ -890,6 +920,7 @@ mod tests {
                 event_source: Arc::new(event_source),
                 event_sender,
                 agent_runner: Arc::new(MockAgentRunner),
+                profile_repo: Arc::new(MockProfileRepository),
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
                 base_dir: PathBuf::from("./rig"),
@@ -1353,6 +1384,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(MockProfileRepository),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1413,6 +1445,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(MockProfileRepository),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1451,6 +1484,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(MockProfileRepository),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1547,6 +1581,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(MockProfileRepository),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),

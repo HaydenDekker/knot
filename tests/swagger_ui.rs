@@ -6,7 +6,8 @@
 use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
-    AgentRunner, EventSource, LoomLogPort, LoomRepository, PortError, TieOffSink,
+    AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
+    LoomRepository, PortError, TieOffSink,
 };
 use knot::application::store::LoomStore;
 use knot::domain::entities::{Loom, LoomId};
@@ -93,6 +94,29 @@ impl AgentRunner for MockAgentRunner {
     }
 }
 
+struct MockProfileRepository;
+
+impl AgentProfileRepository for MockProfileRepository {
+    fn get(
+        &self,
+        _name: &str,
+    ) -> Result<Option<knot::domain::value_objects::AgentProfile>, PortError> {
+        Ok(None)
+    }
+    fn list(&self) -> Result<Vec<knot::domain::value_objects::AgentProfile>, PortError> {
+        Ok(vec![])
+    }
+    fn save(
+        &self,
+        _profile: knot::domain::value_objects::AgentProfile,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn delete(&self, _name: &str) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
 struct MockEventSource;
 
 impl EventSource for MockEventSource {
@@ -116,6 +140,7 @@ fn build_test_context() -> AppContext {
         event_source: Arc::new(MockEventSource),
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
+        profile_repo: Arc::new(MockProfileRepository),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),
