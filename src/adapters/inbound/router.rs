@@ -7,8 +7,9 @@ use axum::{
 use utoipa::OpenApi;
 
 use crate::adapters::inbound::loom::{
-    create_knot, delete_knot, get_knot_status, get_loom, get_loom_activity,
-    get_loom_knots, list_looms, register_loom, unregister_loom, update_knot,
+    create_knot, create_profile, delete_knot, delete_profile, get_knot_status,
+    get_loom, get_loom_activity, get_loom_knots, get_profile, list_looms,
+    list_profiles, register_loom, unregister_loom, update_knot,
 };
 use crate::adapters::inbound::system::{get_rig_config, health, list_agents};
 use crate::adapters::inbound::types::AppContext;
@@ -21,7 +22,9 @@ use crate::domain::entities::{
 use crate::domain::events::{
     KnotRegistered, LoomEvent, ProcessingFailed, StrandEvent, TieOffProduced,
 };
-use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+use crate::domain::value_objects::{
+    AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
+};
 
 // ── OpenAPI / Swagger ──────────────────────────────────────────────────
 
@@ -47,12 +50,17 @@ use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
         crate::adapters::inbound::loom::get_loom_activity,
         crate::adapters::inbound::loom::get_loom_knots,
         crate::adapters::inbound::loom::get_knot_status,
+        crate::adapters::inbound::loom::list_profiles,
+        crate::adapters::inbound::loom::get_profile,
+        crate::adapters::inbound::loom::create_profile,
+        crate::adapters::inbound::loom::delete_profile,
     ),
     components(schemas(
         // Domain value objects
         RigAgentConfig,
         AgentConfig,
         PromptTemplate,
+        AgentProfile,
         // Domain entities
         LoomId,
         KnotId,
@@ -79,6 +87,8 @@ use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
         crate::adapters::inbound::types::RegisterLoomRequest,
         crate::adapters::inbound::types::KnotRequest,
         crate::adapters::inbound::types::RigConfigResponse,
+        crate::adapters::inbound::types::ProfileRequest,
+        crate::adapters::inbound::types::ProfileResponse,
     )),
 )]
 struct ApiDoc;
@@ -110,6 +120,12 @@ pub fn build_app(ctx: AppContext) -> Router {
         .route(
             "/looms/{id}/knots/{name}",
             get(get_knot_status).patch(update_knot).delete(delete_knot),
+        )
+        // Profile endpoints
+        .route("/profiles", get(list_profiles).post(create_profile))
+        .route(
+            "/profiles/{name}",
+            get(get_profile).delete(delete_profile),
         )
         .with_state(ctx)
 }

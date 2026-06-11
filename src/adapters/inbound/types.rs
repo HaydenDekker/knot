@@ -36,10 +36,49 @@ pub struct KnotRequest {
     pub name: String,
     /// Agent configuration for this knot.
     pub agent_config: AgentConfig,
+    /// Reference to a named agent profile (mutually exclusive with
+    /// `agent_config` — if both are present, `agent_config` takes
+    /// precedence for model/tools overrides).
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub agent_profile_ref: Option<String>,
     /// Prompt template for this knot.
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
     pub strand_dir: String,
+}
+
+/// Request body for `POST /profiles/{name}`.
+///
+/// The `name` is derived from the URL path, not the request body.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProfileRequest {
+    /// The LLM provider identifier (e.g. "openai", "anthropic").
+    pub provider: String,
+    /// The model name to use (e.g. "gpt-4o").
+    pub model: String,
+    /// Optional list of tool identifiers to enable.
+    #[serde(default)]
+    #[schema(value_type = Vec<String>)]
+    pub tools: Vec<String>,
+    /// The system prompt given to the agent (required, non-empty).
+    pub system_prompt: String,
+}
+
+/// Response body for profile GET/POST endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProfileResponse {
+    /// Profile name (derived from filename).
+    pub name: String,
+    /// The LLM provider identifier.
+    pub provider: String,
+    /// The model name to use.
+    pub model: String,
+    /// Optional list of tool identifiers.
+    #[schema(value_type = Vec<String>)]
+    pub tools: Vec<String>,
+    /// The system prompt.
+    pub system_prompt: String,
 }
 
 /// Response for `GET /config/rig` — rig path info plus agent config.

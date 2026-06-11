@@ -11,7 +11,10 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::adapters::inbound::types::{AppContext, KnotRequest, RegisterLoomRequest};
+use crate::adapters::inbound::types::{
+    AppContext, KnotRequest, ProfileRequest, ProfileResponse,
+    RegisterLoomRequest,
+};
 use crate::adapters::outbound::FileSystemLoomRepository;
 use crate::application::usecases::{
     GetKnotStatus as GetKnotStatusUc, GetLoom as GetLoomUc,
@@ -19,6 +22,7 @@ use crate::application::usecases::{
 };
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
 use crate::domain::events::LoomEvent;
+use crate::domain::value_objects::AgentProfile;
 use crate::application::usecases::KnotStatus as KnotStatusDto;
 
 // ── Loom Handlers ─────────────────────────────────────────────────────────
@@ -248,7 +252,7 @@ pub async fn register_loom(
             Knot {
                 id: KnotId(k.name.clone()),
                 agent_config: Some(k.agent_config.clone()),
-                agent_profile_ref: None,
+                agent_profile_ref: k.agent_profile_ref.clone(),
                 prompt_template: k.prompt_template.clone(),
                 strand_dir,
             }
@@ -291,31 +295,64 @@ pub async fn register_loom(
 ///
 /// Produces a markdown file with `---` delimited frontmatter containing
 /// the knot's configuration fields. The body is a minimal heading.
+///
+/// If `agent_profile_ref` is set, writes `agent-profile-ref` instead
+/// of `agent-config`. When both are present, `agent-config` is used
+/// as the source with `agent_profile_ref` written instead.
 fn generate_knot_file(knot: &KnotRequest) -> String {
-    let ac = &knot.agent_config;
-    let tools_yaml = if ac.tools.is_empty() {
-        String::new()
-    } else {
-        let lines: Vec<String> = ac
-            .tools
-            .iter()
-            .map(|t| format!("    - {t}"))
-            .collect();
-        format!("\n  tools:\n{}", lines.join("\n"))
-    };
+    // Prefer agent_profile_ref over agent_config when both are present
+    if let Some(ref profile_ref) = knot.agent_profile_ref {
+        let ac = &knot.agent_config;
+        let tools_yaml = if ac.tools.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = ac
+                .tools
+                .iter()
+                .map(|t| format!("    - {t}"))
+                .collect();
+            format!("\n  tools:\n{}", lines.join("\n"))
+        };
 
-    format!(
-        "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\nprompt-template:\n  input-bundling: {6}\n  instructions: {7}\n---\n\n# {8}\n",
-        knot.name,
-        quote_yaml_scalar(&ac.goal),
-        quote_yaml_scalar(&ac.provider),
-        quote_yaml_scalar(&ac.model),
-        tools_yaml,
-        quote_yaml_scalar(&knot.strand_dir),
-        quote_yaml_scalar(&knot.prompt_template.input_bundling),
-        quote_yaml_scalar(&knot.prompt_template.instructions),
-        knot.name,
-    )
+        format!(
+            "---\nname: {0}\nagent-profile-ref: {1}\nagent-config:\n  goal: {2}\n  provider: {3}\n  model: {4}{5}\nstrand-dir: {6}\nprompt-template:\n  input-bundling: {7}\n  instructions: {8}\n---\n\n# {9}\n",
+            knot.name,
+            profile_ref,
+            quote_yaml_scalar(&ac.goal),
+            quote_yaml_scalar(&ac.provider),
+            quote_yaml_scalar(&ac.model),
+            tools_yaml,
+            quote_yaml_scalar(&knot.strand_dir),
+            quote_yaml_scalar(&knot.prompt_template.input_bundling),
+            quote_yaml_scalar(&knot.prompt_template.instructions),
+            knot.name,
+        )
+    } else {
+        let ac = &knot.agent_config;
+        let tools_yaml = if ac.tools.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = ac
+                .tools
+                .iter()
+                .map(|t| format!("    - {t}"))
+                .collect();
+            format!("\n  tools:\n{}", lines.join("\n"))
+        };
+
+        format!(
+            "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\nprompt-template:\n  input-bundling: {6}\n  instructions: {7}\n---\n\n# {8}\n",
+            knot.name,
+            quote_yaml_scalar(&ac.goal),
+            quote_yaml_scalar(&ac.provider),
+            quote_yaml_scalar(&ac.model),
+            tools_yaml,
+            quote_yaml_scalar(&knot.strand_dir),
+            quote_yaml_scalar(&knot.prompt_template.input_bundling),
+            quote_yaml_scalar(&knot.prompt_template.instructions),
+            knot.name,
+        )
+    }
 }
 
 /// Wrap a string in double quotes for safe YAML scalar output.
@@ -436,7 +473,7 @@ pub async fn create_knot(
     let knot = Knot {
         id: KnotId(body.name.clone()),
         agent_config: Some(body.agent_config.clone()),
-        agent_profile_ref: None,
+        agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
     };
@@ -569,7 +606,7 @@ pub async fn update_knot(
     let knot = Knot {
         id: KnotId(name),
         agent_config: Some(body.agent_config.clone()),
-        agent_profile_ref: None,
+        agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
     };
@@ -692,6 +729,197 @@ pub async fn delete_knot(
     }
 }
 
+// ── Profile Handlers ───────────────────────────────────────────────────
+
+/// List all registered agent profiles.
+#[utoipa::path(
+    get,
+    path = "/profiles",
+    responses(
+        (status = 200, body = Vec<ProfileResponse>, description = "List of profiles"),
+    ),
+)]
+pub async fn list_profiles(State(ctx): State<AppContext>) -> Response {
+    match ctx.profile_repo.list() {
+        Ok(profiles) => {
+            let responses: Vec<ProfileResponse> = profiles
+                .into_iter()
+                .map(|p| ProfileResponse {
+                    name: p.name,
+                    provider: p.provider,
+                    model: p.model,
+                    tools: p.tools,
+                    system_prompt: p.system_prompt,
+                })
+                .collect();
+            (StatusCode::OK, Json(responses)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Get a single agent profile by name.
+#[utoipa::path(
+    get,
+    path = "/profiles/{name}",
+    params(
+        ("name" = String, Path, description = "Profile name"),
+    ),
+    responses(
+        (status = 200, body = ProfileResponse, description = "Profile details"),
+        (status = 404, description = "Profile not found"),
+    ),
+)]
+pub async fn get_profile(
+    Path(name): Path<String>,
+    State(ctx): State<AppContext>,
+) -> Response {
+    match ctx.profile_repo.get(&name) {
+        Ok(Some(profile)) => {
+            let response = ProfileResponse {
+                name: profile.name,
+                provider: profile.provider,
+                model: profile.model,
+                tools: profile.tools,
+                system_prompt: profile.system_prompt,
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Create a new agent profile.
+///
+/// The profile `name` is derived from the URL path. The request body
+/// provides provider, model, tools, and system_prompt.
+#[utoipa::path(
+    post,
+    path = "/profiles/{name}",
+    params(
+        ("name" = String, Path, description = "Profile name"),
+    ),
+    request_body = ProfileRequest,
+    responses(
+        (status = 201, description = "Profile created successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
+pub async fn create_profile(
+    Path(name): Path<String>,
+    State(ctx): State<AppContext>,
+    Json(body): Json<ProfileRequest>,
+) -> Response {
+    // Validate system_prompt is non-empty
+    if body.system_prompt.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "system_prompt must not be empty"
+            })),
+        )
+            .into_response();
+    }
+
+    // Validate provider and model are non-empty
+    if body.provider.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "provider must not be empty"
+            })),
+        )
+            .into_response();
+    }
+
+    if body.model.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "model must not be empty"
+            })),
+        )
+            .into_response();
+    }
+
+    // Build the AgentProfile
+    let profile = match AgentProfile::with_tools(
+        name,
+        body.provider,
+        body.model,
+        body.tools,
+        body.system_prompt,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    // Save the profile
+    match ctx.profile_repo.save(profile) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "created": true })),
+        )
+            .into_response(),
+        Err(crate::application::ports::PortError::ProfileSaveFailed(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Delete an agent profile by name.
+#[utoipa::path(
+    delete,
+    path = "/profiles/{name}",
+    params(
+        ("name" = String, Path, description = "Profile name"),
+    ),
+    responses(
+        (status = 204, description = "Profile deleted"),
+        (status = 404, description = "Profile not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+)]
+pub async fn delete_profile(
+    Path(name): Path<String>,
+    State(ctx): State<AppContext>,
+) -> Response {
+    match ctx.profile_repo.delete(&name) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(crate::application::ports::PortError::ProfileNotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -713,8 +941,9 @@ mod tests {
         AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
     };
     use axum::{body::Body, http::Request};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::sync::{Arc, Arc as StdArc, Mutex};
     use tokio::sync::mpsc;
     use tower::util::ServiceExt;
 
@@ -848,28 +1077,70 @@ mod tests {
     }
 
     /// In-memory mock of `AgentProfileRepository`.
-    struct MockProfileRepository;
+    struct MockProfileRepository {
+        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
+    }
+
+    impl MockProfileRepository {
+        fn new() -> Self {
+            Self {
+                profiles: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn add(&self, profile: AgentProfile) {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
+        }
+    }
+
+    impl Default for MockProfileRepository {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
 
     impl AgentProfileRepository for MockProfileRepository {
         fn get(
             &self,
-            _name: &str,
+            name: &str,
         ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(None)
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned())
         }
 
         fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(vec![])
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
         }
 
         fn save(
             &self,
-            _profile: AgentProfile,
+            profile: AgentProfile,
         ) -> Result<(), PortError> {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
             Ok(())
         }
 
-        fn delete(&self, _name: &str) -> Result<(), PortError> {
+        fn delete(&self, name: &str) -> Result<(), PortError> {
+            let mut map = self.profiles.lock().unwrap();
+            if map.remove(name).is_none() {
+                return Err(PortError::ProfileNotFound(name.to_string()));
+            }
             Ok(())
         }
     }
@@ -890,7 +1161,7 @@ mod tests {
             event_source: Arc::new(event_source),
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
-            profile_repo: Arc::new(MockProfileRepository),
+            profile_repo: Arc::new(MockProfileRepository::default()),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),
@@ -920,7 +1191,7 @@ mod tests {
                 event_source: Arc::new(event_source),
                 event_sender,
                 agent_runner: Arc::new(MockAgentRunner),
-                profile_repo: Arc::new(MockProfileRepository),
+                profile_repo: Arc::new(MockProfileRepository::default()),
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
                 base_dir: PathBuf::from("./rig"),
@@ -1384,7 +1655,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
-            profile_repo: Arc::new(MockProfileRepository),
+            profile_repo: Arc::new(MockProfileRepository::default()),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1445,7 +1716,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
-            profile_repo: Arc::new(MockProfileRepository),
+            profile_repo: Arc::new(MockProfileRepository::default()),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1484,7 +1755,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
-            profile_repo: Arc::new(MockProfileRepository),
+            profile_repo: Arc::new(MockProfileRepository::default()),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -1581,7 +1852,7 @@ mod tests {
                 tx
             },
             agent_runner: Arc::new(MockAgentRunner),
-            profile_repo: Arc::new(MockProfileRepository),
+            profile_repo: Arc::new(MockProfileRepository::default()),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: tmp.path().to_path_buf(),
@@ -2165,4 +2436,403 @@ mod tests {
         assert_eq!(unwatch[0], PathBuf::from("/loom1/src"));
     }
 
+    // ── Profile Handler Tests ─────────────────────────────────────────────
+
+    /// Build an `AppContext` with a populated `MockProfileRepository`.
+    fn build_test_context_with_profiles(
+        profile_names: &[&str],
+    ) -> AppContext {
+        let repo = MockProfileRepository::new();
+        for &name in profile_names {
+            let profile = AgentProfile::new(
+                name.to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+                format!("You are {name}.").to_string(),
+            )
+            .unwrap();
+            repo.add(profile);
+        }
+
+        AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(TrackingEventSource::new().0),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(repo),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: PathBuf::from("./rig"),
+        }
+    }
+
+    /// `GET /profiles` returns 200 with JSON array of profile responses.
+    #[tokio::test]
+    async fn get_profiles_returns_json() {
+        let ctx = build_test_context_with_profiles(&["fast", "detailed"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profiles: Vec<ProfileResponse> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(profiles.len(), 2);
+
+        let names: Vec<_> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"fast"));
+        assert!(names.contains(&"detailed"));
+    }
+
+    /// `GET /profiles` with no profiles returns 200 with empty array `[]`.
+    #[tokio::test]
+    async fn get_profiles_empty() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profiles: Vec<ProfileResponse> =
+            serde_json::from_slice(&body).unwrap();
+        assert!(profiles.is_empty());
+    }
+
+    /// `GET /profiles/:name` for a known profile returns 200 with details.
+    #[tokio::test]
+    async fn get_profile_by_name() {
+        let ctx = build_test_context_with_profiles(&["fast"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles/fast")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profile: ProfileResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(profile.name, "fast");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model, "gpt-4o");
+        assert!(profile.system_prompt.contains("fast"));
+    }
+
+    /// `GET /profiles/:name` for unknown profile returns 404.
+    #[tokio::test]
+    async fn get_profile_not_found() {
+        let ctx = build_test_context_with_profiles(&["fast"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles/unknown")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// `POST /profiles/:name` creates a new profile and returns 201.
+    #[tokio::test]
+    async fn create_profile_success() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-20250514",
+            "tools": ["fs", "web"],
+            "system_prompt": "You are a thorough reviewer."
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/profiles/thorough")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app
+            .clone()
+            .oneshot(req)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 201);
+
+        // Verify the profile was saved by reading it back
+        let req = Request::builder()
+            .uri("/profiles/thorough")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profile: ProfileResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(profile.name, "thorough");
+        assert_eq!(profile.provider, "anthropic");
+        assert_eq!(profile.model, "claude-sonnet-4-20250514");
+        assert_eq!(profile.tools, vec!["fs", "web"]);
+    }
+
+    /// `POST /profiles/:name` with empty system_prompt returns 400.
+    #[tokio::test]
+    async fn create_profile_empty_system_prompt_returns_400() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "provider": "openai",
+            "model": "gpt-4o",
+            "tools": [],
+            "system_prompt": ""
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/profiles/bad")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(err.get("error").is_some());
+        assert!(err["error"].as_str().unwrap().contains("system_prompt"));
+    }
+
+    /// `POST /profiles/:name` with empty provider returns 400.
+    #[tokio::test]
+    async fn create_profile_empty_provider_returns_400() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "provider": "",
+            "model": "gpt-4o",
+            "tools": [],
+            "system_prompt": "Review."
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/profiles/bad")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+    }
+
+    /// `POST /profiles/:name` with empty model returns 400.
+    #[tokio::test]
+    async fn create_profile_empty_model_returns_400() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        let body = serde_json::json!({
+            "provider": "openai",
+            "model": "",
+            "tools": [],
+            "system_prompt": "Review."
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/profiles/bad")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 400);
+    }
+
+    /// `DELETE /profiles/:name` for an existing profile returns 204.
+    #[tokio::test]
+    async fn delete_profile_success() {
+        let ctx = build_test_context_with_profiles(&["to-delete"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/profiles/to-delete")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app
+            .clone()
+            .oneshot(req)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 204);
+
+        // Verify the profile is gone
+        let req = Request::builder()
+            .uri("/profiles/to-delete")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// `DELETE /profiles/:name` for unknown profile returns 404.
+    #[tokio::test]
+    async fn delete_profile_not_found() {
+        let ctx = build_test_context_with_profiles(&["exists"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/profiles/missing")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 404);
+    }
+
+    /// Full profile lifecycle: create, get, list, delete.
+    #[tokio::test]
+    async fn profile_lifecycle() {
+        let ctx = build_test_context_with_profiles(&[]);
+        let app = build_app(ctx);
+
+        // 1. List is empty
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/profiles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profiles: Vec<ProfileResponse> =
+            serde_json::from_slice(&body).unwrap();
+        assert!(profiles.is_empty());
+
+        // 2. Create a profile
+        let body = serde_json::json!({
+            "provider": "openai",
+            "model": "gpt-4o",
+            "tools": ["fs"],
+            "system_prompt": "Be fast."
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/profiles/fast")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+
+        // 3. List returns one profile
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/profiles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profiles: Vec<ProfileResponse> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "fast");
+
+        // 4. Get returns the profile
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/profiles/fast")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profile: ProfileResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.tools, vec!["fs"]);
+
+        // 5. Delete removes the profile
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/profiles/fast")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        // 6. List is empty again
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/profiles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profiles: Vec<ProfileResponse> =
+            serde_json::from_slice(&body).unwrap();
+        assert!(profiles.is_empty());
+    }
 }
