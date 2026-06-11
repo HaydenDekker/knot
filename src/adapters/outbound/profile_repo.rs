@@ -14,6 +14,19 @@ use crate::application::ports::{
 use crate::domain::knot_file::parse_agent_profile;
 use crate::domain::value_objects::AgentProfile;
 
+/// Extract the markdown body after the closing `---` delimiter in a
+/// profile file. Returns `None` if the file has no body content.
+fn extract_body(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let rest = &trimmed[3..];
+    let closing_pos = rest.find("---")?;
+    let after = rest[closing_pos + 3..].trim();
+    (!after.is_empty()).then(|| after.to_string())
+}
+
 /// Filesystem-backed implementation of `AgentProfileRepository`.
 ///
 /// Profiles are stored in `{rig}/profiles/` with file naming
@@ -144,6 +157,22 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
 
         let path = self.profile_path(&profile.name);
 
+        // Extract existing markdown body if the file already exists.
+        let preserved_body = if path.exists() {
+            match fs::read_to_string(&path) {
+                Ok(content) => extract_body(&content),
+                Err(e) => {
+                    return Err(PortError::ProfileSaveFailed(format!(
+                        "failed to read existing profile {}: {}",
+                        path.display(),
+                        e
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+
         // Serialize the profile to YAML frontmatter.
         let yaml = serde_yaml::to_string(&profile).map_err(|e| {
             PortError::ProfileSaveFailed(format!(
@@ -153,10 +182,15 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
             ))
         })?;
 
-        // Write the file with YAML frontmatter delimiters.
-        let content = format!("---\n{yaml}---\n\n# {}\n\n{}\n",
-            profile.name, profile.system_prompt
-        );
+        // Build content: frontmatter + preserved body (or default heading).
+        let content = if let Some(body) = preserved_body {
+            format!("---\n{yaml}---\n\n{body}\n")
+        } else {
+            format!(
+                "---\n{yaml}---\n\n# {}\n\n{}\n",
+                profile.name, profile.system_prompt
+            )
+        };
 
         fs::write(&path, content).map_err(|e| {
             PortError::ProfileSaveFailed(format!(
@@ -466,6 +500,40 @@ mod tests {
         assert_eq!(loaded.provider, "anthropic");
         assert_eq!(loaded.model, "claude-sonnet");
         assert!(loaded.system_prompt.contains("Updated"));
+    }
+
+    #[test]
+    fn save_overwrite_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profiles_dir = tmp.path().join("profiles");
+        fs::create_dir(&profiles_dir).unwrap();
+
+        // Create initial profile with custom body.
+        let repo = FileSystemAgentProfileRepository::new(profiles_dir.clone());
+
+        let initial_content = "---\nname: shared\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  Original prompt.\n---\n\n# Shared Profile\n\nThis is custom documentation that should be preserved across saves.\n";
+        fs::write(profiles_dir.join("shared.md"), initial_content).unwrap();
+
+        // Overwrite with new profile (different provider/model).
+        let profile2 = AgentProfile::new(
+            "shared".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "New prompt.".to_string(),
+        )
+        .unwrap();
+        repo.save(profile2).unwrap();
+
+        // Read raw file content and verify body is preserved.
+        let file_content = fs::read_to_string(profiles_dir.join("shared.md")).unwrap();
+        assert!(
+            file_content.contains("This is custom documentation that should be preserved"),
+            "body should be preserved after overwrite"
+        );
+        // Verify the data changed.
+        let loaded = repo.get("shared").unwrap().unwrap();
+        assert_eq!(loaded.provider, "anthropic");
+        assert_eq!(loaded.model, "claude-sonnet");
     }
 
     #[test]

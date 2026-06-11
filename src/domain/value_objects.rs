@@ -32,6 +32,8 @@ pub enum AgentProfileError {
     EmptyModel,
     /// The system prompt is empty or whitespace-only.
     MissingSystemPrompt,
+    /// The profile file has no frontmatter delimiters or no closing delimiter.
+    InvalidFormat,
 }
 
 impl std::fmt::Display for AgentProfileError {
@@ -46,6 +48,9 @@ impl std::fmt::Display for AgentProfileError {
             }
             AgentProfileError::MissingSystemPrompt => {
                 write!(f, "agent profile system_prompt must not be empty")
+            }
+            AgentProfileError::InvalidFormat => {
+                write!(f, "agent profile file has no valid frontmatter")
             }
         }
     }

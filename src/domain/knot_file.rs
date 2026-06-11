@@ -297,10 +297,11 @@ struct RawProfileFrontmatter {
 pub fn parse_agent_profile(
     content: &str,
 ) -> Result<AgentProfile, AgentProfileError> {
-    // Re-use extract_frontmatter via KnotFileError (it returns the same YAML)
-    let yaml_text = extract_frontmatter_for_profile(content)?;
+    // Use shared frontmatter extraction (same logic as KnotFile::parse).
+    let yaml_text =
+        extract_frontmatter(content).map_err(|_| AgentProfileError::InvalidFormat)?;
     let raw: RawProfileFrontmatter = serde_yaml::from_str(&yaml_text).map_err(|_| {
-        AgentProfileError::MissingName // Invalid YAML → report missing name as generic
+        AgentProfileError::InvalidFormat
     })?;
 
     // Validate name
@@ -337,22 +338,7 @@ pub fn parse_agent_profile(
     )
 }
 
-/// Extract YAML frontmatter for agent profile parsing.
-///
-/// Returns `AgentProfileError::MissingName` for structural errors
-/// (no frontmatter delimiters, no closing delimiter) since we don't
-/// have a dedicated "InvalidFormat" variant.
-fn extract_frontmatter_for_profile(content: &str) -> Result<String, AgentProfileError> {
-    let trimmed = content.trim();
-    if !trimmed.starts_with("---") {
-        return Err(AgentProfileError::MissingName);
-    }
 
-    let rest = &trimmed[3..];
-    let closing_pos = rest.find("---").ok_or(AgentProfileError::MissingName)?;
-
-    Ok(rest[..closing_pos].trim().to_string())
-}
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -1018,7 +1004,7 @@ Body.
         let content = "# Just a markdown file\n\nNo frontmatter.";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+        assert_eq!(result.unwrap_err(), AgentProfileError::InvalidFormat);
     }
 
     #[test]
@@ -1028,7 +1014,7 @@ name: test
 provider: openai";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+        assert_eq!(result.unwrap_err(), AgentProfileError::InvalidFormat);
     }
 
     #[test]
@@ -1064,6 +1050,10 @@ Body.
         assert_eq!(
             AgentProfileError::MissingSystemPrompt.to_string(),
             "agent profile system_prompt must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::InvalidFormat.to_string(),
+            "agent profile file has no valid frontmatter"
         );
     }
 
