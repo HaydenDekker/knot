@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ⬜ Planned | 2026-06-12 |
+| 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
@@ -80,9 +80,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 24. Tie-Off Output Rename and Knot File Cleanup
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-12
+**Completed:** 2026-06-12
 **Goal:** Rename `rig/output/` → `rig/tie-offs/`, tie-off filenames from `{strand}.output` → `{knot}-tie-off.md`, remove dead `tie-off-dir` from knot YAML parser, and add non-identified property detection with `.loom-log` warnings.
+
+**Result:** `rig/output/` → `rig/tie-offs/`. Tie-off filenames: `{knot}-tie-off.md` (one per knot, append-mode). `RawFrontmatter` no longer accepts `tie-off-dir`. Unknown YAML properties emit `LoomEvent::KnotParseWarning` entries. `LoomRepository::scan()` now returns `(Vec<Loom>, Vec<String>)` with warnings. Domain glossary, agent skills, and all 48+ test path references updated. 331 tests pass.
 
 Full details in [tieoff-output-rename-and-knot-cleanup.md](tieoff-output-rename-and-knot-cleanup.md).
 
