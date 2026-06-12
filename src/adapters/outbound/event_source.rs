@@ -202,10 +202,9 @@ impl InnerState {
             EventKind::Create(_) | EventKind::Modify(_) => {
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
-                        Ok(knot_file) => {
+                        Ok((knot_file, _warnings)) => {
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
-                                agent_config: knot_file.agent_config,
                                 agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
                                 strand_dir: resolve_path(
@@ -266,10 +265,9 @@ impl InnerState {
                 // Parse the knot file to get the full Knot entity
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
-                        Ok(knot_file) => {
+                        Ok((knot_file, _warnings)) => {
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
-                                agent_config: knot_file.agent_config,
                                 agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
                                 strand_dir: resolve_path(
@@ -966,10 +964,7 @@ mod tests {
         // Create a new knot .md file with valid frontmatter
         let knot_content = "---
 name: new-knot
-agent-config:
-  goal: \"Review documents\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
@@ -1002,7 +997,7 @@ prompt-template:
             } => {
                 assert_eq!(lid.0, "test-loom");
                 assert_eq!(knot.id.0, "new-knot");
-                assert_eq!(knot.agent_config.as_ref().unwrap().provider, "openai");
+                assert_eq!(knot.agent_profile_ref, "fast");
             }
             other => panic!(
                 "Expected ConfigEvent::KnotAdded, got: {:?}",
@@ -1023,10 +1018,7 @@ prompt-template:
         // Create the knot file before watching
         let knot_content = "---
 name: existing-knot
-agent-config:
-  goal: \"Initial goal\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
@@ -1052,13 +1044,10 @@ prompt-template:
             .is_some()
         {}
 
-        // Edit the knot file (change model)
+        // Edit the knot file (change profile ref)
         let updated_content = "---
 name: existing-knot
-agent-config:
-  goal: \"Updated goal\"
-  provider: \"anthropic\"
-  model: \"claude-sonnet\"
+agent-profile-ref: detailed
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
@@ -1090,7 +1079,7 @@ prompt-template:
             } => {
                 assert_eq!(lid.0, "test-loom");
                 assert_eq!(knot.id.0, "existing-knot");
-                assert_eq!(knot.agent_config.as_ref().unwrap().model, "claude-sonnet");
+                assert_eq!(knot.agent_profile_ref, "detailed");
             }
             other => panic!(
                 "Expected ConfigEvent::KnotModified, got: {:?}",
@@ -1110,10 +1099,7 @@ prompt-template:
         // Create the knot file before watching
         let knot_content = "---
 name: to-delete
-agent-config:
-  goal: \"Goal\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:

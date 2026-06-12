@@ -55,9 +55,9 @@ When asked to show rig status:
 3. **List looms**: Send `GET /looms`.
    Present a summary table:
 
-   | Loom ID | Source Dir | Tie-off Dir | Knot Count |
-   |---------|-----------|-------------|------------|
-   | `prd-review` | `project/prds` | `output/prds` | 2 |
+   | Loom ID | Source Dir | Knot Count |
+   |---------|-----------|------------|
+   | `prd-review` | `project/prds` | 2 |
 
 4. **If no looms**: Report "No looms are registered. Use the
    `knots-and-looms` skill to create looms."
@@ -71,7 +71,7 @@ When asked about a specific loom (by ID):
      available looms."
 
 2. **Show loom configuration**:
-   - ID, source directory, tie-off directory
+   - ID, source directory
    - List of knots (by name)
 
 3. **List knots**: Send `GET /looms/{id}/knots` to get knot names.
@@ -147,7 +147,6 @@ Before making calls, review the OpenAPI spec at:
   {
     "id": {"0": "my-loom"},
     "source_dir": "src/docs",
-    "tie_off_dir": "output/docs",
     "knot_count": 2
   }
 ]
@@ -158,7 +157,6 @@ Before making calls, review the OpenAPI spec at:
 {
   "id": {"0": "my-loom"},
   "source_dir": "src/docs",
-  "tie_off_dir": "output/docs",
   "knots": [
     {
       "id": {"0": "review"},
@@ -206,7 +204,7 @@ Before making calls, review the OpenAPI spec at:
     "knot_id": {"0": "review"},
     "event_type": "modified",
     "strand_path": "src/input.md",
-    "tie_off_path": "output/input.md.output",
+    "tie_off_path": "tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md",
     "status": "completed",
     "error": null,
     "last_updated": "2026-06-03T12:00:00Z"

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // Re-export value objects for convenient access through the entities module
-pub use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+pub use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
 pub use crate::domain::value_objects::AgentProfile;
 
 // ── Value Objects (identifiers and paths) ──────────────────────────────────
@@ -46,18 +46,15 @@ pub enum TieOffStatus {
 // ── Entities ───────────────────────────────────────────────────────────────
 
 /// A Knot is the core unit of work: an agent goal paired with a prompt template.
+///
+/// All agent configuration comes from a shared profile referenced by
+/// `agent_profile_ref`. The knot's `prompt_template.instructions` provides
+/// task-specific direction appended to the profile's system prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Knot {
     pub id: KnotId,
-    /// Agent configuration extracted from frontmatter (inline).
-    ///
-    /// `None` when the knot references an agent profile instead
-    /// (`agent_profile_ref` is set).
-    pub agent_config: Option<AgentConfig>,
     /// Reference to a named agent profile stored in `profiles/{name}.md`.
-    ///
-    /// When set, `agent_config` must be `None` (mutually exclusive).
-    pub agent_profile_ref: Option<String>,
+    pub agent_profile_ref: String,
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
     #[schema(value_type = String)]
@@ -103,12 +100,6 @@ mod tests {
     #[test]
     fn knot_construction() {
         let id = KnotId("prd-goals-review".to_string());
-        let agent_config = AgentConfig {
-            goal: "Review PRD goals for clarity".to_string(),
-            provider: "openai".to_string(),
-            model: "gpt-4o".to_string(),
-            tools: Vec::new(),
-        };
         let prompt_template = PromptTemplate {
             input_bundling: "full-file".to_string(),
             instructions: "Review the goals section.".to_string(),
@@ -116,14 +107,13 @@ mod tests {
 
         let knot = Knot {
             id: id.clone(),
-            agent_config: Some(agent_config.clone()),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: prompt_template.clone(),
             strand_dir: PathBuf::from("strands"),
         };
 
         assert_eq!(knot.id, id);
-        assert_eq!(knot.agent_config, Some(agent_config));
+        assert_eq!(knot.agent_profile_ref, "fast");
         assert_eq!(knot.prompt_template, prompt_template);
         assert_eq!(knot.strand_dir, PathBuf::from("strands"));
     }
@@ -132,13 +122,7 @@ mod tests {
     fn knot_construction_with_strand_dir() {
         let knot = Knot {
             id: KnotId("custom-dirs".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "Review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "detailed".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
@@ -157,13 +141,7 @@ mod tests {
         let id = LoomId("prds-loom".to_string());
         let knots = vec![Knot {
             id: KnotId("review".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "Review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
@@ -239,13 +217,7 @@ mod tests {
     fn knot_serialization() {
         let knot = Knot {
             id: KnotId("test".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "test goal".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),

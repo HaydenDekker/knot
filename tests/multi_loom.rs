@@ -29,7 +29,7 @@ async fn multiple_looms_independent() {
     let strand_dir_a = base_dir.join("loom-a-strands");
     fs::create_dir_all(&strand_dir_a).unwrap();
     let knot_a_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review A's documents.\n---\n",
         strand_dir_a.display()
     );
     fs::write(loom_a_dir.join("review.md"), knot_a_content).unwrap();
@@ -40,7 +40,7 @@ async fn multiple_looms_independent() {
     let strand_dir_b = base_dir.join("loom-b-strands");
     fs::create_dir_all(&strand_dir_b).unwrap();
     let knot_b_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review B's documents.\n---\n",
         strand_dir_b.display()
     );
     fs::write(loom_b_dir.join("review.md"), knot_b_content).unwrap();
@@ -92,7 +92,7 @@ async fn multiple_looms_independent() {
     std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in A's output directory
-    let tie_off_a = base_dir.join("output/loom-a-loom/review-knot/strand-a.md.output");
+    let tie_off_a = base_dir.join("tie-offs/loom-a-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_a.exists(),
         "tie-off should exist in loom A: {}",
@@ -105,7 +105,7 @@ async fn multiple_looms_independent() {
     std::thread::sleep(Duration::from_millis(800));
 
     // Tie-off appears only in B's output directory
-    let tie_off_b = base_dir.join("output/loom-b-loom/review-knot/strand-b.md.output");
+    let tie_off_b = base_dir.join("tie-offs/loom-b-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_b.exists(),
         "tie-off should exist in loom B: {}",
@@ -114,7 +114,7 @@ async fn multiple_looms_independent() {
 
     // 3. No cross-interference
     // A's tie-off dir should NOT contain B's strand output
-    let tie_off_dir_a = base_dir.join("output/loom-a-loom/review-knot");
+    let tie_off_dir_a = base_dir.join("tie-offs/loom-a-loom/review-knot");
     let files_in_a: Vec<_> =
         fs::read_dir(&tie_off_dir_a)
             .expect("should read tie-off dir A")
@@ -127,7 +127,7 @@ async fn multiple_looms_independent() {
     );
 
     // B's tie-off dir should NOT contain A's strand output
-    let tie_off_dir_b = base_dir.join("output/loom-b-loom/review-knot");
+    let tie_off_dir_b = base_dir.join("tie-offs/loom-b-loom/review-knot");
     let files_in_b: Vec<_> =
         fs::read_dir(&tie_off_dir_b)
             .expect("should read tie-off dir B")
@@ -172,10 +172,7 @@ async fn server_starts_with_per_knot_source_dirs() {
     let knot_a_content = format!(
         "---
 name: knot-a
-agent-config:
-  goal: \"Review A\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -190,10 +187,7 @@ prompt-template:
     let knot_b_content = format!(
         "---
 name: knot-b
-agent-config:
-  goal: \"Review B\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"{}\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -204,8 +198,17 @@ prompt-template:
     );
     fs::write(loom_dir.join("knot-b.md"), knot_b_content).unwrap();
 
+    // Create a "fast" agent profile
+    let profiles_dir = rig.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     // Mock agent script — ignores all CLI args built by ProcessStrand.
-    let mock_agent = create_mock_agent(&root, "processed");
+    let mock_agent = create_mock_agent(root, "processed");
 
     let port = 32010;
     let host_port = format!("127.0.0.1:{port}");

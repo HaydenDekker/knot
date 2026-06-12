@@ -29,6 +29,15 @@ async fn demo_knot_test_processes_sample_document() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     // Create strand directory
     let strand_dir = base_dir.join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
@@ -37,14 +46,14 @@ async fn demo_knot_test_processes_sample_document() {
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review and summarize documents\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the provided document. Provide a concise summary\n    of its key points and any recommendations.\n---\n\n# Review Knot\n\nThis knot reviews and summarizes documents.\n",
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the provided document. Provide a concise summary\n    of its key points and any recommendations.\n---\n\n# Review Knot\n\nThis knot reviews and summarizes documents.\n",
         strand_dir.display()
     );
-    fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
+    fs::write(loom_dir.join("review-knot.md"), knot_content).unwrap();
 
     // Create the sample-document.md strand
     fs::write(
-        &strand_dir.join("sample-document.md"),
+        strand_dir.join("sample-document.md"),
         r#"# Sample Document for Knot Processing
 
 ## Introduction
@@ -96,11 +105,11 @@ processing pipeline.
 
     // If the initial file hasn't been processed yet (startup race),
     // create a new file to trigger processing explicitly.
-    let tie_off_path = base_dir.join("output/knot-test-loom/review-knot/sample-document.md.output");
+    let tie_off_path = base_dir.join("tie-offs/knot-test-loom/review-knot/review-knot-tie-off.md");
     if !tie_off_path.exists() {
         // Touch the file to trigger a Modify event
         fs::write(
-            &strand_dir.join("sample-document.md"),
+            strand_dir.join("sample-document.md"),
             "# Sample Document for Knot Processing\n\n## Updated\n\nContent.",
         )
         .unwrap();
@@ -151,7 +160,7 @@ processing pipeline.
     );
 
     // 3. Verify loom-log records successful processing
-    let log_path = base_dir.join("output/knot-test-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/knot-test-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -178,6 +187,15 @@ async fn demo_knot_test_with_tools() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     // Create strand directory
     let strand_dir = base_dir.join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
@@ -186,10 +204,10 @@ async fn demo_knot_test_with_tools() {
     let loom_dir = base_dir.join("knot-test-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review with tools\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet-4-20250514\"\n  tools:\n    - fs\n    - web\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the document with tool access.\n---\n\n# Review Knot With Tools\n",
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the document with tool access.\n---\n\n# Review Knot With Tools\n",
         strand_dir.display()
     );
-    fs::write(&loom_dir.join("review-knot.md"), knot_content).unwrap();
+    fs::write(loom_dir.join("review-knot.md"), knot_content).unwrap();
 
     // Create stub-pi agent that echoes all received flags
     let stub_pi = create_stub_pi_agent(&base_dir);
@@ -213,11 +231,11 @@ async fn demo_knot_test_with_tools() {
         .expect("server should start listening");
 
     // Create a strand file
-    fs::write(&strand_dir.join("input.md"), "Document to review.").unwrap();
+    fs::write(strand_dir.join("input.md"), "Document to review.").unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify tie-off exists and contains the model from knot config
-    let tie_off_path = base_dir.join("output/knot-test-loom/review-knot/input.md.output");
+    let tie_off_path = base_dir.join("tie-offs/knot-test-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -226,8 +244,8 @@ async fn demo_knot_test_with_tools() {
     let tie_off_content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
-        tie_off_content.contains("claude-sonnet-4-20250514"),
-        "tie-off should contain the configured model, got: {tie_off_content}"
+        tie_off_content.contains("gpt-4o"),
+        "tie-off should contain the model from profile, got: {tie_off_content}"
     );
 
     // Verify knot status is completed

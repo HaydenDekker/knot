@@ -1,9 +1,6 @@
 ---
 name: review-knot
-agent-config:
-  goal: "Review documents"
-  provider: "openai"
-  model: "gpt-4o"
+agent-profile-ref: fast
 strand-dir: "src/new"
 prompt-template:
   input-bundling: "full-file"

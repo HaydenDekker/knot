@@ -72,23 +72,23 @@ impl LoomStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::path::PathBuf;
 
     /// Build a loom for testing with the given ID.
     fn build_loom(id: LoomId) -> Loom {
+        let _profile = AgentProfile::new(
+            "default".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are a reviewer.".to_string(),
+        );
         Loom {
             id,
             knots: vec![
                 crate::domain::entities::Knot {
                     id: crate::domain::entities::KnotId("k1".to_string()),
-                    agent_config: Some(AgentConfig::new(
-                        "review".to_string(),
-                        "openai".to_string(),
-                        "gpt-4o".to_string(),
-                    )
-                    .unwrap()),
-                    agent_profile_ref: None,
+                    agent_profile_ref: "default".to_string(),
                     prompt_template: PromptTemplate::new(
                         "full-file".to_string(),
                         "check it".to_string(),

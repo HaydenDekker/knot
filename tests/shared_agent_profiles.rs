@@ -39,6 +39,7 @@ async fn create_and_get_profile() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -200,6 +201,7 @@ async fn delete_profile() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -271,6 +273,7 @@ async fn create_pure_profile_ref_knot() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -293,12 +296,7 @@ async fn create_pure_profile_ref_knot() {
         "knots": [
             {
                 "name": "base-knot",
-                "agent_config": {
-                    "goal": "Base goal",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Base instructions"
@@ -397,6 +395,7 @@ async fn create_knot_with_agent_profile_ref() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -413,23 +412,20 @@ async fn create_knot_with_agent_profile_ref() {
         .await
         .expect("create fast profile");
 
-    // 2. Register a loom with a base knot
+    // 2. Register a loom with a base knot (different name)
+    let base_strand_dir = base_dir.join("strands");
+    fs::create_dir_all(&base_strand_dir).unwrap();
     let loom_body = serde_json::json!({
         "id": "profile-ref-loom",
         "knots": [
             {
-                "name": "inline-knot",
-                "agent_config": {
-                    "goal": "Inline goal",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "name": "base-knot",
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
-                    "instructions": "Inline instructions"
+                    "instructions": "Base knot"
                 },
-                "strand_dir": base_dir.join("strands").to_string_lossy()
+                "strand_dir": base_strand_dir.to_string_lossy()
             }
         ]
     });
@@ -443,12 +439,6 @@ async fn create_knot_with_agent_profile_ref() {
 
     let knot_body = serde_json::json!({
         "name": "profile-knot",
-        "agent_config": {
-            "goal": "Profile goal",
-            "provider": "openai",
-            "model": "gpt-4o",
-            "tools": []
-        },
         "agent_profile_ref": "fast",
         "prompt_template": {
             "input_bundling": "full-file",
@@ -483,6 +473,10 @@ async fn create_knot_with_agent_profile_ref() {
         knots.contains(&"profile-knot".to_string()),
         "profile-knot should be present"
     );
+    assert!(
+        knots.contains(&"base-knot".to_string()),
+        "base-knot should be present"
+    );
 
     // 5. Verify the .md file has agent-profile-ref in frontmatter
     let knot_file = base_dir.join("profile-ref-loom/profile-knot.md");
@@ -501,10 +495,12 @@ async fn create_knot_with_agent_profile_ref() {
 
 // ── Profile Override Tests ──────────────────────────────────────────────────
 
-/// Create a profile, create a knot with profile ref + inline model override,
-/// then process a strand and verify processing succeeds.
+/// Create a profile, create a knot referencing it, process a strand,
+/// and verify the profile is resolved at processing time to produce
+/// a tie-off. No inline overrides are possible — the profile is the
+/// sole source of agent configuration.
 #[tokio::test]
-async fn profile_override_at_processing_time() {
+async fn profile_resolution_at_processing_time() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -524,6 +520,7 @@ async fn profile_override_at_processing_time() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -542,16 +539,11 @@ async fn profile_override_at_processing_time() {
 
     // 3. Register a loom with a base knot
     let loom_body = serde_json::json!({
-        "id": "override-loom",
+        "id": "resolve-loom",
         "knots": [
             {
                 "name": "base-knot",
-                "agent_config": {
-                    "goal": "Base goal",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Base instructions"
@@ -565,21 +557,15 @@ async fn profile_override_at_processing_time() {
         .expect("register loom");
 
     // 4. Create a knot with agent_profile_ref via HTTP API (POST /looms/{id}/knots)
-    let strand_dir = base_dir.join("override-strands");
+    let strand_dir = base_dir.join("resolve-strands");
     fs::create_dir_all(&strand_dir).unwrap();
 
     let knot_body = serde_json::json!({
-        "name": "override-knot",
-        "agent_config": {
-            "goal": "Override goal",
-            "provider": "anthropic",
-            "model": "claude-sonnet",
-            "tools": []
-        },
+        "name": "resolve-knot",
         "agent_profile_ref": "fast",
         "prompt_template": {
             "input_bundling": "full-file",
-            "instructions": "Use override model"
+            "instructions": "Use the fast profile"
         },
         "strand_dir": strand_dir.to_string_lossy()
     });
@@ -587,19 +573,19 @@ async fn profile_override_at_processing_time() {
     let (status, _resp) =
         http_post_json(
             &host_port,
-            "/looms/override-loom/knots",
+            "/looms/resolve-loom/knots",
             &knot_body,
         )
         .await
-        .expect("create override knot should respond");
+        .expect("create resolve knot should respond");
     assert!(
         status.contains("201"),
-        "create override knot should return 201, got: {status}"
+        "create resolve knot should return 201, got: {status}"
     );
 
     // 5. Verify knot appears in GET /looms/{id}/knots
     let (status, body) =
-        http_get(&host_port, "/looms/override-loom/knots")
+        http_get(&host_port, "/looms/resolve-loom/knots")
             .await
             .expect("knots endpoint should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
@@ -607,12 +593,12 @@ async fn profile_override_at_processing_time() {
         serde_json::from_str(&body).expect("should be JSON array");
     assert_eq!(knots.len(), 2, "should have 2 knots");
     assert!(
-        knots.contains(&"override-knot".to_string()),
-        "override-knot should be present"
+        knots.contains(&"resolve-knot".to_string()),
+        "resolve-knot should be present"
     );
 
-    // 6. Verify the .md file has agent-profile-ref in frontmatter
-    let knot_file = base_dir.join("override-loom/override-knot.md");
+    // 6. Verify the .md file has agent-profile-ref in frontmatter (no agent-config)
+    let knot_file = base_dir.join("resolve-loom/resolve-knot.md");
     assert!(
         knot_file.exists(),
         "knot .md file should exist"
@@ -625,16 +611,16 @@ async fn profile_override_at_processing_time() {
         file_content
     );
 
-    // 7. Create a strand for the override knot and wait for processing
-    let strand_path = strand_dir.join("override-strand.md");
-    fs::write(&strand_path, "override strand content").unwrap();
+    // 7. Create a strand for the resolve knot and wait for processing
+    let strand_path = strand_dir.join("resolve-strand.md");
+    fs::write(&strand_path, "resolve strand content").unwrap();
 
     // Wait for debounce + processing
     tokio::time::sleep(Duration::from_millis(2000)).await;
 
     // 8. Verify tie-off was produced (profile was resolved at processing time)
     let tie_off_path =
-        base_dir.join("output/override-loom/override-knot/override-strand.md.output");
+        base_dir.join("tie-offs/resolve-loom/resolve-knot/resolve-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after processing: {}",
@@ -643,7 +629,7 @@ async fn profile_override_at_processing_time() {
     let content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
-        content.contains("override strand content"),
+        content.contains("resolve strand content"),
         "tie-off should contain strand content, got: {}",
         content
     );
@@ -668,6 +654,7 @@ async fn dynamic_profile_update_at_processing_time() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -690,12 +677,7 @@ async fn dynamic_profile_update_at_processing_time() {
         "knots": [
             {
                 "name": "base-knot",
-                "agent_config": {
-                    "goal": "Base",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Base"
@@ -714,12 +696,6 @@ async fn dynamic_profile_update_at_processing_time() {
 
     let knot_body = serde_json::json!({
         "name": "dynamic-knot",
-        "agent_config": {
-            "goal": "Dynamic goal",
-            "provider": "openai",
-            "model": "gpt-4o",
-            "tools": []
-        },
         "agent_profile_ref": "reviewer",
         "prompt_template": {
             "input_bundling": "full-file",
@@ -757,10 +733,8 @@ async fn dynamic_profile_update_at_processing_time() {
 
     // 5. Update the profile on disk — change model to claude-sonnet
     let updated_profile_path = base_dir.join("profiles/reviewer.md");
-    let updated_profile = format!(
-        "---\nname: reviewer\nprovider: anthropic\nmodel: claude-sonnet\n\
-         system-prompt: |\n  Updated reviewer\n---\n\n# reviewer\n\nUpdated profile.\n"
-    );
+    let updated_profile = "---\nname: reviewer\nprovider: anthropic\nmodel: claude-sonnet\n\
+         system-prompt: |\n  Updated reviewer\n---\n\n# reviewer\n\nUpdated profile.\n".to_string();
     fs::write(&updated_profile_path, updated_profile).unwrap();
 
     // 6. Verify that GET /profiles/reviewer reflects the updated model
@@ -800,6 +774,7 @@ async fn profile_not_found_logs_error() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -811,12 +786,7 @@ async fn profile_not_found_logs_error() {
         "knots": [
             {
                 "name": "base-knot",
-                "agent_config": {
-                    "goal": "Base",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Base"
@@ -835,12 +805,6 @@ async fn profile_not_found_logs_error() {
 
     let knot_body = serde_json::json!({
         "name": "missing-profile-knot",
-        "agent_config": {
-            "goal": "Missing profile goal",
-            "provider": "openai",
-            "model": "gpt-4o",
-            "tools": []
-        },
         "agent_profile_ref": "nonexistent-profile",
         "prompt_template": {
             "input_bundling": "full-file",
@@ -925,10 +889,10 @@ async fn profile_not_found_logs_error() {
     }
 }
 
-/// Knots with inline `agent-config` (no profile ref) still process
-/// correctly — backward compatibility with existing knot definitions.
+/// A knot referencing the "fast" profile processes a strand and produces a tie-off.
+/// This verifies the end-to-end profile resolution + agent execution pipeline.
 #[tokio::test]
-async fn backward_compat_inline_config() {
+async fn knot_with_profile_ref_processes() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
@@ -948,25 +912,21 @@ async fn backward_compat_inline_config() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server should start listening");
 
-    // 1. Register a loom with a knot that has inline agent-config (no profile ref)
-    let strand_dir = base_dir.join("inline-strands");
+    // 1. Register a loom with a knot that has a profile ref
+    let strand_dir = base_dir.join("profile-strands");
     fs::create_dir_all(&strand_dir).unwrap();
     let loom_body = serde_json::json!({
         "id": "compat-loom",
         "knots": [
             {
-                "name": "inline-knot",
-                "agent_config": {
-                    "goal": "Inline config test",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "name": "profile-knot",
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Process with inline config"
@@ -979,16 +939,16 @@ async fn backward_compat_inline_config() {
         .await
         .expect("register loom");
 
-    // 2. Create a strand — should be processed using inline agent-config
+    // 2. Create a strand — should be processed using the profile ref
     let strand_path = strand_dir.join("inline-strand.md");
-    fs::write(&strand_path, "inline config test content").unwrap();
+    fs::write(&strand_path, "profile ref test content").unwrap();
 
     // Wait for debounce + processing
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // 3. Verify tie-off was produced successfully
     let tie_off_path =
-        base_dir.join("output/compat-loom/inline-knot/inline-strand.md.output");
+        base_dir.join("tie-offs/compat-loom/profile-knot/profile-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -1004,7 +964,7 @@ async fn backward_compat_inline_config() {
 
     // 4. Verify knot status is completed
     let (status, body) =
-        http_get(&host_port, "/looms/compat-loom/knots/inline-knot")
+        http_get(&host_port, "/looms/compat-loom/knots/profile-knot")
             .await
             .expect("knot status should respond");
     assert!(status.contains("200"), "expected 200, got: {status}");
@@ -1013,7 +973,7 @@ async fn backward_compat_inline_config() {
     assert_eq!(
         knot_status["status"].as_str().unwrap(),
         "completed",
-        "knot should be completed (backward compat)"
+        "knot should be completed"
     );
 }
 
@@ -1035,6 +995,7 @@ async fn get_profile_reflects_disk_update() {
         ..AppConfig::default_config()
     };
 
+    create_fast_profile(&base_dir);
     let _handle = spawn_server(config);
     wait_for_port(&host_port, 5000)
         .await
@@ -1067,10 +1028,8 @@ async fn get_profile_reflects_disk_update() {
 
     // 3. Update the profile file directly on disk
     let profile_path = base_dir.join("profiles/updated.md");
-    let updated_content = format!(
-        "---\nname: updated\nprovider: anthropic\nmodel: claude-sonnet\n\
-         system-prompt: |\n  Updated prompt\n---\n\n# updated\n\nUpdated.\n"
-    );
+    let updated_content = "---\nname: updated\nprovider: anthropic\nmodel: claude-sonnet\n\
+         system-prompt: |\n  Updated prompt\n---\n\n# updated\n\nUpdated.\n".to_string();
     fs::write(&profile_path, updated_content).unwrap();
 
     // 4. GET should now reflect the updated model (profiles are read at call time)

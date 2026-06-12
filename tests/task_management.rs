@@ -80,6 +80,7 @@ async fn pipeline_tasks_drain_cleanly_on_shutdown() {
     let (knot_content, _strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let port = 31981;
     let host_port = format!("127.0.0.1:{port}");
@@ -124,7 +125,7 @@ async fn pipeline_tasks_drain_cleanly_on_shutdown() {
     );
 
     // LoomStopped should be written after clean shutdown
-    let log_path = base_dir.join("output/drain-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/drain-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -216,7 +217,7 @@ async fn in_flight_processing_completes_on_shutdown() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Verify the tie-off does NOT exist yet (agent still running)
-    let tie_off_path = base_dir.join("output/inflight-loom/review-knot/inflight-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/inflight-loom/review-knot/review-knot-tie-off.md");
     assert!(
         !tie_off_path.exists(),
         "tie-off should not exist yet — agent is in-flight"
@@ -262,7 +263,7 @@ async fn in_flight_processing_completes_on_shutdown() {
     );
 
     // LoomStopped written
-    let log_path = base_dir.join("output/inflight-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/inflight-loom/.loom-log");
     let log_content = fs::read_to_string(&log_path).unwrap();
     assert!(
         log_content.contains("LoomStopped"),
@@ -292,6 +293,7 @@ async fn shutdown_flushes_pending_debounce_events() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let agent = create_mock_agent(&base_dir, "flushed");
 
@@ -333,7 +335,7 @@ async fn shutdown_flushes_pending_debounce_events() {
     );
 
     // Tie-off should exist — the flush path worked
-    let tie_off_path = base_dir.join("output/flush-loom/review-knot/flush-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/flush-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist — debounce engine should flush pending events \
@@ -349,7 +351,7 @@ async fn shutdown_flushes_pending_debounce_events() {
     );
 
     // LoomStopped written
-    let log_path = base_dir.join("output/flush-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/flush-loom/.loom-log");
     let log_content = fs::read_to_string(&log_path).unwrap();
     assert!(
         log_content.contains("LoomStopped"),
@@ -370,6 +372,7 @@ async fn multiple_strands_then_graceful_shutdown() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let agent = create_mock_agent(&base_dir, "done");
 
@@ -404,22 +407,18 @@ async fn multiple_strands_then_graceful_shutdown() {
     // Wait for debounce window + processing
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // All tie-offs should exist
-    for name in &files {
-        let tie_off = base_dir.join("output/multi-loom/review-knot").join(format!("{}.output", name));
-        assert!(
-            tie_off.exists(),
-            "tie-off for {} should be produced: {}",
-            name,
-            tie_off.display()
-        );
-        let content = fs::read_to_string(&tie_off).unwrap();
-        assert!(
-            content.contains("done"),
-            "tie-off for {} should contain 'done', got: {content}",
-            name
-        );
-    }
+    // Single tie-off per knot should exist (one file, multiple strands)
+    let tie_off = base_dir.join("tie-offs/multi-loom/review-knot").join("review-knot-tie-off.md");
+    assert!(
+        tie_off.exists(),
+        "tie-off should be produced: {}",
+        tie_off.display()
+    );
+    let content = fs::read_to_string(&tie_off).unwrap();
+    assert!(
+        content.contains("done"),
+        "tie-off should contain 'done', got: {content}"
+    );
 
     // Graceful shutdown
     let _ = shutdown_tx.send(());
@@ -428,7 +427,7 @@ async fn multiple_strands_then_graceful_shutdown() {
     assert!(result.is_ok(), "server should shutdown cleanly");
 
     // LoomStopped written
-    let log_path = base_dir.join("output/multi-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/multi-loom/.loom-log");
     let log_content = fs::read_to_string(&log_path).unwrap();
     assert!(
         log_content.contains("LoomStopped"),
@@ -452,6 +451,7 @@ async fn shutdown_with_failing_agent() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     // Agent that fails with exit code 1
     let script_path = base_dir.join("failing-agent");
@@ -492,7 +492,7 @@ async fn shutdown_with_failing_agent() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Tie-off should exist (error tie-off)
-    let tie_off_path = base_dir.join("output/fail-loom/review-knot/fail-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/fail-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "error tie-off should be produced: {}",
@@ -506,7 +506,7 @@ async fn shutdown_with_failing_agent() {
     assert!(result.is_ok(), "server should shutdown cleanly");
 
     // LoomStopped still written
-    let log_path = base_dir.join("output/fail-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/fail-loom/.loom-log");
     let log_content = fs::read_to_string(&log_path).unwrap();
     assert!(
         log_content.contains("LoomStopped"),

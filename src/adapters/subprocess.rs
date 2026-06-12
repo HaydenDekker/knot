@@ -218,7 +218,9 @@ mod tests {
     #[test]
     fn execute_captures_stderr() {
         let runner = SubprocessAgentRunner::new();
-        let ctx = make_context("sh", &["-c", "echo err >&2"]);
+        // `cat >/dev/null` consumes stdin so the process stays alive for
+        // the write, then we emit to stderr.
+        let ctx = make_context("sh", &["-c", "cat >/dev/null; echo err >&2"]);
 
         let result = runner.execute(ctx);
         assert!(result.is_ok(), "should succeed: {result:?}");
@@ -246,7 +248,9 @@ mod tests {
     #[test]
     fn execute_nonzero_exit_error() {
         let runner = SubprocessAgentRunner::new();
-        let ctx = make_context("sh", &["-c", "exit 1"]);
+        // `cat >/dev/null` consumes stdin so the process stays alive for
+        // the write, then exits with code 1.
+        let ctx = make_context("sh", &["-c", "cat >/dev/null; exit 1"]);
 
         let result = runner.execute(ctx);
         assert!(result.is_err(), "should error for non-zero exit");

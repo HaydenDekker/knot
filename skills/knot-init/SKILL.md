@@ -117,7 +117,6 @@ Before making calls, review the OpenAPI spec at:
   {
     "id": {"0": "my-loom"},
     "source_dir": "src/docs",
-    "tie_off_dir": "output/docs",
     "knot_count": 2
   }
 ]

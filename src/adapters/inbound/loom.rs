@@ -251,7 +251,6 @@ pub async fn register_loom(
             );
             Knot {
                 id: KnotId(k.name.clone()),
-                agent_config: k.agent_config.clone(),
                 agent_profile_ref: k.agent_profile_ref.clone(),
                 prompt_template: k.prompt_template.clone(),
                 strand_dir,
@@ -296,51 +295,17 @@ pub async fn register_loom(
 /// Produces a markdown file with `---` delimited frontmatter containing
 /// the knot's configuration fields. The body is a minimal heading.
 ///
-/// Writes either `agent-profile-ref` or `agent-config` (never both).
-/// When `agent_profile_ref` is set, writes only the profile reference.
-/// When `agent_profile_ref` is absent, writes the inline `agent-config`.
+/// Every knot references a shared agent profile via `agent-profile-ref`.
 fn generate_knot_file(knot: &KnotRequest) -> String {
-    if let Some(ref profile_ref) = knot.agent_profile_ref {
-        // Profile-ref knot: write only agent-profile-ref
-        format!(
-            "---\nname: {0}\nagent-profile-ref: {1}\nstrand-dir: {2}\nprompt-template:\n  input-bundling: {3}\n  instructions: {4}\n---\n\n# {5}\n",
-            knot.name,
-            profile_ref,
-            quote_yaml_scalar(&knot.strand_dir),
-            quote_yaml_scalar(&knot.prompt_template.input_bundling),
-            quote_yaml_scalar(&knot.prompt_template.instructions),
-            knot.name,
-        )
-    } else {
-        // Inline-config knot: write only agent-config
-        let ac = knot
-            .agent_config
-            .as_ref()
-            .expect("agent_config required when agent_profile_ref is absent");
-        let tools_yaml = if ac.tools.is_empty() {
-            String::new()
-        } else {
-            let lines: Vec<String> = ac
-                .tools
-                .iter()
-                .map(|t| format!("    - {t}"))
-                .collect();
-            format!("\n  tools:\n{}", lines.join("\n"))
-        };
-
-        format!(
-            "---\nname: {0}\nagent-config:\n  goal: {1}\n  provider: {2}\n  model: {3}{4}\nstrand-dir: {5}\nprompt-template:\n  input-bundling: {6}\n  instructions: {7}\n---\n\n# {8}\n",
-            knot.name,
-            quote_yaml_scalar(&ac.goal),
-            quote_yaml_scalar(&ac.provider),
-            quote_yaml_scalar(&ac.model),
-            tools_yaml,
-            quote_yaml_scalar(&knot.strand_dir),
-            quote_yaml_scalar(&knot.prompt_template.input_bundling),
-            quote_yaml_scalar(&knot.prompt_template.instructions),
-            knot.name,
-        )
-    }
+    format!(
+        "---\nname: {0}\nagent-profile-ref: {1}\nstrand-dir: {2}\nprompt-template:\n  input-bundling: {3}\n  instructions: {4}\n---\n\n# {5}\n",
+        knot.name,
+        knot.agent_profile_ref,
+        quote_yaml_scalar(&knot.strand_dir),
+        quote_yaml_scalar(&knot.prompt_template.input_bundling),
+        quote_yaml_scalar(&knot.prompt_template.instructions),
+        knot.name,
+    )
 }
 
 /// Wrap a string in double quotes for safe YAML scalar output.
@@ -432,6 +397,15 @@ pub async fn create_knot(
         )
             .into_response();
     }
+    if body.agent_profile_ref.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "agent_profile_ref is required"
+            })),
+        )
+            .into_response();
+    }
 
     // Check loom exists
     if ctx.store.get(&loom_id).is_none() {
@@ -460,7 +434,6 @@ pub async fn create_knot(
     );
     let knot = Knot {
         id: KnotId(body.name.clone()),
-        agent_config: body.agent_config.clone(),
         agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
@@ -560,6 +533,15 @@ pub async fn update_knot(
         )
             .into_response();
     }
+    if body.agent_profile_ref.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "agent_profile_ref is required"
+            })),
+        )
+            .into_response();
+    }
     // Check loom exists and contains the knot
     let loom = match ctx.store.get(&loom_id) {
         Some(loom) => loom,
@@ -593,7 +575,6 @@ pub async fn update_knot(
     );
     let knot = Knot {
         id: KnotId(name),
-        agent_config: body.agent_config.clone(),
         agent_profile_ref: body.agent_profile_ref.clone(),
         prompt_template: body.prompt_template.clone(),
         strand_dir,
@@ -926,7 +907,7 @@ mod tests {
     };
     use crate::domain::events::{LoomEvent, StrandEvent};
     use crate::domain::value_objects::{
-        AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
+        AgentProfile, PromptTemplate, RigAgentConfig,
     };
     use axum::{body::Body, http::Request};
     use std::collections::HashMap;
@@ -947,6 +928,7 @@ mod tests {
     }
 
     impl TrackingEventSource {
+        #[allow(clippy::type_complexity)]
         fn new() -> (
             Self,
             StdArc<Mutex<Vec<PathBuf>>>,
@@ -1004,8 +986,8 @@ mod tests {
         fn scan(
             &self,
             _rig: &std::path::Path,
-        ) -> Result<Vec<Loom>, PortError> {
-            Ok(vec![])
+        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
         }
 
         fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
@@ -1178,6 +1160,7 @@ mod tests {
 
     /// Build an `AppContext` with a tracking mock `EventSource`, returning
     /// the context plus handles to inspect watch/unwatch call history.
+    #[allow(clippy::type_complexity)]
     fn build_test_context_with_tracking(
         log_events: Vec<LoomEvent>,
     ) -> (
@@ -1243,13 +1226,7 @@ mod tests {
                 .iter()
                 .map(|k| Knot {
                     id: KnotId(k.to_string()),
-                    agent_config: Some(AgentConfig {
-                        goal: "review".to_string(),
-                        provider: "openai".to_string(),
-                        model: "gpt-4o".to_string(),
-                        tools: Vec::new(),
-                    }),
-                    agent_profile_ref: None,
+                    agent_profile_ref: "fast".to_string(),
                     prompt_template: PromptTemplate {
                         input_bundling: "full-file".to_string(),
                         instructions: "check it".to_string(),
@@ -1629,12 +1606,7 @@ mod tests {
         for i in 0..knot_count {
             knots.as_array_mut().unwrap().push(serde_json::json!({
                 "name": format!("knot{}", i),
-                "agent_config": {
-                    "goal": "review",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "check it"
@@ -1978,12 +1950,7 @@ mod tests {
             "knots": [
                 {
                     "name": "k1",
-                    "agent_config": {
-                        "goal": "g",
-                        "provider": "openai",
-                        "model": "gpt-4o",
-                        "tools": []
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "full-file",
                         "instructions": "do it"
@@ -2086,12 +2053,7 @@ mod tests {
             "knots": [
                 {
                     "name": "knot-a",
-                    "agent_config": {
-                        "goal": "review a",
-                        "provider": "openai",
-                        "model": "gpt-4o",
-                        "tools": []
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "full-file",
                         "instructions": "check a"
@@ -2100,12 +2062,7 @@ mod tests {
                 },
                 {
                     "name": "knot-b",
-                    "agent_config": {
-                        "goal": "review b",
-                        "provider": "anthropic",
-                        "model": "claude",
-                        "tools": ["fs"]
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "diff",
                         "instructions": "check b"
@@ -2134,13 +2091,13 @@ mod tests {
             std::fs::read_to_string(loom_dir.join("knot-a.md")).unwrap();
         assert!(content_a.starts_with("---"));
         assert!(content_a.contains("name: knot-a"));
-        assert!(content_a.contains("review a"));
+        assert!(content_a.contains("check a"));
         assert!(content_a.contains("strand-dir:"));
 
         let content_b =
             std::fs::read_to_string(loom_dir.join("knot-b.md")).unwrap();
         assert!(content_b.contains("name: knot-b"));
-        assert!(content_b.contains("review b"));
+        assert!(content_b.contains("check b"));
     }
 
     /// `POST /looms` with missing `strand_dir` on a knot returns 400.
@@ -2154,12 +2111,7 @@ mod tests {
             "knots": [
                 {
                     "name": "k1",
-                    "agent_config": {
-                        "goal": "g",
-                        "provider": "openai",
-                        "model": "gpt-4o",
-                        "tools": []
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "full-file",
                         "instructions": "do it"
@@ -2197,12 +2149,7 @@ mod tests {
             "knots": [
                 {
                     "name": "k1",
-                    "agent_config": {
-                        "goal": "g",
-                        "provider": "openai",
-                        "model": "gpt-4o",
-                        "tools": []
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "full-file",
                         "instructions": "do it"
@@ -2261,12 +2208,7 @@ mod tests {
             "knots": [
                 {
                     "name": "k1",
-                    "agent_config": {
-                        "goal": "g",
-                        "provider": "openai",
-                        "model": "gpt-4o",
-                        "tools": []
-                    },
+                    "agent_profile_ref": "fast",
                     "prompt_template": {
                         "input_bundling": "full-file",
                         "instructions": "do it"
@@ -2327,7 +2269,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/agents/{encoded}"))
+                    .uri(format!("/agents/{encoded}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2853,8 +2795,7 @@ mod tests {
     fn generate_knot_file_profile_ref_only_parses_cleanly() {
         let req = KnotRequest {
             name: "profile-knot".to_string(),
-            agent_config: None,
-            agent_profile_ref: Some("fast".to_string()),
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Review this.".to_string(),
@@ -2868,33 +2809,24 @@ mod tests {
         assert!(!content.contains("agent-config:"));
 
         // The generated file must parse cleanly through KnotFile::parse()
-        let parsed = crate::domain::knot_file::parse(&content);
-        assert!(parsed.is_ok(), "generated file should parse, got: {parsed:?}");
-        let parsed = parsed.unwrap();
-        assert_eq!(parsed.name, "profile-knot");
-        assert!(parsed.agent_config.is_none(), "agent_config should be None");
-        assert_eq!(
-            parsed.agent_profile_ref,
-            Some("fast".to_string()),
-            "agent_profile_ref should be set"
+        let (parsed, warnings) =
+            crate::domain::knot_file::parse(&content).expect("generated file should parse");
+        assert!(
+            warnings.is_empty(),
+            "generated file should produce no warnings, got: {warnings:?}"
         );
+        assert_eq!(parsed.name, "profile-knot");
+        assert_eq!(parsed.agent_profile_ref, "fast");
     }
 
-    /// `generate_knot_file` with inline agent config only writes a file
-    /// that parses cleanly through `KnotFile::parse()` — no
-    /// `agent-profile-ref` field is emitted. Backward compatibility.
+    /// `generate_knot_file` always writes only `agent-profile-ref`
+    /// (no `agent-config`). The generated file parses cleanly
+    /// through `KnotFile::parse()`.
     #[test]
-    fn generate_knot_file_agent_config_only_parses_cleanly() {
-        let config = AgentConfig::new(
-            "Review PRD goals".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-        )
-        .unwrap();
+    fn generate_knot_file_profile_ref_only() {
         let req = KnotRequest {
-            name: "config-knot".to_string(),
-            agent_config: Some(config),
-            agent_profile_ref: None,
+            name: "profile-knot".to_string(),
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "diff".to_string(),
                 instructions: "Check for clarity.".to_string(),
@@ -2903,31 +2835,25 @@ mod tests {
         };
         let content = generate_knot_file(&req);
 
-        // File should contain agent-config but NOT agent-profile-ref
-        assert!(content.contains("agent-config:"));
-        assert!(!content.contains("agent-profile-ref:"));
+        // File should contain agent-profile-ref but NOT agent-config
+        assert!(content.contains("agent-profile-ref: fast"));
+        assert!(!content.contains("agent-config:"));
 
         // The generated file must parse cleanly
-        let parsed = crate::domain::knot_file::parse(&content);
-        assert!(parsed.is_ok(), "generated file should parse, got: {parsed:?}");
-        let parsed = parsed.unwrap();
-        assert_eq!(parsed.name, "config-knot");
-        assert!(parsed.agent_config.is_some(), "agent_config should be set");
-        assert_eq!(
-            parsed.agent_config.as_ref().unwrap().model,
-            "gpt-4o"
-        );
+        let (parsed, warnings) =
+            crate::domain::knot_file::parse(&content).expect("generated file should parse");
         assert!(
-            parsed.agent_profile_ref.is_none(),
-            "agent_profile_ref should be None"
+            warnings.is_empty(),
+            "generated file should produce no warnings, got: {warnings:?}"
         );
+        assert_eq!(parsed.name, "profile-knot");
+        assert_eq!(parsed.agent_profile_ref, "fast");
     }
 
-    /// `POST /looms/{id}/knots` with only `agent_profile_ref` (no
-    /// `agent_config`) returns 201 and the written `.md` file is
-    /// parseable through `KnotFile::parse()`.
+    /// `POST /looms/{id}/knots` with `agent_profile_ref` returns 201
+    /// and the written `.md` file is parseable through `KnotFile::parse()`.
     #[tokio::test]
-    async fn post_knot_with_profile_ref_only() {
+    async fn post_knot_with_profile_ref() {
         let (ctx, tmp) = build_test_context_with_temp_dir();
         // Create the loom directory so the handler can write knot files
         std::fs::create_dir_all(tmp.path().join("profile-loom")).unwrap();
@@ -2972,17 +2898,12 @@ mod tests {
             .join("profile-loom/profile-only-knot.md");
         assert!(knot_file.is_file(), "knot .md file should exist");
         let content = std::fs::read_to_string(&knot_file).unwrap();
-        let parsed = crate::domain::knot_file::parse(&content);
+        let (parsed, warnings) = crate::domain::knot_file::parse(&content)
+            .expect("knot file should parse cleanly");
         assert!(
-            parsed.is_ok(),
-            "knot file should parse cleanly, got: {:?}",
-            parsed.err()
+            warnings.is_empty(),
+            "knot file should produce no warnings, got: {warnings:?}"
         );
-        let parsed = parsed.unwrap();
-        assert!(parsed.agent_config.is_none(), "agent_config should be None");
-        assert_eq!(
-            parsed.agent_profile_ref,
-            Some("fast".to_string())
-        );
+        assert_eq!(parsed.agent_profile_ref, "fast");
     }
 }

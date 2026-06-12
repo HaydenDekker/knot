@@ -3,9 +3,10 @@
 //! Each use case orchestrates domain entities through port traits and the
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::adapters::logging;
 use crate::application::ports::{
@@ -126,7 +127,7 @@ impl DiscoverLooms {
     /// Returns the list of *newly* discovered looms (those not already
     /// in the store). Already-registered looms are silently skipped.
     pub fn execute(&self, workspace: &Path) -> Result<Vec<Loom>, PortError> {
-        let looms = self.repository.scan(workspace)?;
+        let (looms, warnings) = self.repository.scan(workspace)?;
         let mut new_looms = Vec::new();
 
         for loom in &looms {
@@ -140,7 +141,7 @@ impl DiscoverLooms {
                 &loom.id.0,
                 &format!("new loom found, {} knots", loom.knots.len()),
             );
-            self.register_single(loom)?;
+            self.register_single(loom, &warnings)?;
             new_looms.push(loom.clone());
         }
 
@@ -148,7 +149,11 @@ impl DiscoverLooms {
     }
 
     /// Register a single loom: log events, store, and start watchers.
-    fn register_single(&self, loom: &Loom) -> Result<(), PortError> {
+    fn register_single(
+        &self,
+        loom: &Loom,
+        warnings: &[String],
+    ) -> Result<(), PortError> {
         // Open the loom activity log
         self.log_port.open(&loom.id)?;
 
@@ -157,6 +162,16 @@ impl DiscoverLooms {
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
+                timestamp: format_timestamp(),
+            })?;
+        }
+
+        // Append KnotParseWarning for each unknown property warning
+        for warning in warnings {
+            self.log_port.append(LoomEvent::KnotParseWarning {
+                loom_id: loom.id.clone(),
+                knot_file_name: String::new(),
+                message: warning.clone(),
                 timestamp: format_timestamp(),
             })?;
         }
@@ -608,96 +623,51 @@ impl ProcessStrand {
     /// Resolve the effective `AgentConfig` for a knot, along with the
     /// system prompt to use for `--system-prompt`.
     ///
-    /// Returns a tuple of `(AgentConfig, String)` where the `String` is the
-    /// system prompt that should be used for the CLI `--system-prompt` flag.
+    /// Loads the profile from the repository and builds an `AgentConfig`
+    /// from it. The profile's `system_prompt` is merged with the knot's
+    /// prompt instructions to form the full system prompt for CLI args.
     ///
-    /// - If the knot has `agent_profile_ref` (and no inline `agent_config`):
-    ///   load the profile from the repository and build an `AgentConfig`
-    ///   from it, using the profile's `system_prompt` (merged with the
-    ///   knot's prompt instructions) as the system prompt for CLI args.
-    /// - If the knot has inline `agent_config` (and no profile ref):
-    ///   return the inline config as-is (backward compat), using
-    ///   `template.instructions` as the system prompt.
-    /// - If both are present (shouldn't happen via mutual exclusivity at
-    ///   parse time, but may occur for programmatic Knot construction):
-    ///   profile is the base; inline config overrides specific fields
-    ///   (provider, model, tools).
-    /// - If neither is present: return `PortError::AgentExecutionFailed`.
+    /// Returns a tuple of `(AgentConfig, String)` where the `String` is the
+    /// merged system prompt for the CLI `--system-prompt` flag.
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
     ) -> Result<(AgentConfig, String), PortError> {
-        match (&knot.agent_profile_ref, &knot.agent_config) {
-            (Some(profile_name), None) => {
-                // Profile ref only — load and build AgentConfig from profile.
-                let profile = self
-                    .profile_repo
-                    .get(profile_name)
-                    .map_err(|e| {
-                        PortError::ProfileNotFound(e.to_string())
-                    })?
-                    .ok_or_else(|| {
-                        PortError::ProfileNotFound(profile_name.clone())
-                    })?;
+        let profile = self
+            .profile_repo
+            .get(&knot.agent_profile_ref)
+            .map_err(|e| PortError::ProfileNotFound(e.to_string()))?
+            .ok_or_else(|| {
+                PortError::ProfileNotFound(knot.agent_profile_ref.clone())
+            })?;
 
-                // Merge profile's system_prompt with knot's instructions.
-                // Profile system_prompt is the base (agent persona/instructions),
-                // knot instructions are appended as task-specific direction.
-                let merged_system_prompt = if knot
-                    .prompt_template
-                    .instructions
-                    .trim()
-                    .is_empty()
-                {
-                    profile.system_prompt.clone()
-                } else {
-                    format!(
-                        "{}\n\n{}",
-                        profile.system_prompt,
-                        knot.prompt_template.instructions
-                    )
-                };
+        // Merge profile's system_prompt with knot's instructions.
+        // Profile system_prompt is the base (agent persona/instructions),
+        // knot instructions are appended as task-specific direction.
+        let merged_system_prompt = if knot
+            .prompt_template
+            .instructions
+            .trim()
+            .is_empty()
+        {
+            profile.system_prompt.clone()
+        } else {
+            format!(
+                "{}\n\n{}",
+                profile.system_prompt,
+                knot.prompt_template.instructions
+            )
+        };
 
-                Ok((
-                    AgentConfig {
-                        goal: knot.prompt_template.instructions.clone(),
-                        provider: profile.provider.clone(),
-                        model: profile.model.clone(),
-                        tools: profile.tools.clone(),
-                    },
-                    merged_system_prompt,
-                ))
-            }
-            (None, Some(config)) => {
-                // Inline config only — use as-is (backward compat).
-                Ok((
-                    config.clone(),
-                    knot.prompt_template.instructions.clone(),
-                ))
-            }
-            (Some(profile_name), Some(inline_config)) => {
-                // Both set — profile is the base, inline config overrides.
-                // Since AgentConfig requires all fields, inline fully
-                // overrides the profile. This path handles programmatic
-                // Knot construction where mutual exclusivity is bypassed.
-                logging::log_knot_event(
-                    "warn:profile-override",
-                    profile_name.as_str(),
-                    &knot.id.0,
-                    "knot has both profile-ref and inline config; inline wins",
-                );
-                Ok((
-                    inline_config.clone(),
-                    knot.prompt_template.instructions.clone(),
-                ))
-            }
-            (None, None) => Err(PortError::AgentExecutionFailed(
-                format!(
-                    "knot '{}' has neither agent-profile-ref nor agent-config",
-                    knot.id.0
-                ),
-            )),
-        }
+        Ok((
+            AgentConfig {
+                goal: knot.prompt_template.instructions.clone(),
+                provider: profile.provider.clone(),
+                model: profile.model.clone(),
+                tools: profile.tools.clone(),
+            },
+            merged_system_prompt,
+        ))
     }
 
     /// Execute the strand processing pipeline.
@@ -753,8 +723,44 @@ impl ProcessStrand {
             timestamp: format_timestamp(),
         })?;
 
-        // 2. Resolve effective agent config (profile or inline) and build CLI args
-        let (agent_config, system_prompt) = self.resolve_agent_config(knot)?;
+        // 2. Resolve effective agent config (profile) and build CLI args
+        let resolved = self.resolve_agent_config(knot);
+        let (agent_config, system_prompt, strand_path, event_label, tie_off_path, knot, knot_id, loom_id) = match resolved {
+            Ok(rc) => (rc.0, rc.1, strand_path, event_label, tie_off_path, knot, knot_id, loom_id),
+            Err(err) => {
+                let error_msg = err.to_string();
+                // Write error tie-off
+                let tie_off = TieOff {
+                    content: format!("Processing failed: {}", error_msg),
+                    path: tie_off_path.clone(),
+                    status: crate::domain::entities::TieOffStatus::Failed,
+                    event_type: Some(event_label.clone()),
+                    strand_path: Some(strand_path.0.display().to_string()),
+                    timestamp: None,
+                };
+                let _ = self.tie_off_sink.append(tie_off);
+                // Append KnotFailed to loom-log
+                let _ = self.log_port.append(LoomEvent::KnotFailed {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    error: error_msg.clone(),
+                    timestamp: format_timestamp(),
+                });
+                // Append StrandProcessed with error
+                let _ = self.log_port.append(LoomEvent::StrandProcessed {
+                    loom_id,
+                    strand_path: strand_path.clone(),
+                    error: Some(error_msg.clone()),
+                    timestamp: format_timestamp(),
+                });
+                logging::log_strand_event(
+                    &format!("{} failed: {}", strand_kind, error_msg),
+                    &strand_path.0,
+                );
+                return Ok(());
+            }
+        };
         let mut cli_args = agent_config
             .build_cli_args(&knot.prompt_template, Some(&system_prompt));
         // Append strand content reference using pi's @file syntax
@@ -880,18 +886,15 @@ impl ProcessStrand {
     }
 
     /// Compute the tie-off output path from knot + strand path.
-    /// Uses statically derived path: `rig/output/{loom-id}/{knot-name}/output.md`.
+    /// Uses statically derived path: `rig/tie-offs/{loom-id}/{knot-name}/`
+    /// with a single per-knot file: `{knot-id}-tie-off.md`.
     fn compute_tie_off_path(
         &self,
         loom: &Loom,
         knot: &Knot,
-        strand_path: &StrandPath,
+        _strand_path: &StrandPath,
     ) -> TieOffPath {
-        let filename = strand_path
-            .0
-            .file_name()
-            .map(|f| format!("{}.output", f.to_string_lossy()))
-            .unwrap_or_else(|| "output".to_string());
+        let filename = format!("{}-tie-off.md", knot.id.0);
         let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.base_dir);
         TieOffPath(base.join(filename))
     }
@@ -1136,13 +1139,13 @@ impl ConfigEventHandler {
         }
 
         // Scan the rig to get the loom with full knot data
-        let looms = self.repository.scan(&self.rig_path)?;
+        let (looms, warnings) = self.repository.scan(&self.rig_path)?;
         let loom = looms
             .into_iter()
             .find(|l| l.id == *loom_id)
             .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
 
-        self.register_loom(&loom)?;
+        self.register_loom(&loom, &warnings)?;
         logging::log_loom_event(
             "registered",
             &loom_id.0,
@@ -1386,7 +1389,11 @@ impl ConfigEventHandler {
     }
 
     /// Register a loom: log events, store, and start watchers.
-    fn register_loom(&self, loom: &Loom) -> Result<(), PortError> {
+    fn register_loom(
+        &self,
+        loom: &Loom,
+        warnings: &[String],
+    ) -> Result<(), PortError> {
         // Open the loom activity log
         self.log_port.open(&loom.id)?;
 
@@ -1395,6 +1402,16 @@ impl ConfigEventHandler {
             self.log_port.append(LoomEvent::KnotRegistered {
                 loom_id: loom.id.clone(),
                 knot_id: knot.id.clone(),
+                timestamp: format_timestamp(),
+            })?;
+        }
+
+        // Append KnotParseWarning for each unknown property warning
+        for warning in warnings {
+            self.log_port.append(LoomEvent::KnotParseWarning {
+                loom_id: loom.id.clone(),
+                knot_file_name: String::new(),
+                message: warning.clone(),
                 timestamp: format_timestamp(),
             })?;
         }
@@ -1434,7 +1451,7 @@ impl ConfigEventHandler {
 #[cfg(test)]
 mod config_handler_tests {
     use super::*;
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::PromptTemplate;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
@@ -1448,6 +1465,7 @@ mod config_handler_tests {
     }
 
     impl TrackingEventSource {
+        #[allow(clippy::type_complexity)]
         fn new(
         ) -> (
             Self,
@@ -1539,15 +1557,19 @@ mod config_handler_tests {
     // ── Mock LoomRepository ────────────────────────────────────────────
 
     struct MockLoomRepository {
-        scan_result: Arc<Mutex<Vec<Loom>>>,
+        scan_looms: Arc<Mutex<Vec<Loom>>>,
+        scan_warnings: Arc<Mutex<Vec<String>>>,
     }
 
     impl LoomRepository for MockLoomRepository {
         fn scan(
             &self,
             _rig: &std::path::Path,
-        ) -> Result<Vec<Loom>, PortError> {
-            Ok(self.scan_result.lock().unwrap().clone())
+        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((
+                self.scan_looms.lock().unwrap().clone(),
+                self.scan_warnings.lock().unwrap().clone(),
+            ))
         }
 
         fn get(
@@ -1572,13 +1594,7 @@ mod config_handler_tests {
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -1619,7 +1635,8 @@ mod config_handler_tests {
         );
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![loom.clone()])),
+            scan_looms: Arc::new(Mutex::new(vec![loom.clone()])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let store = LoomStore::new();
@@ -1703,7 +1720,8 @@ mod config_handler_tests {
         store.register(loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _logged_events) = MockLoomLogPort::new();
         let (
@@ -1749,7 +1767,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -1818,7 +1837,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -1838,7 +1858,7 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
-            knot: knot,
+            knot,
         });
 
         // Should succeed (idempotent)
@@ -1863,7 +1883,8 @@ mod config_handler_tests {
     fn config_handler_knot_added_loom_not_found() {
         let store = LoomStore::new();
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -1904,7 +1925,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _logged_events) = MockLoomLogPort::new();
         let (
@@ -1963,7 +1985,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (
@@ -1981,11 +2004,9 @@ mod config_handler_tests {
             PathBuf::from("/rig"),
         );
 
-        // Update knot with same strand_dir (only config changed)
+        // Update knot with same strand_dir (only profile ref changed)
         let mut updated_knot = build_knot("k1");
-        if let Some(ref mut ac) = updated_knot.agent_config {
-            ac.model = "claude-sonnet".to_string();
-        }
+        updated_knot.agent_profile_ref = "slow".to_string();
 
         let result = handler.execute(ConfigEvent::KnotModified {
             loom_id: loom_id.clone(),
@@ -2017,7 +2038,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2084,7 +2106,8 @@ mod config_handler_tests {
         store.register(empty_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2150,7 +2173,8 @@ mod config_handler_tests {
         store.register(empty_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2218,7 +2242,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2288,7 +2313,8 @@ mod config_handler_tests {
         store.register(existing_loom);
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -2321,7 +2347,8 @@ mod config_handler_tests {
     fn config_handler_knot_deleted_loom_not_found() {
         let store = LoomStore::new();
         let repo = Arc::new(MockLoomRepository {
-            scan_result: Arc::new(Mutex::new(vec![])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -2355,7 +2382,7 @@ mod config_handler_tests {
 mod phase2_tests {
     use super::*;
     use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::PromptTemplate;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -2425,13 +2452,7 @@ mod phase2_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2460,7 +2481,7 @@ mod phase2_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2493,7 +2514,7 @@ mod phase2_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2522,7 +2543,7 @@ mod phase2_tests {
         // Register first loom
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             Arc::clone(&es),
         );
@@ -2538,7 +2559,7 @@ mod phase2_tests {
         let (event_source2, watch_calls2) = TrackingEventSource::new();
         let es2: Arc<dyn EventSource> = Arc::new(event_source2);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es2,
         );
@@ -2564,7 +2585,7 @@ mod phase2_tests {
 mod phase3_tests {
     use super::*;
     use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::PromptTemplate;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -2578,6 +2599,7 @@ mod phase3_tests {
     }
 
     impl TrackingEventSource {
+        #[allow(clippy::type_complexity)]
         fn new(
         ) -> (
             Self,
@@ -2645,13 +2667,7 @@ mod phase3_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2684,7 +2700,7 @@ mod phase3_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2721,7 +2737,7 @@ mod phase3_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2746,7 +2762,7 @@ mod phase3_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2774,7 +2790,7 @@ mod phase3_tests {
 mod phase4_tests {
     use super::*;
     use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::PromptTemplate;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -2832,12 +2848,12 @@ mod phase4_tests {
     // ── Mock LoomRepository ────────────────────────────────────────────
 
     struct MockLoomRepository {
-        scan_result: Vec<Loom>,
+        scan_looms: Vec<Loom>,
     }
 
     impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _rig: &std::path::Path) -> Result<Vec<Loom>, PortError> {
-            Ok(self.scan_result.clone())
+        fn scan(&self, _rig: &std::path::Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((self.scan_looms.clone(), vec![]))
         }
 
         fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
@@ -2867,13 +2883,7 @@ mod phase4_tests {
         fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -2898,7 +2908,7 @@ mod phase4_tests {
         store.register(existing_loom.clone());
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: vec![
+            scan_looms: vec![
                 existing_loom.clone(),
                 new_loom.clone(),
                 new_loom2.clone(),
@@ -2909,7 +2919,7 @@ mod phase4_tests {
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2949,14 +2959,14 @@ mod phase4_tests {
         store.register(loom2.clone());
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: vec![loom1.clone(), loom2.clone()],
+            scan_looms: vec![loom1.clone(), loom2.clone()],
         });
         let (event_source, watch_calls) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -2979,14 +2989,14 @@ mod phase4_tests {
         let store = LoomStore::new();
 
         let repo = Arc::new(MockLoomRepository {
-            scan_result: vec![],
+            scan_looms: vec![],
         });
         let (event_source, watch_calls) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort::default()),
+            Arc::new(MockLoomLogPort),
             store.clone(),
             es,
         );
@@ -3004,20 +3014,14 @@ mod phase4_tests {
 #[cfg(test)]
 mod manage_knot_tests {
     use super::*;
-    use crate::domain::value_objects::{AgentConfig, PromptTemplate};
+    use crate::domain::value_objects::PromptTemplate;
     use std::path::PathBuf;
 
     /// Build a knot with the given ID.
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "default".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
@@ -3062,7 +3066,7 @@ mod manage_knot_tests {
             .find(|k| k.id == KnotId("k2".to_string()));
         assert!(found.is_some());
         let k = found.unwrap();
-        assert_eq!(k.agent_config.as_ref().unwrap().model, "gpt-4o");
+        assert_eq!(k.agent_profile_ref, "default");
         assert_eq!(k.strand_dir, PathBuf::from("strands"));
     }
 
@@ -3122,11 +3126,9 @@ mod manage_knot_tests {
         store.register(loom);
 
         let use_case = ManageKnot::new(store.clone());
-        // Update k1 with a new model
+        // Update k1 with a new profile ref
         let mut updated_knot = build_knot("k1");
-        if let Some(ref mut ac) = updated_knot.agent_config {
-            ac.model = "claude-sonnet".to_string();
-        }
+        updated_knot.agent_profile_ref = "slow".to_string();
         updated_knot.prompt_template.instructions = "new instructions".to_string();
 
         let result = use_case.execute(KnotAction::Update {
@@ -3145,7 +3147,7 @@ mod manage_knot_tests {
         let k1 = loom.knots.iter()
             .find(|k| k.id == KnotId("k1".to_string()))
             .unwrap();
-        assert_eq!(k1.agent_config.as_ref().unwrap().model, "claude-sonnet");
+        assert_eq!(k1.agent_profile_ref, "slow");
         assert_eq!(
             k1.prompt_template.instructions,
             "new instructions"
@@ -3155,7 +3157,7 @@ mod manage_knot_tests {
         let k2 = loom.knots.iter()
             .find(|k| k.id == KnotId("k2".to_string()))
             .unwrap();
-        assert_eq!(k2.agent_config.as_ref().unwrap().model, "gpt-4o");
+        assert_eq!(k2.agent_profile_ref, "default");
     }
 
     /// `ManageKnot` with `KnotAction::Update` returns error when knot
@@ -3266,7 +3268,7 @@ mod phase3_profile_resolution_tests {
     use super::*;
     use crate::application::ports::AgentOutput;
     use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -3400,34 +3402,14 @@ mod phase3_profile_resolution_tests {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    /// Build a knot with agent-config only (no profile ref).
-    fn build_inline_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_config: Some(AgentConfig {
-                goal: "review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: vec!["fs".to_string()],
-            }),
-            agent_profile_ref: None,
-            prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-        }
-    }
-
-    /// Build a knot with profile ref only.
+    /// Build a knot with the given profile ref.
     fn build_profile_knot(
         id: impl Into<String>,
         profile_name: &str,
     ) -> Knot {
         Knot {
             id: KnotId(id.into()),
-            agent_config: None,
-            agent_profile_ref: Some(profile_name.to_string()),
+            agent_profile_ref: profile_name.to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "check with profile".to_string(),
@@ -3437,6 +3419,7 @@ mod phase3_profile_resolution_tests {
     }
 
     /// Build a loom with the given ID and knots.
+    #[allow(dead_code)]
     fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         Loom {
             id: LoomId(id.into()),
@@ -3471,7 +3454,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -3496,95 +3479,6 @@ mod phase3_profile_resolution_tests {
         assert!(system_prompt.contains("check with profile"));
     }
 
-    /// Inline agent-config is returned as-is (backward compat).
-    #[test]
-    fn resolve_agent_config_inline_backward_compat() {
-        let store = LoomStore::new();
-        let profile_repo = Arc::new(MockProfileRepository::default());
-
-        let use_case = ProcessStrand::new(
-            store.clone(),
-            Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
-            Arc::new(MockTieOffSink::default()),
-            RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
-            profile_repo,
-        );
-
-        let inline_knot = build_inline_knot("k1");
-        let (config, system_prompt) =
-            use_case.resolve_agent_config(&inline_knot).unwrap();
-
-        // Inline config should be used as-is
-        assert_eq!(config.provider, "openai");
-        assert_eq!(config.model, "gpt-4o");
-        assert_eq!(config.tools, vec!["fs"]);
-        assert_eq!(config.goal, "review");
-        // System prompt is the knot's instructions (backward compat)
-        assert_eq!(system_prompt, "check it");
-    }
-
-    /// Profile ref resolves to profile values even when inline config
-    /// is also present (inline overrides — mutual exclusivity bypassed).
-    #[test]
-    fn resolve_agent_config_profile_with_inline_override() {
-        let store = LoomStore::new();
-        let profile_repo = Arc::new(MockProfileRepository {
-            profiles: Arc::new(Mutex::new(HashMap::from_iter([
-                (
-                    "fast".to_string(),
-                    AgentProfile::with_tools(
-                        "fast".to_string(),
-                        "openai".to_string(),
-                        "gpt-4o".to_string(),
-                        vec!["fs".to_string()],
-                        "You are fast.".to_string(),
-                    )
-                    .unwrap(),
-                ),
-            ]))),
-        });
-
-        let use_case = ProcessStrand::new(
-            store.clone(),
-            Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
-            Arc::new(MockTieOffSink::default()),
-            RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
-            profile_repo,
-        );
-
-        // Build a knot with BOTH profile ref AND inline config
-        // (simulates programmatic construction bypassing mutual exclusivity)
-        let knot = Knot {
-            id: KnotId("k1".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "override goal".to_string(),
-                provider: "anthropic".to_string(),
-                model: "claude-sonnet".to_string(),
-                tools: vec!["web".to_string()],
-            }),
-            agent_profile_ref: Some("fast".to_string()),
-            prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
-                instructions: "check".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-        };
-
-        // When both are set, inline config overrides (full override)
-        let (config, system_prompt) =
-            use_case.resolve_agent_config(&knot).unwrap();
-        assert_eq!(config.provider, "anthropic");
-        assert_eq!(config.model, "claude-sonnet");
-        assert_eq!(config.tools, vec!["web"]);
-        assert_eq!(config.goal, "override goal");
-        // System prompt is the knot's instructions
-        assert_eq!(system_prompt, "check");
-    }
-
     /// Profile not found returns PortError::ProfileNotFound.
     #[test]
     fn resolve_agent_config_profile_not_found() {
@@ -3594,7 +3488,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -3610,43 +3504,6 @@ mod phase3_profile_resolution_tests {
                 assert_eq!(name, "nonexistent");
             }
             other => panic!("Expected ProfileNotFound, got {other:?}"),
-        }
-    }
-
-    /// Neither profile ref nor inline config returns error.
-    #[test]
-    fn resolve_agent_config_neither_set() {
-        let store = LoomStore::new();
-        let profile_repo = Arc::new(MockProfileRepository::default());
-
-        let use_case = ProcessStrand::new(
-            store.clone(),
-            Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
-            Arc::new(MockTieOffSink::default()),
-            RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
-            profile_repo,
-        );
-
-        let knot = Knot {
-            id: KnotId("k1".to_string()),
-            agent_config: None,
-            agent_profile_ref: None,
-            prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
-                instructions: "check".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-        };
-
-        let result = use_case.resolve_agent_config(&knot);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PortError::AgentExecutionFailed(msg) => {
-                assert!(msg.contains("neither"));
-            }
-            other => panic!("Expected AgentExecutionFailed, got {other:?}"),
         }
     }
 
@@ -3674,7 +3531,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -3714,7 +3571,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -3772,7 +3629,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -3800,33 +3657,4 @@ mod phase3_profile_resolution_tests {
         assert_eq!(args[model_index + 1], "gpt-4o");
     }
 
-    /// Inline config knot uses knot instructions as system prompt (backward compat).
-    ///
-    /// Verifies that knots with inline agent-config continue to use
-    /// prompt_template.instructions for --system-prompt.
-    #[test]
-    fn inline_config_cli_args_use_template_instructions() {
-        let store = LoomStore::new();
-        let profile_repo = Arc::new(MockProfileRepository::default());
-
-        let use_case = ProcessStrand::new(
-            store.clone(),
-            Arc::new(MockLoomLogPort),
-            Arc::new(MockAgentRunner::default()),
-            Arc::new(MockTieOffSink::default()),
-            RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
-            profile_repo,
-        );
-
-        let inline_knot = build_inline_knot("k1");
-        let (config, system_prompt) =
-            use_case.resolve_agent_config(&inline_knot).unwrap();
-        let args = config.build_cli_args(&inline_knot.prompt_template, Some(&system_prompt));
-
-        // CLI args should use knot's instructions as system prompt
-        let system_prompt_index = args.iter().position(|a| a == "--system-prompt").expect("--system-prompt flag missing");
-        let system_prompt_value = &args[system_prompt_index + 1];
-        assert_eq!(system_prompt_value, "check it");
-    }
 }

@@ -28,6 +28,7 @@ async fn full_tie_off_history() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     // Simple mock agent — always returns "processed"
     let mock_agent = create_mock_agent(&base_dir, "processed");
@@ -49,7 +50,7 @@ async fn full_tie_off_history() {
     wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("lifecycle-strand.md");
-    let tie_off_path = base_dir.join("output/history-loom/review-knot/lifecycle-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/history-loom/review-knot/review-knot-tie-off.md");
 
     // Step 1: First write (triggers Modified event)
     fs::write(&strand_path, "initial content").unwrap();
@@ -145,6 +146,7 @@ async fn tie_off_sections_readable() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let mock_agent = create_mock_agent(&base_dir, "processed");
 
@@ -165,7 +167,7 @@ async fn tie_off_sections_readable() {
     wait_for_port(&host_port, 5000).await.expect("server should start listening");
 
     let strand_path = strand_dir.join("sections-strand.md");
-    let tie_off_path = base_dir.join("output/sections-loom/review-knot/sections-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/sections-loom/review-knot/review-knot-tie-off.md");
 
     // Create then modify
     fs::write(&strand_path, "content v1").unwrap();

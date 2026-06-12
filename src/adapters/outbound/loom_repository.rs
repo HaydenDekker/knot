@@ -46,7 +46,7 @@ impl FileSystemLoomRepository {
 }
 
 impl LoomRepository for FileSystemLoomRepository {
-    fn scan(&self, rig: &Path) -> Result<Vec<Loom>, PortError> {
+    fn scan(&self, rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
         // Canonicalise the rig directory, then use its parent as the
         // base for resolving per-knot paths (project root).
         let canonical_rig = fs::canonicalize(rig)
@@ -64,6 +64,8 @@ impl LoomRepository for FileSystemLoomRepository {
         let entries =
             fs::read_dir(rig)
                 .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
+
+        let mut all_warnings = Vec::new();
 
         for entry_result in entries {
             let entry = entry_result
@@ -107,8 +109,10 @@ impl LoomRepository for FileSystemLoomRepository {
                     ))
                 })?;
 
-// Parse .md knot definition files from the loom directory.
-            let mut knots = Self::scan_knot_files(&canonical_loom_dir)?;
+            // Parse .md knot definition files from the loom directory,
+            // capturing parse warnings per-loom.
+            let (mut knots, mut warnings) = Self::scan_knot_files(&canonical_loom_dir)?;
+            all_warnings.append(&mut warnings);
 
             // Resolve per-knot paths relative to the project root
             // (parent of the rig directory).
@@ -127,7 +131,7 @@ impl LoomRepository for FileSystemLoomRepository {
         let looms_map = self.looms.lock().unwrap();
         let looms: Vec<Loom> = looms_map.values().cloned().collect();
 
-        Ok(looms)
+        Ok((looms, all_warnings))
     }
 
     fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
@@ -149,7 +153,8 @@ impl LoomRepository for FileSystemLoomRepository {
 impl FileSystemLoomRepository {
     /// Scan a directory for `.md` knot definition files and parse them.
     ///
-    /// Files that fail to parse are skipped with a warning log.
+    /// Files that fail to parse are skipped. Unknown YAML properties
+    /// in valid files produce warnings (see below).
     ///
     /// # Arguments
     ///
@@ -157,15 +162,19 @@ impl FileSystemLoomRepository {
     ///
     /// # Returns
     ///
-    /// Parsed `Knot` instances with unresolved paths (caller must resolve
-    /// `strand_dir` relative to the project root).
+    /// A tuple of:
+    /// - Parsed `Knot` instances with unresolved paths (caller must resolve
+    ///   `strand_dir` relative to the project root).
+    /// - A vector of warning strings for unknown YAML properties in
+    ///   the parsed knot frontmatter.
     pub fn scan_knot_files(
         knot_dir: &Path,
-    ) -> Result<Vec<Knot>, PortError> {
+    ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
         let entries = fs::read_dir(knot_dir)
             .map_err(|e| PortError::RigScanFailed(e.to_string()))?;
 
         let mut knots = Vec::new();
+        let mut warnings = Vec::new();
 
         for entry_result in entries {
             let entry = entry_result
@@ -193,7 +202,8 @@ impl FileSystemLoomRepository {
 
             let parsed = knot_file_parser::parse(&content);
             match parsed {
-                Ok(knot_file) => {
+                Ok((knot_file, file_warnings)) => {
+                    warnings.extend(file_warnings);
                     let knot = Self::knot_from_file(knot_file);
                     knots.push(knot);
                 }
@@ -207,7 +217,7 @@ impl FileSystemLoomRepository {
             }
         }
 
-        Ok(knots)
+        Ok((knots, warnings))
     }
 
     /// Convert a parsed `KnotFile` into a domain `Knot`.
@@ -218,7 +228,6 @@ impl FileSystemLoomRepository {
     fn knot_from_file(file: KnotFile) -> Knot {
         Knot {
             id: KnotId(file.name.clone()),
-            agent_config: file.agent_config,
             agent_profile_ref: file.agent_profile_ref,
             prompt_template: file.prompt_template,
             strand_dir: file.strand_dir,
@@ -268,12 +277,8 @@ mod tests {
 
     const VALID_KNOT_CONTENT: &str = "---
 name: review-knot
-agent-config:
-  goal: \"Review PRD goals for clarity\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"../external-source\"
-tie-off-dir: \"../external-output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: |
@@ -287,12 +292,8 @@ This knot reviews PRD goals.
 
     const KNOT_WITH_DIRS_CONTENT: &str = "---
 name: custom-dirs-knot
-agent-config:
-  goal: \"Review with custom dirs\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"../external-source\"
-tie-off-dir: \"../external-output\"
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review with custom dirs\"
@@ -317,14 +318,16 @@ This knot has custom source and tie-off directories.
         let rig = tempfile::tempdir().unwrap();
         let repo = FileSystemLoomRepository::new();
 
-        let result =
-            repo.scan(rig.path());
+        let (looms, warnings) =
+            repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert!(
             looms.is_empty(),
             "empty rig should return no looms"
+        );
+        assert!(
+            warnings.is_empty(),
+            "empty rig should have no warnings"
         );
     }
 
@@ -338,14 +341,17 @@ This knot has custom source and tie-off directories.
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             1,
             "rig with one loom directory should return one loom"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected for valid knot, got: {:?}",
+            warnings
         );
 
         let loom = &looms[0];
@@ -373,14 +379,17 @@ This knot has custom source and tie-off directories.
         create_knot_file(&loom2_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             2,
             "rig with two loom directories should return two looms"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
         );
 
         // Verify both looms are present.
@@ -412,16 +421,19 @@ broken: yaml: [
         create_knot_file(&loom_dir, "invalid", invalid_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok(), "scan should succeed even with invalid files");
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
 
         // The loom should contain only the valid knot.
         let loom = &looms[0];
         assert_eq!(loom.knots.len(), 1, "invalid knot should be skipped");
         assert_eq!(loom.knots[0].id, KnotId("review-knot".to_string()));
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
     }
 
     #[test]
@@ -433,24 +445,23 @@ broken: yaml: [
         create_knot_file(&loom_dir, "goals-review", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
+        assert_eq!(looms.len(), 1);
         let loom = &looms[0];
         let knot = &loom.knots[0];
+
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         // Verify knot name parsed from frontmatter.
         assert_eq!(knot.id, KnotId("review-knot".to_string()));
 
-        // Verify agent config parsed from frontmatter.
-        assert_eq!(
-            knot.agent_config
-                .as_ref()
-                .unwrap()
-                .goal,
-            "Review PRD goals for clarity"
-        );
+        // Verify profile ref parsed from frontmatter.
+        assert_eq!(knot.agent_profile_ref, "fast");
 
         // Verify prompt template parsed from frontmatter.
         assert_eq!(knot.prompt_template.input_bundling, "full-file");
@@ -524,14 +535,17 @@ broken: yaml: [
         std::env::set_current_dir(temp_root.path()).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&rel_path);
+        let (looms, warnings) = repo.scan(&rel_path).unwrap();
 
         // Restore original directory (even on test failure).
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert!(result.is_ok(), "scan should succeed with relative path");
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         // Every loom's knots have absolute paths.
         for loom in &looms {
@@ -563,10 +577,13 @@ broken: yaml: [
         let abs_path = rig.path().to_path_buf();
         assert!(abs_path.is_absolute(), "test path should be absolute");
 
-        let result = repo.scan(&abs_path);
-        assert!(result.is_ok(), "scan should succeed with absolute path");
-        let looms = result.unwrap();
+        let (looms, warnings) = repo.scan(&abs_path).unwrap();
         assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         let loom = &looms[0];
         let strand_str = loom.knots[0].strand_dir.to_string_lossy();
@@ -608,11 +625,14 @@ broken: yaml: [
             .unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         let loom = &looms[0];
         assert_eq!(loom.knots.len(), 2, "loom should have 2 knots");
@@ -650,10 +670,6 @@ broken: yaml: [
         let external_source = temp_root.path().join("external-source");
         fs::create_dir(&external_source).unwrap();
 
-        // External tie-off directory.
-        let external_tie_off = temp_root.path().join("external-output");
-        fs::create_dir(&external_tie_off).unwrap();
-
         // Rig is a subdirectory (scan only sees loom inside it).
         let rig = temp_root.path().join("rig");
         fs::create_dir(&rig).unwrap();
@@ -662,17 +678,13 @@ broken: yaml: [
         let loom_dir = rig.join("config-loom");
         fs::create_dir(&loom_dir).unwrap();
 
-        // Knot with per-knot strand-dir and tie-off-dir.
+        // Knot with per-knot strand-dir.
         // Paths resolve relative to project root (rig's parent = temp_root),
         // so we use simple names that are siblings of rig/.
         let knot_content = r#"---
 name: custom-dirs-knot
-agent-config:
-  goal: "Review with custom dirs"
-  provider: "openai"
-  model: "gpt-4o"
+agent-profile-ref: fast
 strand-dir: "external-source"
-tie-off-dir: "external-output"
 prompt-template:
   input-bundling: "full-file"
   instructions: "Review with custom dirs"
@@ -683,11 +695,14 @@ Body.
         create_knot_file(&loom_dir, "custom-knot", knot_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&rig);
+        let (looms, warnings) = repo.scan(&rig).unwrap();
 
-        assert!(result.is_ok(), "scan should succeed");
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         let loom = &looms[0];
         assert_eq!(loom.knots.len(), 1);
@@ -719,39 +734,32 @@ Body.
         fs::create_dir(&loom_dir).unwrap();
 
         // Knot A with its own source dir.
-        let tieoff_a = temp_root.path().join("tieoff-a");
-        fs::create_dir(&tieoff_a).unwrap();
         let knot_a_content = format!(
-            "---\nname: knot-a\nagent-config:\n  goal: \"Review \
-             A\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\
-             \nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  \
+            "---\nname: knot-a\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
              input-bundling: \"full-file\"\n  instructions: \"Review \
              A\"\n---\n",
             source_a.display(),
-            tieoff_a.display()
         );
         create_knot_file(&loom_dir, "knot-a", &knot_a_content).unwrap();
 
         // Knot B with its own source dir.
-        let tieoff_b = temp_root.path().join("tieoff-b");
-        fs::create_dir(&tieoff_b).unwrap();
         let knot_b_content = format!(
-            "---\nname: knot-b\nagent-config:\n  goal: \"Review \
-             B\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\
-             \nstrand-dir: \"{}\"\ntie-off-dir: \"{}\"\nprompt-template:\n  \
+            "---\nname: knot-b\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
              input-bundling: \"full-file\"\n  instructions: \"Review \
              B\"\n---\n",
             source_b.display(),
-            tieoff_b.display()
         );
         create_knot_file(&loom_dir, "knot-b", &knot_b_content).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(&rig);
+        let (looms, warnings) = repo.scan(&rig).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         let loom = &looms[0];
         assert_eq!(loom.knots.len(), 2, "loom should have 2 knots");
@@ -795,11 +803,14 @@ Body.
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
 
         let loom = &looms[0];
         assert_eq!(loom.id, LoomId("my-loom".to_string()));
@@ -883,20 +894,23 @@ Body.
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
-        // Create a non-loom directory (e.g. output directory).
-        let output_dir = rig.path().join("output");
-        fs::create_dir(&output_dir).unwrap();
-        create_knot_file(&output_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
+        // Create a non-loom directory (e.g. tie-offs directory).
+        let tieoffs_dir = rig.path().join("tie-offs");
+        fs::create_dir(&tieoffs_dir).unwrap();
+        create_knot_file(&tieoffs_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             1,
             "only -loom directories should be discovered"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
         );
         assert_eq!(
             looms[0].id,
@@ -915,10 +929,7 @@ Body.
         // Knot without strand-dir — should be skipped.
         let no_strand_content = "---
 name: no-strand-knot
-agent-config:
-  goal: \"Review\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 prompt-template:
   input-bundling: \"full-file\"
   instructions: \"Review\"
@@ -928,13 +939,10 @@ Body.
 ";
         create_knot_file(&loom_dir, "no-strand", no_strand_content).unwrap();
 
-        // Knot without tie-off-dir — valid (tie-off-dir is no longer required).
+        // Knot without tie-off-dir — valid (tie-off-dir is no longer accepted).
         let no_tieoff_content = "---
 name: no-tieoff-knot
-agent-config:
-  goal: \"Review\"
-  provider: \"openai\"
-  model: \"gpt-4o\"
+agent-profile-ref: fast
 strand-dir: \"../input\"
 prompt-template:
   input-bundling: \"full-file\"
@@ -949,10 +957,8 @@ Body.
         create_knot_file(&loom_dir, "valid", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok(), "scan should succeed even with invalid knots");
-        let looms = result.unwrap();
         assert_eq!(looms.len(), 1);
 
         // Two valid knots (no-tieoff + valid), no-strand is skipped.
@@ -961,6 +967,11 @@ Body.
             loom.knots.len(),
             2,
             "knots missing strand-dir should be skipped, others accepted"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
         );
         let knot_names: Vec<_> = loom.knots.iter().map(|k| k.id.0.clone()).collect();
         assert!(knot_names.contains(&"no-tieoff-knot".to_string()));
@@ -984,19 +995,65 @@ Body.
         fs::write(state_dir.join(".loom-log"), "some log data").unwrap();
 
         let repo = FileSystemLoomRepository::new();
-        let result = repo.scan(rig.path());
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
 
-        assert!(result.is_ok());
-        let looms = result.unwrap();
         assert_eq!(
             looms.len(),
             1,
             "state directory should not be discovered as a loom"
         );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
         assert_eq!(
             looms[0].id,
             LoomId("active-loom".to_string()),
             "should only find the -loom directory"
+        );
+    }
+
+    // ── Phase 3: warning propagation tests ─────────────────────────────
+
+    #[test]
+    fn scan_returns_warnings_for_unknown_properties() {
+        let rig = tempfile::tempdir().unwrap();
+
+        let loom_dir = rig.path().join("warning-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // Knot with an unknown YAML property.
+        let knot_with_unknown = r#"---
+name: legacy-knot
+agent-profile-ref: fast
+strand-dir: "strands"
+tie-off-dir: "old-output"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: "Review"
+---
+
+Body.
+"#;
+        create_knot_file(&loom_dir, "legacy", knot_with_unknown).unwrap();
+
+        // Knot with clean frontmatter.
+        create_knot_file(&loom_dir, "clean", VALID_KNOT_CONTENT).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
+
+        assert_eq!(looms.len(), 1);
+        let loom = &looms[0];
+        assert_eq!(loom.knots.len(), 2);
+
+        // Should have exactly one warning (from the legacy knot).
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("tie-off-dir"),
+            "warning should mention 'tie-off-dir', got: {}",
+            warnings[0]
         );
     }
 }

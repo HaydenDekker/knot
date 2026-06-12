@@ -11,7 +11,7 @@ use crate::domain::knot_file::derive_loom_log_path;
 /// Filesystem-backed implementation of `LoomLogPort`.
 ///
 /// Writes loom events as JSONL (one JSON object per line) to
-/// `<base_dir>/output/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
+/// `<base_dir>/tie-offs/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
 /// concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemLoomLog {
@@ -21,7 +21,7 @@ pub struct FileSystemLoomLog {
 impl FileSystemLoomLog {
     /// Create a new log adapter backed by `base_dir`.
     ///
-    /// Log files live at `<base_dir>/output/<loom_id>/.loom-log`.
+    /// Log files live at `<base_dir>/tie-offs/<loom_id>/.loom-log`.
     pub fn new(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }
@@ -64,6 +64,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::KnotCompleted { loom_id, .. } => loom_id.clone(),
             LoomEvent::KnotFailed { loom_id, .. } => loom_id.clone(),
             LoomEvent::KnotDeregistered { loom_id, .. } => {
+                loom_id.clone()
+            }
+            LoomEvent::KnotParseWarning { loom_id, .. } => {
                 loom_id.clone()
             }
         };
@@ -185,8 +188,8 @@ mod tests {
         let result = log.append(event);
         assert!(result.is_ok(), "append should succeed");
 
-        // Verify the file has one JSONL entry (rig/output/{loom-id}/.loom-log)
-        let log_path = dir.path().join("output/test-loom/.loom-log");
+        // Verify the file has one JSONL entry (rig/tie-offs/{loom-id}/.loom-log)
+        let log_path = dir.path().join("tie-offs/test-loom/.loom-log");
         assert!(log_path.exists(), "log file should exist");
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();

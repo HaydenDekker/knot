@@ -20,17 +20,16 @@ use helpers::*;
 /// Returns (content, strand_dir). Tie-off paths are statically derived.
 fn make_named_knot_content(
     knot_name: &str,
-    goal: &str,
-    provider: &str,
-    model: &str,
+    _goal: &str,
+    _provider: &str,
+    _model: &str,
     instructions: &str,
     project_root: &std::path::Path,
 ) -> (String, std::path::PathBuf) {
     let strand_dir = project_root.join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
     let content = format!(
-        "---\nname: {knot_name}\nagent-config:\n  goal: \"{goal}\"\n  \
-         provider: \"{provider}\"\n  model: \"{model}\"\nstrand-dir: \"{}\"\n\
+        "---\nname: {knot_name}\nagent-profile-ref: fast\nstrand-dir: \"{}\"\n\
          prompt-template:\n  input-bundling: \"full-file\"\n  \
          instructions: \"{instructions}\"\n---\n\n# {knot_name}\n",
         strand_dir.display()
@@ -148,6 +147,24 @@ async fn runtime_loom_auto_discovery() {
     // Create rig directory (empty at startup)
     fs::create_dir_all(&base_dir).unwrap();
 
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     // Mock agent for processing after discovery
     let mock_agent =
         create_mock_agent(&base_dir, "auto-discovered-output");
@@ -243,7 +260,7 @@ async fn runtime_loom_auto_discovery() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 7. Verify tie-off was produced
-    let tie_off_path = base_dir.join("output/test-loom/review-knot/test-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/test-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after auto-discovery processing: {}",
@@ -314,8 +331,7 @@ async fn runtime_knot_auto_discovery() {
     let strand_dir = base_dir.join("strands2");
     fs::create_dir_all(&strand_dir).unwrap();
     let new_knot_content = format!(
-        "---\nname: summary-knot\nagent-config:\n  goal: \"Summarize \
-         content\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
+        "---\nname: summary-knot\nagent-profile-ref: fast\nstrand-dir: \
          \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"Summarize the document\"\n---\n\n# \
          Summary Knot\n",
@@ -396,16 +412,14 @@ async fn runtime_knot_edit_picks_up_change() {
         serde_json::from_str(&body).expect("should be JSON");
     let knots = loom["knots"].as_array().unwrap();
     assert_eq!(
-        knots[0]["agent_config"]["model"].as_str().unwrap(),
-        "gpt-4o",
-        "initial model should be gpt-4o"
+        knots[0]["agent_profile_ref"].as_str().unwrap(),
+        "fast",
+        "initial profile ref should be fast"
     );
 
     // 2. Edit the .md file to change the model
     let updated_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals \
-         for clarity\"\n  provider: \"anthropic\"\n  model: \"claude-sonnet\"\n\
-         strand-dir: \"{}\"\nprompt-template:\n  \
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
          input-bundling: \"full-file\"\n  instructions: \"Review the goals \
          section of this PRD\"\n---\n\n# review-knot\n",
         base_dir.join("strands").display()
@@ -425,14 +439,9 @@ async fn runtime_knot_edit_picks_up_change() {
         serde_json::from_str(&body).expect("should be JSON");
     let knots = loom["knots"].as_array().unwrap();
     assert_eq!(
-        knots[0]["agent_config"]["model"].as_str().unwrap(),
-        "claude-sonnet",
-        "updated model should be claude-sonnet"
-    );
-    assert_eq!(
-        knots[0]["agent_config"]["provider"].as_str().unwrap(),
-        "anthropic",
-        "updated provider should be anthropic"
+        knots[0]["agent_profile_ref"].as_str().unwrap(),
+        "fast",
+        "profile ref should be fast"
     );
 
 }
@@ -464,8 +473,7 @@ async fn runtime_knot_deletion() {
     let strand_dir2 = base_dir.join("strands2");
     fs::create_dir_all(&strand_dir2).unwrap();
     let second_knot = format!(
-        "---\nname: second-knot\nagent-config:\n  goal: \"Second knot \
-         goal\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
+        "---\nname: second-knot\nagent-profile-ref: fast\nstrand-dir: \
          \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"Second knot\"\n---\n\n# second-knot\n",
         strand_dir2.display()
@@ -667,12 +675,7 @@ async fn http_post_loom_verifies_knot_registered() {
         "knots": [
             {
                 "name": "verify-knot",
-                "agent_config": {
-                    "goal": "Verify registration",
-                    "provider": "openai",
-                    "model": "gpt-4o",
-                    "tools": []
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Verify knot registration"
@@ -712,7 +715,7 @@ async fn http_post_loom_verifies_knot_registered() {
     );
 
     // 5. Verify .loom-log contains KnotRegistered for the knot
-    let log_path = base_dir.join("output/verify-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/verify-loom/.loom-log");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
         log_path.exists(),
@@ -733,7 +736,7 @@ async fn http_post_loom_verifies_knot_registered() {
     let mut found_knot_registered = false;
     for line in &log_lines {
         let event: serde_json::Value =
-            serde_json::from_str(*line).expect("should parse JSON line");
+            serde_json::from_str(line).expect("should parse JSON line");
         if event.get("KnotRegistered").is_some() {
             let reg = &event["KnotRegistered"];
             assert_eq!(
@@ -820,12 +823,7 @@ async fn http_create_knot() {
 
     let body = serde_json::json!({
         "name": "new-knot",
-        "agent_config": {
-            "goal": "Process new content",
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "tools": []
-        },
+        "agent_profile_ref": "fast",
         "prompt_template": {
             "input_bundling": "full-file",
             "instructions": "Process the document"
@@ -869,7 +867,7 @@ async fn http_create_knot() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 6. Verify tie-off
-    let tie_off_path = base_dir.join("output/knot-crud-loom/new-knot/crud-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/knot-crud-loom/new-knot/new-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -923,20 +921,15 @@ async fn http_update_knot() {
         serde_json::from_str(&body).expect("should be JSON");
     let knots = loom["knots"].as_array().unwrap();
     assert_eq!(
-        knots[0]["agent_config"]["model"].as_str().unwrap(),
-        "gpt-4o",
-        "initial model should be gpt-4o"
+        knots[0]["agent_profile_ref"].as_str().unwrap(),
+        "fast",
+        "initial profile ref should be fast"
     );
 
     // 2. PATCH /looms/{id}/knots/{name} with new model
     let body = serde_json::json!({
         "name": "review-knot",
-        "agent_config": {
-            "goal": "Updated goal",
-            "provider": "anthropic",
-            "model": "claude-3-opus",
-            "tools": []
-        },
+        "agent_profile_ref": "fast",
         "prompt_template": {
             "input_bundling": "full-file",
             "instructions": "Updated instructions"
@@ -966,14 +959,9 @@ async fn http_update_knot() {
         serde_json::from_str(&body).expect("should be JSON");
     let knots = loom["knots"].as_array().unwrap();
     assert_eq!(
-        knots[0]["agent_config"]["model"].as_str().unwrap(),
-        "claude-3-opus",
-        "updated model should be claude-3-opus"
-    );
-    assert_eq!(
-        knots[0]["agent_config"]["provider"].as_str().unwrap(),
-        "anthropic",
-        "updated provider should be anthropic"
+        knots[0]["agent_profile_ref"].as_str().unwrap(),
+        "fast",
+        "profile ref should be fast"
     );
 
     // 4. Verify .md file was updated on disk (handler writes review-knot.md)
@@ -981,13 +969,8 @@ async fn http_update_knot() {
     let file_content =
         fs::read_to_string(&knot_file).expect("should read knot file");
     assert!(
-        file_content.contains("claude-3-opus"),
-        "knot .md file should contain updated model, got: {}",
-        file_content
-    );
-    assert!(
-        file_content.contains("anthropic"),
-        "knot .md file should contain updated provider, got: {}",
+        file_content.contains("Updated instructions"),
+        "knot .md file should contain updated instructions, got: {}",
         file_content
     );
 
@@ -1018,8 +1001,7 @@ async fn http_delete_knot() {
     let strand_dir2 = base_dir.join("strands2");
     fs::create_dir_all(&strand_dir2).unwrap();
     let second_knot = format!(
-        "---\nname: to-delete-knot\nagent-config:\n  goal: \"Will be \
-         deleted\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \
+        "---\nname: to-delete-knot\nagent-profile-ref: fast\nstrand-dir: \
          \"{}\"\nprompt-template:\n  input-bundling: \
          \"full-file\"\n  instructions: \"To delete\"\n---\n\n# to-delete-knot\n",
         strand_dir2.display()

@@ -23,8 +23,8 @@ use tower::util::ServiceExt;
 struct MockLoomRepository;
 
 impl LoomRepository for MockLoomRepository {
-    fn scan(&self, _rig: &Path) -> Result<Vec<Loom>, PortError> {
-        Ok(vec![])
+    fn scan(&self, _rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+        Ok((vec![], vec![]))
     }
     fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
         Ok(None)

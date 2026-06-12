@@ -78,6 +78,7 @@ async fn rig_directory_scanned() {
     fs::create_dir(&loom_dir).unwrap();
     let (knot_content, _strand_dir) = make_knot_content_with_dirs(tmp.path());
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&rig_path);
 
     let port = 31981;
     let host_port = format!("127.0.0.1:{port}");
@@ -238,11 +239,7 @@ async fn api_register_then_discover_after_restart() {
         "id": "persist-loom",
         "knots": [{
             "name": "persist-knot",
-            "agent_config": {
-                "goal": "Persist test",
-                "provider": "openai",
-                "model": "gpt-4o"
-            },
+            "agent_profile_ref": "fast",
             "prompt_template": {
                 "input_bundling": "full-file",
                 "instructions": "Review this content."
@@ -276,7 +273,7 @@ async fn api_register_then_discover_after_restart() {
 
     // Shutdown first server and wait for port release
     let _ = shutdown1.send(());
-    tokio::time::timeout(Duration::from_secs(10), _handle1)
+    let _ = tokio::time::timeout(Duration::from_secs(10), _handle1)
         .await
         .expect("server 1 should complete shutdown within timeout");
 

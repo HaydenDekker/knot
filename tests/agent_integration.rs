@@ -44,6 +44,16 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
+    // Create a "fast" agent profile so the knot can resolve it.
+    let profiles_dir = rig.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |
+  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     let port = 31998;
     let host_port = format!("127.0.0.1:{port}");
 
@@ -100,7 +110,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     );
 
     // 4. Verify loom-log contains StrandProcessed with error field.
-    let log_path = rig.join("output/error-loom/.loom-log");
+    let log_path = rig.join("tie-offs/error-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -118,7 +128,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     );
 
     // 5. Verify tie-off file written with Failed content.
-    let tie_off_path = rig.join("output/error-loom/review-knot/error-strand.md.output");
+    let tie_off_path = rig.join("tie-offs/error-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -161,6 +171,17 @@ async fn full_pipeline_with_pi_agent() {
     fs::create_dir(&loom_dir).unwrap();
     let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
+
+    // Create a "fast" agent profile so the knot can resolve it.
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |
+  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
 
     // Create the stub-pi script that echoes received args and content
     let stub_pi = create_stub_pi_agent(&base_dir);
@@ -191,7 +212,7 @@ async fn full_pipeline_with_pi_agent() {
     std::thread::sleep(Duration::from_millis(500));
 
     // 1. Verify tie-off exists and contains the agent output
-    let tie_off_path = base_dir.join("output/pi-loom/review-knot/test-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/pi-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -234,7 +255,7 @@ async fn full_pipeline_with_pi_agent() {
     );
 
     // 3. Verify loom-log contains StrandProcessed with no error
-    let log_path = base_dir.join("output/pi-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/pi-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -266,16 +287,16 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     let strand_dir = base_dir.join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
 
-    // Create a loom directory with a knot that uses a nonexistent model
+    // Create a loom directory with a knot that references a nonexistent profile
     let loom_dir = base_dir.join("error-loom");
     fs::create_dir(&loom_dir).unwrap();
     let knot_content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review with nonexistent model\"\n  provider: \"openai\"\n  model: \"nonexistent-model-xyz\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Error Test Knot\n\nThis knot tests error handling.\n",
+        "---\nname: review-knot\nagent-profile-ref: nonexistent-profile\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Error Test Knot\n\nThis knot tests error handling.\n",
         strand_dir.display()
     );
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
-    // Create the stub-pi script (exits 1 for "nonexistent" models)
+    // Create the stub-pi script
     let stub_pi = create_stub_pi_agent(&base_dir);
 
     let port = 32004;
@@ -323,12 +344,14 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     let error_msg = knot_status["last_error"].as_str().unwrap();
     assert!(
         error_msg.contains("agent execution failed")
-            || error_msg.contains("exited with code 1"),
-        "error should mention agent failure, got: {error_msg}"
+            || error_msg.contains("exited with code 1")
+            || error_msg.contains("profile")
+            || error_msg.contains("not found"),
+        "error should mention agent failure or profile error, got: {error_msg}"
     );
 
     // 2. Verify tie-off contains error details
-    let tie_off_path = base_dir.join("output/error-loom/review-knot/error-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/error-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -342,7 +365,7 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     );
 
     // 3. Verify loom-log contains StrandProcessed with error
-    let log_path = base_dir.join("output/error-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/error-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -357,7 +380,9 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     // The error field should be present (non-null) in the log
     assert!(
         log_content.contains("agent execution failed")
-            || log_content.contains("exited with code"),
+            || log_content.contains("exited with code")
+            || log_content.contains("profile")
+            || log_content.contains("not found"),
         "loom log should contain error details, got: {log_content}"
     );
 

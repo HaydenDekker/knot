@@ -109,6 +109,14 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// A knot file contained unknown YAML properties (accepted but not used).
+    KnotParseWarning {
+        loom_id: LoomId,
+        knot_file_name: String,
+        message: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -153,7 +161,7 @@ pub enum ConfigEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entities::{AgentConfig, PromptTemplate};
+    use crate::domain::entities::PromptTemplate;
     use std::path::PathBuf;
 
     #[test]
@@ -578,13 +586,7 @@ mod tests {
     fn make_knot(id: &str) -> Knot {
         Knot {
             id: KnotId(id.to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "Test goal".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Test instructions.".to_string(),
@@ -675,7 +677,7 @@ mod tests {
 
     #[test]
     fn loom_event_serialisation_all_variants() {
-        // Verify all 8 variants round-trip through JSON
+        // Verify all 9 variants round-trip through JSON
         let loom_id = LoomId("all".to_string());
         let knot_id = KnotId("k1".to_string());
         let strand_path = StrandPath(PathBuf::from("in.md"));
@@ -727,6 +729,12 @@ mod tests {
                 knot_id: knot_id.clone(),
                 timestamp: ts.clone(),
             },
+            LoomEvent::KnotParseWarning {
+                loom_id: loom_id.clone(),
+                knot_file_name: "legacy.md".to_string(),
+                message: "unknown property 'tie-off-dir'".to_string(),
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -734,5 +742,39 @@ mod tests {
             let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, *event, "round-trip failed for variant");
         }
+    }
+
+    #[test]
+    fn loom_event_knot_parse_warning() {
+        let loom_id = LoomId("prds".to_string());
+        let ts = "2026-06-10T12:00:00Z".to_string();
+
+        let event = LoomEvent::KnotParseWarning {
+            loom_id: loom_id.clone(),
+            knot_file_name: "legacy-knot.md".to_string(),
+            message: "unknown property 'tie-off-dir' in knot frontmatter (not used)".to_string(),
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotParseWarning {
+                loom_id: lid,
+                knot_file_name,
+                message,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*knot_file_name, "legacy-knot.md");
+                assert!(message.contains("tie-off-dir"));
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected KnotParseWarning variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
     }
 }

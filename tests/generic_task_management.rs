@@ -761,12 +761,11 @@ async fn abort_is_safety_net() {
     }
 
     // Exit order: stage 1 first, then stage 3
-    let order = exit_order.lock().unwrap();
-    assert_eq!(
-        *order, vec![1, 3],
-        "normal stages exit in order, hung stage never exits"
-    );
-    drop(order);
+    let order_snapshot = {
+        let guard = exit_order.lock().unwrap();
+        guard.clone()
+    };
+    assert_eq!(order_snapshot, vec![1, 3]);
 
     // abort_all() terminates the hung stage as safety net
     set.abort_all();

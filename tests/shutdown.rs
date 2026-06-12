@@ -33,6 +33,7 @@ async fn graceful_shutdown_stops_watchers() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let port = 31995;
     let host_port = format!("127.0.0.1:{port}");
@@ -80,7 +81,7 @@ async fn graceful_shutdown_stops_watchers() {
 
     // Tie-off file should NOT exist (watcher was stopped)
     let tie_off_path =
-        base_dir.join("output/shutdown-loom/review-knot/post-shutdown-strand.md.output");
+        base_dir.join("tie-offs/shutdown-loom/review-knot/review-knot-tie-off.md");
     assert!(
         !tie_off_path.exists(),
         "tie-off should NOT exist after shutdown: {}",
@@ -106,6 +107,7 @@ async fn shutdown_logs_loom_stopped() {
     let (knot_content, _strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     let port = 31996;
     let host_port = format!("127.0.0.1:{port}");
@@ -138,7 +140,7 @@ async fn shutdown_logs_loom_stopped() {
         .expect("server task should not panic during shutdown");
 
     // Read the loom-log file
-    let log_file = base_dir.join("output/log-loom/.loom-log");
+    let log_file = base_dir.join("tie-offs/log-loom/.loom-log");
     assert!(
         log_file.exists(),
         "loom log file should exist: {}",

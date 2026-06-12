@@ -13,7 +13,7 @@ use crate::application::ports::{
 use crate::application::store::LoomStore;
 use crate::domain::entities::LoomId;
 use crate::domain::events::StrandEvent;
-use crate::domain::value_objects::{AgentConfig, PromptTemplate, RigAgentConfig};
+use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
 
 // ── Request Bodies ────────────────────────────────────────────────────────
 
@@ -28,28 +28,16 @@ pub struct RegisterLoomRequest {
 
 /// A single knot definition within a `RegisterLoomRequest`.
 ///
-/// All fields are required except `agent_config` — knots may reference
-/// a shared agent profile via `agent_profile_ref` instead of providing
-/// inline configuration.
-/// Tie-off paths are now statically derived from loom ID and knot name.
+/// All fields are required — every knot must reference a shared agent
+/// profile via `agent_profile_ref`. Tie-off paths are statically derived
+/// from loom ID and knot name.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct KnotRequest {
     /// The name of the knot (becomes the `KnotId`).
     pub name: String,
-    /// Agent configuration for this knot (inline).
-    ///
-    /// Optional — when absent, `agent_profile_ref` must be set.
-    /// Mutually exclusive with `agent_profile_ref`.
-    #[serde(default)]
-    #[schema(value_type = Option<AgentConfig>)]
-    pub agent_config: Option<AgentConfig>,
     /// Reference to a named agent profile.
-    ///
-    /// When set, `agent_config` must be absent. Mutually exclusive
-    /// with `agent_config`.
-    #[serde(default)]
-    #[schema(value_type = Option<String>)]
-    pub agent_profile_ref: Option<String>,
+    #[schema(value_type = String)]
+    pub agent_profile_ref: String,
     /// Prompt template for this knot.
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).

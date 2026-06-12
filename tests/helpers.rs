@@ -1,4 +1,6 @@
 //! Shared test infrastructure for integration tests.
+
+#![allow(dead_code)]
 //!
 //! Provides helper functions for creating test fixtures, spawning servers,
 //! making HTTP requests, and polling for expected states.
@@ -22,7 +24,7 @@ pub fn make_knot_content_with_dirs(
     let strand_dir = project_root.join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
     let content = format!(
-        "---\nname: review-knot\nagent-config:\n  goal: \"Review PRD goals for clarity\"\n  provider: \"openai\"\n  model: \"gpt-4o\"\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
+        "---\nname: review-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: |\n    Review the goals section of this PRD.\n---\n\n# Review Knot\n\nThis knot reviews PRD goals.\n",
         strand_dir.display()
     );
     (content, strand_dir)
@@ -32,6 +34,20 @@ pub fn make_knot_content_with_dirs(
 pub fn make_knot_content(project_root: &Path) -> String {
     let (content, _) = make_knot_content_with_dirs(project_root);
     content
+}
+
+/// Create the "fast" agent profile in the given directory.
+///
+/// Writes `profiles/fast.md` with a valid AgentProfile frontmatter so that
+/// knots with `agent-profile-ref: fast` can resolve at runtime.
+pub fn create_fast_profile(dir: &Path) {
+    let profiles_dir = dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
 }
 
 /// Create a mock agent script in the given directory.
@@ -44,7 +60,7 @@ pub fn create_mock_agent(
     let script_path = dir.join("mock-agent");
     fs::write(
         &script_path,
-        format!("#!/bin/sh\necho '{}'\n", output),
+        format!("#!/bin/sh\ncat >/dev/null\necho '{}'\n", output),
     )
     .expect("should write mock agent script");
     fs::set_permissions(

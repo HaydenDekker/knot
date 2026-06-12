@@ -22,6 +22,15 @@ async fn http_register_then_process_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     // Mock agent script — ignores all CLI args built by ProcessStrand.
     let mock_agent = create_mock_agent(&base_dir, "http-processed");
 
@@ -49,6 +58,7 @@ async fn http_register_then_process_strand() {
     let (knot_content, strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(source_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     // 1. POST /looms to register the loom with knot definitions.
     let body = serde_json::json!({
@@ -56,11 +66,7 @@ async fn http_register_then_process_strand() {
         "knots": [
             {
                 "name": "review-knot",
-                "agent_config": {
-                    "goal": "Review documents",
-                    "provider": "openai",
-                    "model": "gpt-4o"
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Review docs"
@@ -112,7 +118,7 @@ async fn http_register_then_process_strand() {
     tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
     // 4. Verify tie-off was produced (static path: rig/output/{loom}/{knot}/).
-    let tie_off_path = base_dir.join("output/http-reg-loom/review-knot/new-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/http-reg-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -158,9 +164,10 @@ async fn unregister_stops_processing() {
     // Create source directory with knot definition file.
     let source_dir = base_dir.join("unreg-loom");
     fs::create_dir(&source_dir).unwrap();
-    let (knot_content, strand_dir) =
+    let (knot_content, _strand_dir) =
         make_knot_content_with_dirs(&base_dir);
     fs::write(source_dir.join("review.md"), knot_content).unwrap();
+    create_fast_profile(&base_dir);
 
     // Mock agent script.
     let mock_agent = create_mock_agent(&base_dir, "should-not-run");
@@ -211,7 +218,7 @@ async fn unregister_stops_processing() {
 
     // 4. Verify NO tie-off was produced.
     let tie_off_path =
-        base_dir.join("output/unreg-loom/review-knot/post-unreg-strand.md.output");
+        base_dir.join("tie-offs/unreg-loom/review-knot/review-knot-tie-off.md");
     assert!(
         !tie_off_path.exists(),
         "tie-off should NOT exist after unregister: {}",

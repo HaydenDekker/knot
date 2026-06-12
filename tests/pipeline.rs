@@ -30,6 +30,9 @@ async fn event_flows_through_pipeline() {
     let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
+    // Create the "fast" agent profile
+    create_fast_profile(&base_dir);
+
     // Mock agent script — ignores all CLI args built by ProcessStrand
     let mock_agent =
         create_mock_agent(&base_dir, "agent output");
@@ -72,7 +75,7 @@ async fn event_flows_through_pipeline() {
     );
 
     // Verify tie-off file was produced
-    let tie_off_path = base_dir.join("output/pipeline-loom/review-knot/test-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/pipeline-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off file should exist: {}",
@@ -153,7 +156,7 @@ async fn debounce_prevents_duplicate_processing() {
     // internals), so without debouncing we'd see 3-6+ StrandProcessed
     // events for the burst alone. With debouncing, the 3 rapid writes
     // coalesce to 1 debounced event.
-    let log_path = base_dir.join("output/debounce-loom/.loom-log");
+    let log_path = base_dir.join("tie-offs/debounce-loom/.loom-log");
     let log_content =
         fs::read_to_string(&log_path).expect("loom log should exist");
     let strand_processed_count = log_content
@@ -173,7 +176,7 @@ async fn debounce_prevents_duplicate_processing() {
     );
 
     // Tie-off directory exists and has at least one file for the strand
-    let tie_off_dir = base_dir.join("output/debounce-loom/review-knot");
+    let tie_off_dir = base_dir.join("tie-offs/debounce-loom/review-knot");
     assert!(
         tie_off_dir.exists(),
         "tie-off directory should exist"
@@ -212,6 +215,15 @@ async fn full_pipeline_create_modify_delete() {
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
+    // Create a "fast" agent profile
+    let profiles_dir = base_dir.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
     let mock_agent = create_mock_agent(&base_dir, "processed");
 
     let port = 31992;
@@ -284,7 +296,7 @@ async fn full_pipeline_create_modify_delete() {
         "knot status should be completed after processing"
     );
 
-    let tie_off_path = base_dir.join("output/pipeline-loom/review-knot/test-strand.md.output");
+    let tie_off_path = base_dir.join("tie-offs/pipeline-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist after create: {}",
@@ -394,7 +406,16 @@ async fn full_pipeline_with_subdirectory_rig() {
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
-    let mock_agent = create_mock_agent(&root, "processed external");
+    // Create a "fast" agent profile (must be in rig/ since that is base_dir)
+    let profiles_dir = rig.join("profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("fast.md"),
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+    )
+    .unwrap();
+
+    let mock_agent = create_mock_agent(root, "processed external");
 
     let port = 31997;
     let host_port = format!("127.0.0.1:{port}");
@@ -437,7 +458,7 @@ async fn full_pipeline_with_subdirectory_rig() {
         .expect("knot status should reach terminal state");
 
     // Tie-off should appear in the loom's .knot-output directory.
-    let tie_off_path = rig.join("output/config-loom/review-knot/external-strand.md.output");
+    let tie_off_path = rig.join("tie-offs/config-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -481,8 +502,11 @@ async fn full_pipeline_with_external_dirs() {
     let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
+    // Create the "fast" agent profile (must be in rig/ since that is base_dir)
+    create_fast_profile(&rig);
+
     // Mock agent script — ignores all CLI args built by ProcessStrand
-    let mock_agent = create_mock_agent(&root, "summary");
+    let mock_agent = create_mock_agent(root, "summary");
 
     let port = 32002;
     let host_port = format!("127.0.0.1:{port}");
@@ -528,7 +552,7 @@ async fn full_pipeline_with_external_dirs() {
     );
 
     // 4. Verify loom-log contains `StrandProcessed` with no error.
-    let log_path = rig.join("output/success-external-loom/.loom-log");
+    let log_path = rig.join("tie-offs/success-external-loom/.loom-log");
     assert!(
         log_path.exists(),
         "loom log should exist: {}",
@@ -547,7 +571,7 @@ async fn full_pipeline_with_external_dirs() {
     );
 
     // 5. Verify tie-off file written with agent output.
-    let tie_off_path = rig.join("output/success-external-loom/review-knot/success-strand.md.output");
+    let tie_off_path = rig.join("tie-offs/success-external-loom/review-knot/review-knot-tie-off.md");
     assert!(
         tie_off_path.exists(),
         "tie-off should exist: {}",
@@ -639,21 +663,18 @@ async fn knot_status_during_processing_does_not_hang() {
     let mut found_processing = false;
     for _ in 0..200 {
         let path = "/looms/concurrent-loom/knots/review-knot";
-        match http_get(&host_port, path).await {
-            Ok((_st, body)) => {
-                let val: serde_json::Value =
-                    serde_json::from_str(&body).ok().unwrap_or_default();
-                let status =
-                    val.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                if status == "processing" {
-                    found_processing = true;
-                    break;
-                }
-                if status == "completed" || status == "failed" {
-                    break; // agent finished too fast — test will still run
-                }
+        if let Ok((_st, body)) = http_get(&host_port, path).await {
+            let val: serde_json::Value =
+                serde_json::from_str(&body).ok().unwrap_or_default();
+            let status =
+                val.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            if status == "processing" {
+                found_processing = true;
+                break;
             }
-            Err(_) => {}
+            if status == "completed" || status == "failed" {
+                break; // agent finished too fast — test will still run
+            }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

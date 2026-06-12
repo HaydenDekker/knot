@@ -20,7 +20,7 @@ use knot::domain::entities::{
 };
 use knot::domain::events::{LoomEvent, StrandEvent};
 use knot::domain::value_objects::{
-    AgentConfig, AgentProfile, PromptTemplate, RigAgentConfig,
+    AgentProfile, PromptTemplate, RigAgentConfig,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -34,8 +34,8 @@ impl LoomRepository for MockLoomRepository {
     fn scan(
         &self,
         _rig: &Path,
-    ) -> Result<Vec<Loom>, PortError> {
-        Ok(vec![])
+    ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+        Ok((vec![], vec![]))
     }
     fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
         Ok(None)
@@ -154,13 +154,7 @@ fn build_context_with_loom() -> AppContext {
         id: LoomId("test-loom".to_string()),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "Review documents".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "default".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Review this document.".to_string(),
@@ -391,17 +385,13 @@ async fn knots_and_looms_register_and_list() {
         "knots": [
             {
                 "name": "review-knot",
-                "agent_config": {
-                    "goal": "Review documents",
-                    "provider": "openai",
-                    "model": "gpt-4o"
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Review docs"
                 },
                 "strand_dir": "src/new",
-                "tie_off_dir": "output/new"
+                "tie_off_dir": "tie-offs/new"
             }
         ]
     });
@@ -689,7 +679,7 @@ async fn knot_inspect_knot_status_with_state() {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("review".to_string()),
             strand_path: StrandPath(PathBuf::from("src/input.md")),
-            tie_off_path: TieOffPath(PathBuf::from("output/output.md")),
+            tie_off_path: TieOffPath(PathBuf::from("tie-offs/output.md")),
             timestamp: "2026-06-10T12:00:01Z".to_string(),
         },
     ];
@@ -731,13 +721,7 @@ async fn knot_inspect_knot_status_with_state() {
         id: LoomId("test-loom".to_string()),
         knots: vec![Knot {
             id: KnotId("review".to_string()),
-            agent_config: Some(AgentConfig {
-                goal: "Review".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
-                tools: Vec::new(),
-            }),
-            agent_profile_ref: None,
+            agent_profile_ref: "default".to_string(),
             prompt_template: PromptTemplate {
                 input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
@@ -857,17 +841,13 @@ async fn skill_contract_knots_and_looms_workflow() {
         "knots": [
             {
                 "name": "review-knot",
-                "agent_config": {
-                    "goal": "Review documents",
-                    "provider": "openai",
-                    "model": "gpt-4o"
-                },
+                "agent_profile_ref": "fast",
                 "prompt_template": {
                     "input_bundling": "full-file",
                     "instructions": "Review docs"
                 },
                 "strand_dir": "src/workflow",
-                "tie_off_dir": "output/workflow"
+                "tie_off_dir": "tie-offs/workflow"
             }
         ]
     });
@@ -1005,7 +985,7 @@ async fn skill_contract_knot_inspect_workflow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/looms/{}", loom_id))
+                .uri(format!("/looms/{}", loom_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1022,7 +1002,7 @@ async fn skill_contract_knot_inspect_workflow() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/looms/{}/knots", loom_id))
+                .uri(format!("/looms/{}/knots", loom_id))
                 .body(Body::empty())
                 .unwrap(),
         )

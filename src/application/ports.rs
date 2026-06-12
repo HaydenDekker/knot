@@ -195,8 +195,9 @@ pub struct AgentOutput {
 /// An adapter must be able to scan a rig for looms, retrieve individual
 /// looms, list all registered looms, and save loom definitions.
 pub trait LoomRepository: Send + Sync {
-    /// Scan a rig directory and return all discovered looms.
-    fn scan(&self, rig: &Path) -> Result<Vec<Loom>, PortError>;
+    /// Scan a rig directory and return all discovered looms along with
+    /// any knot parse warnings (unknown YAML properties in knot files).
+    fn scan(&self, rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError>;
 
     /// Get a single loom by its ID.
     fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError>;
@@ -329,8 +330,8 @@ mod tests {
     }
 
     impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _rig: &Path) -> Result<Vec<Loom>, PortError> {
-            Ok(self.looms.values().cloned().collect())
+        fn scan(&self, _rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((self.looms.values().cloned().collect(), Vec::new()))
         }
 
         fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
@@ -485,8 +486,9 @@ mod tests {
 
         // Verify all trait methods compile and are callable
         let rig = Path::new("/tmp/rig");
-        let scan_result = repo.scan(rig);
-        assert!(scan_result.is_ok());
+        let (looms, warnings) = repo.scan(rig).unwrap();
+        assert!(looms.is_empty());
+        assert!(warnings.is_empty());
 
         let loom_id = LoomId("test".to_string());
         let get_result = repo.get(&loom_id);
@@ -533,7 +535,7 @@ mod tests {
 
     #[test]
     fn agent_runner_contract() {
-        let runner = MockAgentRunner::default();
+        let runner = MockAgentRunner;
 
         // Verify trait is object-safe
         let _obj: &dyn AgentRunner = &runner;
@@ -577,7 +579,7 @@ mod tests {
 
     #[test]
     fn event_source_contract() {
-        let source = MockEventSource::default();
+        let source = MockEventSource;
 
         // Verify trait is object-safe
         let _obj: &dyn EventSource = &source;

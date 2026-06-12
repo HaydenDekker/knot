@@ -249,9 +249,9 @@ mod tests {
         let (tx, mut rx, _handle) = DebounceEngine::start();
 
         // Send 5 events for the same file within 50 ms.
-        for i in 0..5 {
-            let path = format!("file-{}.md", i % 1); // all "file-0.md"
-            tx.send(modified(&path)).await.unwrap();
+        for _i in 0..5 {
+            let path = "file-0.md"; // all events target the same file
+            tx.send(modified(path)).await.unwrap();
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
 
@@ -307,7 +307,7 @@ mod tests {
         }
 
         // Verify both files are present (order may vary).
-        let paths: Vec<_> = received.iter().map(|e| event_path(e)).collect();
+        let paths: Vec<_> = received.iter().map(event_path).collect();
         assert!(paths.contains(&"file-a.md".to_string()));
         assert!(paths.contains(&"file-b.md".to_string()));
 

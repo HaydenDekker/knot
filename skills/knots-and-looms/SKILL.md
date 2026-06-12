@@ -59,8 +59,6 @@ When asked to create a new loom:
 1. **Gather required information** from the user:
    - `id`: A unique loom identifier (e.g. `prd-review`, `docs-summary`)
    - `source_dir`: The source directory to watch (e.g. `project/prds`)
-   - `tie_off_dir` (optional): Output directory for processed files
-     (defaults to `output` if not specified)
 
 2. **Check for duplicates**: Send `GET /looms` to list existing looms.
    If a loom with the same ID exists, ask the user whether to modify the
@@ -70,8 +68,7 @@ When asked to create a new loom:
    ```json
    {
      "id": "my-loom",
-     "source_dir": "project/prds",
-     "tie_off_dir": "output/prds"
+     "source_dir": "project/prds"
    }
    ```
    - Expected response: `201 Created` with body `{"registered": true}`
@@ -82,7 +79,7 @@ When asked to create a new loom:
    was created successfully.
 
 5. **Report success**: "Loom `my-loom` registered, watching
-   `project/prds`, output to `output/prds`."
+   `project/prds`."
 
 ### Delete a Loom
 
@@ -119,7 +116,7 @@ existing loom's configuration:
 When asked to show all looms:
 
 1. Send `GET /looms` to list all registered looms.
-2. Present a summary table with: ID, source dir, tie-off dir, knot count.
+2. Present a summary table with: ID, source dir, knot count.
 
 ---
 
@@ -141,7 +138,6 @@ agent-config:
   model: "gpt-4o"
   tools: []
 source-dir: "app"
-tie-off-dir: "output"
 prompt-template:
   input-bundling: "full-file"
   instructions: |
@@ -163,24 +159,26 @@ Free-form markdown documentation about this knot.
 | `agent-config.model` | **Yes** | Model identifier (e.g. `gpt-4o`) |
 | `agent-config.tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
 | `source-dir` | No | Per-knot source directory. Relative paths resolve against the project root. Falls back to loom-level source dir if omitted. |
-| `tie-off-dir` | No | Per-knot tie-off directory. Relative paths resolve against the project root. Falls back to loom-level tie-off dir if omitted. |
 | `prompt-template.input-bundling` | **Yes** | How input is bundled (e.g. `full-file`) |
 | `prompt-template.instructions` | **Yes** | Prompt instructions sent to the agent |
 
 ### Directory Resolution
 
-- `source-dir` and `tie-off-dir` are **relative to the project root**
+- `source-dir` is **relative to the project root**
   (the directory containing the `rig/` folder).
-- If omitted, the knot uses the loom-level defaults:
-  - `source_dir` = loom directory itself
-  - `tie_off_dir` = `<loom_dir>/.knot-output`
+- If omitted, the knot uses the loom-level source directory.
 - Absolute paths are used as-is.
+- Tie-off paths are static — they follow the pattern:
+  `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`
 - Example project layout:
   ```
   project_root/              ← source-dir resolves from here
   ├── app/                   ← source-dir: "app"
-  ├── output/                ← tie-off-dir: "output"
   └── rig/                   ← rig directory
+      ├── tie-offs/          ← static tie-off directory
+      │   └── my-loom/       ← tie-offs for this loom
+      │       └── my-knot/   ← tie-off artifacts for this knot
+      │           └── my-knot-tie-off.md
       └── my-loom/           ← loom (knot files live here)
           └── my-knot.md
   ```
@@ -201,8 +199,6 @@ user whether to overwrite or choose a different name.
    - `instructions`: Prompt instructions
    - `source-dir` (optional): Directory to watch. If the knot watches
      a directory outside the loom, specify it here (e.g. `../../app`).
-   - `tie-off-dir` (optional): Output directory. If output goes outside
-     the loom, specify it here (e.g. `../../output`).
 4. **Write the knot file** as `<name>.md` in the loom directory with
    proper YAML frontmatter.
 5. **Report success**: "Knot `my-knot` created in `.knots/my-loom/`."
@@ -249,8 +245,7 @@ Request body (`RegisterLoomRequest`):
 ```json
 {
   "id": "string (required, unique loom ID)",
-  "source_dir": "string (required, path to watch)",
-  "tie_off_dir": "string (optional, defaults to 'output')"
+  "source_dir": "string (required, path to watch)"
 }
 ```
 
@@ -267,7 +262,6 @@ Response: `Array<LoomSummary>`
   {
     "id": {"0": "my-loom"},
     "source_dir": "src/docs",
-    "tie_off_dir": "output/docs",
     "knot_count": 2
   }
 ]
@@ -280,7 +274,6 @@ Response: `Loom`
 {
   "id": {"0": "my-loom"},
   "source_dir": "src/docs",
-  "tie_off_dir": "output/docs",
   "knots": []
 }
 ```
@@ -312,12 +305,13 @@ Response: `Array<String>` (knot name identifiers)
 
 ```
 Rig (top-level container)
- └── Loom (source dir + tie-off dir + knots)
+ └── Loom (source dir + knots)
       └── Knot (agent config + prompt template)
 ```
 
 - A **loom** is identified by a unique string ID and watches one source
-  directory, writing output to one tie-off directory.
+  directory. Tie-off output follows a static path pattern:
+  `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`.
 - A **knot** defines how files are processed: which agent runs (provider,
   model, goal) and how input is bundled (prompt template).
 - Knots are discovered from the loom's directory structure when Knot
@@ -334,7 +328,7 @@ curl http://localhost:3000/looms
 # Register a loom
 curl -X POST http://localhost:3000/looms \
   -H "Content-Type: application/json" \
-  -d '{"id":"my-loom","source_dir":"src/docs","tie_off_dir":"output/docs"}'
+  -d '{"id":"my-loom","source_dir":"src/docs"}'
 
 # Get loom details
 curl http://localhost:3000/looms/my-loom

@@ -45,7 +45,7 @@ async fn list_agents_returns_directory_contents() {
 
     let encoded = dir_path.replace('/', "%2F");
     let req = Request::builder()
-        .uri(&format!("/agents/{encoded}"))
+        .uri(format!("/agents/{encoded}"))
         .body(Body::empty())
         .unwrap();
 

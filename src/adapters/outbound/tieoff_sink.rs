@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::application::ports::{PortError, TieOffSink};
-use crate::domain::entities::{StrandPath, TieOff, TieOffPath};
+use crate::domain::entities::{TieOff, TieOffPath};
 
 /// Filesystem-backed implementation of `TieOffSink`.
 ///
-/// Writes tie-off content as plain text files. Derives tie-off filenames
-/// from strand filenames: `<name>.tie-off.<ext>`.
+/// Writes tie-off content as plain text files at paths determined by
+/// the `TieOff` entity. (Filename derivation from strand paths was
+/// removed as dead code — see Phase 6 cleanup.)
 pub struct FileSystemTieOffSink {
+    #[allow(dead_code)]
     tie_off_dir: PathBuf,
 }
 
@@ -17,31 +19,6 @@ impl FileSystemTieOffSink {
     /// Create a new sink that writes into `tie_off_dir`.
     pub fn new(tie_off_dir: PathBuf) -> Self {
         Self { tie_off_dir }
-    }
-
-    /// Derive a tie-off filename from a strand filename.
-    ///
-    /// Pattern: `<name>.tie-off.<ext>`.
-    /// E.g. `input.md` → `input.tie-off.md`
-    ///      `report` → `report.tie-off`
-    pub fn derive_tieoff_filename(strand_path: &StrandPath) -> String {
-        let filename = strand_path.0.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "output".to_string());
-
-        let extension = strand_path.0.extension()
-            .map(|ext| format!(".{}", ext.to_string_lossy()));
-
-        match extension {
-            Some(ext) => format!("{}.tie-off{}", filename, ext),
-            None => format!("{}.tie-off", filename),
-        }
-    }
-
-    /// Resolve the full tie-off path for a given strand.
-    pub fn resolve_path(&self, strand_path: &StrandPath) -> TieOffPath {
-        let filename = Self::derive_tieoff_filename(strand_path);
-        TieOffPath(self.tie_off_dir.join(filename))
     }
 }
 
@@ -235,18 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn tieoff_filename_derived_from_strand() {
-        let strand = StrandPath(PathBuf::from("input.md"));
-        let filename = FileSystemTieOffSink::derive_tieoff_filename(&strand);
-
-        assert_eq!(
-            filename,
-            "input.tie-off.md",
-            "strand input.md should produce tie-off input.tie-off.md"
-        );
-    }
-
-    #[test]
     fn tieoff_create_parent_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().to_path_buf();
@@ -299,43 +264,6 @@ mod tests {
         let sink = FileSystemTieOffSink::new(PathBuf::from("/tmp"));
         // Verify trait is object-safe
         let _obj: &dyn TieOffSink = &sink;
-    }
-
-    #[test]
-    fn tieoff_filename_no_extension() {
-        let strand = StrandPath(PathBuf::from("report"));
-        let filename = FileSystemTieOffSink::derive_tieoff_filename(&strand);
-
-        assert_eq!(
-            filename,
-            "report.tie-off",
-            "strand without extension should get .tie-off suffix"
-        );
-    }
-
-    #[test]
-    fn tieoff_filename_complex_extension() {
-        let strand = StrandPath(PathBuf::from("document.markdown"));
-        let filename = FileSystemTieOffSink::derive_tieoff_filename(&strand);
-
-        assert_eq!(
-            filename,
-            "document.tie-off.markdown",
-            "complex extension should be preserved"
-        );
-    }
-
-    #[test]
-    fn tieoff_resolve_path() {
-        let sink = FileSystemTieOffSink::new(PathBuf::from("output/reviews"));
-        let strand = StrandPath(PathBuf::from("input.md"));
-        let path = sink.resolve_path(&strand);
-
-        assert_eq!(
-            path.0,
-            PathBuf::from("output/reviews/input.tie-off.md"),
-            "resolve_path should join tie_off_dir with derived filename"
-        );
     }
 
     #[test]
