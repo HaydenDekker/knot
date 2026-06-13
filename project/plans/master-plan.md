@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ⬜ Planned | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ⬜ Planned | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
@@ -79,6 +80,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 28. Rig-Log Notification, Timeout Handling and Rollback
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-14
+**Goal:** Rig-level event log (`rig/.rig-log`) records timeout and queue-idle events. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only).
+
+**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
+
+Full details in [rig-log-notification-and-timeout.md](rig-log-notification-and-timeout.md).
 
 ### 27. Git Versioning — Automatic Commit History for Agent Work
 
