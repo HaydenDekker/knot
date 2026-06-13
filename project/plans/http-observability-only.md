@@ -24,7 +24,19 @@ The PRD's "HTTP-only" constraint was intended to keep skills clean and Knot in c
 6. All tests updated to match
 7. The file-first approach documented in skills (paths, formats, what Knot auto-discovers)
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-13)
+
+## Result
+
+All 7 control endpoints removed from the HTTP interface. Configuration is now file-first — profiles, looms, and knots are created by writing `.md` files directly to `rig/profiles/` and `rig/{name}-loom/`. Knot's file watcher auto-discovers all changes.
+
+**Removed:** `POST /looms`, `DELETE /looms/{id}`, `POST /looms/{id}/knots`, `PATCH /looms/{id}/knots/{name}`, `DELETE /looms/{id}/knots/{name}`, `POST /profiles/{name}`, `DELETE /profiles/{name}`. Request types `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` removed. 3600+ lines of handler code and tests removed.
+
+**Added:** `AgentProfile.body: Option<String>` — profile markdown body now threaded through `ProfileResponse`. Skills updated to file-first approach.
+
+**Tests:** 311 pass, 1 ignored. Removed `loom_crud.rs` (4 tests), `shared_agent_profiles.rs` (10 tests), knot CRUD tests from `auto_discovery_and_knot_crud.rs` (4 tests), and 2 HTTP workflow tests from `skill_integration.rs`. Added 2 new unit tests for profile body field. Global `knots-and-looms` skill removed (stale duplicate).
+
+Full details in [http-observability-only.md](http-observability-only.md).
 
 ## Existing Tests
 
@@ -89,10 +101,12 @@ The PRD's "HTTP-only" constraint was intended to keep skills clean and Knot in c
 - [x] Verify skill integration tests reference correct endpoints (16 tests pass)
 
 ### Phase 4: Verify full system integration
-- [ ] Full `cargo test` passes
-- [ ] Verify auto-discovery still works: create profile file + loom directory + knot file on disk → `GET /looms` and `GET /profiles` reflect changes
-- [ ] Verify `GET` endpoints still serve Swagger UI correctly with reduced schema
-- [ ] Verify `GET /profiles/{name}` returns body field (if profile has markdown body)
+- [x] Full `cargo test` passes (311 passed, 1 ignored)
+- [x] Verify auto-discovery still works: 6 integration tests confirm file-first discovery
+- [x] Verify `GET` endpoints still serve Swagger UI correctly with reduced schema (no POST/PATCH/DELETE, no removed types)
+- [x] Verify `GET /profiles/{name}` returns body field — added `body: Option<String>` to `AgentProfile` and `ProfileResponse`, populated from disk, 2 new unit tests
+
+**Result:** `AgentProfile` now carries `body: Option<String>` (markdown body from profile file). `ProfileResponse` serializes it. `FileSystemAgentProfileRepository::get()` extracts body using `extract_body()` helper. Swagger spec verified: only GET methods, no removed request types in schema.
 
 ## Notes
 
