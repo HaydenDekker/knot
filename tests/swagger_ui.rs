@@ -226,5 +226,4 @@ async fn openapi_json_returns_valid_spec() {
     assert!(schemas.contains_key("ProcessingStatus"));
     assert!(schemas.contains_key("AgentConfig"));
     assert!(schemas.contains_key("PromptTemplate"));
-    assert!(schemas.contains_key("RegisterLoomRequest"));
 }

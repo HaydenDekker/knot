@@ -13,55 +13,11 @@ use crate::application::ports::{
 use crate::application::store::LoomStore;
 use crate::domain::entities::LoomId;
 use crate::domain::events::StrandEvent;
-use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
+use crate::domain::value_objects::RigAgentConfig;
 
-// ── Request Bodies ────────────────────────────────────────────────────────
+// ── Response Bodies ───────────────────────────────────────────────────────
 
-/// JSON body for `POST /looms` to register a new loom.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub struct RegisterLoomRequest {
-    /// Unique loom identifier (must end in `-loom`).
-    pub id: String,
-    /// Knot definitions to write and register.
-    pub knots: Vec<KnotRequest>,
-}
-
-/// A single knot definition within a `RegisterLoomRequest`.
-///
-/// All fields are required — every knot must reference a shared agent
-/// profile via `agent_profile_ref`. Tie-off paths are statically derived
-/// from loom ID and knot name.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub struct KnotRequest {
-    /// The name of the knot (becomes the `KnotId`).
-    pub name: String,
-    /// Reference to a named agent profile.
-    #[schema(value_type = String)]
-    pub agent_profile_ref: String,
-    /// Prompt template for this knot.
-    pub prompt_template: PromptTemplate,
-    /// Directory to watch for strand files (required).
-    pub strand_dir: String,
-}
-
-/// Request body for `POST /profiles/{name}`.
-///
-/// The `name` is derived from the URL path, not the request body.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ProfileRequest {
-    /// The LLM provider identifier (e.g. "openai", "anthropic").
-    pub provider: String,
-    /// The model name to use (e.g. "gpt-4o").
-    pub model: String,
-    /// Optional list of tool identifiers to enable.
-    #[serde(default)]
-    #[schema(value_type = Vec<String>)]
-    pub tools: Vec<String>,
-    /// The system prompt given to the agent (required, non-empty).
-    pub system_prompt: String,
-}
-
-/// Response body for profile GET/POST endpoints.
+/// Response body for profile GET endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProfileResponse {
     /// Profile name (derived from filename).

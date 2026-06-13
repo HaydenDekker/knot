@@ -203,72 +203,62 @@ async fn app_loads_rig_agent_config() {
     );
 }
 
-/// Register a loom via API, stop server, restart — loom re-discovered
-/// with same configuration (knot files survive restart).
+/// Loom created via file-first approach is re-discovered by the next
+/// Knot instance after restart.
 ///
-/// 1. Start server with empty rig
-/// 2. POST /looms with a loom that has a knot
-/// 3. Verify loom directory and knot file created on disk
-/// 4. Shutdown server
-/// 5. Restart server with same rig directory
-/// 6. Verify loom is re-discovered via GET /looms with matching config
+/// 1. Create loom dir + knot file on disk (file-first)
+/// 2. Start server — auto-discovery picks up the loom
+/// 3. Shutdown server
+/// 4. Restart server with same rig directory
+/// 5. Verify loom is re-discovered via GET /looms with matching config
 #[tokio::test]
-async fn api_register_then_discover_after_restart() {
+async fn file_first_register_then_discover_after_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let rig_path = tmp.path().join("rig");
     let strand_dir = tmp.path().join("strands");
     fs::create_dir_all(&strand_dir).unwrap();
 
+    // Create loom directory and knot file (file-first approach)
+    let loom_dir = rig_path.join("persist-loom");
+    fs::create_dir_all(&loom_dir).unwrap();
+    fs::write(
+        loom_dir.join("persist-knot.md"),
+        format!(
+            "---\nname: persist-knot\nagent-profile-ref: fast\nstrand-dir: \"{0}\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Review this content.\"\n---\n\n# persist-knot\n",
+            strand_dir.display()
+        ),
+    )
+    .unwrap();
+
     let port = 32011;
     let host_port = format!("127.0.0.1:{port}");
 
+    // --- First server instance ---
     let config = AppConfig {
         base_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
 
-    // --- First server instance ---
     let (_handle1, shutdown1) = spawn_server_with_shutdown(config);
     wait_for_port(&host_port, 5000)
         .await
         .expect("server 1 should start listening");
 
-    // POST /looms to register a new loom
-    let post_body = serde_json::json!({
-        "id": "persist-loom",
-        "knots": [{
-            "name": "persist-knot",
-            "agent_profile_ref": "fast",
-            "prompt_template": {
-                "input_bundling": "full-file",
-                "instructions": "Review this content."
-            },
-            "strand_dir": strand_dir.to_string_lossy().to_string()
-        }]
-    });
-
-    let (status, _body) =
-        http_post_json(&host_port, "/looms", &post_body)
+    // GET /looms should discover the loom
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
             .await
-            .expect("POST /looms should respond");
-    assert!(
-        status.contains("201"),
-        "expected 201 Created, got: {status}"
-    );
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
 
-    // Verify loom directory and knot file created on disk
-    let loom_dir = rig_path.join("persist-loom");
-    assert!(
-        loom_dir.exists(),
-        "loom directory should be created on disk: {}",
-        loom_dir.display()
-    );
-    let knot_file = loom_dir.join("persist-knot.md");
-    assert!(
-        knot_file.exists(),
-        "knot file should be created on disk: {}",
-        knot_file.display()
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert_eq!(summaries.len(), 1, "should discover exactly 1 loom");
+    assert_eq!(
+        summaries[0]["id"].as_str().unwrap(),
+        "persist-loom",
+        "loom id should match"
     );
 
     // Shutdown first server and wait for port release

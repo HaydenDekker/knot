@@ -172,9 +172,9 @@ fn build_context_with_loom() -> AppContext {
 /// Verify all three skill directories exist with SKILL.md files.
 #[test]
 fn skill_files_exist() {
-    let skills_dir = Path::new("skills");
+    let skills_dir = Path::new(".agents/skills");
 
-    for skill_name in &["knot-init", "knots-and-looms", "knot-inspect"] {
+    for skill_name in &["knot-init", "knot-create", "knot-inspect"] {
         let skill_md = skills_dir.join(skill_name).join("SKILL.md");
         assert!(
             skill_md.exists(),
@@ -187,9 +187,9 @@ fn skill_files_exist() {
 /// Each SKILL.md must have valid YAML frontmatter with required fields.
 #[test]
 fn skill_files_have_valid_frontmatter() {
-    let skills_dir = Path::new("skills");
+    let skills_dir = Path::new(".agents/skills");
 
-    for skill_name in &["knot-init", "knots-and-looms", "knot-inspect"] {
+    for skill_name in &["knot-init", "knot-create", "knot-inspect"] {
         let skill_md = skills_dir.join(skill_name).join("SKILL.md");
         let content = std::fs::read_to_string(&skill_md)
             .unwrap_or_else(|e| panic!("Cannot read {}: {}", skill_md.display(), e));
@@ -251,9 +251,9 @@ fn skill_files_have_valid_frontmatter() {
 #[test]
 fn skills_reference_openapi_spec_url() {
     let expected_url = "http://localhost:3000/swagger-ui/openapi.json";
-    let skills_dir = Path::new("skills");
+    let skills_dir = Path::new(".agents/skills");
 
-    for skill_name in &["knot-init", "knots-and-looms", "knot-inspect"] {
+    for skill_name in &["knot-init", "knot-create", "knot-inspect"] {
         let skill_md = skills_dir.join(skill_name).join("SKILL.md");
         let content = std::fs::read_to_string(&skill_md)
             .unwrap_or_else(|e| panic!("Cannot read {}: {}", skill_md.display(), e));
@@ -270,7 +270,7 @@ fn skills_reference_openapi_spec_url() {
 /// knot-init skill must reference the endpoints it uses.
 #[test]
 fn knot_init_skill_references_endpoints() {
-    let skill_md = Path::new("skills/knot-init/SKILL.md");
+    let skill_md = Path::new(".agents/skills/knot-init/SKILL.md");
     let content = std::fs::read_to_string(skill_md).unwrap();
 
     // Must reference the endpoints used by the skill
@@ -279,14 +279,13 @@ fn knot_init_skill_references_endpoints() {
     assert!(content.contains("/looms"), "must reference /looms");
 }
 
-/// knots-and-looms skill must reference CRUD endpoints.
+/// knot-create skill must reference endpoints.
 #[test]
-fn knots_and_looms_skill_references_endpoints() {
-    let skill_md = Path::new("skills/knots-and-looms/SKILL.md");
+fn knot_create_skill_references_endpoints() {
+    let skill_md = Path::new(".agents/skills/knot-create/SKILL.md");
     let content = std::fs::read_to_string(skill_md).unwrap();
 
-    assert!(content.contains("POST /looms"), "must reference POST /looms");
-    assert!(content.contains("DELETE /looms"), "must reference DELETE /looms");
+    assert!(content.contains("/looms"), "must reference /looms");
     assert!(content.contains("/looms/{id}"), "must reference /looms/ID");
     assert!(
         content.contains("/looms/{id}/knots"),
@@ -297,7 +296,7 @@ fn knots_and_looms_skill_references_endpoints() {
 /// knot-inspect skill must reference all read endpoints.
 #[test]
 fn knot_inspect_skill_references_endpoints() {
-    let skill_md = Path::new("skills/knot-inspect/SKILL.md");
+    let skill_md = Path::new(".agents/skills/knot-inspect/SKILL.md");
     let content = std::fs::read_to_string(skill_md).unwrap();
 
     assert!(content.contains("/health"), "must reference /health");
@@ -373,66 +372,6 @@ async fn knot_init_config_rig_check() {
 // ── API Endpoint Tests (knots-and-looms skill endpoints) ───────────────────
 
 /// `POST /looms` creates a loom, then `GET /looms` lists it — the
-/// knots-and-looms skill register + verify flow.
-#[tokio::test]
-async fn knots_and_looms_register_and_list() {
-    let ctx = build_context_with_loom();
-    let app = knot::adapters::inbound::build_app(ctx);
-
-    // POST /looms — register a new loom with knots
-    let body = serde_json::json!({
-        "id": "new-loom",
-        "knots": [
-            {
-                "name": "review-knot",
-                "agent_profile_ref": "fast",
-                "prompt_template": {
-                    "input_bundling": "full-file",
-                    "instructions": "Review docs"
-                },
-                "strand_dir": "src/new",
-                "tie_off_dir": "tie-offs/new"
-            }
-        ]
-    });
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/looms")
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-
-    // GET /looms — verify it appears
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/looms")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let summaries: Vec<knot::application::usecases::LoomSummary> =
-        serde_json::from_slice(&body).unwrap();
-    assert_eq!(summaries.len(), 2); // test-loom + new-loom
-
-    let new = summaries.iter().find(|s| s.id.0 == "new-loom").unwrap();
-    // Loom directory is derived from naming convention (not stored as source_dir).
-    assert_eq!(new.knot_count, 1, "new loom should have 1 knot");
-}
-
 /// `GET /looms/{id}` returns loom details with knots — the knots-and-looms
 /// skill verify step.
 #[tokio::test]
@@ -483,27 +422,6 @@ async fn knots_and_looms_list_knots() {
         .unwrap();
     let names: Vec<String> = serde_json::from_slice(&body).unwrap();
     assert_eq!(names, vec!["review"]);
-}
-
-/// `DELETE /looms/{id}` returns 204 — the knots-and-looms skill unregister
-/// flow.
-#[tokio::test]
-async fn knots_and_looms_delete_loom() {
-    let ctx = build_context_with_loom();
-    let app = knot::adapters::inbound::build_app(ctx);
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/looms/test-loom")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 204);
 }
 
 // ── API Endpoint Tests (knot-inspect skill endpoints) ──────────────────────
@@ -829,92 +747,6 @@ async fn skill_contract_knot_init_workflow() {
 /// 3. GET /looms/{id}/knots lists knots
 /// 4. DELETE /looms/{id} removes it
 ///
-/// This validates the exact API contract that knots-and-looms skill expects.
-#[tokio::test]
-async fn skill_contract_knots_and_looms_workflow() {
-    let ctx = build_context_with_loom();
-    let app = knot::adapters::inbound::build_app(ctx);
-
-    // Step 1: Register a loom with knots
-    let body = serde_json::json!({
-        "id": "workflow-loom",
-        "knots": [
-            {
-                "name": "review-knot",
-                "agent_profile_ref": "fast",
-                "prompt_template": {
-                    "input_bundling": "full-file",
-                    "instructions": "Review docs"
-                },
-                "strand_dir": "src/workflow",
-                "tie_off_dir": "tie-offs/workflow"
-            }
-        ]
-    });
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/looms")
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-
-    // Step 2: Verify with GET /looms/{id}
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/looms/workflow-loom")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let loom: Loom = serde_json::from_slice(&body).unwrap();
-    assert_eq!(loom.id, LoomId("workflow-loom".to_string()));
-
-    // Step 3: List knots
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/looms/workflow-loom/knots")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let names: Vec<String> = serde_json::from_slice(&body).unwrap();
-    assert_eq!(names, vec!["review-knot"]); // Has one knot
-
-    // Step 4: Delete loom
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/looms/workflow-loom")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 204);
-}
-
 /// End-to-end: simulate the knot-inspect full inspection workflow.
 ///
 /// 1. GET /health → 200

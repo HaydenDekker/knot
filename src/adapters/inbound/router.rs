@@ -1,15 +1,14 @@
 //! OpenAPI documentation and router construction.
 
 use axum::{
-    routing::{delete, get, post},
+    routing::get,
     Router,
 };
 use utoipa::OpenApi;
 
 use crate::adapters::inbound::loom::{
-    create_knot, create_profile, delete_knot, delete_profile, get_knot_status,
-    get_loom, get_loom_activity, get_loom_knots, get_profile, list_looms,
-    list_profiles, register_loom, unregister_loom, update_knot,
+    get_knot_status, get_loom, get_loom_activity, get_loom_knots, get_profile,
+    list_looms, list_profiles,
 };
 use crate::adapters::inbound::system::{get_rig_config, health, list_agents};
 use crate::adapters::inbound::types::AppContext;
@@ -41,19 +40,12 @@ use crate::domain::value_objects::{
         crate::adapters::inbound::system::list_agents,
         crate::adapters::inbound::system::get_rig_config,
         crate::adapters::inbound::loom::list_looms,
-        crate::adapters::inbound::loom::register_loom,
-        crate::adapters::inbound::loom::unregister_loom,
         crate::adapters::inbound::loom::get_loom,
-        crate::adapters::inbound::loom::create_knot,
-        crate::adapters::inbound::loom::update_knot,
-        crate::adapters::inbound::loom::delete_knot,
         crate::adapters::inbound::loom::get_loom_activity,
         crate::adapters::inbound::loom::get_loom_knots,
         crate::adapters::inbound::loom::get_knot_status,
         crate::adapters::inbound::loom::list_profiles,
         crate::adapters::inbound::loom::get_profile,
-        crate::adapters::inbound::loom::create_profile,
-        crate::adapters::inbound::loom::delete_profile,
     ),
     components(schemas(
         // Domain value objects
@@ -84,10 +76,7 @@ use crate::domain::value_objects::{
         KnotEventType,
         KnotState,
         // Inbound types
-        crate::adapters::inbound::types::RegisterLoomRequest,
-        crate::adapters::inbound::types::KnotRequest,
         crate::adapters::inbound::types::RigConfigResponse,
-        crate::adapters::inbound::types::ProfileRequest,
         crate::adapters::inbound::types::ProfileResponse,
     )),
 )]
@@ -112,20 +101,12 @@ pub fn build_app(ctx: AppContext) -> Router {
         .route("/config/rig", get(get_rig_config))
         // Loom endpoints
         .route("/looms", get(list_looms))
-        .route("/looms", post(register_loom))
         .route("/looms/{id}", get(get_loom))
-        .route("/looms/{id}", delete(unregister_loom))
         .route("/looms/{id}/activity", get(get_loom_activity))
-        .route("/looms/{id}/knots", get(get_loom_knots).post(create_knot))
-        .route(
-            "/looms/{id}/knots/{name}",
-            get(get_knot_status).patch(update_knot).delete(delete_knot),
-        )
+        .route("/looms/{id}/knots", get(get_loom_knots))
+        .route("/looms/{id}/knots/{name}", get(get_knot_status))
         // Profile endpoints
         .route("/profiles", get(list_profiles))
-        .route(
-            "/profiles/{name}",
-            get(get_profile).delete(delete_profile).post(create_profile),
-        )
+        .route("/profiles/{name}", get(get_profile))
         .with_state(ctx)
 }

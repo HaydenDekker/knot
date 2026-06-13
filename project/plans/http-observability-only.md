@@ -45,15 +45,17 @@ The PRD's "HTTP-only" constraint was intended to keep skills clean and Knot in c
 ## Phases
 
 ### Phase 0: Remove control endpoints from router + handlers
-- [ ] Remove from `router.rs`: `POST /looms`, `DELETE /looms/{id}`, `POST /looms/{id}/knots`, `PATCH /looms/{id}/knots/{name}`, `DELETE /looms/{id}/knots/{name}`, `POST /profiles/{name}`, `DELETE /profiles/{name}`
-- [ ] Remove unused imports from `router.rs`: `register_loom`, `unregister_loom`, `create_knot`, `update_knot`, `delete_knot`, `create_profile`, `delete_profile`
-- [ ] Remove from `loom.rs` handlers: `register_loom`, `unregister_loom`, `create_knot`, `update_knot`, `delete_knot`, `create_profile`, `delete_profile` (keep all GET handlers)
-- [ ] Remove from `loom.rs` handler tests: all tests for removed handlers (register, unregister, create/update/delete knot, create/delete profile)
-- [ ] Remove `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` from `types.rs`
-- [ ] Remove `ProfileRequest` from OpenAPI schema components in `router.rs`
-- [ ] Remove removed endpoints from OpenAPI `paths()` list in `router.rs`
-- [ ] Revert the uncommitted `AgentProfileRepository::save()` trait change (add `body` param) — no longer needed since profiles are file-first
-- [ ] Verify `cargo build` passes
+- [x] Remove from `router.rs`: `POST /looms`, `DELETE /looms/{id}`, `POST /looms/{id}/knots`, `PATCH /looms/{id}/knots/{name}`, `DELETE /looms/{id}/knots/{name}`, `POST /profiles/{name}`, `DELETE /profiles/{name}`
+- [x] Remove unused imports from `router.rs`: `register_loom`, `unregister_loom`, `create_knot`, `update_knot`, `delete_knot`, `create_profile`, `delete_profile`
+- [x] Remove from `loom.rs` handlers: `register_loom`, `unregister_loom`, `create_knot`, `update_knot`, `delete_knot`, `create_profile`, `delete_profile` (keep all GET handlers)
+- [x] Remove from `loom.rs` handler tests: all tests for removed handlers (register, unregister, create/update/delete knot, create/delete profile)
+- [x] Remove `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` from `types.rs`
+- [x] Remove `ProfileRequest` from OpenAPI schema components in `router.rs`
+- [x] Remove removed endpoints from OpenAPI `paths()` list in `router.rs`
+- [x] Revert the uncommitted `AgentProfileRepository::save()` trait change (add `body` param) — no longer needed since profiles are file-first
+- [x] Verify `cargo build` passes
+
+**Result:** All 7 control endpoints removed from router. 7 handler functions + helper functions removed from `loom.rs` (1713 lines deleted). All CRUD handler unit tests removed. `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` types removed from `types.rs`. OpenAPI spec updated. `mod.rs` re-exports cleaned. `AgentProfileRepository::save()` already had correct signature (no uncommitted body param to revert). `cargo build` passes.
 
 ### Phase 1: Remove control tests + helpers
 - [ ] Remove `tests/loom_crud.rs` entirely (all 4 tests are CRUD-only)
