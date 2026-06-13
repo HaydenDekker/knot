@@ -48,7 +48,6 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ⬜ Planned | 2026-06-13 |
-| 25 | [Profile Body Storage and Init Default Profile](profile-init-and-body.md) | ⬜ Planned (superseded by http-observability-only) | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
@@ -87,14 +86,6 @@ _Overview sections for active and recently completed plans go here._
 **Goal:** Remove all control (POST/PUT/DELETE) endpoints from the HTTP interface, keeping only read-only observability (GET endpoints). Configuration (profiles, looms, knots) becomes file-first — skills write files directly, Knot's file watcher auto-discovers changes.
 
 Full details in [http-observability-only.md](http-observability-only.md).
-
-### 25. Profile Body Storage and Init Default Profile
-
-**Status:** ⬜ Planned (superseded by [http-observability-only](http-observability-only.md))
-**Created:** 2026-06-13
-**Goal:** Allow profile `.md` files to carry a markdown body with comments documenting available models and tools, and have `knot-init` draft a first default profile with comment annotations on a fresh rig.
-
-Full details in [profile-init-and-body.md](profile-init-and-body.md).
 
 ### 24. Tie-Off Output Rename and Knot File Cleanup
 
