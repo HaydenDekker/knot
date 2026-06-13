@@ -1,6 +1,6 @@
 ---
 name: knot-create
-description: "Create looms and knots via Knot's HTTP API. A loom watches strand directories through configured knots. Each knot references a shared agent profile that provides the LLM provider, model, tools, and system prompt. This skill holds the theory and application notes on creating looms and knots, including profile management, the domain model, and the full CRUD lifecycle. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
+description: "Create looms, knots, and profiles by writing .md files directly. Knot auto-discovers looms (directories ending in `-loom`) and parses knot definition files (`.md` files inside loom directories). Profiles live in `rig/profiles/`. Use Knot's GET endpoints to verify state after file changes. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
 license: MIT
 metadata:
   author: Knot Team
@@ -11,45 +11,46 @@ metadata:
 
 # Knot Create Skill
 
-Create looms and knots through Knot's HTTP API and file system. This skill
-holds the theory and application notes for the full loom/knot/profile
-lifecycle — creation, modification, and deletion.
+Create and manage looms, knots, and agent profiles by writing `.md` files
+directly to disk. Knot auto-discovers changes through its file watcher —
+no HTTP registration is needed. Use Knot's `GET` endpoints to verify
+state after file changes.
 
-A **loom** is a directory inside the rig (name ending in `-loom`) that
-contains `.md` knot definition files. Each **knot** references a shared
+A **loom** is a directory inside the rig whose name ends in `-loom`.
+Knot discovers these directories automatically and parses `.md` knot
+definition files inside them. Each **knot** references a shared
 **agent profile** that provides the LLM provider, model, tools, and
-system prompt. The knot's prompt template provides task-specific
-instructions appended to the profile's system prompt.
+system prompt.
 
-**Knot API base URL:** `http://localhost:3000`
+**Knot API base URL:** `http://localhost:3000` (GET endpoints only)
 **OpenAPI spec:** `http://localhost:3000/swagger-ui/openapi.json`
 
 ---
 
 ## Core Philosophy
 
-### Looms via HTTP API
+### File-First
 
-Looms are registered through Knot's HTTP API. Knot manages loom state
-internally and discovers knots from `.md` files in the loom directory.
+All configuration is `.md` files with YAML frontmatter. Write files
+directly to disk — Knot's file watcher picks up changes automatically.
+No HTTP registration needed.
 
-### Knots as Files
+### Auto-Discovery
 
-Knots are `.md` files with YAML frontmatter placed inside a loom
-directory. Knots can also be created, modified, and deleted via
-HTTP endpoints that write the files and update the in-memory store.
+- Looms: any subdirectory of `rig/` ending in `-loom` is discovered.
+- Knots: any `.md` file inside a loom directory is parsed as a knot.
+- Profiles: any `.md` file in `rig/profiles/` is parsed as a profile.
+  Profiles are read fresh from disk at processing time.
 
-### Profiles as Files
+### Git-Friendly
 
-Agent profiles are `.md` files with YAML frontmatter stored in
-`rig/profiles/`. They can be managed via HTTP endpoints. Profiles are
-resolved at processing time — edits are picked up on the next strand
-event without restart.
+All configuration is plain files tracked by git. Changes are visible
+through diffs. No hidden state.
 
 ### Confirm Before Destructive Actions
 
-Always confirm with the user before deleting a loom or profile.
-Summarise what will be removed.
+Always confirm with the user before deleting a loom directory or profile
+file. Summarise what will be removed.
 
 ---
 
@@ -77,13 +78,16 @@ Rig (`./rig/`, top-level container)
 ```
 
 - A **rig** is the top-level container for all looms and profiles.
-- A **loom** is identified by a unique string ID (must end in `-loom`)
-  and contains `.md` knot definition files.
-- A **knot** references a shared **agent profile** via `agent-profile-ref`
-  and defines task-specific direction via `prompt-template.instructions`.
-  Each knot watches its own `strand-dir` for input files (strands).
-- An **agent profile** is a shared entity storing provider, model, tools,
-  and system prompt. Multiple knots can reference the same profile.
+- A **loom** is a directory inside `rig/` whose name ends in `-loom`
+  (e.g. `prd-review-loom`). Knot discovers these automatically.
+- A **knot** is a `.md` file with YAML frontmatter inside a loom
+  directory. It references a shared **agent profile** via
+  `agent-profile-ref` and defines task-specific direction via
+  `prompt-template.instructions`. Each knot watches its own
+  `strand-dir` for input files (strands).
+- An **agent profile** is a `.md` file with YAML frontmatter stored in
+  `rig/profiles/{name}.md`. Multiple knots can reference the same
+  profile.
 
 ---
 
@@ -96,8 +100,9 @@ first, then create knots that reference it.
 
 1. **Gather required information** from the user:
    - `name`: Profile identifier (e.g. `fast`, `reviewer`, `coder`)
-   - `provider`: AI provider (e.g. `openai`, `anthropic`)
-   - `model`: Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`)
+   - `provider`: AI provider (e.g. `openai`, `anthropic`, or a pi
+     provider name like `llama-workhorse`)
+   - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
    - `system_prompt`: The agent's system prompt/persona
    - `tools` (optional): List of tool names (e.g. `fs`, `web`)
 
@@ -105,35 +110,45 @@ first, then create knots that reference it.
    profiles. If a profile with the same name exists, ask the user
    whether to overwrite.
 
-3. **Create the profile**: Send `POST /profiles/{name}` with JSON body:
-   ```json
-   {
-     "provider": "openai",
-     "model": "gpt-4o",
-     "tools": ["fs"],
-     "system_prompt": "You are a fast reviewer. Keep responses concise and direct."
-   }
+3. **Write the profile file** to `rig/profiles/{name}.md`:
+   ```markdown
+   ---
+   name: fast
+   provider: openai
+   model: gpt-4o
+   tools:
+     - fs
+   system-prompt: |
+     You are a fast reviewer. Keep responses concise and direct.
+   ---
+
+   # Fast Profile
+
+   Lightweight profile for quick reviews.
    ```
-   - Expected response: `201 Created` with body `{"created": true}`
-   - On `400 Bad Request`: Invalid fields (empty provider, model, or system_prompt).
+   - Ensure the `rig/profiles/` directory exists (create it if needed).
+   - The `name` in frontmatter should match the filename stem.
 
 4. **Verify creation**: Send `GET /profiles/{name}` to confirm the
-   profile was created successfully.
+   profile is discoverable by Knot.
 
-5. **Report success**: "Profile `fast` created."
+5. **Report success**: "Profile `fast` created at `rig/profiles/fast.md`."
 
 ### Modify a Profile
 
-When asked to modify a profile:
+When asked to modify a profile, edit the `.md` file directly:
 
-1. **Read the existing profile**: Send `GET /profiles/{name}`.
-   On `404`: Profile does not exist.
+1. **Read the existing profile**: Send `GET /profiles/{name}` to see
+   current values. On `404`: Profile does not exist.
 
-2. **Re-create with updated values**: Send `POST /profiles/{name}`
-   with the updated body. This overwrites the profile file while
-   preserving any custom markdown body.
+2. **Edit the file** at `rig/profiles/{name}.md` with updated
+   frontmatter values. The markdown body (after the closing `---`)
+   is preserved automatically when editing frontmatter.
 
-3. **Report what changed**.
+3. **Verify the change**: Send `GET /profiles/{name}` to confirm the
+   new values are picked up.
+
+4. **Report what changed**.
 
 ### Delete a Profile
 
@@ -143,11 +158,10 @@ When asked to delete a profile:
    by sending `GET /profiles/{name}`. Warn that knots referencing this
    profile will fail on next processing. Ask the user to confirm.
 
-2. **Delete the profile**: Send `DELETE /profiles/{name}`.
-   - Expected response: `204 No Content`
-   - On `404 Not Found`: Profile does not exist.
+2. **Delete the file** at `rig/profiles/{name}.md`.
 
-3. **Verify deletion**: Send `GET /profiles` to confirm the profile is gone.
+3. **Verify deletion**: Send `GET /profiles` to confirm the profile is
+   gone.
 
 4. **Report success**: "Profile `fast` deleted."
 
@@ -158,13 +172,15 @@ When asked to show all profiles:
 1. Send `GET /profiles`.
 2. Present a summary table with: Name, Provider, Model, Tools.
 
-### Create a Loom
+---
 
-A loom is registered with its knots inline. Knots reference profiles
-that must already exist.
+### Create a Loom with Knots
+
+A loom is created by making a directory (ending in `-loom`) and writing
+`.md` knot definition files inside it.
 
 1. **Gather required information** from the user:
-   - `id`: Unique loom identifier, must end in `-loom`
+   - `id`: Loom identifier, must end in `-loom`
      (e.g. `prd-review-loom`, `docs-loom`)
    - At least one knot definition (see below)
 
@@ -176,31 +192,31 @@ that must already exist.
    send `GET /profiles/{name}` to confirm the profile exists.
    If missing, ask the user to create it first.
 
-4. **Register the loom**: Send `POST /looms` with JSON body:
-   ```json
-   {
-     "id": "prd-review-loom",
-     "knots": [
-       {
-         "name": "goals-review",
-         "agent_profile_ref": "fast",
-         "strand_dir": "project/prds",
-         "prompt_template": {
-           "input_bundling": "full-file",
-           "instructions": "Review the goals section for clarity and measurability."
-         }
-       }
-     ]
-   }
+4. **Create the loom directory** at `rig/{id}/` (e.g. `rig/prd-review-loom/`).
+
+5. **Write knot definition files** inside the loom directory.
+   For a single knot named `goals-review`:
+   ```markdown
+   ---
+   name: goals-review
+   agent-profile-ref: fast
+   strand-dir: "project/prds"
+   prompt-template:
+     input-bundling: "full-file"
+     instructions: |
+       Review the goals section for clarity and measurability.
+   ---
+
+   # Goals Review Knot
+
+   This knot reviews the goals section of PRD documents.
    ```
-   - Expected response: `201 Created` with body `{"registered": true}`
-   - On `400 Bad Request`: Invalid loom ID (must end in `-loom`) or
-     empty knots list.
+   Write this to `rig/prd-review-loom/goals-review.md`.
 
-5. **Verify registration**: Send `GET /looms/{id}` to confirm the loom
-   was created successfully.
+6. **Verify registration**: Send `GET /looms/{id}` to confirm Knot has
+   discovered the loom and its knots.
 
-6. **Report success**: "Loom `prd-review-loom` registered with 1 knot."
+7. **Report success**: "Loom `prd-review-loom` created with 1 knot."
 
 ### Add a Knot to an Existing Loom
 
@@ -211,35 +227,42 @@ When asked to add a knot to an existing loom:
 2. **Verify the profile exists**: Send `GET /profiles/{name}` for the
    knot's `agent_profile_ref`.
 
-3. **Create the knot**: Send `POST /looms/{id}/knots` with JSON body:
-   ```json
-   {
-     "name": "non-goals-review",
-     "agent_profile_ref": "fast",
-     "strand_dir": "project/prds",
-     "prompt_template": {
-       "input_bundling": "full-file",
-       "instructions": "Review the non-goals section."
-     }
-   }
-   ```
-   - Expected response: `201 Created` with body `{"created": true}`
-   - On `409 Conflict`: A knot with this name already exists.
+3. **Write the knot file** as `{knot-name}.md` inside the loom
+   directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
+   ```markdown
+   ---
+   name: non-goals-review
+   agent-profile-ref: fast
+   strand-dir: "project/prds"
+   prompt-template:
+     input-bundling: "full-file"
+     instructions: |
+       Review the non-goals section.
+   ---
 
-4. **Report success**: "Knot `non-goals-review` added to loom `prd-review-loom`."
+   # Non-Goals Review Knot
+   ```
+
+4. **Verify**: Send `GET /looms/{id}/knots` to confirm the new knot
+   appears in the list.
+
+5. **Report success**: "Knot `non-goals-review` added to loom
+   `prd-review-loom`."
 
 ### Modify a Knot
 
-When asked to modify a knot:
+When asked to modify a knot, edit its `.md` file directly:
 
-1. **Read the existing loom**: Send `GET /looms/{id}` to see current knots.
+1. **Read the existing loom**: Send `GET /looms/{id}` to see current
+   knots.
 
-2. **Update the knot**: Send `PATCH /looms/{id}/knots/{name}` with the
-   full updated knot JSON body (same shape as create).
-   - Expected response: `200 OK` with body `{"updated": true}`
-   - On `404 Not Found`: Loom or knot does not exist.
+2. **Edit the file** at `rig/{loom-id}/{knot-name}.md` with updated
+   frontmatter values.
 
-3. **Report what changed**.
+3. **Verify**: Send `GET /looms/{id}` to confirm the changes are picked
+   up.
+
+4. **Report what changed**.
 
 ### Delete a Knot
 
@@ -248,11 +271,12 @@ When asked to delete a knot:
 1. **Confirm with the user**: Show the loom's current knots via
    `GET /looms/{id}/knots`. Ask the user to confirm deletion.
 
-2. **Delete the knot**: Send `DELETE /looms/{id}/knots/{name}`.
-   - Expected response: `204 No Content`
-   - On `404 Not Found`: Loom or knot does not exist.
+2. **Delete the file** at `rig/{loom-id}/{knot-name}.md`.
 
-3. **Report success**: "Knot `non-goals-review` deleted from loom `prd-review-loom`."
+3. **Verify**: Send `GET /looms/{id}/knots` to confirm the knot is gone.
+
+4. **Report success**: "Knot `non-goals-review` deleted from loom
+   `prd-review-loom`."
 
 ### Delete a Loom
 
@@ -260,20 +284,19 @@ When asked to delete a loom:
 
 1. **Confirm with the user**: Show the loom's current configuration
    by sending `GET /looms/{id}`. Ask the user to confirm deletion.
+   Note: this deletes the entire directory and all its knot files.
 
-2. **Unregister the loom**: Send `DELETE /looms/{id}`.
-   - Expected response: `204 No Content`
-   - On `404 Not Found`: Loom does not exist.
+2. **Remove the loom directory** at `rig/{id}/`.
 
 3. **Verify deletion**: Send `GET /looms` to confirm the loom is gone.
 
-4. **Report success**: "Loom `prd-review-loom` unregistered."
+4. **Report success**: "Loom `prd-review-loom` deleted."
 
 ### List All Looms
 
 When asked to show all looms:
 
-1. Send `GET /looms` to list all registered looms.
+1. Send `GET /looms` to list all discovered looms.
 2. Present a summary table with: ID, Knot Count.
 
 ---
@@ -365,7 +388,7 @@ Lightweight profile for quick reviews.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | **Yes** | Profile identifier (becomes the filename) |
+| `name` | **Yes** | Profile identifier (becomes the filename stem) |
 | `provider` | **Yes** | LLM provider (e.g. `openai`, `anthropic`) |
 | `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
@@ -392,91 +415,24 @@ no restart needed.
 
 ---
 
-## API Reference
+## Verification Endpoints (GET Only)
 
-Before making calls, review the OpenAPI spec at:
-`http://localhost:3000/swagger-ui/openapi.json`
+All configuration is file-first. Use these `GET` endpoints to verify
+state after writing or editing files.
 
-### Endpoints Used by This Skill
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /looms` | List all discovered looms |
+| `GET /looms/{id}` | Get loom details (knots included) |
+| `GET /looms/{id}/knots` | List knot names in a loom |
+| `GET /looms/{id}/activity` | Get loom activity log |
+| `GET /looms/{id}/knots/{name}` | Get knot processing status |
+| `GET /profiles` | List all agent profiles |
+| `GET /profiles/{name}` | Get a profile by name |
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/looms` | GET | List all looms |
-| `/looms` | POST | Register a new loom (with knots) |
-| `/looms/{id}` | GET | Get loom details |
-| `/looms/{id}` | DELETE | Unregister a loom |
-| `/looms/{id}/knots` | GET | List knot names in a loom |
-| `/looms/{id}/knots` | POST | Add a knot to a loom |
-| `/looms/{id}/knots/{name}` | PATCH | Update a knot |
-| `/looms/{id}/knots/{name}` | DELETE | Remove a knot from a loom |
-| `/profiles` | GET | List all agent profiles |
-| `/profiles/{name}` | GET | Get a profile by name |
-| `/profiles/{name}` | POST | Create or update a profile |
-| `/profiles/{name}` | DELETE | Delete a profile |
+### Response Schemas
 
-### Request/Response Schemas
-
-**POST /looms** — Register a new loom
-
-Request body:
-```json
-{
-  "id": "prd-review-loom",
-  "knots": [
-    {
-      "name": "goals-review",
-      "agent_profile_ref": "fast",
-      "strand_dir": "project/prds",
-      "prompt_template": {
-        "input_bundling": "full-file",
-        "instructions": "Review the goals section."
-      }
-    }
-  ]
-}
-```
-
-Responses:
-- `201 Created`: `{"registered": true}`
-- `400 Bad Request`: Invalid loom ID (must end in `-loom`) or empty knots.
-
-**POST /looms/{id}/knots** — Add a knot
-
-Request body:
-```json
-{
-  "name": "non-goals-review",
-  "agent_profile_ref": "fast",
-  "strand_dir": "project/prds",
-  "prompt_template": {
-    "input_bundling": "full-file",
-    "instructions": "Review the non-goals section."
-  }
-}
-```
-
-Responses:
-- `201 Created`: `{"created": true}`
-- `404 Not Found`: Loom does not exist.
-- `409 Conflict`: Knot with this name already exists.
-
-**PATCH /looms/{id}/knots/{name}** — Update a knot
-
-Request body: same shape as POST (full knot definition).
-
-Responses:
-- `200 OK`: `{"updated": true}`
-- `404 Not Found`: Loom or knot does not exist.
-
-**DELETE /looms/{id}/knots/{name}** — Remove a knot
-
-Responses:
-- `204 No Content`
-- `404 Not Found`: Loom or knot does not exist.
-
-**GET /looms** — List all looms
-
-Response: `Array<LoomSummary>`
+**GET /looms** → `Array<LoomSummary>`:
 ```json
 [
   {
@@ -486,9 +442,7 @@ Response: `Array<LoomSummary>`
 ]
 ```
 
-**GET /looms/{id}** — Get loom details
-
-Response: `Loom`
+**GET /looms/{id}** → `Loom`:
 ```json
 {
   "id": {"0": "prd-review-loom"},
@@ -506,35 +460,12 @@ Response: `Loom`
 }
 ```
 
-**DELETE /looms/{id}** — Unregister a loom
-
-Responses:
-- `204 No Content`
-- `404 Not Found`
-
-**GET /looms/{id}/knots** — List knot names
-
-Response: `Array<String>` (knot name identifiers)
-
-**POST /profiles/{name}** — Create or update a profile
-
-Request body:
+**GET /looms/{id}/knots** → `Array<String>`:
 ```json
-{
-  "provider": "openai",
-  "model": "gpt-4o",
-  "tools": ["fs"],
-  "system_prompt": "You are a fast reviewer."
-}
+["goals-review", "non-goals-review"]
 ```
 
-Responses:
-- `201 Created`: `{"created": true}`
-- `400 Bad Request`: Empty provider, model, or system_prompt.
-
-**GET /profiles** — List all profiles
-
-Response: `Array<ProfileResponse>`
+**GET /profiles** → `Array<ProfileResponse>`:
 ```json
 [
   {
@@ -547,15 +478,16 @@ Response: `Array<ProfileResponse>`
 ]
 ```
 
-**GET /profiles/{name}** — Get a profile
-
-Response: `ProfileResponse` (same shape as above)
-
-**DELETE /profiles/{name}** — Delete a profile
-
-Responses:
-- `204 No Content`
-- `404 Not Found`
+**GET /profiles/{name}** → `ProfileResponse`:
+```json
+{
+  "name": "fast",
+  "provider": "openai",
+  "model": "gpt-4o",
+  "tools": ["fs"],
+  "system_prompt": "You are a fast reviewer. Keep responses concise and direct."
+}
+```
 
 ---
 
@@ -563,11 +495,10 @@ Responses:
 
 | Scenario | Action |
 |----------|--------|
-| `POST /looms` returns 400 | Invalid loom ID (must end in `-loom`) or empty knots. Report to user. |
-| `POST /looms/{id}/knots` returns 409 | Knot name already exists. Ask user to choose different name. |
-| `DELETE /looms/{id}` returns 404 | Loom not found. Already deleted or never existed. |
-| `DELETE /profiles/{name}` returns 404 | Profile not found. |
-| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check `GET /looms/{id}/knots/{name}` status. |
+| `GET /looms/{id}` returns 404 | Loom not found. Directory may not end in `-loom`, or file watcher hasn't picked it up yet. |
+| `GET /profiles/{name}` returns 404 | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
+| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log via `GET /looms/{id}/activity`. |
+| Knot file parse errors | Knot is skipped. Check `GET /looms/{id}/activity` for `KnotParseWarning` events. |
 | Connection refused | Knot is not running. Suggest `knot-init` skill. |
 
 ---
@@ -575,72 +506,46 @@ Responses:
 ## Quick Reference
 
 ```bash
-# List all looms
+# Create a profile (write file directly)
+mkdir -p rig/profiles
+cat > rig/profiles/fast.md << 'EOF'
+---
+name: fast
+provider: openai
+model: gpt-4o
+system-prompt: |
+  You are a fast reviewer.
+---
+# Fast Profile
+EOF
+
+# Create a loom with a knot (write files directly)
+mkdir -p rig/prd-review-loom
+cat > rig/prd-review-loom/goals-review.md << 'EOF'
+---
+name: goals-review
+agent-profile-ref: fast
+strand-dir: "project/prds"
+prompt-template:
+  input-bundling: "full-file"
+  instructions: "Review the goals section."
+---
+# Goals Review
+EOF
+
+# Verify Knot has discovered the changes
 curl http://localhost:3000/looms
-
-# Register a loom with knots
-curl -X POST http://localhost:3000/looms \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "prd-review-loom",
-    "knots": [{
-      "name": "goals-review",
-      "agent_profile_ref": "fast",
-      "strand_dir": "project/prds",
-      "prompt_template": {
-        "input_bundling": "full-file",
-        "instructions": "Review the goals section."
-      }
-    }]
-  }'
-
-# Get loom details
 curl http://localhost:3000/looms/prd-review-loom
-
-# List knots in a loom
-curl http://localhost:3000/looms/prd-review-loom/knots
-
-# Add a knot
-curl -X POST http://localhost:3000/looms/prd-review-loom/knots \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "non-goals-review",
-    "agent_profile_ref": "fast",
-    "strand_dir": "project/prds",
-    "prompt_template": {
-      "input_bundling": "full-file",
-      "instructions": "Review the non-goals section."
-    }
-  }'
-
-# Update a knot
-curl -X PATCH http://localhost:3000/looms/prd-review-loom/knots/goals-review \
-  -H "Content-Type: application/json" \
-  -d '{...}'
-
-# Delete a knot
-curl -X DELETE http://localhost:3000/looms/prd-review-loom/knots/goals-review
-
-# Unregister a loom
-curl -X DELETE http://localhost:3000/looms/prd-review-loom
-
-# List all profiles
 curl http://localhost:3000/profiles
 
-# Create a profile
-curl -X POST http://localhost:3000/profiles/fast \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "openai",
-    "model": "gpt-4o",
-    "system_prompt": "You are a fast reviewer."
-  }'
+# Delete a knot (remove its file)
+rm rig/prd-review-loom/goals-review.md
 
-# Get a profile
-curl http://localhost:3000/profiles/fast
+# Delete a profile (remove its file)
+rm rig/profiles/fast.md
 
-# Delete a profile
-curl -X DELETE http://localhost:3000/profiles/fast
+# Delete a loom (remove the directory)
+rm -rf rig/prd-review-loom
 
 # View full API documentation
 # Open browser: http://localhost:3000/swagger-ui
@@ -655,5 +560,6 @@ Related skills:
 1. **knot-init skill** — initialise the rig (prerequisite for this skill)
 2. **knot-inspect skill** — inspect loom activity and knot processing state
 
-This skill (`knot-create`) manages the full loom, knot, and profile lifecycle.
-Use knot-inspect for monitoring and debugging.
+This skill (`knot-create`) manages the full loom, knot, and profile
+lifecycle through direct file operations. Use knot-inspect for
+monitoring and debugging.
