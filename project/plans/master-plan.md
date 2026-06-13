@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-12
-> **Plan Added:** Tie-Off Output Rename and Knot File Cleanup
+> **Last Updated:** 2026-06-13
+> **Plan Added:** Profile Body Storage and Init Default Profile
 
 ## How to Add a Plan
 
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 25 | [Profile Body Storage and Init Default Profile](profile-init-and-body.md) | ⬜ Planned | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
@@ -77,6 +78,15 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 25. Profile Body Storage and Init Default Profile
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-13
+**PRD:** [Knot Skills — AI-Driven Configuration via Skills](../prds/prd-knot-skills.md)
+**Goal:** Allow profile `.md` files to carry a markdown body with comments documenting available models and tools, and have `knot-init` draft a first default profile with comment annotations on a fresh rig.
+
+Full details in [profile-init-and-body.md](profile-init-and-body.md).
 
 ### 24. Tie-Off Output Rename and Knot File Cleanup
 
