@@ -1,6 +1,6 @@
 ---
-name: knots-and-looms
-description: "Create, modify, and delete looms and knots via Knot's HTTP API, and manage agent profiles on disk. A loom watches strand directories through configured knots. Each knot references a shared agent profile. This skill handles the full loom/knot/profile lifecycle. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
+name: knot-create
+description: "Create looms and knots via Knot's HTTP API. A loom watches strand directories through configured knots. Each knot references a shared agent profile that provides the LLM provider, model, tools, and system prompt. This skill holds the theory and application notes on creating looms and knots, including profile management, the domain model, and the full CRUD lifecycle. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
 license: MIT
 metadata:
   author: Knot Team
@@ -9,10 +9,11 @@ metadata:
   api_spec: "http://localhost:3000/swagger-ui/openapi.json"
 ---
 
-# Knots, Looms, and Profiles Skill
+# Knot Create Skill
 
-Create, modify, and delete looms, knots, and agent profiles through Knot's
-HTTP API and file system.
+Create looms and knots through Knot's HTTP API and file system. This skill
+holds the theory and application notes for the full loom/knot/profile
+lifecycle — creation, modification, and deletion.
 
 A **loom** is a directory inside the rig (name ending in `-loom`) that
 contains `.md` knot definition files. Each **knot** references a shared
@@ -654,5 +655,5 @@ Related skills:
 1. **knot-init skill** — initialise the rig (prerequisite for this skill)
 2. **knot-inspect skill** — inspect loom activity and knot processing state
 
-This skill manages the full loom, knot, and profile lifecycle. Use
-knot-inspect for monitoring and debugging.
+This skill (`knot-create`) manages the full loom, knot, and profile lifecycle.
+Use knot-inspect for monitoring and debugging.

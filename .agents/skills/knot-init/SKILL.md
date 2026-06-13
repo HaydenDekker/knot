@@ -69,7 +69,7 @@ When asked to initialise a Knot rig:
 4. **Check for existing looms**:
    - Send `GET /looms` to `http://localhost:3000/looms`.
    - If the response is an empty array `[]`, the rig has no looms yet.
-     Report: "Rig is initialised but has no looms. Use the `knots-and-looms`
+     Report: "Rig is initialised but has no looms. Use the `knot-create`
      skill to create looms."
    - If the response contains looms, report the existing loom IDs and
      suggest using the `knot-inspect` skill to examine them.
@@ -83,7 +83,7 @@ When asked to initialise a Knot rig:
    - Knot service status (running)
    - Rig configuration (from `/config/rig`)
    - Number of registered looms
-   - Next steps (create looms with `knots-and-looms` skill)
+   - Next steps (create looms with `knot-create` skill)
 
 ---
 
@@ -158,7 +158,7 @@ curl http://localhost:3000/looms
 
 After initialisation, the workflow continues with:
 
-1. **knots-and-looms skill** — create, modify, or delete looms and knots
+1. **knot-create skill** — create, modify, or delete looms and knots
 2. **knot-inspect skill** — inspect rig, loom, and knot state
 
 This skill prepares the rig. The other skills manage the content.

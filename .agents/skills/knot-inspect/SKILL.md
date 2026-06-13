@@ -1,6 +1,6 @@
 ---
 name: knot-inspect
-description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity logs, check knot processing status, list agent profiles. Read-only access to rig state via Knot's HTTP API. USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knots-and-looms), deleting looms (use knots-and-looms), creating profiles (use knots-and-looms), initialising a rig (use knot-init), triggering processing."
+description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity logs, check knot processing status, list agent profiles. Read-only access to rig state via Knot's HTTP API. USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing."
 license: MIT
 metadata:
   author: Knot Team
@@ -25,7 +25,7 @@ processing status, and agent profiles through Knot's HTTP API.
 ### Read-Only
 
 This skill only reads state. It does not modify, create, or delete any
-resources. Use `knot-init` or `knots-and-looms` for write operations.
+resources. Use `knot-init` or `knot-create` for write operations.
 
 ### Progressive Disclosure
 
@@ -67,7 +67,7 @@ When asked to show rig status:
    | `fast` | `openai` | `gpt-4o` |
 
 5. **If no looms**: Report "No looms are registered. Use the
-   `knots-and-looms` skill to create looms."
+   `knot-create` skill to create looms."
 
 ### Inspect a Specific Loom
 
@@ -349,7 +349,7 @@ curl http://localhost:3000/profiles/fast
 Related skills:
 
 1. **knot-init skill** — initialise the rig
-2. **knots-and-looms skill** — create, modify, or delete looms, knots, and profiles
+2. **knot-create skill** — create, modify, or delete looms, knots, and profiles
 
-This skill provides visibility into rig state. Use knots-and-looms for
+This skill provides visibility into rig state. Use knot-create for
 changes.

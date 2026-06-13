@@ -32,7 +32,7 @@ This project maintains agent skills in `.agents/skills/`. Pi discovers these as 
 
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
-- **knots-and-looms** — Create, modify, delete looms, knots, and agent profiles
+- **knot-create** — Create, modify, delete looms, knots, and agent profiles
 
 ### Workflow
 
