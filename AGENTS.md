@@ -24,6 +24,24 @@ cargo run
 
 This starts the Knot HTTP service on `localhost:3000` (or the configured port).
 
+## Agent Skills
+
+This project maintains agent skills in `.agents/skills/`. Pi discovers these as project-local skills, which override any same-named global skills in `~/.agents/skills/`.
+
+### Knot Skills
+
+- **knot-init** — Initialise a Knot rig in a directory
+- **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
+- **knots-and-looms** — Create, modify, delete looms, knots, and agent profiles
+
+### Workflow
+
+Skills are developed and tested at the project level (`.agents/skills/`) before being installed globally for use by other projects. To publish a skill globally:
+
+```bash
+cp -r .agents/skills/<skill-name> ~/.agents/skills/<skill-name>
+```
+
 ## Domain Glossary
 
 Domain terms used throughout the project are defined in [project/domain-glossary.md](project/domain-glossary.md). Read it before starting work on any feature.

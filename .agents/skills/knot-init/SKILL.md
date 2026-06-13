@@ -4,8 +4,8 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.1.0+"
+  version: "2.0.0"
+  compatibility: "Knot 0.2.0+"
   api_spec: "http://localhost:3000/swagger-ui/openapi.json"
 ---
 
@@ -59,6 +59,7 @@ When asked to initialise a Knot rig:
    - Expected response: `200 OK` with JSON body:
      ```json
      {
+       "rig_path": "/absolute/path/to/rig",
        "cli_path": "pi",
        "cli_args": []
      }
@@ -103,9 +104,10 @@ Before making calls, review the OpenAPI spec at:
 
 **GET /health** → `200` with plain text body `ok`
 
-**GET /config/rig** → `200` with `RigAgentConfig`:
+**GET /config/rig** → `200` with `RigConfigResponse`:
 ```json
 {
+  "rig_path": "/absolute/path/to/rig",
   "cli_path": "pi",
   "cli_args": []
 }
@@ -115,8 +117,7 @@ Before making calls, review the OpenAPI spec at:
 ```json
 [
   {
-    "id": {"0": "my-loom"},
-    "source_dir": "src/docs",
+    "id": {"0": "prd-review-loom"},
     "knot_count": 2
   }
 ]
