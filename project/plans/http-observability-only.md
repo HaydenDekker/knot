@@ -75,19 +75,18 @@ The PRD's "HTTP-only" constraint was intended to keep skills clean and Knot in c
 - [x] Verify `cargo build` + `cargo test` pass (310 tests pass, 1 ignored)
 
 ### Phase 3: Update skills for file-first approach
-- [ ] Update `knot-create` skill (`/.agents/skills/knot-create/SKILL.md`):
-  - Remove all HTTP POST/PATCH/DELETE references
-  - Document file paths and formats for creating looms, knots, profiles
-  - Explain that Knot auto-discovers via file watcher (no registration needed)
-  - Document `GET` endpoints for verification only
-- [ ] Update `knot-init` skill (`/.agents/skills/knot-init/SKILL.md`):
-  - Add profile discovery from `~/.pi/agent/models.json`
-  - When no profiles exist, write first profile file directly to `rig/profiles/default.md`
-  - Include markdown body with comment annotations documenting alternatives
-  - Verify via `GET /profiles` and `GET /profiles/default`
-- [ ] Update `knot-inspect` skill (no changes needed — already read-only)
-- [ ] Update `knots-and-looms` skill in `~/.agents/skills/` (global copy, if still present) or note deprecation
-- [ ] Verify skill integration tests reference correct endpoints
+- [x] Update `knot-create` skill (`/.agents/skills/knot-create/SKILL.md`):
+  - All HTTP POST/PATCH/DELETE workflows replaced with file-first approach
+  - Documented file paths and formats for creating looms, knots, profiles
+  - Explained auto-discovery via file watcher (no registration needed)
+  - Documented `GET` endpoints for verification only
+- [x] Update `knot-init` skill (`/.agents/skills/knot-init/SKILL.md`):
+  - Added profile discovery from `~/.pi/agent/models.json`
+  - When no profiles exist, writes `rig/profiles/default.md` with markdown body documenting alternatives
+  - Verifies via `GET /profiles` and `GET /profiles/{name}`
+- [x] Update `knot-inspect` skill (no changes needed — already read-only)
+- [x] Update `knots-and-looms` skill in `~/.agents/skills/` — removed (stale global duplicate of project-local `knot-create`)
+- [x] Verify skill integration tests reference correct endpoints (16 tests pass)
 
 ### Phase 4: Verify full system integration
 - [ ] Full `cargo test` passes
