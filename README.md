@@ -1,6 +1,15 @@
 # Knot
 
-Knot is an **AI workflow orchestrator** — a file-first system for structuring, managing, and running AI agent workflows.
+Knot is an blank canvas, a software factory, an **Agentic Harness**, a swarm or workflow orchestrator — that's because it's a file-first system that run in the background along side your workspace and reacts to you.
+
+It's not an agent however. You bring your own agent.
+
+You use knot with your agent and an IDE.
+
+Knot helps with but not limited to,
+
+- Tokenomics
+- Agent Self-Improvement
 
 ## Philosophy
 
