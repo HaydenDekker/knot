@@ -31,6 +31,9 @@ pub struct ProfileResponse {
     pub tools: Vec<String>,
     /// The system prompt.
     pub system_prompt: String,
+    /// Optional markdown body from the profile file (documentation only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Response for `GET /config/rig` — rig path info plus agent config.

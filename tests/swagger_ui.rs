@@ -209,6 +209,29 @@ async fn openapi_json_returns_valid_spec() {
     assert!(paths.contains_key("/looms/{id}/knots"));
     assert!(paths.contains_key("/looms/{id}/knots/{name}"));
 
+    // Verify profile paths are present (observability GET endpoints)
+    assert!(paths.contains_key("/profiles"), "GET /profiles should exist");
+    assert!(paths.contains_key("/profiles/{name}"), "GET /profiles/{{name}} should exist");
+
+    // Verify control endpoints are NOT present (removed — file-first approach)
+    for (path_key, path_obj) in paths.iter() {
+        let path_str: &str = path_key;
+        let path_map = path_obj.as_object().expect("path should be object");
+        // No POST/PATCH/DELETE methods should exist on any path
+        assert!(
+            !path_map.contains_key("post"),
+            "POST method should not exist on {path_str} — control endpoints removed"
+        );
+        assert!(
+            !path_map.contains_key("patch"),
+            "PATCH method should not exist on {path_str} — control endpoints removed"
+        );
+        assert!(
+            !path_map.contains_key("delete"),
+            "DELETE method should not exist on {path_str} — control endpoints removed"
+        );
+    }
+
     // Verify key schemas are present
     let schemas = spec
         .get("components")
@@ -226,4 +249,30 @@ async fn openapi_json_returns_valid_spec() {
     assert!(schemas.contains_key("ProcessingStatus"));
     assert!(schemas.contains_key("AgentConfig"));
     assert!(schemas.contains_key("PromptTemplate"));
+    assert!(schemas.contains_key("ProfileResponse"));
+
+    // Verify removed request types are NOT in schemas
+    assert!(
+        !schemas.contains_key("RegisterLoomRequest"),
+        "RegisterLoomRequest should be removed from schemas"
+    );
+    assert!(
+        !schemas.contains_key("KnotRequest"),
+        "KnotRequest should be removed from schemas"
+    );
+    assert!(
+        !schemas.contains_key("ProfileRequest"),
+        "ProfileRequest should be removed from schemas"
+    );
+
+    // Verify ProfileResponse schema includes body field
+    let profile_response = &schemas["ProfileResponse"];
+    let props = profile_response
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .expect("ProfileResponse should have properties");
+    assert!(
+        props.contains_key("body"),
+        "ProfileResponse should have 'body' field for markdown content"
+    );
 }

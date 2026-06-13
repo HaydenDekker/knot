@@ -92,8 +92,8 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
                 e
             ))
         })?;
-
-        Ok(Some(profile))
+        let body = extract_body(&content);
+        Ok(Some(profile.with_body(body)))
     }
 
     fn list(&self) -> Result<Vec<AgentProfile>, PortError> {

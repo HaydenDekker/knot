@@ -177,6 +177,7 @@ pub async fn list_profiles(State(ctx): State<AppContext>) -> Response {
                     model: p.model,
                     tools: p.tools,
                     system_prompt: p.system_prompt,
+                    body: p.body,
                 })
                 .collect();
             (StatusCode::OK, Json(responses)).into_response()
@@ -213,6 +214,7 @@ pub async fn get_profile(
                 model: profile.model,
                 tools: profile.tools,
                 system_prompt: profile.system_prompt,
+                body: profile.body,
             };
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -1206,5 +1208,80 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
 
         assert_eq!(resp.status(), 404);
+    }
+
+    /// `GET /profiles/:name` returns the body field when the profile
+    /// has markdown body content (documentation after frontmatter).
+    #[tokio::test]
+    async fn get_profile_with_body() {
+        let repo = MockProfileRepository::new();
+        let profile = AgentProfile::new(
+            "documented".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+            "You are a code reviewer.".to_string(),
+        )
+        .unwrap()
+        .with_body(Some("This profile is used for code review tasks.".to_string()));
+        repo.add(profile);
+
+        let ctx = AppContext {
+            store: LoomStore::new(),
+            loom_repo: Arc::new(MockLoomRepository::new()),
+            loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+            tie_off_sink: Arc::new(MockTieOffSink),
+            event_source: Arc::new(TrackingEventSource::new().0),
+            event_sender: {
+                let (tx, _rx) = mpsc::channel::<StrandEvent>(100);
+                tx
+            },
+            agent_runner: Arc::new(MockAgentRunner),
+            profile_repo: Arc::new(repo),
+            rig_config: RigAgentConfig::default_config(),
+            loom_ids: Vec::new(),
+            base_dir: PathBuf::from("./rig"),
+        };
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles/documented")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profile: ProfileResponse =
+            serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(profile.name, "documented");
+        assert_eq!(profile.provider, "anthropic");
+        assert_eq!(profile.body, Some("This profile is used for code review tasks.".to_string()));
+    }
+
+    /// `GET /profiles/:name` omits body field when profile has no
+    /// markdown body (skip_serializing_if = None).
+    #[tokio::test]
+    async fn get_profile_without_body_omits_field() {
+        let ctx = build_test_context_with_profiles(&["fast"]);
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .uri("/profiles/fast")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body_bytes);
+        // body field should be omitted from JSON when None
+        assert!(
+            !text.contains("\"body\""),
+            "body field should be omitted when None, got: {text}"
+        );
     }
 }

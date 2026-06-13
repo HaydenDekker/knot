@@ -223,6 +223,11 @@ pub struct AgentProfile {
     /// The system prompt given to the agent.
     #[serde(rename = "system-prompt")]
     pub system_prompt: String,
+    /// Optional markdown body content from the profile file (after closing
+    /// `---` frontmatter delimiter). Not serialized to YAML frontmatter —
+    /// read from disk by the filesystem repository.
+    #[serde(skip_deserializing, default)]
+    pub body: Option<String>,
 }
 
 impl AgentProfile {
@@ -255,6 +260,7 @@ impl AgentProfile {
             model,
             tools: Vec::new(),
             system_prompt,
+            body: None,
         })
     }
 
@@ -284,7 +290,17 @@ impl AgentProfile {
             model,
             tools,
             system_prompt,
+            body: None,
         })
+    }
+
+    /// Add markdown body content to an existing profile.
+    ///
+    /// Used by the filesystem repository when reading profile files that
+    /// contain markdown body after the closing frontmatter delimiter.
+    pub fn with_body(mut self, body: Option<String>) -> Self {
+        self.body = body;
+        self
     }
 }
 
