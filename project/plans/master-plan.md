@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-13
-> **Plan Added:** HTTP Observability Only — Remove Control Endpoints
+> **Plan Completed:** HTTP Observability Only — Remove Control Endpoints
 
 ## How to Add a Plan
 
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ⬜ Planned | 2026-06-13 |
+| 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
@@ -81,9 +81,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 26. HTTP Observability Only — Remove Control Endpoints
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-13
+**Completed:** 2026-06-13
 **Goal:** Remove all control (POST/PUT/DELETE) endpoints from the HTTP interface, keeping only read-only observability (GET endpoints). Configuration (profiles, looms, knots) becomes file-first — skills write files directly, Knot's file watcher auto-discovers changes.
+
+**Result:** 7 control endpoints removed (`POST /looms`, `DELETE /looms/{id}`, `POST /looms/{id}/knots`, `PATCH /looms/{id}/knots/{name}`, `DELETE /looms/{id}/knots/{name}`, `POST /profiles/{name}`, `DELETE /profiles/{name}`). Request types `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` removed. 3600+ lines of handler code and tests eliminated. `AgentProfile.body: Option<String>` added for profile markdown body. Skills updated to file-first approach. 317 tests pass (3 ignored). Version bumped to 0.3.0. ADR-006 documents the file-first approach; ADR-005 documents the skill integration testing strategy.
 
 Full details in [http-observability-only.md](http-observability-only.md).
 
