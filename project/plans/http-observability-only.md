@@ -24,7 +24,7 @@ The PRD's "HTTP-only" constraint was intended to keep skills clean and Knot in c
 6. All tests updated to match
 7. The file-first approach documented in skills (paths, formats, what Knot auto-discovers)
 
-## Implementation Status: ✅ Complete (2026-06-13)
+## Implementation Status: ✅ Complete (Phases 0-4, 2026-06-13) — Phase 5 pending
 
 ## Result
 
@@ -116,3 +116,17 @@ Full details in [http-observability-only.md](http-observability-only.md).
 - **What becomes file-first:** Creating/modifying/deleting profiles, looms, and knots. Skills write `.md` files directly. The file watcher activates changes.
 - **Body preservation is solved naturally.** Writing the full `.md` file (frontmatter + body) is a single `fs::write` — no threading through JSON, no trait changes, no round-trip issues.
 - **The uncommitted changes (trait `save` with body parameter) are reverted in Phase 2.** They were exploring the wrong solution — making HTTP handle file-level metadata instead of just writing the file.
+
+### Phase 5: Close test gaps — file-first CRUD integration + skill workflow
+- [ ] Add `tests/skill_e2e.rs` (ignored by default, `pi`-dependent) for subprocess-based skill tests
+- [ ] Integration test: loom directory deletion — create `*-loom/` dir, verify via `GET /looms`, remove directory, verify via `GET /looms` that loom is gone
+- [ ] Integration test: profile modify via file — write profile file, verify via `GET /profiles/{name}`, edit file frontmatter, verify updated values via `GET /profiles/{name}`
+- [ ] Integration test: profile delete via file — write profile file, verify via `GET /profiles`, delete file, verify via `GET /profiles` that profile is gone
+- [ ] Integration test: profile body end-to-end — write profile file with markdown body, verify `GET /profiles/{name}` returns `body` field
+- [ ] Skill workflow test: `knot-create` profile workflow — invoke `knot-create` skill via Pi CLI subprocess (see [ADR-005](../adrs/adr-005-skill-integration-testing.md)), verify profile file created and discoverable via `GET /profiles/{name}`
+- [ ] Skill workflow test: `knot-create` loom+knot workflow — invoke `knot-create` skill via Pi CLI subprocess, verify loom directory created, knot discovered via `GET /looms/{id}`
+- [ ] Add `ignore` annotation and `pi` dependency check to new tests
+- [ ] Verify `cargo test` (fast suite) still passes
+- [ ] Verify `cargo test --test skill_e2e -- --ignored --include-ignored` passes in CI environment
+
+**Result:** Test gaps from plan review closed. File-first CRUD operations (create, modify, delete) verified at integration level for all three entity types. Skill workflows validated end-to-end via Pi CLI subprocess. See [ADR-005: Skill Integration Testing](../adrs/adr-005-skill-integration-testing.md) for the testing approach.
