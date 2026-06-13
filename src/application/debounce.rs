@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::domain::events::StrandEvent;
-use crate::domain::entities::StrandPath;
+use crate::domain::entities::{KnotId, LoomId, StrandPath};
 
 /// Default debounce window: 100 ms per file.
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
@@ -90,8 +90,12 @@ impl DebounceEngine {
         mut input_rx: mpsc::Receiver<StrandEvent>,
         output_tx: mpsc::Sender<StrandEvent>,
     ) {
-        // Maps strand path → (last event, deadline for emission)
-        let mut pending: HashMap<StrandPath, (StrandEvent, tokio::time::Instant)> =
+        // Maps (strand_path, loom_id, knot_id) → (last event, deadline for emission).
+        // The composite key ensures events for the same file but different
+        // knots are tracked independently — two knots watching the same
+        // strand directory each get their own debounced event.
+        type EventKey = (StrandPath, LoomId, KnotId);
+        let mut pending: HashMap<EventKey, (StrandEvent, tokio::time::Instant)> =
             HashMap::new();
 
         let window = DEBOUNCE_WINDOW;
@@ -101,11 +105,11 @@ impl DebounceEngine {
             tokio::select! {
                 biased;
 
-                // New raw event arrives — update the pending entry for that file.
+                // New raw event arrives — update the pending entry for that (file, knot) pair.
                 maybe_event = input_rx.recv() => {
                     match maybe_event {
                         Some(event) => {
-                            let key = Self::file_key(&event);
+                            let key = Self::event_key(&event);
                             let deadline = tokio::time::Instant::now() + window;
                             pending.insert(key, (event, deadline));
                         }
@@ -123,11 +127,11 @@ impl DebounceEngine {
                     let expired: Vec<_> = pending
                         .iter()
                         .filter(|(_, (_, deadline))| *deadline <= now)
-                        .map(|(path, _)| path.clone())
+                        .map(|(key, _)| key.clone())
                         .collect();
 
-                    for path in expired {
-                        if let Some((event, _)) = pending.remove(&path) {
+                    for key in expired {
+                        if let Some((event, _)) = pending.remove(&key) {
                             let _ = output_tx.send(event).await;
                         }
                     }
@@ -138,7 +142,7 @@ impl DebounceEngine {
 
     /// Flush all pending entries to the output channel (used on shutdown).
     async fn flush_all(
-        pending: &HashMap<StrandPath, (StrandEvent, tokio::time::Instant)>,
+        pending: &HashMap<(StrandPath, LoomId, KnotId), (StrandEvent, tokio::time::Instant)>,
         output_tx: &mpsc::Sender<StrandEvent>,
     ) {
         for (event, _) in pending.values() {
@@ -146,12 +150,27 @@ impl DebounceEngine {
         }
     }
 
-    /// Extract the strand path (file key) from a `StrandEvent`.
-    fn file_key(event: &StrandEvent) -> StrandPath {
+    /// Extract the composite key (file, loom, knot) from a `StrandEvent`.
+    ///
+    /// Using all three fields ensures that the same file watched by
+    /// different knots produces independent debounced events.
+    fn event_key(event: &StrandEvent) -> (StrandPath, LoomId, KnotId) {
         match event {
-            StrandEvent::Created { strand_path, .. } => strand_path.clone(),
-            StrandEvent::Modified { strand_path, .. } => strand_path.clone(),
-            StrandEvent::Deleted { strand_path, .. } => strand_path.clone(),
+            StrandEvent::Created {
+                strand_path,
+                loom_id,
+                knot_id,
+            }
+            | StrandEvent::Modified {
+                strand_path,
+                loom_id,
+                knot_id,
+            }
+            | StrandEvent::Deleted {
+                strand_path,
+                loom_id,
+                knot_id,
+            } => (strand_path.clone(), loom_id.clone(), knot_id.clone()),
         }
     }
 }
@@ -208,6 +227,24 @@ mod tests {
             | StrandEvent::Deleted { strand_path, .. } => {
                 strand_path.0.to_string_lossy().into_owned()
             }
+        }
+    }
+
+    /// Extract the knot ID from a `StrandEvent`.
+    fn event_knot_id(event: &StrandEvent) -> String {
+        match event {
+            StrandEvent::Created { knot_id, .. }
+            | StrandEvent::Modified { knot_id, .. }
+            | StrandEvent::Deleted { knot_id, .. } => knot_id.0.clone(),
+        }
+    }
+
+    /// Build a `Created` event with explicit loom/knot IDs.
+    fn created_for(path: &str, loom: &str, knot: &str) -> StrandEvent {
+        StrandEvent::Created {
+            loom_id: LoomId(loom.to_string()),
+            knot_id: KnotId(knot.to_string()),
+            strand_path: StrandPath(PathBuf::from(path)),
         }
     }
 
@@ -350,6 +387,58 @@ mod tests {
             rx.recv(),
         )
         .await;
+        assert!(extra.is_err(), "no extra events expected");
+    }
+
+    /// Same file modified, but watched by two different knots — both
+    /// knots get independent debounced events.
+    #[tokio::test]
+    async fn same_file_different_knots_both_emit() {
+        let (tx, mut rx, _handle) = DebounceEngine::start();
+
+        // Two knots watch the same strand directory.
+        // A file change produces events for both knots.
+        tx.send(created_for("shared.md", "loom-1", "knot-a"))
+            .await
+            .unwrap();
+        tx.send(created_for("shared.md", "loom-1", "knot-b"))
+            .await
+            .unwrap();
+
+        // Wait for debounce window.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        // Both knots should receive events (different debounce keys).
+        let mut received = Vec::new();
+        for _ in 0..2 {
+            let event = tokio::time::timeout(
+                Duration::from_millis(50),
+                rx.recv(),
+            )
+            .await
+            .expect("should receive event")
+            .expect("channel should not be closed");
+            received.push(event);
+        }
+
+        let knot_ids: Vec<_> = received.iter().map(event_knot_id).collect();
+        assert!(
+            knot_ids.contains(&"knot-a".to_string()),
+            "knot-a should have received an event"
+        );
+        assert!(
+            knot_ids.contains(&"knot-b".to_string()),
+            "knot-b should have received an event"
+        );
+
+        // Both events target the same file.
+        for event in &received {
+            assert_eq!(event_path(event), "shared.md");
+        }
+
+        // No extra events.
+        let extra = tokio::time::timeout(Duration::from_millis(50), rx.recv())
+            .await;
         assert!(extra.is_err(), "no extra events expected");
     }
 }

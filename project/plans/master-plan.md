@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-13
+> **Last Updated:** 2026-06-14
 > **Plan Completed:** HTTP Observability Only — Remove Control Endpoints
 
 ## How to Add a Plan
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ⬜ Planned | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
@@ -69,7 +70,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
 | 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
 | 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ✅ Complete | 2026-06-03 |
-| 3 | [Outbound Adapters](file-watcher.md) | ✅ Complete | 2026-06-03 |
+| 3 | [Outbound Adapters](file-watcher.md) | ✅ Complete | 2026-06-03 (bugfix 2026-06-14) |
 | 2 | [Application Layer — Ports and Use Cases](loom-discovery-and-state.md) | ✅ Complete | 2026-06-03 |
 | 1 | [Knot Domain Models](knot-domain-models.md) | ✅ Complete | 2026-06-03 |
 
@@ -78,6 +79,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 27. Git Versioning — Automatic Commit History for Agent Work
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-13
+**Goal:** Each knot run produces a git commit in the project root with structured message and tie-off body. Opt-out per-knot via `git-versioned: false` in frontmatter. Gracefully skips if not a git repo.
+
+**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
+
+Full details in [git-versioning.md](git-versioning.md).
 
 ### 26. HTTP Observability Only — Remove Control Endpoints
 
@@ -274,6 +285,7 @@ Full details in [loom-knot-definition-and-discovery.md](loom-knot-definition-and
 **Status:** ✅ Complete
 **Created:** 2026-06-03
 **Completed:** 2026-06-03
+**Bugfix:** 2026-06-14 — multi-knot shared directory fanout (see [dpr-001](../dprs/dpr-001-multi-knot-watch-fanout.md))
 **Hex Layer:** Outbound Adapters
 **Goal:** Concrete adapters for filesystem IO, notify watching, subprocess execution — all tests use `tempfile`.
 

@@ -69,9 +69,12 @@ struct InnerState {
     config_sender: mpsc::Sender<ConfigEvent>,
     /// Watched directories with their types.
     ///
-    /// Stored as a `Vec` so `find_watch_type` can iterate in
-    /// longest-path-first order — more specific (longer) paths
-    /// always take priority over broader (shorter) parent paths.
+    /// Multiple entries can share the same path (e.g. two knots
+    /// watching the same strand directory) — each carries its own
+    /// `(loom_id, knot_id)` pair. Stored as a `Vec` so
+    /// `find_watch_types` can iterate in longest-path-first order
+    /// — more specific (longer) paths always take priority over
+    /// broader (shorter) parent paths.
     watched_dirs: Vec<(PathBuf, WatchType)>,
     /// Project root directory. Used to resolve relative `strand_dir`
     /// and `strand_dir` paths from knot config files during event
@@ -80,37 +83,55 @@ struct InnerState {
 }
 
 impl InnerState {
-    /// Map a raw notify event to a `StrandEvent` or `ConfigEvent`,
-    /// filtering and enriching based on the watch type.
+    /// Map a raw notify event to strand and config events,
+    /// filtering and enriching based on the watch types.
     ///
-    /// Returns a tuple of (Option<StrandEvent>, Option<ConfigEvent>).
-    /// At most one of the two options will be `Some`.
+    /// Returns a tuple of (Vec<StrandEvent>, Option<ConfigEvent>).
+    /// Multiple strand events can be returned when multiple knots
+    /// watch the same directory. At most one config event is returned
+    /// (rig/loom watches are unique per directory).
     fn map_event(
         &self,
         event: &Event,
-    ) -> (Option<StrandEvent>, Option<ConfigEvent>) {
+    ) -> (Vec<StrandEvent>, Option<ConfigEvent>) {
         let path = match event.paths.first() {
             Some(p) => p,
-            None => return (None, None),
+            None => return (Vec::new(), None),
         };
 
-        // Find the watch type for this path
-        let watch_type = match self.find_watch_type(path) {
-            Some(wt) => wt,
-            None => return (None, None),
-        };
+        // Find all matching watch types for this path.
+        // Multiple knots can watch the same strand directory.
+        let watch_types = self.find_watch_types(path);
 
-        match &watch_type {
-            WatchType::Strand(loom_id, knot_id) => {
-                self.map_strand_event(event, path, loom_id, knot_id)
-            }
-            WatchType::Rig => {
-                self.map_rig_event(event, path)
-            }
-            WatchType::Loom(loom_id) => {
-                self.map_loom_event(event, path, loom_id)
+        if watch_types.is_empty() {
+            return (Vec::new(), None);
+        }
+
+        // Collect strand events (one per Strand watch) and at most one
+        // config event (rig/loom watches are unique per directory).
+        let mut strand_events = Vec::new();
+        let mut config_event: Option<ConfigEvent> = None;
+
+        for wt in watch_types {
+            match &wt {
+                WatchType::Strand(loom_id, knot_id) => {
+                    let (se, _) = self.map_strand_event(event, path, loom_id, knot_id);
+                    if let Some(se) = se {
+                        strand_events.push(se);
+                    }
+                }
+                WatchType::Rig => {
+                    let (_, ce) = self.map_rig_event(event, path);
+                    config_event = ce.or(config_event);
+                }
+                WatchType::Loom(loom_id) => {
+                    let (_, ce) = self.map_loom_event(event, path, loom_id);
+                    config_event = ce.or(config_event);
+                }
             }
         }
+
+        (strand_events, config_event)
     }
 
     /// Map events for strand directory watches.
@@ -311,20 +332,37 @@ impl InnerState {
         (None, config_event)
     }
 
-    /// Find the watch type for a path by checking watched directories.
+    /// Find all watch types for a path by checking watched directories.
     ///
     /// Iterates in longest-path-first order so that more specific
     /// (longer) paths always take priority over broader (shorter)
     /// parent paths. For example, a watch on `/rig/strands/` with
     /// `WatchType::Strand` will match before a watch on `/rig/` with
     /// `WatchType::Rig`.
-    fn find_watch_type(&self, path: &Path) -> Option<WatchType> {
-        // Find the longest matching watched directory.
-        self.watched_dirs
+    ///
+    /// Returns all matching watch types — multiple knots can watch
+    /// the same strand directory, and each should receive events.
+    fn find_watch_types(&self, path: &Path) -> Vec<WatchType> {
+        // Find the maximum depth among matching directories so we
+        // only return watches at the most specific level (shadowing).
+        let max_len = self.watched_dirs
             .iter()
             .filter(|(dir, _)| path.starts_with(dir))
-            .max_by_key(|(dir, _)| dir.as_os_str().len())
+            .map(|(dir, _)| dir.as_os_str().len())
+            .max();
+
+        let Some(max_len) = max_len else {
+            return Vec::new();
+        };
+
+        // Return all watch types at the most specific depth.
+        self.watched_dirs
+            .iter()
+            .filter(|(dir, _)| {
+                path.starts_with(dir) && dir.as_os_str().len() == max_len
+            })
             .map(|(_, wt)| wt.clone())
+            .collect()
     }
 }
 
@@ -368,37 +406,31 @@ impl NotifyEventSource {
             move |result: Result<Event, notify::Error>| {
                 if let Ok(event) = result {
                     let inner = state_clone.lock().unwrap();
-                    let (strand_event, config_event) =
+                    let (strand_events, config_event) =
                         inner.map_event(&event);
                     // Log every mapped event for observability.
                     // Volume is low (a few hundred/day), so log all of them.
-                    if let Some(ref se) = strand_event
-                        && let Some(path) = event.paths.first() {
+                    if let Some(path) = event.paths.first() {
+                        for se in &strand_events {
                             let kind = match se {
                                 StrandEvent::Created { .. } => "Created",
                                 StrandEvent::Modified { .. } => "Modified",
                                 StrandEvent::Deleted { .. } => "Deleted",
                             };
-                            let detail = format!(
-                                "{:?}",
-                                se
-                            );
+                            let detail = format!("{:?}", se);
                             logging::log_notify_event(kind, path, &detail);
                         }
-                    if let Some(ref ce) = config_event
-                        && let Some(path) = event.paths.first() {
+                        if let Some(ref ce) = config_event {
                             let kind = match ce {
                                 ConfigEvent::LoomAdded { .. } => "LoomAdded",
                                 ConfigEvent::KnotAdded { .. } => "KnotAdded",
                                 ConfigEvent::KnotModified { .. } => "KnotModified",
                                 ConfigEvent::KnotDeleted { .. } => "KnotDeleted",
                             };
-                            let detail = format!(
-                                "{:?}",
-                                ce
-                            );
+                            let detail = format!("{:?}", ce);
                             logging::log_notify_event(kind, path, &detail);
                         }
+                    }
                     // Use try_send to avoid blocking the notify callback
                     // thread. If the channel is full, the event is dropped
                     // — this is acceptable because:
@@ -406,7 +438,7 @@ impl NotifyEventSource {
                     //    file exists on next poll cycle
                     // 2. Config events: the config handler is idempotent
                     //    and will re-process on next event
-                    if let Some(se) = strand_event {
+                    for se in strand_events {
                         let _ = inner.strand_sender.try_send(se);
                     }
                     if let Some(ce) = config_event {
@@ -437,15 +469,32 @@ impl NotifyEventSource {
         };
         logging::log_watch_event("register", &path, wt_label);
         let mut inner = self.state.lock().unwrap();
-        // Update if already present, otherwise push.
+        // Update if the exact (path, watch_type) pair already exists,
+        // otherwise push. Multiple knots can watch the same directory,
+        // so we only deduplicate identical entries — not duplicate paths.
         if let Some(pos) = inner
             .watched_dirs
             .iter()
-            .position(|(p, _)| p == &path)
+            .position(|(p, wt)| p == &path && Self::watch_types_equal(wt, &watch_type))
         {
-            inner.watched_dirs[pos].1 = watch_type;
+            inner.watched_dirs[pos] = (path, watch_type);
         } else {
             inner.watched_dirs.push((path, watch_type));
+        }
+    }
+
+    /// Check if two watch types refer to the same logical watch.
+    ///
+    /// Two `Strand` watches are equal only if both loom and knot IDs match.
+    /// `Rig` and `Loom` watches are equal by their variant/loom ID.
+    fn watch_types_equal(a: &WatchType, b: &WatchType) -> bool {
+        match (a, b) {
+            (WatchType::Strand(l1, k1), WatchType::Strand(l2, k2)) => {
+                l1 == l2 && k1 == k2
+            }
+            (WatchType::Rig, WatchType::Rig) => true,
+            (WatchType::Loom(l1), WatchType::Loom(l2)) => l1 == l2,
+            _ => false,
         }
     }
 
@@ -1264,6 +1313,117 @@ Just some markdown.
             recv_config_event(&mut config_rx, Duration::from_millis(200))
                 .is_none(),
             "malformed knot file should not emit events"
+        );
+    }
+
+    /// Two knots watching the same strand directory each receive events
+    /// when a file in that directory is modified.
+    #[test]
+    fn two_knots_same_directory_both_receive_events() {
+        let shared_dir = TempDir::new().unwrap();
+        let (strand_tx, mut strand_rx) = mpsc::channel::<StrandEvent>(100);
+        let (config_tx, _config_rx) = mpsc::channel::<ConfigEvent>(100);
+        let source = NotifyEventSource::new(
+            strand_tx,
+            config_tx,
+            PathBuf::from("/tmp"),
+        );
+
+        // Register two knots watching the same directory
+        source.register_watch(
+            shared_dir.path().to_path_buf(),
+            WatchType::Strand(
+                LoomId("loom-1".to_string()),
+                KnotId("knot-a".to_string()),
+            ),
+        );
+        source.register_watch(
+            shared_dir.path().to_path_buf(),
+            WatchType::Strand(
+                LoomId("loom-1".to_string()),
+                KnotId("knot-b".to_string()),
+            ),
+        );
+
+        source.watch(shared_dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        // Create a file in the shared directory
+        let file_path = shared_dir.path().join("shared-strand.md");
+        fs::write(&file_path, "content").unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        // Collect all events
+        let mut events = Vec::new();
+        while let Ok(event) = strand_rx.try_recv() {
+            events.push(event);
+        }
+
+        // Should receive Created events for BOTH knots
+        assert!(
+            events.len() >= 2,
+            "expected at least 2 events (one per knot), got {}",
+            events.len()
+        );
+
+        // Verify both knots are represented
+        let knot_ids: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StrandEvent::Created { knot_id, .. } => Some(knot_id.0.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            knot_ids.contains(&"knot-a".to_string()),
+            "knot-a should have received a Created event, got: {:?}",
+            knot_ids
+        );
+        assert!(
+            knot_ids.contains(&"knot-b".to_string()),
+            "knot-b should have received a Created event, got: {:?}",
+            knot_ids
+        );
+    }
+
+    /// Re-registering the exact same (path, watch_type) pair is
+    /// idempotent — doesn't create duplicate entries.
+    #[test]
+    fn register_watch_idempotent_for_same_knot() {
+        let dir = TempDir::new().unwrap();
+        let (source, _strand_rx, _config_rx) = create_source_fresh();
+
+        let loom_id = LoomId("loom-1".to_string());
+        let knot_id = KnotId("knot-a".to_string());
+        let path = dir.path().to_path_buf();
+
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_id.clone()),
+        );
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_id.clone()),
+        );
+
+        let inner = source.state.lock().unwrap();
+        let count = inner
+            .watched_dirs
+            .iter()
+            .filter(|(p, wt)| {
+                p == &path
+                    && matches!(
+                        wt,
+                        WatchType::Strand(l, k) if l == &loom_id && k == &knot_id
+                    )
+            })
+            .count();
+
+        assert_eq!(
+            count, 1,
+            "duplicate (path, watch_type) should be deduplicated"
         );
     }
 }

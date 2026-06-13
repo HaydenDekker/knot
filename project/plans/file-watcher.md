@@ -20,7 +20,9 @@ Knot has domain types (Plan 1) and port interfaces (Plan 2) but no concrete adap
 - `FileSystemTieOffSink` — writes tie-off files to disk
 - All adapters implement their respective port traits from Plan 2
 
-## Implementation Status: ✅ Complete (2026-06-03)
+## Implementation Status: ✅ Complete (2026-06-03, bugfix 2026-06-14)
+
+**Post-completion bugfix (2026-06-14):** Multi-knot shared directory fanout — when two knots watch the same `strand_dir`, each now receives independent events. See [dpr-001-multi-knot-watch-fanout.md](../dprs/dpr-001-multi-knot-watch-fanout.md).
 
 ## Hex Layer: Outbound Adapters
 
@@ -131,5 +133,36 @@ Each adapter implements a port trait. Depends on domain types and application po
 - [x] Derives tie-off filename from strand filename: `<name>.tie-off.<ext>`
 - [x] Implements `TieOffSink` port trait
 - [x] Uses `std::fs::create_dir_all` + `std::fs::write`
+
+## Post-Completion Bugfix: Multi-Knot Shared Directory (2026-06-14)
+
+**Reported:** Two knots watching the same `strand_dir` — only the last-registered knot receives file events. The first knot's watch is silently overwritten.
+
+**Root cause:** Three interconnected bugs across the event pipeline:
+
+1. **`register_watch` overwrites duplicate paths** (`src/adapters/outbound/event_source.rs`) — when two knots registered the same `strand_dir`, the second call's `(loom_id, knot_id)` pair replaced the first's entry. The dedup check was `p == &path` (path only) instead of `(p, wt)` (path + watch type).
+
+2. **`find_watch_type` returned at most one match** — even if both watches survived, `max_by_key()` picked a single `WatchType` and discarded the rest.
+
+3. **`map_event` emitted at most one `StrandEvent`** — returned `(Option<StrandEvent>, ...)` so only one strand event could fire per file system notification.
+
+4. **Debounce keyed only by `StrandPath`** (`src/application/debounce.rs`) — the debounce engine used `StrandPath` alone as its HashMap key, so events for the same file but different knots collapsed into one entry.
+
+**Fix:**
+
+| File | Change |
+|------|--------|
+| `event_source.rs` | `register_watch` deduplicates by `(path, watch_type)` equality — identical knot re-registers are idempotent, different knots are appended |
+| `event_source.rs` | `find_watch_types` (renamed from `find_watch_type`) returns all `WatchType` entries at the most specific depth |
+| `event_source.rs` | `map_event` returns `(Vec<StrandEvent>, Option<ConfigEvent>)` — one strand event per matching knot |
+| `debounce.rs` | Debounce key changed from `StrandPath` to `(StrandPath, LoomId, KnotId)` — each `(file, loom, knot)` triple debounced independently |
+
+**Tests added:**
+
+| Test | File | Asserts |
+|------|------|---------|
+| `two_knots_same_directory_both_receive_events` | `event_source.rs` | Both knots receive `Created` events for a file in a shared directory |
+| `register_watch_idempotent_for_same_knot` | `event_source.rs` | Re-registering the same `(path, watch_type)` doesn't duplicate entries |
+| `same_file_different_knots_both_emit` | `debounce.rs` | Same file, different knots → both debounced events fire independently |
 
 ## Notes
