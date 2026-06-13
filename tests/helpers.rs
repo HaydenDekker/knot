@@ -356,6 +356,63 @@ pub fn spawn_server_with_shutdown(
     (handle, tx)
 }
 
+/// Helper: wait for auto-discovery to register a loom (poll GET /looms).
+pub async fn wait_for_loom_discovery(
+    host_port: &str,
+    expected_count: usize,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let result = tokio::time::timeout(
+            Duration::from_millis(2000),
+            http_get(host_port, "/looms"),
+        )
+        .await;
+        let (st, body) = match result {
+            Ok(Ok(r)) => r,
+            _ => continue,
+        };
+        if st.contains("200") {
+            let summaries: Vec<serde_json::Value> =
+                serde_json::from_str(&body).unwrap_or_default();
+            if summaries.len() == expected_count {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Helper: wait for a knot to appear in the loom's knot list.
+pub async fn wait_for_knot_count(
+    host_port: &str,
+    loom_id: &str,
+    expected: usize,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let result = tokio::time::timeout(
+            Duration::from_millis(2000),
+            http_get(host_port, &format!("/looms/{loom_id}/knots")),
+        )
+        .await;
+        let (st, body) = match result {
+            Ok(Ok(r)) => r,
+            _ => continue,
+        };
+        if st.contains("200") {
+            let knots: Vec<String> =
+                serde_json::from_str(&body).unwrap_or_default();
+            if knots.len() == expected {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Poll a knot status endpoint until it reaches a terminal state.
 pub async fn poll_knot_status(
     host_port: &str,
