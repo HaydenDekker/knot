@@ -188,12 +188,12 @@ This is a **non-breaking change** to the trait — the method signature doesn't 
 - Unit test: existing timeout test (no context override) still passes — regression guard
 
 **Tasks:**
-- [ ] Add `timeout: Option<Duration>` field to `ExecutionContext` in `src/application/ports.rs`
-- [ ] Update `AgentRunner` trait doc comment to document the timeout behaviour
-- [ ] In `SubprocessAgentRunner::execute()`: `let effective_timeout = ctx.timeout.unwrap_or(self.timeout);`
-- [ ] Update mock `ExecutionContext` in port tests to include `timeout: None`
-- [ ] Add unit tests for per-context timeout (override, fallback, large value)
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] Add `timeout: Option<Duration>` field to `ExecutionContext` in `src/application/ports.rs`
+- [x] Update `AgentRunner` trait doc comment to document the timeout behaviour
+- [x] In `SubprocessAgentRunner::execute()`: `let effective_timeout = ctx.timeout.unwrap_or(self.timeout);`
+- [x] Update mock `ExecutionContext` in port tests to include `timeout: None`
+- [x] Add unit tests for per-context timeout (override, fallback, large value)
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 6: ProcessStrand — Timeout handling change + rig-log writes
 
