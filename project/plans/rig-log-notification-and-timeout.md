@@ -269,13 +269,13 @@ This is a "drain check" — it doesn't block processing, just checks if the chan
 - Integration test: rapid burst of events → only one `QueueIdle` written (after all complete, not between each)
 
 **Tasks:**
-- [ ] In `ProcessStrand` event loop, after `execute()`:
+- [x] In `ProcessStrand` event loop, after `execute()`:
   - Use `tokio::time::timeout(500ms, debounce_rx.recv())` to poll for next event
   - If timeout fires (no event): write `QueueIdle` to rig-log, then loop back to `recv().await` for the real next event
   - If event arrives: process it normally (don't write `QueueIdle`)
-- [ ] Integration test in `tests/rig_log.rs`: single event → `QueueIdle` written
-- [ ] Integration test in `tests/rig_log.rs`: burst of 3 events → only one `QueueIdle` after all complete
-- [ ] Run `cargo test` — all tests pass
+- [x] Integration test in `tests/rig_log.rs`: single event → `QueueIdle` written
+- [x] Integration test in `tests/rig_log.rs`: burst of 3 events → only one `QueueIdle` after all complete
+- [x] Run `cargo test` — all tests pass
 
 ### Phase 9: Integration tests and cleanup
 
