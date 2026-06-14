@@ -236,7 +236,7 @@ mod tests {
     use crate::adapters::inbound::types::AppContext;
     use crate::application::ports::{
         AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-        LoomRepository, PortError, TieOffSink,
+        LoomRepository, PortError, RigLogPort, TieOffSink,
     };
     use crate::application::store::LoomStore;
     use crate::application::usecases::LoomSummary;
@@ -361,6 +361,23 @@ mod tests {
 
         fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
             Ok(self.events.clone())
+        }
+    }
+
+    /// Mock `RigLogPort` that does nothing.
+    struct MockRigLogPort;
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            _event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(vec![])
         }
     }
 
@@ -490,6 +507,7 @@ mod tests {
             event_sender,
             agent_runner: Arc::new(MockAgentRunner),
             profile_repo: Arc::new(MockProfileRepository::default()),
+            rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),
@@ -521,6 +539,7 @@ mod tests {
                 event_sender,
                 agent_runner: Arc::new(MockAgentRunner),
                 profile_repo: Arc::new(MockProfileRepository::default()),
+                rig_log_port: Arc::new(MockRigLogPort),
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
                 base_dir: PathBuf::from("./rig"),
@@ -1120,6 +1139,7 @@ mod tests {
             },
             agent_runner: Arc::new(MockAgentRunner),
             profile_repo: Arc::new(repo),
+            rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),
@@ -1237,6 +1257,7 @@ mod tests {
             },
             agent_runner: Arc::new(MockAgentRunner),
             profile_repo: Arc::new(repo),
+            rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             base_dir: PathBuf::from("./rig"),

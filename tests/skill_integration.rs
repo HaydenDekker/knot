@@ -12,7 +12,7 @@ use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
     AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-    LoomRepository, ProcessingStatus, PortError, TieOffSink,
+    LoomRepository, ProcessingStatus, PortError, RigLogPort, TieOffSink,
 };
 use knot::application::store::LoomStore;
 use knot::domain::entities::{
@@ -130,6 +130,22 @@ impl EventSource for MockEventSource {
     }
 }
 
+struct MockRigLogPort;
+
+impl RigLogPort for MockRigLogPort {
+    fn append(
+        &self,
+        _event: knot::domain::events::RigLogEvent,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn read_all(
+        &self,
+    ) -> Result<Vec<knot::domain::events::RigLogEvent>, PortError> {
+        Ok(vec![])
+    }
+}
+
 /// Build an AppContext with mock ports and a pre-registered loom.
 fn build_context_with_loom() -> AppContext {
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
@@ -144,6 +160,7 @@ fn build_context_with_loom() -> AppContext {
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         profile_repo: Arc::new(MockProfileRepository),
+        rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),
@@ -533,6 +550,7 @@ async fn knot_inspect_loom_activity() {
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         profile_repo: Arc::new(MockProfileRepository),
+        rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),
@@ -631,6 +649,7 @@ async fn knot_inspect_knot_status_with_state() {
         event_sender,
         agent_runner: Arc::new(MockAgentRunner),
         profile_repo: Arc::new(MockProfileRepository),
+        rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         base_dir: PathBuf::from("./rig"),

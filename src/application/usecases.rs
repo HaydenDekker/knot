@@ -12,7 +12,7 @@ use crate::adapters::logging;
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, ExecutionContext, EventSource,
     KnotEventType, LoomLogPort, LoomRepository, ProcessingStatus,
-    PortError, TieOffSink,
+    PortError, RigLogPort, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
@@ -596,6 +596,8 @@ pub struct ProcessStrand {
     base_dir: PathBuf,
     /// Profile repository for dynamic profile resolution at processing time.
     profile_repo: Arc<dyn AgentProfileRepository>,
+    /// Rig-log port for recording operational events (timeouts, idle).
+    rig_log: Arc<dyn RigLogPort>,
 }
 
 impl ProcessStrand {
@@ -608,6 +610,7 @@ impl ProcessStrand {
         rig_config: RigAgentConfig,
         base_dir: PathBuf,
         profile_repo: Arc<dyn AgentProfileRepository>,
+        rig_log: Arc<dyn RigLogPort>,
     ) -> Self {
         Self {
             store,
@@ -617,6 +620,7 @@ impl ProcessStrand {
             rig_config,
             base_dir,
             profile_repo,
+            rig_log,
         }
     }
 
@@ -826,16 +830,32 @@ impl ProcessStrand {
             Err(err) => {
                 let error_msg = err.to_string();
 
-                // 4. Write error tie-off
-                let tie_off = TieOff {
-                    content: format!("Processing failed: {}", error_msg),
-                    path: tie_off_path.clone(),
-                    status: crate::domain::entities::TieOffStatus::Failed,
-                    event_type: Some(event_label.clone()),
-                    strand_path: Some(strand_path.0.display().to_string()),
-                    timestamp: None,
-                };
-                self.tie_off_sink.append(tie_off)?;
+                // On timeout: skip tie-off write, write to rig-log instead.
+                // On other errors: preserve existing behaviour (write to tie-off).
+                if matches!(err, PortError::Timeout(_)) {
+                    // Timeout: do NOT write error to tie-off (preserve unchanged).
+                    // Write TimeoutExceeded to rig-log.
+                    let _ = self.rig_log.append(
+                        crate::domain::events::RigLogEvent::TimeoutExceeded {
+                            loom_id: loom_id.clone(),
+                            knot_id: knot_id.clone(),
+                            strand_path: strand_path.clone(),
+                            error: error_msg.clone(),
+                            timestamp: format_timestamp(),
+                        },
+                    );
+                } else {
+                    // Non-timeout error: existing behaviour — write to tie-off.
+                    let tie_off = TieOff {
+                        content: format!("Processing failed: {}", error_msg),
+                        path: tie_off_path.clone(),
+                        status: crate::domain::entities::TieOffStatus::Failed,
+                        event_type: Some(event_label.clone()),
+                        strand_path: Some(strand_path.0.display().to_string()),
+                        timestamp: None,
+                    };
+                    let _ = self.tie_off_sink.append(tie_off);
+                }
 
                 // 5. Append KnotFailed to loom-log
                 self.log_port.append(LoomEvent::KnotFailed {
@@ -3351,6 +3371,36 @@ mod phase3_profile_resolution_tests {
         }
     }
 
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockRigLogPort {
+        events: Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>,
+    }
+
+    impl MockRigLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
     // ── Mock AgentProfileRepository ──────────────────────────────────
 
     #[derive(Default)]
@@ -3452,6 +3502,7 @@ mod phase3_profile_resolution_tests {
             ]))),
         });
 
+        let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
@@ -3460,6 +3511,7 @@ mod phase3_profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(rig_log),
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
@@ -3486,6 +3538,7 @@ mod phase3_profile_resolution_tests {
         let store = LoomStore::new();
         let profile_repo = Arc::new(MockProfileRepository::default());
 
+        let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
@@ -3494,6 +3547,7 @@ mod phase3_profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(rig_log),
         );
 
         let profile_knot = build_profile_knot("k1", "nonexistent");
@@ -3529,6 +3583,7 @@ mod phase3_profile_resolution_tests {
             ]))),
         });
 
+        let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
@@ -3537,6 +3592,7 @@ mod phase3_profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(rig_log),
         );
 
         let knot1 = build_profile_knot("k1", "detailed");
@@ -3569,6 +3625,7 @@ mod phase3_profile_resolution_tests {
         let store = LoomStore::new();
         let profile_repo = Arc::new(MockProfileRepository::default());
 
+        let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
@@ -3577,6 +3634,7 @@ mod phase3_profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(rig_log),
         );
 
         // Profile doesn't exist yet — should error
@@ -3627,6 +3685,7 @@ mod phase3_profile_resolution_tests {
             )]))),
         });
 
+        let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort),
@@ -3635,6 +3694,7 @@ mod phase3_profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(rig_log),
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
@@ -3658,4 +3718,467 @@ mod phase3_profile_resolution_tests {
         assert_eq!(args[model_index + 1], "gpt-4o");
     }
 
+}
+
+// ── Phase 6: Timeout Handling Tests ───────────────────────────────
+
+#[cfg(test)]
+mod phase6_timeout_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId, TieOffStatus};
+    use crate::domain::events::RigLogEvent;
+    use crate::domain::value_objects::PromptTemplate;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Mock LoomLogPort ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort {
+        events: Arc<Mutex<Vec<LoomEvent>>>,
+    }
+
+    impl MockLoomLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock AgentRunner (configurable error) ────────────────────────
+
+    /// Mock agent runner that returns a configurable result.
+    struct ConfigurableAgentRunner {
+        result: Arc<Mutex<Result<AgentOutput, PortError>>>,
+    }
+
+    impl ConfigurableAgentRunner {
+        fn new(result: Result<AgentOutput, PortError>) -> Self {
+            Self {
+                result: Arc::new(Mutex::new(result)),
+            }
+        }
+
+        fn set_result(&self, result: Result<AgentOutput, PortError>) {
+            *self.result.lock().unwrap() = result;
+        }
+    }
+
+    impl AgentRunner for ConfigurableAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            self.result.lock().unwrap().clone()
+        }
+    }
+
+    // ── Mock TieOffSink (tracks appends) ─────────────────────────────
+
+    struct TrackingTieOffSink {
+        appends: Arc<Mutex<Vec<TieOff>>>,
+        content: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    impl TrackingTieOffSink {
+        fn new() -> (
+            Self,
+            Arc<Mutex<Vec<TieOff>>>,
+            Arc<Mutex<HashMap<String, String>>>,
+        ) {
+            let appends = Arc::new(Mutex::new(vec![]));
+            let content = Arc::new(Mutex::new(HashMap::new()));
+            (
+                Self {
+                    appends: appends.clone(),
+                    content: content.clone(),
+                },
+                appends,
+                content,
+            )
+        }
+    }
+
+    impl TieOffSink for TrackingTieOffSink {
+        fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.content
+                .lock()
+                .unwrap()
+                .insert(tie_off.path.0.display().to_string(), tie_off.content);
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.appends.lock().unwrap().push(tie_off.clone());
+            self.write(tie_off)
+        }
+
+        fn read_content(
+            &self,
+            path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(self
+                .content
+                .lock()
+                .unwrap()
+                .get(&path.0.display().to_string())
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    struct MockRigLogPort {
+        events: Arc<Mutex<Vec<RigLogEvent>>>,
+    }
+
+    impl MockRigLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<RigLogEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            event: RigLogEvent,
+        ) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<RigLogEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    struct MockProfileRepository {
+        profiles: Arc<Mutex<HashMap<String, crate::domain::value_objects::AgentProfile>>>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<crate::domain::value_objects::AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned())
+        }
+
+        fn list(
+            &self,
+        ) -> Result<Vec<crate::domain::value_objects::AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
+        }
+
+        fn save(
+            &self,
+            profile: crate::domain::value_objects::AgentProfile,
+        ) -> Result<(), PortError> {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
+            Ok(())
+        }
+
+        fn delete(&self, name: &str) -> Result<(), PortError> {
+            let mut map = self.profiles.lock().unwrap();
+            if map.remove(name).is_none() {
+                return Err(PortError::ProfileNotFound(name.to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Build a knot with the given profile ref.
+    fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: profile.to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        }
+    }
+
+    /// Build a loom with the given ID and knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    /// Build a default profile for "fast".
+    fn default_profile() -> crate::domain::value_objects::AgentProfile {
+        crate::domain::value_objects::AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+    }
+
+    /// Build the ProcessStrand use case with all mocks.
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand(
+        loom: Loom,
+        agent_runner: Arc<dyn AgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<Vec<RigLogEvent>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+    ) {
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, rig_events) = MockRigLogPort::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            agent_runner,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+        );
+
+        (
+            use_case,
+            log_events,
+            tie_off_appends,
+            rig_events,
+            tie_off_content,
+        )
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    /// On `PortError::Timeout`:
+    /// - loom-log receives `KnotProcessing`, `KnotFailed`, `StrandProcessed`
+    /// - rig-log receives `TimeoutExceeded`
+    /// - tie-off is NOT appended (preserved unchanged)
+    #[test]
+    fn process_strand_timeout_skip_tieoff_write_rig_log() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let timeout_err = PortError::Timeout("session exceeded 60s".to_string());
+        let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
+
+        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+
+        // execute() always returns Ok (errors are logged, not propagated)
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotFailed, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3, "should have 3 loom-log events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotFailed { knot_id, error, .. } => {
+                assert_eq!(knot_id.0, "k1");
+                assert!(error.contains("timeout"));
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_some(), "error should be present");
+                assert!(error.as_ref().unwrap().contains("timeout"));
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+
+        // Rig-log: TimeoutExceeded
+        let rig = rig_events.lock().unwrap();
+        assert_eq!(rig.len(), 1, "should have 1 rig-log event");
+        match &rig[0] {
+            RigLogEvent::TimeoutExceeded {
+                loom_id,
+                knot_id,
+                error,
+                ..
+            } => {
+                assert_eq!(loom_id.0, "test-loom");
+                assert_eq!(knot_id.0, "k1");
+                assert!(error.contains("timeout"));
+            }
+            other => panic!("expected TimeoutExceeded, got {other:?}"),
+        }
+
+        // Tie-off: NO append (unchanged)
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(
+            appends.is_empty(),
+            "tie-off should NOT be appended on timeout"
+        );
+    }
+
+    /// On non-timeout error (e.g., AgentExecutionFailed):
+    /// - loom-log receives `KnotProcessing`, `KnotFailed`, `StrandProcessed`
+    /// - rig-log does NOT receive any event
+    /// - tie-off IS appended with error content (existing behaviour preserved)
+    #[test]
+    fn process_strand_non_timeout_error_writes_tieoff() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let err = PortError::AgentExecutionFailed("crash".to_string());
+        let runner = Arc::new(ConfigurableAgentRunner::new(Err(err)));
+
+        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotFailed, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            LoomEvent::KnotFailed { error, .. } => {
+                assert!(error.contains("crash"));
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+
+        // Rig-log: NO event (only timeout writes to rig-log)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should NOT receive event for non-timeout errors"
+        );
+
+        // Tie-off: IS appended with error content
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        let appended = &appends[0];
+        assert_eq!(appended.status, TieOffStatus::Failed);
+        assert!(
+            appended.content.contains("Processing failed"),
+            "tie-off content should contain error: {}", appended.content
+        );
+        assert!(
+            appended.content.contains("crash"),
+            "tie-off content should contain error detail: {}",
+            appended.content,
+        );
+    }
+
+    /// On successful execution:
+    /// - loom-log receives `KnotProcessing`, `KnotCompleted`, `StrandProcessed`
+    /// - rig-log receives NO events
+    /// - tie-off IS appended with agent output
+    #[test]
+    fn process_strand_success_no_rig_log() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "agent output".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!("expected KnotCompleted, got {other:?}"),
+        }
+
+        // Rig-log: NO events
+        let rig = rig_events.lock().unwrap();
+        assert!(rig.is_empty(), "rig-log should be empty on success");
+
+        // Tie-off: IS appended
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1);
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(appends[0].content, "agent output");
+    }
 }

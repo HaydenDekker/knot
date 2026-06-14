@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-    LoomRepository, TieOffSink,
+    LoomRepository, RigLogPort, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::LoomId;
@@ -72,6 +72,8 @@ pub struct AppContext {
     pub agent_runner: Arc<dyn AgentRunner>,
     /// Agent profile repository for dynamic profile resolution.
     pub profile_repo: Arc<dyn AgentProfileRepository>,
+    /// Rig-log port for recording operational events (timeouts, idle).
+    pub rig_log_port: Arc<dyn RigLogPort>,
     /// Rig-level agent configuration.
     pub rig_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
