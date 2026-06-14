@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-10
+> **Last Updated:** 2026-06-14
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -93,10 +93,23 @@ The final response or error produced by a knot at the end of its session. Each p
 
 ---
 
+### Rig-log
+
+An append-only JSONL file at `rig/.rig-log` that records serious operational events so the user or an external watcher (human or LLM agent) can monitor and react. Two event types are recorded:
+
+- `TimeoutExceeded` — an agent session exceeded its deadline (from profile `timeout` or runner default). Contains loom ID, knot ID, strand path, error message, and timestamp. The tie-off file is **preserved unchanged** on timeout.
+- `QueueIdle` — all pending events have been processed and no new events arrived within the poll window (500ms). Indicates the system is quiet.
+
+The rig-log survives server restarts. Multiple consumers can watch it safely (append-only, single-line JSON entries).
+
+---
+
 ## Term Relationships
 
 ```
 Rig (`./rig/`)
+ ├── .rig-log (operational event log — TimeoutExceeded, QueueIdle)
+ ├── profiles/ (shared agent profile definitions)
  ├── tie-offs/
  │     └── <loom-id>/
  │           ├── .loom-log (activity log)

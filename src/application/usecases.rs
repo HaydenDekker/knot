@@ -738,7 +738,7 @@ impl ProcessStrand {
         // 2. Resolve effective agent config (profile) and build CLI args
         let resolved = self.resolve_agent_config(knot);
         let (agent_config, system_prompt, profile_timeout) = resolved
-            .map_err(|err| {
+            .inspect_err(|err| {
                 let error_msg = err.to_string();
                 // Write error tie-off
                 let tie_off = TieOff {
@@ -769,7 +769,6 @@ impl ProcessStrand {
                     &format!("{} failed: {}", strand_kind, error_msg),
                     &strand_path.0,
                 );
-                err
             })?;
         let (agent_config, system_prompt, profile_timeout) =
             (agent_config, system_prompt, profile_timeout);
