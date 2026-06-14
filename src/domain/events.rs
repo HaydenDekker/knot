@@ -126,6 +126,30 @@ pub struct KnotRegistered {
     pub knot_id: KnotId,
 }
 
+// ── Rig-Log Events ─────────────────────────────────────────────────────────
+
+/// An operational event written to the rig-log (`rig/.rig-log`).
+///
+/// The rig-log is an append-only JSONL file that records serious operational
+/// events so the user or an external watcher can monitor and react.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum RigLogEvent {
+    /// An agent session exceeded its timeout deadline.
+    TimeoutExceeded {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        error: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
+    /// All pending events have been processed and the queue is idle.
+    QueueIdle {
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
+}
+
 // ── Configuration Events ───────────────────────────────────────────────────
 
 /// An event that describes configuration changes to looms and knots.
@@ -776,5 +800,94 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn riglog_event_timeout_exceeded() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let error = "Agent session exceeded 60s deadline".to_string();
+        let ts = "2026-06-14T10:00:00Z".to_string();
+
+        let event = RigLogEvent::TimeoutExceeded {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            error: error.clone(),
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            RigLogEvent::TimeoutExceeded {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                error: msg,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(msg.as_str(), error);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected TimeoutExceeded variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: RigLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn riglog_event_queue_idle() {
+        let ts = "2026-06-14T10:05:00Z".to_string();
+
+        let event = RigLogEvent::QueueIdle {
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            RigLogEvent::QueueIdle { timestamp: t } => {
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected QueueIdle variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: RigLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn riglog_event_serialisation_all_variants() {
+        let loom_id = LoomId("ops".to_string());
+        let knot_id = KnotId("slow-review".to_string());
+        let strand_path = StrandPath(PathBuf::from("input/data.md"));
+        let ts = "2026-06-14T12:00:00Z".to_string();
+
+        let events: Vec<RigLogEvent> = vec![
+            RigLogEvent::TimeoutExceeded {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                error: "deadline exceeded after 600s".to_string(),
+                timestamp: ts.clone(),
+            },
+            RigLogEvent::QueueIdle {
+                timestamp: ts.clone(),
+            },
+        ];
+
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let deserialized: RigLogEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, *event, "round-trip failed for variant");
+        }
     }
 }

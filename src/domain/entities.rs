@@ -33,6 +33,13 @@ pub struct StrandPath(pub PathBuf);
 #[schema(value_type = String)]
 pub struct TieOffPath(pub PathBuf);
 
+/// Path to the rig-log (append-only JSONL operational log at `rig/.rig-log`).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+)]
+#[schema(value_type = String)]
+pub struct RigLogPath(pub PathBuf);
+
 /// Status of a TieOff output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -211,6 +218,12 @@ mod tests {
     fn tieoff_path_newtype() {
         let p = TieOffPath(PathBuf::from("out.md"));
         assert_eq!(p.0, PathBuf::from("out.md"));
+    }
+
+    #[test]
+    fn riglog_path_newtype() {
+        let p = RigLogPath(PathBuf::from("rig/.rig-log"));
+        assert_eq!(p.0, PathBuf::from("rig/.rig-log"));
     }
 
     #[test]
