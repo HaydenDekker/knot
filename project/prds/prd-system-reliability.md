@@ -14,12 +14,13 @@ Knot needs **operational safety controls** so the user can protect their provide
 - [ ] Users can set rate limits (max requests per time window) per provider, with automatic queuing and backoff
 - [ ] Users can set budget or token caps (per knot, per loom, or global) and Knot stops processing when the cap is reached
 - [ ] Users can see current token usage and cost estimates via the HTTP interface, so they can make informed decisions about processing
-- [ ] A rig-level event log (`rig-log`) records serious operational events (timeouts, queue idle) so the user (or an external agent) can monitor and react
-- [ ] Failed strands are reported via the rig-log; the user reprocesses by touching the strand file, triggering the normal file-watcher pipeline (no programmatic replay in the app)
+- [x] A rig-level event log (`rig-log`) records serious operational events (timeouts, queue idle) so the user (or an external agent) can monitor and react — *Plan 28*
+- [x] Failed strands are reported via the rig-log; the user reprocesses by touching the strand file, triggering the normal file-watcher pipeline (no programmatic replay in the app) — *Plan 28*
+- [x] Users can set a per-agent-profile session timeout so that a hung or excessively slow agent session is terminated automatically — *Plan 28*
 - [ ] Users can roll back their tie-off output to an earlier point in time, discarding later processing events
 - [ ] Users are alerted when a knot-to-knot (k2k) recursive feedback loop is detected, whether self-recursive or cross-knot
 - [ ] Users can set a maximum iteration limit for k2k feedback loops so that refinement cycles terminate automatically if agents do not converge
-- [ ] Users can set a per-agent-profile session timeout so that a hung or excessively slow agent session is terminated automatically
+
 
 ## Non-Goals
 
@@ -168,15 +169,15 @@ As a user, I want each knot run to produce a git commit in my project, so that I
 - [ ] A user can configure `rate_limit` (requests per time window per provider) and excess requests are deferred automatically
 - [ ] A user can configure `max_tokens` (per event, per knot, or per loom) and Knot stops processing when the cap is reached
 - [ ] Usage statistics (request count, token usage) are queryable via the HTTP interface at loom, knot, and rig levels
-- [ ] A rig-log file exists at the rig root and receives `TimeoutExceeded` entries when agent sessions time out, and `QueueIdle` entries when the event pipeline has no pending events
-- [ ] The rig-log is append-only and persistent — entries survive server restarts
-- [ ] Successful processing, loom/knot registration, and config errors do **not** appear in the rig-log
-- [ ] A user can reprocess a failed strand by touching the strand file, and the reprocessing fires through the normal file-watcher pipeline
-- [ ] On timeout, the tie-off file is preserved unchanged — no error content is appended
+- [x] A rig-log file exists at the rig root and receives `TimeoutExceeded` entries when agent sessions time out, and `QueueIdle` entries when the event pipeline has no pending events — *Plan 28*
+- [x] The rig-log is append-only and persistent — entries survive server restarts — *Plan 28*
+- [x] Successful processing, loom/knot registration, and config errors do **not** appear in the rig-log — *Plan 28*
+- [x] A user can reprocess a failed strand by touching the strand file, and the reprocessing fires through the normal file-watcher pipeline — *Plan 28 (file-watcher pipeline exists, rig-log surfaces failures)*
+- [x] On timeout, the tie-off file is preserved unchanged — no error content is appended — *Plan 28*
+- [x] A user can configure `timeout` (per agent profile) and hung sessions are terminated with a `TimeoutExceeded` error — *Plan 28*
 - [ ] A user can roll back a loom to a previous event position via the HTTP interface, and tie-off files are restored accordingly
 - [ ] Replay and rollback events are recorded in the loom-log with distinct event types for auditability
 - [ ] Feedback loops (self-recursive and cross-knot) are detected and logged with a `FeedbackLoopDetected` event; exceeding `max_k2k_iterations` produces a `FeedbackLoopExceeded` event and stops processing
-- [ ] A user can configure `timeout` (per agent profile) and hung sessions are terminated with a `TimeoutExceeded` error
 - [ ] A user can set `git-versioned: false` on a knot to opt out of versioning, and no commit is created for that knot
 - [ ] Each successful knot run creates a git commit in the project root (if it is a git repository)
 - [ ] Commit message includes loom, knot, strand, and event type (e.g. `knot: review — processed strands/goals.md (Created)`)
