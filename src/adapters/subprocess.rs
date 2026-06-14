@@ -96,19 +96,19 @@ impl AgentRunner for SubprocessAgentRunner {
 
         let child_pid = child.id() as i32;
         let cli_path = ctx.cli_path.clone();
-        let timeout = self.timeout;
+        let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
 
         // Spawn a background thread that kills the child on timeout.
         let _timeout_thread = std::thread::Builder::new()
             .name("subprocess-timeout".to_string())
             .spawn(move || {
-                std::thread::sleep(timeout);
+                std::thread::sleep(effective_timeout);
                 let _ = unsafe {
                     libc::kill(child_pid, libc::SIGKILL)
                 };
                 eprintln!(
                     "WARNING: killed '{}' after timeout of {:?}",
-                    cli_path, timeout
+                    cli_path, effective_timeout
                 );
             })
             .map_err(|e| {
@@ -147,7 +147,7 @@ impl AgentRunner for SubprocessAgentRunner {
         if output.status.code().is_none() {
             return Err(PortError::Timeout(format!(
                 "'{}' exceeded timeout of {:?}",
-                ctx.cli_path, self.timeout
+                ctx.cli_path, effective_timeout
             )));
         }
 
@@ -187,6 +187,7 @@ mod tests {
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             previous_tie_off: String::new(),
+            timeout: None,
         }
     }
 
@@ -292,6 +293,7 @@ mod tests {
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             previous_tie_off: String::new(),
+            timeout: None,
         };
 
         let result = runner.execute(ctx);
@@ -314,6 +316,7 @@ mod tests {
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("strand.md")),
             event_type: String::new(),
             previous_tie_off: String::new(),
+            timeout: None,
         };
 
         let result = runner.execute(ctx);
@@ -338,6 +341,7 @@ mod tests {
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("doc.md")),
             event_type: "Modified".to_string(),
             previous_tie_off: "Previous review done.".to_string(),
+            timeout: None,
         };
 
         let result = runner.execute(ctx);
@@ -375,6 +379,113 @@ mod tests {
             output.stdout.contains("Review this file."),
             "output should still contain original prompt: {}",
             output.stdout
+        );
+    }
+
+    /// Context timeout of 50ms overrides the runner's 120s default,
+    /// killing a long-running process quickly.
+    #[test]
+    fn execute_context_timeout_override() {
+        let runner =
+            SubprocessAgentRunner::with_timeout(Duration::from_secs(120));
+        let ctx = ExecutionContext {
+            cli_path: "sleep".to_string(),
+            cli_args: vec!["30".to_string()],
+            prompt: "test prompt".to_string(),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
+            timeout: Some(Duration::from_millis(50)),
+        };
+
+        let start = std::time::Instant::now();
+        let result = runner.execute(ctx);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "should error for timeout");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::Timeout(_)),
+            "expected Timeout, got {err:?}"
+        );
+        // Should complete well under 120s (the runner default)
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "should use context timeout, not runner default"
+        );
+    }
+
+    /// When context has no timeout override, the runner's default is used.
+    #[test]
+    fn execute_context_timeout_fallback_to_runner_default() {
+        let runner =
+            SubprocessAgentRunner::with_timeout(Duration::from_millis(50));
+        let ctx = ExecutionContext {
+            cli_path: "sleep".to_string(),
+            cli_args: vec!["30".to_string()],
+            prompt: "test prompt".to_string(),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
+            timeout: None,
+        };
+
+        let start = std::time::Instant::now();
+        let result = runner.execute(ctx);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "should error for timeout");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::Timeout(_)),
+            "expected Timeout, got {err:?}"
+        );
+        // Should timeout at runner's 50ms default, not hang
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "should use runner default timeout"
+        );
+    }
+
+    /// Context timeout can be larger than the runner's default,
+    /// allowing longer-running agents.
+    #[test]
+    fn execute_context_timeout_larger_than_default() {
+        let runner =
+            SubprocessAgentRunner::with_timeout(Duration::from_millis(50));
+        // Context allows 3s — enough for `sh -c 'cat >/dev/null; echo ok'`
+        let ctx = ExecutionContext {
+            cli_path: "sh".to_string(),
+            cli_args: vec!["-c".to_string(), "echo ok".to_string()],
+            prompt: "test prompt".to_string(),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            previous_tie_off: String::new(),
+            timeout: Some(Duration::from_secs(3)),
+        };
+
+        let result = runner.execute(ctx);
+        assert!(result.is_ok(), "should succeed: {result:?}");
+
+        let output = result.unwrap();
+        assert!(output.stdout.contains("ok"));
+    }
+
+    /// Existing timeout test with no context override still passes
+    /// (regression guard — runner default is used).
+    #[test]
+    fn execute_timeout_regression_no_context_override() {
+        let runner =
+            SubprocessAgentRunner::with_timeout(Duration::from_millis(100));
+        let ctx = make_context("sleep", &["30"]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for timeout");
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::Timeout(_)),
+            "expected Timeout, got {err:?}"
         );
     }
 }

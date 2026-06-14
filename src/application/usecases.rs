@@ -781,6 +781,7 @@ impl ProcessStrand {
             strand_path: strand_path.clone(),
             event_type: event_label.clone(),
             previous_tie_off,
+            timeout: None,
         };
 
         // 5. Execute agent and handle result

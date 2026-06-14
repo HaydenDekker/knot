@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 
 use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
 use crate::domain::events::{LoomEvent, RigLogEvent};
@@ -171,6 +172,10 @@ pub struct KnotState {
 }
 
 /// Context passed to the agent runner when executing a knot.
+///
+/// The optional `timeout` field allows per-knot timeout overrides.
+/// When `None`, the runner's global default timeout is used.
+/// When `Some(d)`, the agent session deadline is `d`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionContext {
     /// Path to the agent CLI binary.
@@ -185,6 +190,11 @@ pub struct ExecutionContext {
     pub event_type: String,
     /// Content of the previous tie-off file, if it existed.
     pub previous_tie_off: String,
+    /// Per-context timeout override.
+    ///
+    /// When `Some(d)`, the agent runner uses `d` as the session deadline.
+    /// When `None`, the runner falls back to its own global default timeout.
+    pub timeout: Option<Duration>,
 }
 
 /// Output captured from agent execution.
@@ -273,8 +283,18 @@ pub trait EventSource: Send + Sync {
 }
 
 /// Port for executing the agent CLI and capturing its output.
+///
+/// The runner enforces a session deadline. If `ExecutionContext::timeout`
+/// is `Some(d)`, that value is used. Otherwise the runner falls back to
+/// its own global default timeout configured at construction time.
 pub trait AgentRunner: Send + Sync {
     /// Execute the agent CLI with the given context.
+    ///
+    /// The session deadline is determined as follows:
+    /// 1. If `ctx.timeout` is `Some(d)`, use `d`.
+    /// 2. Otherwise, use the runner's global default timeout.
+    /// If the agent exceeds the deadline, it is killed and
+    /// `PortError::Timeout` is returned.
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError>;
 }
 
@@ -588,6 +608,7 @@ mod tests {
             strand_path: StrandPath(PathBuf::from("doc.md")),
             event_type: "Created".to_string(),
             previous_tie_off: String::new(),
+            timeout: None,
         };
         let result = runner.execute(ctx);
         assert!(result.is_ok());
@@ -767,6 +788,7 @@ mod tests {
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
             event_type: "Created".to_string(),
             previous_tie_off: String::new(),
+            timeout: None,
         };
 
         assert_eq!(ctx.cli_path, "pi");
@@ -774,6 +796,7 @@ mod tests {
         assert!(!ctx.prompt.is_empty());
         assert_eq!(ctx.event_type, "Created");
         assert!(ctx.previous_tie_off.is_empty());
+        assert!(ctx.timeout.is_none());
     }
 
     #[test]
