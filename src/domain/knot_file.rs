@@ -64,6 +64,9 @@ pub struct KnotFile {
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
     pub strand_dir: PathBuf,
+    /// When `true` (default), a git commit is created after each successful
+    /// knot run. Parsed from `git-versioned` frontmatter key.
+    pub git_versioned: bool,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -76,6 +79,8 @@ struct RawFrontmatter {
     prompt_template: Option<RawPromptTemplate>,
     #[serde(rename = "strand-dir")]
     strand_dir: Option<String>,
+    #[serde(rename = "git-versioned")]
+    git_versioned: Option<bool>,
     /// Captures any unknown YAML keys for warning emission.
     #[allow(dead_code)]
     #[serde(flatten)]
@@ -150,12 +155,16 @@ pub fn parse(
         .map(PathBuf::from)
         .ok_or(KnotFileError::MissingStrandDir)?;
 
+    // git-versioned defaults to true when absent
+    let git_versioned = raw.git_versioned.unwrap_or(true);
+
     Ok((
         KnotFile {
             name,
             agent_profile_ref,
             prompt_template,
             strand_dir,
+            git_versioned,
         },
         warnings,
     ))
@@ -559,6 +568,7 @@ Body.
             )
             .unwrap(),
             strand_dir: PathBuf::from("strands/test"),
+            git_versioned: true,
         };
 
         let json = serde_json::to_string(&file).unwrap();
@@ -578,6 +588,63 @@ Body.
         assert_eq!(file.name, "roundtrip-knot");
         assert_eq!(file.agent_profile_ref, "fast");
         assert_eq!(file.strand_dir, PathBuf::from("strands"));
+        assert!(file.git_versioned, "should default to true");
+    }
+
+    // ── Git Versioned Tests ──────────────────────────────────────────────
+
+    #[test]
+    fn knot_file_with_git_versioned_true() {
+        let content = "---\nname: git-on-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: true\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let (file, warnings) = parse(content).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {warnings:?}"
+        );
+        assert_eq!(file.name, "git-on-knot");
+        assert!(file.git_versioned);
+    }
+
+    #[test]
+    fn knot_file_with_git_versioned_false() {
+        let content = "---\nname: git-off-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let (file, warnings) = parse(content).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {warnings:?}"
+        );
+        assert_eq!(file.name, "git-off-knot");
+        assert!(!file.git_versioned);
+    }
+
+    #[test]
+    fn knot_file_without_git_versioned_defaults_true() {
+        let content = "---\nname: default-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let (file, warnings) = parse(content).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {warnings:?}"
+        );
+        assert_eq!(file.name, "default-git-knot");
+        assert!(
+            file.git_versioned,
+            "git_versioned should default to true when absent"
+        );
+    }
+
+    #[test]
+    fn knot_file_roundtrip_with_git_versioned() {
+        // Parse a knot file with git-versioned: false, then serialize and
+        // parse again to verify the value survives round-trip.
+        let content = "---\nname: roundtrip-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let (file, _warnings) = parse(content).unwrap();
+        assert!(!file.git_versioned);
+
+        // Serialize back to JSON and deserialize
+        let json = serde_json::to_string(&file).unwrap();
+        let deserialized: KnotFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, file);
+        assert!(!deserialized.git_versioned);
     }
 
     // ── Agent Profile Parsing Tests ──────────────────────────────────────────

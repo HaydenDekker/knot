@@ -589,6 +589,7 @@ mod tests {
                         instructions: "check it".to_string(),
                     },
                     strand_dir: PathBuf::from("strands"),
+                    git_versioned: true,
                 })
                 .collect(),
         }

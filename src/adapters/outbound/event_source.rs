@@ -232,6 +232,7 @@ impl InnerState {
                                     &self.project_root,
                                     &knot_file.strand_dir,
                                 ),
+                                git_versioned: knot_file.git_versioned,
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
@@ -295,6 +296,7 @@ impl InnerState {
                                     &self.project_root,
                                     &knot_file.strand_dir,
                                 ),
+                                git_versioned: knot_file.git_versioned,
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {

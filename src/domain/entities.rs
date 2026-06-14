@@ -52,6 +52,11 @@ pub enum TieOffStatus {
 
 // ── Entities ───────────────────────────────────────────────────────────────
 
+/// Default value for `git_versioned`: enabled.
+fn default_git_versioned() -> bool {
+    true
+}
+
 /// A Knot is the core unit of work: an agent goal paired with a prompt template.
 ///
 /// All agent configuration comes from a shared profile referenced by
@@ -66,6 +71,11 @@ pub struct Knot {
     /// Directory to watch for strand files (required).
     #[schema(value_type = String)]
     pub strand_dir: PathBuf,
+    /// When `true` (default), a git commit is created after each successful
+    /// knot run. Set to `false` in frontmatter via `git-versioned: false` to
+    /// opt out of automatic versioning for this knot.
+    #[serde(default = "default_git_versioned")]
+    pub git_versioned: bool,
 }
 
 /// A Loom orchestrates a collection of Knots.
@@ -117,12 +127,14 @@ mod tests {
             agent_profile_ref: "fast".to_string(),
             prompt_template: prompt_template.clone(),
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         };
 
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_profile_ref, "fast");
         assert_eq!(knot.prompt_template, prompt_template);
         assert_eq!(knot.strand_dir, PathBuf::from("strands"));
+        assert!(knot.git_versioned);
     }
 
     #[test]
@@ -135,6 +147,7 @@ mod tests {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("../custom-source"),
+            git_versioned: true,
         };
 
         assert_eq!(
@@ -154,6 +167,7 @@ mod tests {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("project/prds"),
+            git_versioned: true,
         }];
 
         let loom = Loom {
@@ -236,11 +250,64 @@ mod tests {
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         };
 
         let json = serde_json::to_string(&knot).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, knot);
+    }
+
+    #[test]
+    fn knot_serialization_roundtrip_with_git_versioned() {
+        // git_versioned: true
+        let knot_true = Knot {
+            id: KnotId("git-on".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "do it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        };
+        let json = serde_json::to_string(&knot_true).unwrap();
+        let deserialized: Knot = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, knot_true);
+        assert!(deserialized.git_versioned);
+
+        // git_versioned: false
+        let knot_false = Knot {
+            id: KnotId("git-off".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "do it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: false,
+        };
+        let json = serde_json::to_string(&knot_false).unwrap();
+        let deserialized: Knot = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, knot_false);
+        assert!(!deserialized.git_versioned);
+
+        // Missing field in JSON defaults to true
+        let knot_no_field = Knot {
+            id: KnotId("git-default".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "do it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        };
+        // Build JSON without the git_versioned field
+        let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"input_bundling":"full-file","instructions":"do it"},"strand_dir":"strands"}"#;
+        let deserialized: Knot = serde_json::from_str(json_minimal).unwrap();
+        assert_eq!(deserialized.id, knot_no_field.id);
+        assert!(deserialized.git_versioned, "missing field should default to true");
     }
 
     #[test]

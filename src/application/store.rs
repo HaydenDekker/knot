@@ -95,6 +95,7 @@ mod tests {
                     )
                     .unwrap(),
                     strand_dir: PathBuf::from("strands"),
+                    git_versioned: true,
                 },
             ],
         }

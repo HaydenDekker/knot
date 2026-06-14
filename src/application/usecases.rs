@@ -1628,6 +1628,7 @@ mod config_handler_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -2486,6 +2487,7 @@ mod phase2_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -2701,6 +2703,7 @@ mod phase3_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -2917,6 +2920,7 @@ mod phase4_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -3055,6 +3059,7 @@ mod manage_knot_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -3473,6 +3478,7 @@ mod phase3_profile_resolution_tests {
                 instructions: "check with profile".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -3953,6 +3959,7 @@ mod phase6_timeout_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 
@@ -4410,6 +4417,7 @@ mod phase7_timeout_resolution_tests {
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 

@@ -616,6 +616,7 @@ mod tests {
                 instructions: "Test instructions.".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
         }
     }
 

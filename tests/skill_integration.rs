@@ -177,6 +177,7 @@ fn build_context_with_loom() -> AppContext {
                 instructions: "Review this document.".to_string(),
             },
             strand_dir: PathBuf::from("src/docs"),
+            git_versioned: true,
         }],
     };
     ctx.store.register(test_loom);
@@ -664,6 +665,7 @@ async fn knot_inspect_knot_status_with_state() {
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("src/docs"),
+            git_versioned: true,
         }],
     });
     let app = knot::adapters::inbound::build_app(ctx);
