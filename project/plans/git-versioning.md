@@ -57,33 +57,21 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 **Hex Layer:** Application (Port + Use Case)
 
-- [ ] Add `GitVersioningPort` trait to `application/ports.rs`:
-  ```rust
-  pub trait GitVersioningPort: Send + Sync {
-      fn commit(
-          &self,
-          loom_id: &LoomId,
-          knot_id: &KnotId,
-          strand_path: &StrandPath,
-          event_type: &str,
-          tie_off_content: &str,
-      ) -> Result<(), PortError>;
-  }
-  ```
-- [ ] Add `PortError::GitCommitFailed(String)` variant with `Display` impl
-- [ ] Add mock `GitVersioningPort` to port tests module
-- [ ] Add `git_versioning_port: Arc<dyn GitVersioningPort>` to `ProcessStrand`
-- [ ] In `ProcessStrand::execute()`, after tie-off write (before log completion):
+- [x] Add `GitVersioningPort` trait to `application/ports.rs`
+- [x] Add `PortError::GitCommitFailed(String)` variant with `Display` impl
+- [x] Add mock `GitVersioningPort` to port tests module
+- [x] Add `git_versioning_port: Arc<dyn GitVersioningPort>` to `ProcessStrand`
+- [x] In `ProcessStrand::execute()`, after tie-off write (before log completion):
   - Check `knot.git_versioned` — if `false`, skip
   - Call `git_versioning_port.commit()` with tie-off content (the current response, not full file)
   - On error: log warning, do NOT fail processing (strand still marked completed)
-- [ ] Tests:
-  - `git_versioning_port_contract` — trait is object-safe, methods callable
-  - `process_strand_calls_git_port_on_success` — mock port receives commit call
-  - `process_strand_skips_git_when_disabled` — `git_versioned: false` → no commit call
-  - `process_strand_continues_on_git_error` — mock port returns error → processing succeeds
-  - `port_error_git_commit_display` — error Display impl
-  - Update existing ProcessStrand tests to include mock git port
+- [x] Tests:
+  - [x] `git_versioning_port_contract` — trait is object-safe, methods callable
+  - [x] `process_strand_calls_git_port_on_success` — mock port receives commit call
+  - [x] `process_strand_skips_git_when_disabled` — `git_versioned: false` → no commit call
+  - [x] `process_strand_continues_on_git_error` — mock port returns error → processing succeeds
+  - [x] `port_error_git_commit_display` — error Display impl
+  - [x] Update existing ProcessStrand tests to include mock git port
 
 ### Phase 2: Outbound Adapter — FileSystemGitVersioner
 
