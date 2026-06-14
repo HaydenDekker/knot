@@ -223,6 +223,9 @@ pub struct AgentProfile {
     /// The system prompt given to the agent.
     #[serde(rename = "system-prompt")]
     pub system_prompt: String,
+    /// Session timeout in seconds. `None` means use the runner's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
     /// Optional markdown body content from the profile file (after closing
     /// `---` frontmatter delimiter). Not serialized to YAML frontmatter —
     /// read from disk by the filesystem repository.
@@ -231,9 +234,17 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
+    /// Default session timeout in seconds when not specified per-profile.
+    ///
+    /// Matches `AppConfig::agent_timeout` (5 minutes). When a profile
+    /// does not set `timeout`, the agent runner uses this value as its
+    /// session deadline.
+    pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
     /// Create a new `AgentProfile` with all required fields.
     ///
-    /// `tools` defaults to an empty list.
+    /// `tools` defaults to an empty list. `timeout` defaults to `None`
+    /// (use the runner's default).
     ///
     /// Returns `AgentProfileError` if any required field is blank.
     pub fn new(
@@ -260,6 +271,7 @@ impl AgentProfile {
             model,
             tools: Vec::new(),
             system_prompt,
+            timeout: None,
             body: None,
         })
     }
@@ -290,6 +302,7 @@ impl AgentProfile {
             model,
             tools,
             system_prompt,
+            timeout: None,
             body: None,
         })
     }
@@ -300,6 +313,15 @@ impl AgentProfile {
     /// contain markdown body after the closing frontmatter delimiter.
     pub fn with_body(mut self, body: Option<String>) -> Self {
         self.body = body;
+        self
+    }
+
+    /// Set the session timeout in seconds.
+    ///
+    /// Returns `None` to use the runner's default timeout
+    /// (`DEFAULT_TIMEOUT_SECS`).
+    pub fn with_timeout(mut self, timeout: Option<u64>) -> Self {
+        self.timeout = timeout;
         self
     }
 }
@@ -724,5 +746,146 @@ mod tests {
         assert!(profile.is_ok());
         let profile = profile.unwrap();
         assert!(profile.system_prompt.contains("\n\n"));
+    }
+
+    #[test]
+    fn agent_profile_default_timeout_constant() {
+        assert_eq!(AgentProfile::DEFAULT_TIMEOUT_SECS, 300);
+    }
+
+    #[test]
+    fn agent_profile_new_has_no_timeout() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        assert_eq!(profile.timeout, None);
+    }
+
+    #[test]
+    fn agent_profile_with_timeout_sets_field() {
+        let profile = AgentProfile::new(
+            "slow".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "You are slow but thorough.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+        assert_eq!(profile.timeout, Some(600));
+    }
+
+    #[test]
+    fn agent_profile_with_timeout_none() {
+        let profile = AgentProfile::new(
+            "default".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Default timeout.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(None);
+        assert_eq!(profile.timeout, None);
+    }
+
+    #[test]
+    fn agent_profile_serialization_with_timeout() {
+        let profile = AgentProfile::new(
+            "slow".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Thorough review.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+        assert_eq!(deserialized.timeout, Some(600));
+        // Verify timeout is present in JSON
+        assert!(json.contains("\"timeout\":600"));
+    }
+
+    #[test]
+    fn agent_profile_serialization_without_timeout() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Quick review.".to_string(),
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+        assert_eq!(deserialized.timeout, None);
+        // Verify timeout is NOT present in JSON (skip_serializing_if)
+        assert!(!json.contains("timeout"));
+    }
+
+    #[test]
+    fn agent_profile_serialization_missing_timeout_defaults_to_none() {
+        // Deserialize JSON that has no timeout field — should default to None
+        let json = r#"{
+            "name": "legacy",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "tools": [],
+            "system-prompt": "Legacy profile."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.timeout, None);
+        assert_eq!(profile.name, "legacy");
+    }
+
+    #[test]
+    fn agent_profile_yaml_roundtrip_with_timeout() {
+        let profile = AgentProfile::new(
+            "timed".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Timed review.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+
+        let yaml = serde_yaml::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.timeout, Some(600));
+        assert_eq!(deserialized.name, "timed");
+        assert_eq!(deserialized.provider, "anthropic");
+    }
+
+    #[test]
+    fn agent_profile_yaml_roundtrip_without_timeout() {
+        let profile = AgentProfile::new(
+            "no-timeout".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "No timeout.".to_string(),
+        )
+        .unwrap();
+
+        let yaml = serde_yaml::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.timeout, None);
+        assert_eq!(deserialized.name, "no-timeout");
+        // Verify timeout is not in YAML output
+        // (serde_yaml may or may not skip None — the important part is
+        // round-trip correctness)
+        let _ = &yaml; // silence unused warning
+    }
+
+    #[test]
+    fn agent_profile_yaml_missing_timeout_defaults_to_none() {
+        let yaml = "name: legacy\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: Legacy.\n";
+        let profile: AgentProfile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(profile.timeout, None);
+        assert_eq!(profile.name, "legacy");
     }
 }

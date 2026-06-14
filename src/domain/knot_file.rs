@@ -213,6 +213,8 @@ struct RawProfileFrontmatter {
     system_prompt: Option<String>,
     #[serde(default)]
     tools: Option<Vec<String>>,
+    #[serde(default)]
+    timeout: Option<u64>,
 }
 
 /// Parse an agent profile file from its string content.
@@ -256,7 +258,7 @@ pub fn parse_agent_profile(
         .filter(|s| !s.trim().is_empty())
         .ok_or(AgentProfileError::MissingSystemPrompt)?;
 
-    // Build profile with optional tools
+    // Build profile with optional tools and timeout
     AgentProfile::with_tools(
         name,
         provider,
@@ -264,6 +266,7 @@ pub fn parse_agent_profile(
         raw.tools.unwrap_or_default(),
         system_prompt,
     )
+    .map(|p| p.with_timeout(raw.timeout))
 }
 
 
@@ -811,5 +814,57 @@ Body.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.tools, vec!["fs", "web", "sql"]);
+    }
+
+    #[test]
+    fn parse_profile_with_timeout() {
+        let content = "---
+name: slow-model
+provider: anthropic
+model: claude-sonnet-4-20250514
+timeout: 600
+system-prompt: Thorough review with long timeout.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.name, "slow-model");
+        assert_eq!(profile.timeout, Some(600));
+    }
+
+    #[test]
+    fn parse_profile_without_timeout() {
+        let content = "---
+name: fast
+provider: openai
+model: gpt-4o
+system-prompt: Quick review.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.timeout, None);
+    }
+
+    #[test]
+    fn parse_profile_with_timeout_and_tools() {
+        let content = "---
+name: full-timed
+provider: anthropic
+model: claude-sonnet
+tools:
+  - fs
+  - web
+timeout: 300
+system-prompt: Full review with timeout.
+---
+
+Body.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.timeout, Some(300));
+        assert_eq!(profile.tools, vec!["fs", "web"]);
     }
 }
