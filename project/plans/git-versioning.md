@@ -41,17 +41,17 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 **Hex Layer:** Domain
 
-- [ ] Add `git_versioned: bool` field to `Knot` entity (default `true`)
-- [ ] Add `git_versioned: Option<bool>` to `KnotFile` struct (parsed from frontmatter)
-- [ ] Add `#[serde(rename = "git-versioned")]` field to `RawFrontmatter`
-- [ ] Update `parse()` to extract field, defaulting to `true` when absent
-- [ ] Update `KnotFile` → `Knot` conversion (wherever it happens) to pass the field
-- [ ] Tests:
-  - `knot_file_with_git_versioned_true` — parses `git-versioned: true`
-  - `knot_file_with_git_versioned_false` — parses `git-versioned: false`
-  - `knot_file_without_git_versioned_defaults_true` — absent field → `true`
-  - `knot_serialization_roundtrip_with_git_versioned` — JSON round-trip preserves field
-  - `knot_file_roundtrip_with_git_versioned` — generate → parse round-trip
+- [x] Add `git_versioned: bool` field to `Knot` entity (default `true`)
+- [x] Add `git_versioned: Option<bool>` to `KnotFile` struct (parsed from frontmatter)
+- [x] Add `#[serde(rename = "git-versioned")]` field to `RawFrontmatter`
+- [x] Update `parse()` to extract field, defaulting to `true` when absent
+- [x] Update `KnotFile` → `Knot` conversion (wherever it happens) to pass the field
+- [x] Tests:
+  - [x] `knot_file_with_git_versioned_true` — parses `git-versioned: true`
+  - [x] `knot_file_with_git_versioned_false` — parses `git-versioned: false`
+  - [x] `knot_file_without_git_versioned_defaults_true` — absent field → `true`
+  - [x] `knot_serialization_roundtrip_with_git_versioned` — JSON round-trip preserves field
+  - [x] `knot_file_roundtrip_with_git_versioned` — generate → parse round-trip
 
 ### Phase 1: Application — GitVersioningPort and ProcessStrand Integration
 
