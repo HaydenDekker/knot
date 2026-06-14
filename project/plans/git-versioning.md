@@ -4,7 +4,7 @@
 
 This plan contributes to [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md).
 
-It implements Story 9 (Git Versioning), providing a permanent, auditable record of agent work through automatic git commits. This complements the file-based rollback feature by giving users standard git tools (`git log`, `git revert`, `git diff`) for long-term history and recovery.
+It implements Story 10 (Git Versioning), providing a permanent, auditable record of agent work through automatic git commits. This complements the file-based rollback feature by giving users standard git tools (`git log`, `git revert`, `git diff`) for long-term history and recovery.
 
 ## Problem
 
