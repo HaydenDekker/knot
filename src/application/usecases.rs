@@ -625,18 +625,21 @@ impl ProcessStrand {
     }
 
     /// Resolve the effective `AgentConfig` for a knot, along with the
-    /// system prompt to use for `--system-prompt`.
+    /// system prompt to use for `--system-prompt` and the profile's
+    /// session timeout.
     ///
     /// Loads the profile from the repository and builds an `AgentConfig`
     /// from it. The profile's `system_prompt` is merged with the knot's
     /// prompt instructions to form the full system prompt for CLI args.
+    /// If the profile specifies `timeout`, it is converted to a `Duration`.
     ///
-    /// Returns a tuple of `(AgentConfig, String)` where the `String` is the
-    /// merged system prompt for the CLI `--system-prompt` flag.
+    /// Returns a tuple of `(AgentConfig, String, Option<Duration>)` where
+    /// the `String` is the merged system prompt and the `Option<Duration>`
+    /// is the profile's timeout (or `None` to use the runner's default).
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
-    ) -> Result<(AgentConfig, String), PortError> {
+    ) -> Result<(AgentConfig, String, Option<std::time::Duration>), PortError> {
         let profile = self
             .profile_repo
             .get(&knot.agent_profile_ref)
@@ -663,6 +666,10 @@ impl ProcessStrand {
             )
         };
 
+        let timeout = profile
+            .timeout
+            .map(std::time::Duration::from_secs);
+
         Ok((
             AgentConfig {
                 goal: knot.prompt_template.instructions.clone(),
@@ -671,6 +678,7 @@ impl ProcessStrand {
                 tools: profile.tools.clone(),
             },
             merged_system_prompt,
+            timeout,
         ))
     }
 
@@ -729,9 +737,8 @@ impl ProcessStrand {
 
         // 2. Resolve effective agent config (profile) and build CLI args
         let resolved = self.resolve_agent_config(knot);
-        let (agent_config, system_prompt, strand_path, event_label, tie_off_path, knot, knot_id, loom_id) = match resolved {
-            Ok(rc) => (rc.0, rc.1, strand_path, event_label, tie_off_path, knot, knot_id, loom_id),
-            Err(err) => {
+        let (agent_config, system_prompt, profile_timeout) = resolved
+            .map_err(|err| {
                 let error_msg = err.to_string();
                 // Write error tie-off
                 let tie_off = TieOff {
@@ -753,7 +760,7 @@ impl ProcessStrand {
                 });
                 // Append StrandProcessed with error
                 let _ = self.log_port.append(LoomEvent::StrandProcessed {
-                    loom_id,
+                    loom_id: loom_id.clone(),
                     strand_path: strand_path.clone(),
                     error: Some(error_msg.clone()),
                     timestamp: format_timestamp(),
@@ -762,9 +769,10 @@ impl ProcessStrand {
                     &format!("{} failed: {}", strand_kind, error_msg),
                     &strand_path.0,
                 );
-                return Ok(());
-            }
-        };
+                err
+            })?;
+        let (agent_config, system_prompt, profile_timeout) =
+            (agent_config, system_prompt, profile_timeout);
         let mut cli_args = agent_config
             .build_cli_args(&knot.prompt_template, Some(&system_prompt));
         // Append strand content reference using pi's @file syntax
@@ -785,7 +793,7 @@ impl ProcessStrand {
             strand_path: strand_path.clone(),
             event_type: event_label.clone(),
             previous_tie_off,
-            timeout: None,
+            timeout: profile_timeout,
         };
 
         // 5. Execute agent and handle result
@@ -3515,11 +3523,13 @@ mod phase3_profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
-        let (config, system_prompt) =
+        let (config, system_prompt, profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
 
         // Resolved config should use profile values
         assert_eq!(config.provider, "openai");
+        // Profile has no timeout set, so it resolves to None
+        assert_eq!(profile_timeout, None);
         assert_eq!(config.model, "gpt-4o");
         assert_eq!(config.tools, vec!["fs", "web"]);
         // Goal comes from prompt template instructions
@@ -3598,12 +3608,15 @@ mod phase3_profile_resolution_tests {
         let knot1 = build_profile_knot("k1", "detailed");
         let knot2 = build_profile_knot("k2", "detailed");
 
-        let (config1, system_prompt1) =
+        let (config1, system_prompt1, timeout1) =
             use_case.resolve_agent_config(&knot1).unwrap();
-        let (config2, system_prompt2) =
+        let (config2, system_prompt2, timeout2) =
             use_case.resolve_agent_config(&knot2).unwrap();
 
         // Both should resolve to the same profile values
+        // Neither profile has a timeout set
+        assert_eq!(timeout1, None);
+        assert_eq!(timeout2, None);
         assert_eq!(config1.provider, "anthropic");
         assert_eq!(config1.model, "claude-sonnet-4-20250514");
         assert_eq!(config2.provider, "anthropic");
@@ -3654,9 +3667,11 @@ mod phase3_profile_resolution_tests {
         profile_repo.save(profile).unwrap();
 
         // Now the same knot should resolve successfully
-        let (config, system_prompt) =
+        let (config, system_prompt, profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
         assert_eq!(config.provider, "openai");
+        // Profile has no timeout set
+        assert_eq!(profile_timeout, None);
         assert_eq!(config.model, "gpt-4o");
         assert_eq!(config.tools, vec!["fs"]);
         // System prompt contains profile's system_prompt + knot instructions
@@ -3698,7 +3713,7 @@ mod phase3_profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
-        let (config, system_prompt) =
+        let (config, system_prompt, _profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
         let args = config.build_cli_args(&profile_knot.prompt_template, Some(&system_prompt));
 
@@ -4180,5 +4195,424 @@ mod phase6_timeout_tests {
         assert_eq!(appends.len(), 1);
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "agent output");
+    }
+}
+
+// ── Phase 7: Profile Timeout Resolution Tests ─────────────────────────
+
+#[cfg(test)]
+mod phase7_timeout_resolution_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    // ── Mock LoomLogPort ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Tracking AgentRunner (captures ExecutionContext) ────────────
+
+    /// Mock agent runner that records the ExecutionContext passed to it.
+    struct TrackingAgentRunner {
+        contexts: Arc<Mutex<Vec<ExecutionContext>>>,
+    }
+
+    impl TrackingAgentRunner {
+        fn new() -> (Self, Arc<Mutex<Vec<ExecutionContext>>>) {
+            let contexts = Arc::new(Mutex::new(vec![]));
+            (
+                Self { contexts: contexts.clone() },
+                contexts,
+            )
+        }
+    }
+
+    impl AgentRunner for TrackingAgentRunner {
+        fn execute(
+            &self,
+            ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            self.contexts.lock().unwrap().push(ctx);
+            Ok(AgentOutput {
+                stdout: "mock output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Mock AgentRunner (no-op) ─────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockAgentRunner;
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            Ok(AgentOutput {
+                stdout: "mock".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Mock TieOffSink ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockTieOffSink {
+        content: std::sync::RwLock<HashMap<String, String>>,
+    }
+
+    impl TieOffSink for MockTieOffSink {
+        fn write(
+            &self,
+            tie_off: TieOff,
+        ) -> Result<(), PortError> {
+            self.content
+                .write()
+                .unwrap()
+                .insert(tie_off.path.0.display().to_string(), tie_off.content);
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.write(tie_off)
+        }
+
+        fn read_content(
+            &self,
+            path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(self
+                .content
+                .read()
+                .unwrap()
+                .get(&path.0.display().to_string())
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockRigLogPort {
+        events: Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>,
+    }
+
+    impl MockRigLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    #[derive(Default)]
+    struct MockProfileRepository {
+        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
+        }
+
+        fn save(
+            &self,
+            profile: AgentProfile,
+        ) -> Result<(), PortError> {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
+            Ok(())
+        }
+
+        fn delete(&self, name: &str) -> Result<(), PortError> {
+            let mut map = self.profiles.lock().unwrap();
+            if map.remove(name).is_none() {
+                return Err(PortError::ProfileNotFound(name.to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Build a knot with the given profile ref.
+    fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: profile.to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+        }
+    }
+
+    /// Build a loom with the given ID and knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    // ── resolve_agent_config Timeout Tests ───────────────────────────
+
+    /// `resolve_agent_config()` returns the profile's timeout
+    /// converted to a Duration when the profile sets `timeout: Some(600)`.
+    #[test]
+    fn resolve_agent_config_returns_timeout_from_profile() {
+        let store = LoomStore::new();
+        let profile = AgentProfile::new(
+            "slow".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "You are thorough.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("slow".to_string(), profile),
+            ]))),
+        });
+
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+            Arc::new(rig_log),
+        );
+
+        let knot = build_knot("k1", "slow");
+        let (_config, _system_prompt, timeout) =
+            use_case.resolve_agent_config(&knot).unwrap();
+
+        assert_eq!(timeout, Some(Duration::from_secs(600)));
+    }
+
+    /// `resolve_agent_config()` returns `None` timeout when the profile
+    /// does not set a timeout (falls back to runner default).
+    #[test]
+    fn resolve_agent_config_returns_none_timeout_from_profile() {
+        let store = LoomStore::new();
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        // No .with_timeout() — defaults to None
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), profile),
+            ]))),
+        });
+
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo.clone(),
+            Arc::new(rig_log),
+        );
+
+        let knot = build_knot("k1", "fast");
+        let (_config, _system_prompt, timeout) =
+            use_case.resolve_agent_config(&knot).unwrap();
+
+        assert_eq!(timeout, None);
+    }
+
+    // ── ProcessStrand execute() Timeout Tests ────────────────────────
+
+    /// `ProcessStrand::execute` with a profile that has `timeout = Some(60)`
+    /// passes `ExecutionContext.timeout = Some(Duration::from_secs(60))`.
+    #[test]
+    fn process_strand_execute_passes_profile_timeout_to_context() {
+        let profile = AgentProfile::new(
+            "timed".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Timed review.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(60));
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("timed".to_string(), profile),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "timed")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+        );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify the ExecutionContext received the profile's timeout
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1, "should have called execute once");
+        assert_eq!(
+            contexts[0].timeout,
+            Some(Duration::from_secs(60)),
+            "ExecutionContext.timeout should be profile's timeout"
+        );
+    }
+
+    /// `ProcessStrand::execute` with a profile that has `timeout = None`
+    /// passes `ExecutionContext.timeout = None` (falls back to runner default).
+    #[test]
+    fn process_strand_execute_passes_none_timeout_to_context() {
+        let profile = AgentProfile::new(
+            "default".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Default timeout.".to_string(),
+        )
+        .unwrap();
+        // No .with_timeout() — defaults to None
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("default".to_string(), profile),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "default")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+        );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify the ExecutionContext received None timeout
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1, "should have called execute once");
+        assert_eq!(
+            contexts[0].timeout,
+            None,
+            "ExecutionContext.timeout should be None (runner fallback)"
+        );
     }
 }
