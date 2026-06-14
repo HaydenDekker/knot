@@ -77,25 +77,16 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 **Hex Layer:** Outbound Adapter
 
-- [ ] Create `src/adapters/outbound/git_versioner.rs`
-- [ ] Implement `FileSystemGitVersioner` with subprocess approach:
-  - Uses `std::process::Command` to run `git` (avoids `git2` C dependency)
-  - `git add -A` (stages all changes)
-  - `git commit -m "<message>"` (with body from tie-off)
-  - Commit message format: `knot: <knot-id> — processed <strand-name> (<event-type>)`
-  - Commit body: tie-off content (truncated to ~1000 lines if excessive)
-- [ ] Handle edge cases:
-  - Not a git repo: check `git rev-parse --git-dir` first, skip if fails
-  - Git unavailable (binary not found): skip, log warning
-  - Git commit fails (e.g. no config): skip, log warning
-  - Uncommitted changes from other sources: `git add -A` includes everything — that's the desired behaviour (all agent work captured together)
-- [ ] Tests:
-  - `git_versioner_creates_commit_in_git_repo` — temp dir with init'd git, verify commit
-  - `git_versioner_skips_when_not_git_repo` — temp dir without git init, no error
-  - `git_versioner_commit_message_format` — message includes loom, knot, strand, event
-  - `git_versioner_commit_body_contains_tieoff` — body has tie-off content
-  - `git_versioner_trait_object_safe` — trait is object-safe
-  - `git_versioner_multiple_commits_in_sequence` — simulates series of knot runs
+- [x] Create `src/adapters/outbound/git_versioner.rs`
+- [x] Implement `FileSystemGitVersioner` with subprocess approach
+- [x] Handle edge cases (not a git repo, git unavailable, commit failures — all non-fatal)
+- [x] Tests:
+  - [x] `git_versioner_creates_commit_in_git_repo`
+  - [x] `git_versioner_skips_when_not_git_repo`
+  - [x] `git_versioner_commit_message_format`
+  - [x] `git_versioner_commit_body_contains_tieoff`
+  - [x] `git_versioner_trait_object_safe`
+  - [x] `git_versioner_multiple_commits_in_sequence`
 
 ### Phase 3: Composition Root — Wire the Adapter
 
