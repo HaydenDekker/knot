@@ -246,13 +246,13 @@ The `resolve_agent_config()` return type change is a single-use case internal AP
 - Unit test: `resolve_agent_config()` returns correct timeout from profile
 
 **Tasks:**
-- [ ] Update `resolve_agent_config()` to also return the profile's timeout as `Option<Duration>`:
+- [x] Update `resolve_agent_config()` to also return the profile's timeout as `Option<Duration>`:
   - `pub fn resolve_agent_config(&self, knot: &Knot) -> Result<(AgentConfig, String, Option<std::time::Duration>), PortError>`
   - Convert `profile.timeout` (Option<u64>) to `Option<Duration>` via `.map(Duration::from_secs)`
-- [ ] In `execute()`, extract timeout from resolved tuple and pass to `ExecutionContext`
-- [ ] Update mock `AgentProfile` instances in existing tests to include `timeout: None`
-- [ ] Add unit tests for timeout resolution from profile
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] In `execute()`, extract timeout from resolved tuple and pass to `ExecutionContext`
+- [x] Update mock `AgentProfile` instances in existing tests to include `timeout: None`
+- [x] Add unit tests for timeout resolution from profile
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 8: Queue Idle detection + rig-log QueueIdle entry
 
