@@ -16,7 +16,7 @@ Two issues with knot configuration changes:
 2. Parse failures log to stderr so malformed frontmatter is not silently ignored.
 3. Path resolution in `NotifyEventSource` matches `FileSystemLoomRepository` (both resolve to absolute) — ensuring the in-memory knot is consistent whether loaded at startup or via file watcher.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-15)
 
 ## Existing Tests
 
@@ -91,3 +91,12 @@ End-to-end test verifying that filesystem edits produce consistent absolute path
 ## Notes
 
 Phase 0 is already implemented as uncommitted changes. The remaining phases add observability and test coverage.
+
+### Phase 0 Bugfix (2026-06-15)
+
+The initial Phase 0 implementation added `resolve_path` to `NotifyEventSource` and wired a `project_root` parameter — but `project_root` was incorrectly set to the rig directory (`config.base_dir`) instead of the project root (parent of the rig). This meant relative `strand_dir` values in knot frontmatter resolved to `<rig>/<strand_dir>` instead of `<project>/<strand_dir>`, causing `No path was found` watcher errors when the strand directory lived alongside the rig (e.g. `project/prds`).
+
+**Fix applied across 7 source files + 17 test files:**
+- `server.rs`: `project_root` now derives from `config.rig_dir.parent()` matching `FileSystemLoomRepository::scan()`
+- Full rename `base_dir` → `rig_dir` everywhere (`AppConfig`, `AppContext`, `FileSystemLoomLog`, `FileSystemRigLog`, `SharedLoomLog`, `SharedRigLog`, `ProcessStrand`, all constructors, all callers) to eliminate ambiguity between "rig directory" and "project root"
+- All tests pass (`cargo test` green across 100+ tests)

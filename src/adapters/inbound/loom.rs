@@ -510,7 +510,7 @@ mod tests {
             rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
-            base_dir: PathBuf::from("./rig"),
+            rig_dir: PathBuf::from("./rig"),
         }
     }
 
@@ -542,7 +542,7 @@ mod tests {
                 rig_log_port: Arc::new(MockRigLogPort),
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
-                base_dir: PathBuf::from("./rig"),
+                rig_dir: PathBuf::from("./rig"),
             },
             watch_calls,
             unwatch_calls,
@@ -1143,7 +1143,7 @@ mod tests {
             rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
-            base_dir: PathBuf::from("./rig"),
+            rig_dir: PathBuf::from("./rig"),
         }
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
             rig_log_port: Arc::new(MockRigLogPort),
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
-            base_dir: PathBuf::from("./rig"),
+            rig_dir: PathBuf::from("./rig"),
         };
         let app = build_app(ctx);
 

@@ -78,6 +78,6 @@ pub struct AppContext {
     pub rig_config: RigAgentConfig,
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
     pub loom_ids: Vec<LoomId>,
-    /// Base (rig) directory path — used by discover and config endpoints.
-    pub base_dir: PathBuf,
+    /// Rig directory path — used by discover and config endpoints.
+    pub rig_dir: PathBuf,
 }

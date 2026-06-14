@@ -37,7 +37,7 @@ async fn full_tie_off_history() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -154,7 +154,7 @@ async fn tie_off_sections_readable() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),

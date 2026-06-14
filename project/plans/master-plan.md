@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-14
-> **Plan Completed:** Rig-Log Notification and Timeout Handling
+> **Last Updated:** 2026-06-15
+> **Plan Completed:** Knot Modification Observability and Path Resolution Consistency
 
 ## How to Add a Plan
 
@@ -54,7 +54,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
-| 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ⬜ Planned | 2026-06-08 |
+| 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ✅ Complete | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
@@ -166,9 +166,12 @@ Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-
 
 ### 20. Knot Modification Observability and Path Resolution Consistency
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-08
+**Completed:** 2026-06-15
 **Goal:** Make `KnotModified` filesystem changes observable via loom-log (`LoomEvent::KnotUpdated`), log parse failures to stderr, and ensure path resolution is consistent between initial load and file-watcher events.
+
+**Result:** Phase 0 (path resolution consistency) completed: `NotifyEventSource` now receives correct `project_root` (parent of rig directory) so relative `strand_dir` paths resolve identically to `FileSystemLoomRepository::scan()`. Full rename `base_dir` → `rig_dir` across all 7 source files + 17 test files to eliminate ambiguity between "rig directory" and "project root". Remaining phases (KnotUpdated loom-log, parse failure logging, integration test) remain Planned.
 
 Full details in [plan-knot-modify-observability.md](plan-knot-modify-observability.md).
 

@@ -101,7 +101,7 @@ async fn profile_timeout_two_seconds_kills_agent() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
@@ -195,7 +195,7 @@ async fn profile_no_timeout_uses_runner_default() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
@@ -274,7 +274,7 @@ async fn profile_timeout_overrides_runner_default() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),

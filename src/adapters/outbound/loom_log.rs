@@ -11,29 +11,29 @@ use crate::domain::knot_file::derive_loom_log_path;
 /// Filesystem-backed implementation of `LoomLogPort`.
 ///
 /// Writes loom events as JSONL (one JSON object per line) to
-/// `<base_dir>/tie-offs/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
+/// `<rig_dir>/tie-offs/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
 /// concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemLoomLog {
-    base_dir: PathBuf,
+    rig_dir: PathBuf,
 }
 
 impl FileSystemLoomLog {
-    /// Create a new log adapter backed by `base_dir`.
+    /// Create a new log adapter backed by `rig_dir`.
     ///
-    /// Log files live at `<base_dir>/tie-offs/<loom_id>/.loom-log`.
-    pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+    /// Log files live at `<rig_dir>/tie-offs/<loom_id>/.loom-log`.
+    pub fn new(rig_dir: PathBuf) -> Self {
+        Self { rig_dir }
     }
 
     /// Resolve the log file path for a given loom.
     fn log_path(&self, loom_id: &LoomId) -> PathBuf {
-        derive_loom_log_path(&loom_id.0, &self.base_dir)
+        derive_loom_log_path(&loom_id.0, &self.rig_dir)
     }
 
     /// Open the log file for appending, creating directories as needed.
-    fn open_file(loom_id: &LoomId, base_dir: &std::path::Path) -> Result<File, PortError> {
-        let path = derive_loom_log_path(&loom_id.0, base_dir);
+    fn open_file(loom_id: &LoomId, rig_dir: &std::path::Path) -> Result<File, PortError> {
+        let path = derive_loom_log_path(&loom_id.0, rig_dir);
         let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)
             .map_err(|e| PortError::LoomLogOpenFailed(e.to_string()))?;
@@ -48,7 +48,7 @@ impl FileSystemLoomLog {
 impl LoomLogPort for FileSystemLoomLog {
     fn open(&self, loom_id: &LoomId) -> Result<(), PortError> {
         // Ensure the loom directory and log file exist.
-        let _file = Self::open_file(loom_id, &self.base_dir)?;
+        let _file = Self::open_file(loom_id, &self.rig_dir)?;
         Ok(())
     }
 
@@ -74,7 +74,7 @@ impl LoomLogPort for FileSystemLoomLog {
         let line = serde_json::to_string(&event)
             .map_err(|e| PortError::LoomLogAppendFailed(e.to_string()))?;
 
-        let mut file = Self::open_file(&loom_id, &self.base_dir)?;
+        let mut file = Self::open_file(&loom_id, &self.rig_dir)?;
         writeln!(file, "{}", line)
             .map_err(|e| PortError::LoomLogAppendFailed(e.to_string()))?;
         file.flush()
@@ -118,9 +118,9 @@ pub struct SharedLoomLog {
 
 impl SharedLoomLog {
     /// Create a shared log writer for a specific loom.
-    pub fn new(base_dir: PathBuf, loom_id: LoomId) -> Result<Self, PortError> {
-        let inner = FileSystemLoomLog::new(base_dir.clone());
-        let file = Self::open_file(&loom_id, &base_dir)?;
+    pub fn new(rig_dir: PathBuf, loom_id: LoomId) -> Result<Self, PortError> {
+        let inner = FileSystemLoomLog::new(rig_dir.clone());
+        let file = Self::open_file(&loom_id, &rig_dir)?;
         Ok(Self {
             inner,
             file: Arc::new(Mutex::new(Some(file))),
@@ -128,8 +128,8 @@ impl SharedLoomLog {
         })
     }
 
-    fn open_file(loom_id: &LoomId, base_dir: &std::path::Path) -> Result<File, PortError> {
-        let path = derive_loom_log_path(&loom_id.0, base_dir);
+    fn open_file(loom_id: &LoomId, rig_dir: &std::path::Path) -> Result<File, PortError> {
+        let path = derive_loom_log_path(&loom_id.0, rig_dir);
         let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir)
             .map_err(|e| PortError::LoomLogOpenFailed(e.to_string()))?;

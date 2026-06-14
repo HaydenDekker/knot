@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 /// Configuration for starting the Knot server.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
-    /// Base directory for filesystem adapters.
-    pub base_dir: PathBuf,
+    /// Rig directory for filesystem adapters.
+    pub rig_dir: PathBuf,
     /// Address to bind the HTTP server on.
     pub bind_addr: SocketAddr,
     /// Rig-level agent configuration.
@@ -38,11 +38,11 @@ pub struct AppConfig {
 impl AppConfig {
     /// Create default configuration: bind `127.0.0.1:3000`, rig dir `./rig`.
     pub fn default_config() -> Self {
-        let base_dir = std::env::current_dir()
+        let rig_dir = std::env::current_dir()
             .map(|cwd| cwd.join("rig"))
             .unwrap_or_else(|_| PathBuf::from("./rig"));
         Self {
-            base_dir,
+            rig_dir,
             bind_addr: "127.0.0.1:3000".parse().unwrap(),
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
@@ -54,10 +54,10 @@ impl AppConfig {
 /// in the given directory. Falls back to `default` if the file does not
 /// exist or cannot be parsed.
 fn load_rig_config(
-    base_dir: &std::path::Path,
+    rig_dir: &std::path::Path,
     default: RigAgentConfig,
 ) -> RigAgentConfig {
-    let config_path = base_dir.join(".workspace-agent-config.yaml");
+    let config_path = rig_dir.join(".workspace-agent-config.yaml");
     if !config_path.exists() {
         return default;
     }
@@ -113,18 +113,18 @@ pub fn build_app_context(
 
     // Load rig config from .rig-agent-config.yaml (falls back to defaults).
     let rig_config =
-        load_rig_config(&config.base_dir, config.rig_config.clone());
+        load_rig_config(&config.rig_dir, config.rig_config.clone());
 
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
         Arc::new(crate::adapters::outbound::FileSystemLoomRepository::new());
     let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
         Arc::new(crate::adapters::outbound::FileSystemLoomLog::new(
-            config.base_dir.clone(),
+            config.rig_dir.clone(),
         ));
     let tie_off_sink: Arc<dyn application::ports::TieOffSink> =
         Arc::new(crate::adapters::outbound::FileSystemTieOffSink::new(
-            config.base_dir.clone(),
+            config.rig_dir.clone(),
         ));
     let agent_runner: Arc<dyn application::ports::AgentRunner> =
         Arc::new(
@@ -133,13 +133,13 @@ pub fn build_app_context(
     let profile_repo: Arc<dyn application::ports::AgentProfileRepository> =
         Arc::new(
             crate::adapters::outbound::FileSystemAgentProfileRepository::new(
-                config.base_dir.join("profiles"),
+                config.rig_dir.join("profiles"),
             ),
         );
     let rig_log_port: Arc<dyn application::ports::RigLogPort> =
         Arc::new(
             crate::adapters::outbound::FileSystemRigLog::new(
-                config.base_dir.clone(),
+                config.rig_dir.clone(),
             ),
         );
 
@@ -151,7 +151,14 @@ pub fn build_app_context(
 
     // File-system event source — created once, shared via AppContext.
     // Handlers can pass this to use cases for watch/unwatch.
-    let project_root = config.base_dir.clone();
+    // Project root is the parent of the rig directory, matching the
+    // resolution in FileSystemLoomRepository::scan(). This ensures
+    // relative strand_dir paths resolve against the project root,
+    // not the rig directory.
+    let project_root = config.rig_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| config.rig_dir.clone());
     let event_source: Arc<dyn application::ports::EventSource> =
         Arc::new(
             crate::adapters::outbound::NotifyEventSource::new(
@@ -174,7 +181,7 @@ pub fn build_app_context(
             rig_log_port,
             rig_config,
             loom_ids: Vec::new(),
-            base_dir: config.base_dir.clone(),
+            rig_dir: config.rig_dir.clone(),
         },
         strand_rx,
         config_rx,
@@ -214,16 +221,16 @@ pub fn start_event_pipeline(
     let agent_runner = Arc::clone(&ctx.agent_runner);
     let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
     let rig_config = ctx.rig_config.clone();
-    let base_dir = ctx.base_dir.clone();
+    let rig_dir = ctx.rig_dir.clone();
     let profile_repo = Arc::clone(&ctx.profile_repo);
     let rig_log_port = Arc::clone(&ctx.rig_log_port);
 
     // Git versioning: project root is the parent of the rig directory.
-    // Falls back to base_dir itself if parent does not exist.
-    let project_root = base_dir
+    // Falls back to rig_dir itself if parent does not exist.
+    let project_root = rig_dir
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| base_dir.clone());
+        .unwrap_or_else(|| rig_dir.clone());
     let git_versioning_port: Arc<dyn GitVersioningPort> = Arc::new(
         crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
     );
@@ -235,7 +242,7 @@ pub fn start_event_pipeline(
             agent_runner,
             tie_off_sink,
             rig_config,
-            base_dir,
+            rig_dir,
             profile_repo,
             rig_log_port.clone(),
             git_versioning_port,
@@ -311,11 +318,11 @@ pub fn start_event_pipeline(
 /// Returns the list of discovered looms.
 pub fn run_startup(
     ctx: &AppContext,
-    base_dir: &StdPath,
+    rig_dir: &StdPath,
 ) -> std::io::Result<Vec<Loom>> {
     // Auto-create the rig directory if it doesn't exist.
-    std::fs::create_dir_all(base_dir).map_err(|e| {
-        eprintln!("WARNING: failed to create rig dir {}: {e}", base_dir.display());
+    std::fs::create_dir_all(rig_dir).map_err(|e| {
+        eprintln!("WARNING: failed to create rig dir {}: {e}", rig_dir.display());
         e
     })?;
 
@@ -327,7 +334,7 @@ pub fn run_startup(
     );
 
     let looms = discover
-        .execute(base_dir)
+        .execute(rig_dir)
         .map_err(|e| {
             std::io::Error::other(e.to_string())
         })?;
@@ -335,8 +342,8 @@ pub fn run_startup(
     // Register rig directory watch — auto-discover new `*-loom` directories
     // and knot changes within existing looms.
     ctx.event_source
-        .register_watch(base_dir.to_path_buf(), WatchType::Rig);
-    if let Err(e) = ctx.event_source.watch(base_dir) {
+        .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
+    if let Err(e) = ctx.event_source.watch(rig_dir) {
         eprintln!("WARNING: failed to watch rig dir: {e}");
     }
 
@@ -363,7 +370,7 @@ pub fn start_config_pipeline(
     let log_port = Arc::clone(&ctx.loom_log_port);
     let store = ctx.store.clone();
     let event_source = Arc::clone(&ctx.event_source);
-    let rig_path = ctx.base_dir.clone();
+    let rig_path = ctx.rig_dir.clone();
 
     join_set.spawn(async move {
         let use_case = application::usecases::ConfigEventHandler::new(
@@ -430,7 +437,7 @@ pub async fn start_server_with_shutdown(
     start_event_pipeline(&ctx, strand_rx, &mut join_set);
 
     // Startup: discover looms, create state files, start watchers
-    let looms = run_startup(&ctx, &config.base_dir).unwrap_or_else(|e| {
+    let looms = run_startup(&ctx, &config.rig_dir).unwrap_or_else(|e| {
         eprintln!("WARNING: startup discovery failed: {e}");
         Vec::new()
     });

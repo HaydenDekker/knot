@@ -9,23 +9,23 @@ use crate::domain::events::RigLogEvent;
 /// Filesystem-backed implementation of `RigLogPort`.
 ///
 /// Writes rig-log events as JSONL (one JSON object per line) to
-/// `<base_dir>/.rig-log`. Uses append mode for concurrent write safety.
+/// `<rig_dir>/.rig-log`. Uses append mode for concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemRigLog {
-    base_dir: PathBuf,
+    rig_dir: PathBuf,
 }
 
 impl FileSystemRigLog {
-    /// Create a new rig-log adapter backed by `base_dir`.
+    /// Create a new rig-log adapter backed by `rig_dir`.
     ///
-    /// The log file lives at `<base_dir>/.rig-log`.
-    pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+    /// The log file lives at `<rig_dir>/.rig-log`.
+    pub fn new(rig_dir: PathBuf) -> Self {
+        Self { rig_dir }
     }
 
     /// Resolve the log file path.
     fn log_path(&self) -> PathBuf {
-        self.base_dir.join(".rig-log")
+        self.rig_dir.join(".rig-log")
     }
 
     /// Open the log file for appending, creating parent directories as needed.
@@ -91,8 +91,8 @@ pub struct SharedRigLog {
 
 impl SharedRigLog {
     /// Create a shared rig-log writer.
-    pub fn new(base_dir: PathBuf) -> Result<Self, PortError> {
-        let inner = FileSystemRigLog::new(base_dir.clone());
+    pub fn new(rig_dir: PathBuf) -> Result<Self, PortError> {
+        let inner = FileSystemRigLog::new(rig_dir.clone());
         let file = inner.open_append()?;
         Ok(Self { inner, file: Arc::new(Mutex::new(file)) })
     }

@@ -99,7 +99,7 @@ async fn single_event_queue_idle_written() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),
@@ -183,7 +183,7 @@ async fn burst_events_single_queue_idle() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),
@@ -284,7 +284,7 @@ async fn timeout_writes_rig_log_entry() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
@@ -362,7 +362,7 @@ async fn successful_processing_no_rig_log_timeout() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),
@@ -442,7 +442,7 @@ async fn tieoff_preserved_on_timeout() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
@@ -523,7 +523,7 @@ async fn tieoff_receives_error_on_non_timeout_failure() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: script_path.to_string_lossy().to_string(),

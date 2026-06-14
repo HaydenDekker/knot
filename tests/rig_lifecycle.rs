@@ -30,7 +30,7 @@ async fn rig_directory_auto_created() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig_path.clone(),
+        rig_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -65,7 +65,7 @@ async fn rig_directory_auto_created() {
 /// looms discovered and registered.
 ///
 /// 1. Create a temp dir with a `./rig/` subdirectory containing a loom
-/// 2. Start Knot with base_dir pointing to the rig
+/// 2. Start Knot with rig_dir pointing to the rig
 /// 3. Verify looms are discovered via `GET /looms`
 #[tokio::test]
 async fn rig_directory_scanned() {
@@ -84,7 +84,7 @@ async fn rig_directory_scanned() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig_path.clone(),
+        rig_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -235,7 +235,7 @@ async fn file_first_register_then_discover_after_restart() {
 
     // --- First server instance ---
     let config = AppConfig {
-        base_dir: rig_path.clone(),
+        rig_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -269,7 +269,7 @@ async fn file_first_register_then_discover_after_restart() {
 
     // --- Second server instance (restart) ---
     let config2 = AppConfig {
-        base_dir: rig_path.clone(),
+        rig_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };

@@ -39,7 +39,7 @@ async fn graceful_shutdown_stops_watchers() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
@@ -113,7 +113,7 @@ async fn shutdown_logs_loom_stopped() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };

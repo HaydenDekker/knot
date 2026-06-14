@@ -40,7 +40,7 @@ fn make_knot_content_with_dirs_git_disabled(
 /// format containing knot id, strand name, event type, and tie-off
 /// content in the body.
 ///
-/// Setup: temp dir → git init → rig subdirectory as base_dir → loom +
+/// Setup: temp dir → git init → rig subdirectory as rig_dir → loom +
 /// knot (git-versioned default: true) → mock agent → spawn server →
 /// create strand → wait for completion → verify git commit.
 #[tokio::test]
@@ -48,7 +48,7 @@ async fn event_pipeline_creates_git_commit() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // Initialise git at the project root (parent of base_dir).
+    // Initialise git at the project root (parent of rig_dir).
     assert!(
         init_git_repo(root),
         "should initialise git repo in temp directory"
@@ -74,7 +74,7 @@ async fn event_pipeline_creates_git_commit() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -192,7 +192,7 @@ async fn event_pipeline_skips_git_when_disabled() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -282,7 +282,7 @@ async fn event_pipeline_continues_without_git() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),

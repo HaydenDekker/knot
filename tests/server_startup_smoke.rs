@@ -13,7 +13,7 @@ async fn server_starts_and_listens() {
     fs::create_dir(&rig).unwrap();
 
     let config = AppConfig {
-        base_dir: rig,
+        rig_dir: rig,
         bind_addr: "127.0.0.1:35500".parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -46,7 +46,7 @@ async fn server_starts_with_loom_directory() {
     create_fast_profile(&rig);
 
     let config = AppConfig {
-        base_dir: rig,
+        rig_dir: rig,
         bind_addr: "127.0.0.1:35501".parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -72,7 +72,7 @@ async fn two_servers_sequential() {
     fs::create_dir(&rig1).unwrap();
 
     let config1 = AppConfig {
-        base_dir: rig1,
+        rig_dir: rig1,
         bind_addr: "127.0.0.1:35502".parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -91,7 +91,7 @@ async fn two_servers_sequential() {
     fs::create_dir(&rig2).unwrap();
 
     let config2 = AppConfig {
-        base_dir: rig2,
+        rig_dir: rig2,
         bind_addr: "127.0.0.1:35503".parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()

@@ -49,7 +49,7 @@ async fn multiple_looms_independent() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
@@ -214,7 +214,7 @@ prompt-template:
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),

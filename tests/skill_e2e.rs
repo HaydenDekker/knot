@@ -133,7 +133,7 @@ async fn file_first_loom_delete() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -251,7 +251,7 @@ async fn file_first_profile_modify() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -329,7 +329,7 @@ async fn file_first_profile_delete() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -400,7 +400,7 @@ async fn file_first_profile_body_e2e() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -472,7 +472,7 @@ async fn file_first_knot_delete() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -556,7 +556,7 @@ async fn skill_workflow_knot_create_profile() {
     let api_url = format!("http://{host_port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()
@@ -695,7 +695,7 @@ async fn skill_workflow_knot_create_loom_and_knot() {
     let api_url = format!("http://{host_port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig::default_config(),
         ..AppConfig::default_config()

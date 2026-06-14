@@ -60,7 +60,7 @@ pub async fn list_agents(Path(dir): Path<String>) -> Response {
 )]
 pub async fn get_rig_config(State(ctx): State<AppContext>) -> Response {
     let response = RigConfigResponse {
-        rig_path: ctx.base_dir.clone(),
+        rig_path: ctx.rig_dir.clone(),
         cli_path: ctx.rig_config.cli_path.clone(),
         cli_args: ctx.rig_config.cli_args.clone(),
     };

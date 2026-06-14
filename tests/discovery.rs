@@ -31,7 +31,7 @@ async fn startup_discovers_looms() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir,
+        rig_dir: base_dir,
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -95,7 +95,7 @@ async fn startup_starts_watchers() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir,
+        rig_dir: base_dir,
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -158,7 +158,7 @@ async fn startup_logs_knot_registration() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };
@@ -215,7 +215,7 @@ async fn startup_logs_knot_registration() {
 /// Non-`-loom` directories in the rig are ignored during discovery.
 ///
 /// 1. Create rig with both `*-loom` and non-`*-loom` directories
-/// 2. Start Knot with base_dir pointing to the rig
+/// 2. Start Knot with rig_dir pointing to the rig
 /// 3. Verify only `-loom` directories appear in `GET /looms`
 #[tokio::test]
 async fn discovery_ignores_non_loom_directories() {
@@ -248,7 +248,7 @@ async fn discovery_ignores_non_loom_directories() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig_path.clone(),
+        rig_dir: rig_path.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..AppConfig::default_config()
     };

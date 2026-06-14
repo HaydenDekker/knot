@@ -59,7 +59,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
 
     // Use a nonexistent CLI path.
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "/nonexistent/path/to/fake-agent".to_string(),
@@ -190,7 +190,7 @@ async fn full_pipeline_with_pi_agent() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),
@@ -303,7 +303,7 @@ async fn pi_agent_receives_system_prompt_and_strand() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: stub_pi.to_string_lossy().to_string(),

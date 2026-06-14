@@ -160,7 +160,7 @@ fn build_test_context() -> AppContext {
         rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
-        base_dir: PathBuf::from("./rig"),
+        rig_dir: PathBuf::from("./rig"),
     }
 }
 

@@ -86,7 +86,7 @@ async fn pipeline_tasks_drain_cleanly_on_shutdown() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         ..knot::AppConfig::default_config()
     };
@@ -192,7 +192,7 @@ async fn in_flight_processing_completes_on_shutdown() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
@@ -301,7 +301,7 @@ async fn shutdown_flushes_pending_debounce_events() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),
@@ -380,7 +380,7 @@ async fn multiple_strands_then_graceful_shutdown() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: agent.to_string_lossy().to_string(),
@@ -470,7 +470,7 @@ async fn shutdown_with_failing_agent() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = knot::AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: knot::RigAgentConfig {
             cli_path: script_path.to_string_lossy().to_string(),

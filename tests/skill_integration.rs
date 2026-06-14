@@ -163,7 +163,7 @@ fn build_context_with_loom() -> AppContext {
         rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
-        base_dir: PathBuf::from("./rig"),
+        rig_dir: PathBuf::from("./rig"),
     };
 
     // Register a test loom with a knot
@@ -554,7 +554,7 @@ async fn knot_inspect_loom_activity() {
         rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
-        base_dir: PathBuf::from("./rig"),
+        rig_dir: PathBuf::from("./rig"),
     };
     let app = knot::adapters::inbound::build_app(ctx);
 
@@ -653,7 +653,7 @@ async fn knot_inspect_knot_status_with_state() {
         rig_log_port: Arc::new(MockRigLogPort),
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
-        base_dir: PathBuf::from("./rig"),
+        rig_dir: PathBuf::from("./rig"),
     };
     ctx.store.register(Loom {
         id: LoomId("test-loom".to_string()),

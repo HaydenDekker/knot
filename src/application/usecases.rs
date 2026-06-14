@@ -567,8 +567,8 @@ pub struct ProcessStrand {
     agent_runner: Arc<dyn AgentRunner>,
     tie_off_sink: Arc<dyn TieOffSink>,
     rig_config: RigAgentConfig,
-    /// Base (rig) directory — used to derive static output paths.
-    base_dir: PathBuf,
+    /// Rig directory — used to derive static output paths.
+    rig_dir: PathBuf,
     /// Profile repository for dynamic profile resolution at processing time.
     profile_repo: Arc<dyn AgentProfileRepository>,
     /// Rig-log port for recording operational events (timeouts, idle).
@@ -585,7 +585,7 @@ impl ProcessStrand {
         agent_runner: Arc<dyn AgentRunner>,
         tie_off_sink: Arc<dyn TieOffSink>,
         rig_config: RigAgentConfig,
-        base_dir: PathBuf,
+        rig_dir: PathBuf,
         profile_repo: Arc<dyn AgentProfileRepository>,
         rig_log: Arc<dyn RigLogPort>,
         git_versioning_port: Arc<dyn GitVersioningPort>,
@@ -596,7 +596,7 @@ impl ProcessStrand {
             agent_runner,
             tie_off_sink,
             rig_config,
-            base_dir,
+            rig_dir,
             profile_repo,
             rig_log,
             git_versioning_port,
@@ -920,7 +920,7 @@ impl ProcessStrand {
         _strand_path: &StrandPath,
     ) -> TieOffPath {
         let filename = format!("{}-tie-off.md", knot.id.0);
-        let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.base_dir);
+        let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.rig_dir);
         TieOffPath(base.join(filename))
     }
 

@@ -41,7 +41,7 @@ async fn event_flows_through_pipeline() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -108,7 +108,7 @@ async fn debounce_prevents_duplicate_processing() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: "sh".to_string(),
@@ -230,7 +230,7 @@ async fn full_pipeline_create_modify_delete() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -384,7 +384,7 @@ async fn full_pipeline_create_modify_delete() {
 
 /// Full pipeline test with loom in a subdirectory rig.
 ///
-/// Verifies that when `base_dir` is a subdirectory of the project root,
+/// Verifies that when `rig_dir` is a subdirectory of the project root,
 /// looms are still discovered and strands processed correctly.
 ///
 /// 1. Rig subdirectory scanned for looms
@@ -406,7 +406,7 @@ async fn full_pipeline_with_subdirectory_rig() {
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
-    // Create a "fast" agent profile (must be in rig/ since that is base_dir)
+    // Create a "fast" agent profile (must be in rig/ since that is rig_dir)
     let profiles_dir = rig.join("profiles");
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
@@ -421,7 +421,7 @@ async fn full_pipeline_with_subdirectory_rig() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -502,7 +502,7 @@ async fn full_pipeline_with_external_dirs() {
     let (knot_content, strand_dir) = make_knot_content_with_dirs(root);
     fs::write(loom_dir.join("review.md"), knot_content).unwrap();
 
-    // Create the "fast" agent profile (must be in rig/ since that is base_dir)
+    // Create the "fast" agent profile (must be in rig/ since that is rig_dir)
     create_fast_profile(&rig);
 
     // Mock agent script — ignores all CLI args built by ProcessStrand
@@ -512,7 +512,7 @@ async fn full_pipeline_with_external_dirs() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: rig.clone(),
+        rig_dir: rig.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: mock_agent.to_string_lossy().to_string(),
@@ -632,7 +632,7 @@ async fn knot_status_during_processing_does_not_hang() {
     let host_port = format!("127.0.0.1:{port}");
 
     let config = AppConfig {
-        base_dir: base_dir.clone(),
+        rig_dir: base_dir.clone(),
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         rig_config: RigAgentConfig {
             cli_path: slow_agent.to_string_lossy().to_string(),
