@@ -24,6 +24,14 @@ cargo run
 
 This starts the Knot HTTP service on `localhost:3000` (or the configured port).
 
+## Installing
+
+After `project-plan-completion` bumps the binary version, reinstall the updated binary:
+
+```bash
+cargo install --path .
+```
+
 ## Agent Skills
 
 This project maintains agent skills in `.agents/skills/`. Pi discovers these as project-local skills, which override any same-named global skills in `~/.agents/skills/`.

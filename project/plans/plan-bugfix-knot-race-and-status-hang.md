@@ -1,6 +1,20 @@
 # Plan: Fix KnotModified race and GET knot-status hang
 
-**Status:** Complete (2026-06-08)
+**Status:** Complete (2026-06-14)
+**Branch:** (merged to main)
+
+## Timeline
+
+- 2026-06-08: Phases 0–3 complete, merged to main
+- 2026-06-14: Phase 4 added (QueueIdle drain-check bug), completed inline
+
+## Implementation Status: ✅ Complete (2026-06-14)
+
+## Notes
+- Phase 4: QueueIdle drain-check bug — `is_burst_active` flag replaces nested loop
+- Debug `eprintln!` logging removed (kept only QueueIdle write confirmation)
+- All 18 pipeline/rig_log tests pass
+- Live-verified on borrow-my-stuff rig (burst of 2 events → QueueIdle written)
 **Branch:** `fix/knot-modified-race-and-status-read`
 
 ---
@@ -123,6 +137,85 @@ match result {
 
 ---
 
+### Phase 4: QueueIdle drain-check bug — `QueueIdle` never written after last event
+
+**File:** `src/server.rs`
+
+#### Problem
+
+`start_event_pipeline` writes `QueueIdle` to the rig-log only via a 500ms
+`tokio::time::timeout` drain check *after* each strand event. The original
+code had a single drain check that ran after the first event in the loop:
+
+```
+loop {
+    event = debounce_rx.recv().await;   // blocking — waits forever
+    process(event);
+    match timeout(500ms, debounce_rx.recv()) {
+        Ok(Some(next)) => { process(next); /* loops back to top */ },
+        Ok(None) => break,
+        Err(_) => write QueueIdle,
+    }
+}
+```
+
+When the drain check found `next` (event #2), it processed it and the
+`loop { }` fell through back to the **blocking** `recv()` at the top.
+No drain check ran after event #2. If no more events arrived, the loop
+blocked forever and `QueueIdle` was never written.
+
+This means:
+- Burst of 1 event: `QueueIdle` written ✓
+- Burst of 2 events: `QueueIdle` **never** written ✗ (blocks on top recv)
+- Burst of 3+ events: `QueueIdle` **never** written ✗ (same)
+
+In production, a strand file change fires events for multiple knots
+(e.g. `arch-planner` + `coding-planner` both watch `project/plans/`),
+so bursts of 2+ are the norm — `QueueIdle` was never written.
+
+#### Fix
+
+Replace the single `if` drain check with `is_burst_active` flag that
+controls whether the next `recv` is blocking or timed:
+
+```
+loop {
+    next = if is_burst_active {
+        timeout(500ms, recv())  // drain check
+    } else {
+        recv()                  // blocking — wait for first event
+    };
+
+    match next {
+        Some(event) => {
+            is_burst_active = true;  // next recv will use timeout
+            process(event);
+        }
+        None => break,
+    }
+}
+```
+
+- First event: `is_burst_active` is `false` → blocking `recv()` fires
+- After processing: `is_burst_active = true` → next recv uses timeout
+  - If another event arrives within 500ms: process it, loop continues
+    (next recv still uses timeout — keeps draining)
+  - If 500ms passes: `QueueIdle` written, `is_burst_active = false`,
+    `continue` → next recv blocks again
+
+#### Debug logging (temporary)
+
+`eprintln!` statements added at every decision point for live debugging.
+Remove before merging or gate behind `RUST_LOG`/debug flag.
+
+- [x] Add `is_burst_active` flag controlling recv mode (blocking vs. timed)
+- [x] Drain check now runs after *every* event (not just the second)
+- [x] Add `eprintln!` debug logging at each decision point
+- [x] Compile and run tests
+- [x] Live test verified: `QueueIdle` written after burst of 2 events
+
+---
+
 ## Test Summary
 
 | # | Test | Type | File | Phase |
@@ -131,7 +224,10 @@ match result {
 | 2 | `config_handler_knot_modified_not_found` (updated) | Unit | `src/application/usecases.rs` | 0 |
 | 3 | `http_post_loom_verifies_knot_registered` | Integration | `tests/auto_discovery_and_knot_crud.rs` | 1 |
 | 4 | `filesystem_loom_creation_race_recovery` | Integration | `tests/auto_discovery_and_knot_crud.rs` | 2 |
-| 5 | `knot_status_during_processing_does_not_hang` | Integration | `tests/pipeline.rs` or new file | 3 |
+| 5 | `knot_status_during_processing_does_not_hang` | Integration | `tests/pipeline.rs` | 3 |
+| 6 | `single_event_queue_idle_written` | Integration | `tests/rig_log.rs` | 4 |
+| 7 | `burst_events_single_queue_idle` | Integration | `tests/rig_log.rs` | 4 |
+| 8 | `timeout_writes_rig_log_entry` | Integration | `tests/rig_log.rs` | 4 |
 
 ---
 

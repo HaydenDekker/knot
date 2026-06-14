@@ -242,43 +242,59 @@ pub fn start_event_pipeline(
         );
 
         // Process strand events with queue idle detection.
+        //
         // After each event, poll for 500ms — if no event arrives,
-        // write QueueIdle to the rig-log.
+        // write QueueIdle to the rig-log and go back to blocking.
+        //
+        // `is_burst_active` controls whether the next recv is blocking
+        // (idle, wait for first event) or timed (drain check, detect end
+        // of burst). This keeps a single flat loop with no nesting.
         let poll_window = Duration::from_millis(500);
+        let mut is_burst_active = false;
 
         loop {
-            // Wait for next event (blocks until event or channel close)
-            let event = match debounce_rx.recv().await {
-                Some(e) => e,
-                None => break, // channel closed — pipeline shutting down
+            // If a burst is active, poll with a timeout.
+            // If idle, block indefinitely for the next event.
+            let next_event = if is_burst_active {
+                match tokio::time::timeout(poll_window, debounce_rx.recv()).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        // Timeout: burst has ended — queue is idle.
+                        let ts = application::usecases::format_timestamp();
+                        let result = rig_log_port.append(
+                            domain::events::RigLogEvent::QueueIdle {
+                                timestamp: ts.clone(),
+                            },
+                        );
+                        match result {
+                            Ok(()) => {
+                                eprintln!("[pipeline] QueueIdle written to rig-log (ts={})", ts);
+                            }
+                            Err(e) => {
+                                eprintln!("[pipeline] QueueIdle WRITE FAILED: {e}");
+                            }
+                        }
+                        is_burst_active = false;
+                        continue; // Loop back — block indefinitely for next event
+                    }
+                }
+            } else {
+                // Queue is idle; block until a fresh event arrives.
+                debounce_rx.recv().await
             };
 
-            if let Err(e) = use_case.execute(event) {
-                eprintln!("ProcessStrand error: {e}");
-            }
-
-            // Drain check: poll for another event within the window.
-            match tokio::time::timeout(poll_window, debounce_rx.recv()).await {
-                Ok(Some(next_event)) => {
-                    // Event arrived during poll window — process it.
-                    if let Err(e) = use_case.execute(next_event) {
-                        eprintln!("ProcessStrand error: {e}");
+            // Handle the event (or channel close).
+            match next_event {
+                Some(event) => {
+                    is_burst_active = true;
+                    if let Err(e) = use_case.execute(event) {
+                        eprintln!("[pipeline] ProcessStrand error: {e}");
                     }
-                    // After processing, the loop continues and runs another
-                    // drain check. If more events keep arriving within the
-                    // window, they are processed one-by-one without QueueIdle.
+                    // Loop continues — next recv will use timeout (drain check).
                 }
-                Ok(None) => {
-                    // Channel closed during poll — exit.
+                None => {
+                    // Channel closed — pipeline shutting down.
                     break;
-                }
-                Err(_) => {
-                    // Timeout: no event within poll window — queue is idle.
-                    let _ = rig_log_port.append(
-                        domain::events::RigLogEvent::QueueIdle {
-                            timestamp: application::usecases::format_timestamp(),
-                        },
-                    );
                 }
             }
         }
