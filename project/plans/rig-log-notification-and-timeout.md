@@ -24,7 +24,10 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 
 4. **Per-profile timeout** — `AgentProfile` has an optional `timeout` field (seconds). When a profile specifies `timeout`, the agent runner uses that value for the session deadline. When not set, the runner's global default is used. This lets fast models use short timeouts (60s) and slow models use long ones (600s).
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
+
+**Completed:** 2026-06-14
+**Result:** Rig-log (`rig/.rig-log`) records `TimeoutExceeded` and `QueueIdle` events as JSONL. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only). Per-profile timeout via `AgentProfile.timeout` field (optional, in seconds). `SubprocessAgentRunner` reads effective timeout from `ExecutionContext.timeout`, falling back to runner default. 362 tests pass (11 new unit + 11 new integration). Domain glossary updated with `Rig-log` term. Clippy clean (no new warnings).
 
 ## Existing Tests
 
@@ -296,12 +299,15 @@ Full integration test coverage for the rig-log and timeout flows:
   - Profile file with `timeout: 30` serialises/deserialises correctly (round-trip via FileSystemAgentProfileRepository)
 
 **Tasks:**
-- [ ] Create `tests/rig_log.rs` with integration tests
-- [ ] Create `tests/profile_timeout.rs` with profile timeout integration tests
-- [ ] Run `cargo test` — all tests pass
-- [ ] Update `project/domain-glossary.md` with new term: `Rig-log`
-- [ ] Run `cargo clippy` — no warnings
+- [x] Create `tests/rig_log.rs` with integration tests
+- [x] Create `tests/profile_timeout.rs` with profile timeout integration tests
+- [x] Run `cargo test` — all tests pass
+- [x] Update `project/domain-glossary.md` with new term: `Rig-log`
+- [x] Run `cargo clippy` — no warnings
 
 ## Notes
 
-[Any observations, deviations, or lessons learned during implementation]
+- Phase 1 sub-agent proactively completed Phase 2 tasks (parsing timeout from profile frontmatter) since they were tightly coupled domain-layer changes.
+- Phase 6 required updating `AppContext` and all test files that manually construct it (`swagger_ui.rs`, `skill_integration.rs`, `loom.rs`, `usecases.rs`) — significant ripple from adding `rig_log_port` field.
+- Phase 8 queue idle detection was implemented in `server.rs` event loop (not inside `ProcessStrand`) since the event loop owns the debounce channel receiver.
+- Pre-existing `ConfigurableAgentRunner::set_result` unused method warning existed before this plan — not introduced by our changes.
