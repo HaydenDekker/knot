@@ -413,6 +413,90 @@ pub async fn wait_for_knot_count(
     false
 }
 
+// ── Git Helpers ────────────────────────────────────────────────────────────
+
+/// Initialise a git repository in the given directory.
+///
+/// Runs `git init -b main` and configures `user.email` and `user.name`
+/// so that commits can be made without interactive prompts.
+///
+/// Returns `true` if git was successfully initialised.
+pub fn init_git_repo(dir: &Path) -> bool {
+    let init = std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(dir)
+        .output();
+
+    if init.as_ref().map(|o| o.status.success()).unwrap_or(false) {
+        // Configure user so commits don't fail
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.email", "test@knot.local"])
+            .current_dir(dir)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.name", "Knot Test"])
+            .current_dir(dir)
+            .output();
+
+        // Create an initial empty commit so the repo has a baseline.
+        // This ensures `git add -A` / `git commit` work even when the
+        // first change is just the tie-off file.
+        // We create a small sentinel file first so the initial commit
+        // has content (avoids empty tree issues on some git versions).
+        let sentinel = dir.join(".knot-git-sentinel");
+        let _ = std::fs::write(&sentinel, "");
+        let _ = std::process::Command::new("git")
+            .args(["add", ".knot-git-sentinel"])
+            .current_dir(dir)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(dir)
+            .output();
+
+        true
+    } else {
+        false
+    }
+}
+
+/// Read the latest commit message from a git repository.
+///
+/// Returns `(subject, body)` where `subject` is the first line and
+/// `body` is everything after the blank line separator.
+///
+/// Returns `None` if the directory is not a git repository or has no
+/// commits.
+pub fn get_latest_commit(dir: &Path) -> Option<(String, String)> {
+    let output = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+
+    let msg = String::from_utf8_lossy(&output.stdout).to_string();
+    let lines: Vec<&str> = msg.lines().collect();
+    let subject = lines.first().map(|s| s.to_string())?;
+    let body = msg
+        .find("\n\n")
+        .map(|pos| msg[pos + 2..].trim().to_string())
+        .unwrap_or_default();
+
+    Some((subject, body))
+}
+
+/// Count the number of commits in a git repository.
+pub fn count_commits(dir: &Path) -> Option<usize> {
+    let output = std::process::Command::new("git")
+        .args(["log", "--format=%H"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+
+    let log = String::from_utf8_lossy(&output.stdout);
+    Some(log.lines().filter(|l| !l.is_empty()).count())
+}
+
 /// Poll a knot status endpoint until it reaches a terminal state.
 pub async fn poll_knot_status(
     host_port: &str,

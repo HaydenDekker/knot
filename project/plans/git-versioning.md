@@ -102,13 +102,14 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 **Hex Layer:** Integration
 
-- [ ] In `tests/pipeline.rs` (or new `tests/git_versioning.rs`):
-  - `event_pipeline_creates_git_commit` — full pipeline with git repo, verify commit exists and has correct message/body
-  - `event_pipeline_skips_git_when_disabled` — knot with `git-versioned: false`, no commit created
-  - `event_pipeline_continues_without_git` — no git repo, processing succeeds normally
-- [ ] Update `tests/helpers.rs`:
-  - `init_git_repo(dir)` — `git init` + `git config` in temp dir
-  - Helper to read latest commit message/body
+- [x] In `tests/pipeline.rs` (or new `tests/git_versioning.rs`):
+  - [x] `event_pipeline_creates_git_commit` — full pipeline with git repo, verify commit exists and has correct message/body
+  - [x] `event_pipeline_skips_git_when_disabled` — knot with `git-versioned: false`, no commit created
+  - [x] `event_pipeline_continues_without_git` — no git repo, processing succeeds normally
+- [x] Update `tests/helpers.rs`:
+  - [x] `init_git_repo(dir)` — `git init` + `git config` in temp dir
+  - [x] `get_latest_commit(dir)` — read latest commit subject/body
+  - [x] `count_commits(dir)` — count total commits in repo
 
 ## Notes
 
