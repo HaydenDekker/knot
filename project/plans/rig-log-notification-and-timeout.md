@@ -29,6 +29,8 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 **Completed:** 2026-06-14
 **Bugfix (Phase X):** 2026-06-15 — Spurious timeout warning from detached thread not checking child exit status; missing knot context in processing logs. Fixed via `AtomicBool` cancelled flag + strand/knot context in logs. Version bumped to `0.5.1`.
 
+**Bugfix (Phase Y):** 2026-06-14 — Timestamp logs producing wrong year (`-2773` for `QueueIdle` events). Two bugs in separate `format_timestamp()` implementations: `usecases.rs` used a wrong Dershowitz & Reingold formula variant (producing year -2773), `logging.rs` had an off-by-one (`+1`) shifting dates by one day. `tieoff_sink.rs` was already correct. Fixed by correcting `logging.rs::days_to_ymd()` and delegating `usecases.rs::format_timestamp()` to `logging::format_timestamp()`, eliminating the duplicate algorithm. All 293+ tests pass.
+
 **Result:** Rig-log (`rig/.rig-log`) records `TimeoutExceeded` and `QueueIdle` events as JSONL. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only). Per-profile timeout via `AgentProfile.timeout` field (optional, in seconds). `SubprocessAgentRunner` reads effective timeout from `ExecutionContext.timeout`, falling back to runner default. 362 tests pass (11 new unit + 11 new integration). Domain glossary updated with `Rig-log` term. Clippy clean (no new warnings).
 
 ## Existing Tests
@@ -346,6 +348,36 @@ The `log_strand_event` calls in `ProcessStrand::execute()` emit messages like `M
 - [x] Run `cargo test` — all 362 tests pass
 - [x] Run `cargo clippy` — no new warnings
 
+### Phase Y: Bugfix — Wrong year in timestamps
+
+Hex layer: **Application (use cases)** + **Outbound adapters (logging)**
+
+**Discovered:** 2026-06-14 in production use.
+
+**Bug: Timestamps producing year `-2773`.**
+
+Three separate `format_timestamp()` implementations existed in the codebase, each converting Unix epoch seconds to ISO 8601 date:
+
+1. `application/usecases.rs::format_timestamp()` — used a wrong Dershowitz & Reingold formula variant (`let a = z + 305` / `let b = (4*a+3)/146097` / `let year = 100*b + d - 4800 + m/10`). This produced year **-2773** for any modern date. This is the function called by `server.rs` when writing `QueueIdle` timestamps, so this is what produced `"timestamp":"-2773-04-15T11:36:04Z"`.
+
+2. `adapters/logging.rs::format_timestamp()` — used the correct Dershowitz & Reingold algorithm but with an erroneous `let z = z + 1;` that shifted every date forward by one day.
+
+3. `adapters/outbound/tieoff_sink.rs::format_timestamp()` — already correct.
+
+**Fix:**
+- `logging.rs::days_to_ymd()` — removed the erroneous `+1` so dates are accurate
+- `usecases.rs::format_timestamp()` — replaced the broken algorithm entirely, delegating to `logging::format_timestamp()` instead. This eliminates the duplicate and ensures all timestamp generation goes through a single verified implementation
+
+**Why the plan missed it:**
+- The plan introduced `QueueIdle` events with real timestamps in Phase 8, but all timestamps were generated at runtime — CI tests only verified timestamps *parse correctly* and are *present*, not that the *values* are correct. A test that asserts the year falls within a plausible range (e.g. 2024–2100) would have caught this. The `-2773` year is silently valid ISO 8601 so no parser complained.
+- The logging off-by-one was similarly invisible in tests because tests compare against `format_timestamp()` itself (identity comparisons), never against an external clock.
+
+**Tasks:**
+- [x] Fix `days_to_ymd()` in `src/adapters/logging.rs` — remove `let z = z + 1;`
+- [x] Replace `format_timestamp()` in `src/application/usecases.rs` with delegation to `logging::format_timestamp()`
+- [x] Run `cargo test` — all 293+ tests pass
+- [x] Verify timestamps now produce correct year (2026)
+
 ## Notes
 
 - Phase 1 sub-agent proactively completed Phase 2 tasks (parsing timeout from profile frontmatter) since they were tightly coupled domain-layer changes.
@@ -353,3 +385,4 @@ The `log_strand_event` calls in `ProcessStrand::execute()` emit messages like `M
 - Phase 8 queue idle detection was implemented in `server.rs` event loop (not inside `ProcessStrand`) since the event loop owns the debounce channel receiver.
 - Pre-existing `ConfigurableAgentRunner::set_result` unused method warning existed before this plan — not introduced by our changes.
 - Phase X bugfix: spurious timeout warning from detached thread not checking child exit status, plus missing knot context in processing logs. Detached thread pattern needs lifecycle awareness — any future timeout implementation should cancel the watcher when the watched handle completes.
+- Phase Y bugfix: timestamp year `-2773` from wrong algorithm in `usecases.rs::format_timestamp()` and off-by-one in `logging.rs::days_to_ymd()`. Consolidated to single implementation in `logging.rs`. Any future timestamp code should reuse `logging::format_timestamp()` — never duplicate the epoch-to-date algorithm.

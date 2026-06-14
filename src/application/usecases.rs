@@ -22,32 +22,7 @@ use crate::domain::value_objects::{AgentConfig, RigAgentConfig};
 
 /// Generate an ISO 8601 UTC timestamp string.
 pub fn format_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Compute UTC date/time from Unix epoch (good enough for ISO 8601)
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-    let ss = time_of_day % 60;
-    // Convert days since 1970-01-01 to Y-M-D (Gregorian)
-    let z = days_since_epoch as i64 + 719468;
-    let a = z + 305;
-    let b = (4 * a + 3) / 146097;
-    let c = a - (146097 * b) / 4;
-    let d = (4 * c + 3) / 1461;
-    let e = c - (1461 * d) / 4;
-    let m = (5 * e + 2) / 153;
-    let day = e - (153 * m + 2) / 5 + 1;
-    let month = m + 3 - 12 * (m / 10);
-    let year = 100 * b + d - 4800 + m / 10;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hh, mm, ss
-    )
+    logging::format_timestamp()
 }
 
 // ── Query Result Types ───────────────────────────────────────────────────

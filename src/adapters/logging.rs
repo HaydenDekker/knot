@@ -29,22 +29,17 @@ pub fn format_timestamp() -> String {
 /// Convert days since 1970-01-01 to (year, month, day).
 ///
 /// Algorithm from "Calendrical Calculations" by Dershowitz & Reingold.
-/// Day 0 = 1970-01-01.
+/// 1970-01-01 corresponds to civil day 719468.
 fn days_to_ymd(days: u64) -> (i32, i32, i32) {
-    // Convert to the "civil days" system where year 0, month 3, day 1 = day 0
-    // 1970-01-01 corresponds to civil day 719468
     let z = days as i64 + 719468;
-
-    // Adjust so that year starts in March (simplifies leap year handling)
-    let z = z + 1;
     let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
-    let doe = z - era * 146097; // day of era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
-    let mp = (5 * doy + 2) / 153; // month [0, 11], where March = 0
-    let d = doy - (153 * mp + 2) / 5 + 1; // day [1, 31]
-    let m = mp + if mp < 10 { 3 } else { -9 }; // month [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
     let y = y + if m <= 2 { 1 } else { 0 };
 
     (y as i32, m as i32, d as i32)
