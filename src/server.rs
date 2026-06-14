@@ -226,11 +226,48 @@ pub fn start_event_pipeline(
             rig_config,
             base_dir,
             profile_repo,
-            rig_log_port,
+            rig_log_port.clone(),
         );
-        while let Some(event) = debounce_rx.recv().await {
+
+        // Process strand events with queue idle detection.
+        // After each event, poll for 500ms — if no event arrives,
+        // write QueueIdle to the rig-log.
+        let poll_window = Duration::from_millis(500);
+
+        loop {
+            // Wait for next event (blocks until event or channel close)
+            let event = match debounce_rx.recv().await {
+                Some(e) => e,
+                None => break, // channel closed — pipeline shutting down
+            };
+
             if let Err(e) = use_case.execute(event) {
                 eprintln!("ProcessStrand error: {e}");
+            }
+
+            // Drain check: poll for another event within the window.
+            match tokio::time::timeout(poll_window, debounce_rx.recv()).await {
+                Ok(Some(next_event)) => {
+                    // Event arrived during poll window — process it.
+                    if let Err(e) = use_case.execute(next_event) {
+                        eprintln!("ProcessStrand error: {e}");
+                    }
+                    // After processing, the loop continues and runs another
+                    // drain check. If more events keep arriving within the
+                    // window, they are processed one-by-one without QueueIdle.
+                }
+                Ok(None) => {
+                    // Channel closed during poll — exit.
+                    break;
+                }
+                Err(_) => {
+                    // Timeout: no event within poll window — queue is idle.
+                    let _ = rig_log_port.append(
+                        domain::events::RigLogEvent::QueueIdle {
+                            timestamp: application::usecases::format_timestamp(),
+                        },
+                    );
+                }
             }
         }
     });
