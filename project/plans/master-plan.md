@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-14
-> **Plan Completed:** HTTP Observability Only — Remove Control Endpoints
+> **Plan Completed:** Rig-Log Notification and Timeout Handling
 
 ## How to Add a Plan
 
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ⬜ Planned | 2026-06-14 |
+| 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ⬜ Planned | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
@@ -83,9 +83,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 28. Rig-Log Notification, Timeout Handling and Rollback
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-14
+**Completed:** 2026-06-14
 **Goal:** Rig-level event log (`rig/.rig-log`) records timeout and queue-idle events. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only).
+
+**Result:** `RigLogPath` and `RigLogEvent` domain types. `RigLogPort` trait + `FileSystemRigLog` adapter. `AgentProfile.timeout` field (optional, seconds) — parsed from profile frontmatter. `ExecutionContext.timeout` — per-context override with runner default fallback. `ProcessStrand` writes `TimeoutExceeded` to rig-log on timeout (tie-off preserved). Queue idle detection in event loop writes `QueueIdle` after 500ms of no events. 11 new unit tests + 11 new integration tests across `rig_log.rs` and `profile_timeout.rs`. Domain glossary updated with `Rig-log` term. 362 tests pass, clippy clean.
 
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
