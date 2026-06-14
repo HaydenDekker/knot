@@ -14,9 +14,14 @@ When knots process strands, the agent may modify project files (via tools) and w
 
 Each knot run produces a static git commit in the project root. The commit message identifies the loom, knot, strand, and event type. The commit body contains the tie-off output (current response). Opt-out per-knot via `git-versioned: false` in frontmatter. Gracefully skips if not a git repo.
 
-## Implementation Status: ⬜ Draft | 🔄 Active | ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-14)
 
-**Completed:** 2026-06-14
+## Completion Notes
+- All 5 phases (0–4) complete, 17 new unit tests + 3 integration tests
+- `FileSystemGitVersioner` uses `std::process::Command` (no C dependency)
+- Graceful degradation: skips if not a git repo, git unavailable, or commit fails
+- Wired in composition root via `start_event_pipeline` in `src/server.rs`
+- Version bumped to 0.5.0 (MINOR — new backwards-compatible feature)
 
 ## Existing Tests
 | Test Class | What it covers | Status |

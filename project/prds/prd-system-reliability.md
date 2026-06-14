@@ -17,6 +17,7 @@ Knot needs **operational safety controls** so the user can protect their provide
 - [x] A rig-level event log (`rig-log`) records serious operational events (timeouts, queue idle) so the user (or an external agent) can monitor and react — *Plan 28*
 - [x] Failed strands are reported via the rig-log; the user reprocesses by touching the strand file, triggering the normal file-watcher pipeline (no programmatic replay in the app) — *Plan 28*
 - [x] Users can set a per-agent-profile session timeout so that a hung or excessively slow agent session is terminated automatically — *Plan 28*
+- [x] Each successful knot run creates a git commit with structured message and tie-off body; opt-out per-knot via `git-versioned: false`; gracefully skips if not a git repo — *Plan 27*
 - [ ] Users can roll back their tie-off output to an earlier point in time, discarding later processing events
 - [ ] Users are alerted when a knot-to-knot (k2k) recursive feedback loop is detected, whether self-recursive or cross-knot
 - [ ] Users can set a maximum iteration limit for k2k feedback loops so that refinement cycles terminate automatically if agents do not converge
@@ -178,12 +179,12 @@ As a user, I want each knot run to produce a git commit in my project, so that I
 - [ ] A user can roll back a loom to a previous event position via the HTTP interface, and tie-off files are restored accordingly
 - [ ] Replay and rollback events are recorded in the loom-log with distinct event types for auditability
 - [ ] Feedback loops (self-recursive and cross-knot) are detected and logged with a `FeedbackLoopDetected` event; exceeding `max_k2k_iterations` produces a `FeedbackLoopExceeded` event and stops processing
-- [ ] A user can set `git-versioned: false` on a knot to opt out of versioning, and no commit is created for that knot
-- [ ] Each successful knot run creates a git commit in the project root (if it is a git repository)
-- [ ] Commit message includes loom, knot, strand, and event type (e.g. `knot: review — processed strands/goals.md (Created)`)
-- [ ] Commit body includes the tie-off output (current response only, not full history)
-- [ ] Multiple knot runs produce separate commits (one per strand event)
-- [ ] Non-git repositories or unavailable git are handled gracefully — processing succeeds without error
+- [x] A user can set `git-versioned: false` on a knot to opt out of versioning, and no commit is created for that knot
+- [x] Each successful knot run creates a git commit in the project root (if it is a git repository)
+- [x] Commit message includes loom, knot, strand, and event type (e.g. `knot: review — processed strands/goals.md (Created)`)
+- [x] Commit body includes the tie-off output (current response only, not full history)
+- [x] Multiple knot runs produce separate commits (one per strand event)
+- [x] Non-git repositories or unavailable git are handled gracefully — processing succeeds without error
 - [ ] All new configuration fields are validatable in the knot file parser (domain layer) — invalid values reject at parse time
 
 ## Dependencies & Constraints
@@ -202,4 +203,12 @@ As a user, I want each knot run to produce a git commit in my project, so that I
 - **Technical constraint:** Git versioning runs after tie-off write in `ProcessStrand`. It must not fail the overall processing pipeline — if git commit fails, a warning is logged but the strand is still marked as completed.
 - **Dependency:** The `base_dir` (rig directory) is known at composition root and can be used to derive the project root (parent of rig). This path is passed to the git adapter at construction time.
 
-## Implementation Status: 🔵 Open
+## Implementation Status: 🟡 Partial
+
+**Completed stories:**
+- Story 6 (Rig-Log Notification) — *Plan 28*
+- Story 7 (Event Replay) — *Plan 28*
+- Story 9 (Agent Session Timeout) — *Plan 28*
+- Story 10 (Git Versioning) — *Plan 27*
+
+**Remaining:** Stories 1–5 (Concurrency, Rate Limiting, Budget, Usage Visibility), Story 8 (Feedback Loop Detection), Story 7 (Rollback)
