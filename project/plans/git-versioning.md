@@ -92,11 +92,11 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 **Hex Layer:** Composition Root
 
-- [ ] In `src/server.rs` (or wherever ProcessStrand is constructed):
-  - Create `FileSystemGitVersioner` with project root (parent of `base_dir`)
-  - Pass as `Arc<dyn GitVersioningPort>` to `ProcessStrand::new()`
-- [ ] Update `AppConfig` if needed (likely not — project root derives from `base_dir`)
-- [ ] Update `tests/composition.rs` to verify new wiring compiles
+- [x] In `src/server.rs` (or wherever ProcessStrand is constructed):
+  - [x] Create `FileSystemGitVersioner` with project root (parent of `base_dir`)
+  - [x] Pass as `Arc<dyn GitVersioningPort>` to `ProcessStrand::new()`
+- [x] Update `AppConfig` if needed (likely not — project root derives from `base_dir`)
+- [x] Update `tests/composition.rs` to verify new wiring compiles
 
 ### Phase 4: Integration Tests — Full Pipeline with Git
 
