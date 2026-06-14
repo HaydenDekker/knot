@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::logging;
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, ExecutionContext, EventSource,
-    KnotEventType, LoomLogPort, LoomRepository, ProcessingStatus,
-    PortError, RigLogPort, TieOffSink,
+    GitVersioningPort, KnotEventType, LoomLogPort, LoomRepository,
+    ProcessingStatus, PortError, RigLogPort, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
@@ -598,6 +598,8 @@ pub struct ProcessStrand {
     profile_repo: Arc<dyn AgentProfileRepository>,
     /// Rig-log port for recording operational events (timeouts, idle).
     rig_log: Arc<dyn RigLogPort>,
+    /// Git versioning port for creating commits after successful runs.
+    git_versioning_port: Arc<dyn GitVersioningPort>,
 }
 
 impl ProcessStrand {
@@ -611,6 +613,7 @@ impl ProcessStrand {
         base_dir: PathBuf,
         profile_repo: Arc<dyn AgentProfileRepository>,
         rig_log: Arc<dyn RigLogPort>,
+        git_versioning_port: Arc<dyn GitVersioningPort>,
     ) -> Self {
         Self {
             store,
@@ -621,6 +624,7 @@ impl ProcessStrand {
             base_dir,
             profile_repo,
             rig_log,
+            git_versioning_port,
         }
     }
 
@@ -801,6 +805,7 @@ impl ProcessStrand {
         match result {
             Ok(output) => {
                 // 4. Write successful tie-off
+                let tie_off_content = output.stdout.clone();
                 let tie_off = TieOff {
                     content: output.stdout,
                     path: tie_off_path.clone(),
@@ -810,6 +815,23 @@ impl ProcessStrand {
                     timestamp: None,
                 };
                 self.tie_off_sink.append(tie_off)?;
+
+                // 4b. Git versioning commit (best-effort, non-fatal)
+                if knot.git_versioned {
+                    let commit_result = self.git_versioning_port.commit(
+                        &loom_id,
+                        &knot_id,
+                        &strand_path,
+                        &event_label,
+                        &tie_off_content,
+                    );
+                    if let Err(ref e) = commit_result {
+                        logging::log_strand_event(
+                            &format!("git commit warning: {}", e),
+                            &strand_path.0,
+                        );
+                    }
+                }
 
                 // 5. Append KnotCompleted to loom-log
                 self.log_port.append(LoomEvent::KnotCompleted {
@@ -3463,6 +3485,24 @@ mod phase3_profile_resolution_tests {
         }
     }
 
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -3525,6 +3565,7 @@ mod phase3_profile_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
@@ -3563,6 +3604,7 @@ mod phase3_profile_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo,
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "nonexistent");
@@ -3608,6 +3650,7 @@ mod phase3_profile_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let knot1 = build_profile_knot("k1", "detailed");
@@ -3653,6 +3696,7 @@ mod phase3_profile_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         // Profile doesn't exist yet — should error
@@ -3715,6 +3759,7 @@ mod phase3_profile_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
@@ -3947,6 +3992,24 @@ mod phase6_timeout_tests {
         }
     }
 
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -4017,6 +4080,7 @@ mod phase6_timeout_tests {
             PathBuf::from("/rig"),
             profile_repo,
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         (
@@ -4405,6 +4469,24 @@ mod phase7_timeout_resolution_tests {
         }
     }
 
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -4461,6 +4543,7 @@ mod phase7_timeout_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let knot = build_knot("k1", "slow");
@@ -4500,6 +4583,7 @@ mod phase7_timeout_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo.clone(),
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let knot = build_knot("k1", "fast");
@@ -4546,6 +4630,7 @@ mod phase7_timeout_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo,
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let event = StrandEvent::Created {
@@ -4602,6 +4687,7 @@ mod phase7_timeout_resolution_tests {
             PathBuf::from("/rig"),
             profile_repo,
             Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
         );
 
         let event = StrandEvent::Created {
@@ -4621,5 +4707,335 @@ mod phase7_timeout_resolution_tests {
             None,
             "ExecutionContext.timeout should be None (runner fallback)"
         );
+    }
+}
+
+// ── Phase 8: Git Versioning Tests ────────────────────────────────
+
+#[cfg(test)]
+mod phase8_git_versioning_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Mock LoomLogPort ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Tracking GitVersioningPort ───────────────────────────────────
+
+    /// Mock that records all commit calls for inspection.
+    struct TrackingGitVersioningPort {
+        commits: Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
+        /// When set, `commit()` returns this error instead of Ok.
+        force_error: Arc<Mutex<Option<PortError>>>,
+    }
+
+    impl TrackingGitVersioningPort {
+        fn new() -> (
+            Self,
+            Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
+        ) {
+            let commits = Arc::new(Mutex::new(vec![]));
+            (
+                Self {
+                    commits: commits.clone(),
+                    force_error: Arc::new(Mutex::new(None)),
+                },
+                commits,
+            )
+        }
+
+        fn set_error(&self, error: PortError) {
+            *self.force_error.lock().unwrap() = Some(error);
+        }
+    }
+
+    impl GitVersioningPort for TrackingGitVersioningPort {
+        fn commit(
+            &self,
+            loom_id: &LoomId,
+            knot_id: &KnotId,
+            strand_path: &StrandPath,
+            event_type: &str,
+            tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            self.commits
+                .lock()
+                .unwrap()
+                .push((
+                    loom_id.clone(),
+                    knot_id.clone(),
+                    strand_path.0.display().to_string(),
+                    event_type.to_string(),
+                    tie_off_content.to_string(),
+                ));
+            if let Some(ref err) = *self.force_error.lock().unwrap() {
+                return Err(err.clone());
+            }
+            Ok(())
+        }
+    }
+
+    // ── Mock AgentRunner ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockAgentRunner;
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            Ok(AgentOutput {
+                stdout: "agent output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Mock TieOffSink ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockTieOffSink;
+
+    impl TieOffSink for MockTieOffSink {
+        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_content(
+            &self,
+            _path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(String::new())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockRigLogPort;
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            _event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    struct MockProfileRepository {
+        profiles: HashMap<String, AgentProfile>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self.profiles.get(name).cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self.profiles.values().cloned().collect())
+        }
+
+        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn delete(&self, _name: &str) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    fn default_profile() -> AgentProfile {
+        AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+    }
+
+    fn build_knot(
+        id: impl Into<String>,
+        git_versioned: bool,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned,
+        }
+    }
+
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    fn build_process_strand(
+        loom: Loom,
+        git_port: Arc<dyn GitVersioningPort>,
+    ) -> ProcessStrand {
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]),
+        });
+
+        ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(MockAgentRunner),
+            Arc::new(MockTieOffSink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort),
+            git_port,
+        )
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    /// On successful processing with `git_versioned: true`, the git
+    /// port receives a `commit()` call with loom, knot, strand,
+    /// event type, and tie-off content.
+    #[test]
+    fn process_strand_calls_git_port_on_success() {
+        let loom =
+            build_loom("test-loom", vec![build_knot("k1", true)]);
+
+        let (git_port, commits) = TrackingGitVersioningPort::new();
+        let use_case = build_process_strand(loom, Arc::new(git_port));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Git port received exactly one commit call
+        let commits = commits.lock().unwrap();
+        assert_eq!(commits.len(), 1);
+        let (loom_id, knot_id, strand, et, content) = &commits[0];
+        assert_eq!(loom_id.0, "test-loom");
+        assert_eq!(knot_id.0, "k1");
+        assert_eq!(strand, "input/strand.md");
+        assert_eq!(et, "Created");
+        assert_eq!(content, "agent output");
+    }
+
+    /// When `git_versioned: false`, the git port is never called
+    /// even on successful processing.
+    #[test]
+    fn process_strand_skips_git_when_disabled() {
+        let loom =
+            build_loom("test-loom", vec![build_knot("k1", false)]);
+
+        let (git_port, commits) = TrackingGitVersioningPort::new();
+        let use_case = build_process_strand(loom, Arc::new(git_port));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Git port should NOT have been called
+        let commits = commits.lock().unwrap();
+        assert!(
+            commits.is_empty(),
+            "git port should not be called when git_versioned is false"
+        );
+    }
+
+    /// When the git port returns an error, processing still succeeds
+    /// (strand is marked completed, error is only logged as warning).
+    #[test]
+    fn process_strand_continues_on_git_error() {
+        let loom =
+            build_loom("test-loom", vec![build_knot("k1", true)]);
+
+        let (git_port, commits) = TrackingGitVersioningPort::new();
+        git_port.set_error(PortError::GitCommitFailed(
+            "not a git repo".to_string(),
+        ));
+
+        let use_case = build_process_strand(loom, Arc::new(git_port));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        // execute() should succeed despite git error
+        let result = use_case.execute(event);
+        assert!(
+            result.is_ok(),
+            "processing should succeed despite git commit failure"
+        );
+
+        // Git port was still called (the error is non-fatal)
+        let commits = commits.lock().unwrap();
+        assert_eq!(commits.len(), 1, "commit should still be attempted");
     }
 }

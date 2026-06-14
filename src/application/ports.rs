@@ -54,6 +54,8 @@ pub enum PortError {
     RigLogWriteFailed(String),
     /// Failed to read from the rig-log.
     RigLogReadFailed(String),
+    /// Failed to create a git commit.
+    GitCommitFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -115,6 +117,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::RigLogReadFailed(msg) => {
                 write!(f, "rig-log read failed: {msg}")
+            }
+            PortError::GitCommitFailed(msg) => {
+                write!(f, "git commit failed: {msg}")
             }
         }
     }
@@ -356,6 +361,32 @@ pub trait AgentProfileRepository: Send + Sync {
     fn delete(&self, name: &str) -> Result<(), PortError>;
 }
 
+/// Port for creating git commits to version agent work.
+///
+/// After a successful knot run, the application layer calls this port
+/// to create a commit in the project root. The commit message identifies
+/// the loom, knot, strand, and event type. The commit body contains the
+/// tie-off output. The port must gracefully handle non-git directories
+/// (e.g., return `Ok(())` or a non-fatal error).
+pub trait GitVersioningPort: Send + Sync {
+    /// Create a git commit for a knot run.
+    ///
+    /// Arguments:
+    /// - `loom_id` — identifier of the loom
+    /// - `knot_id` — identifier of the knot
+    /// - `strand_path` — path to the strand that was processed
+    /// - `event_type` — type of strand event (Created/Modified/Deleted)
+    /// - `tie_off_content` — the current response / tie-off output
+    fn commit(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_path: &StrandPath,
+        event_type: &str,
+        tie_off_content: &str,
+    ) -> Result<(), PortError>;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -531,6 +562,37 @@ mod tests {
             if map.remove(name).is_none() {
                 return Err(PortError::ProfileNotFound(name.to_string()));
             }
+            Ok(())
+        }
+    }
+
+    /// In-memory mock of `GitVersioningPort`.
+    ///
+    /// Records all commit calls for inspection in tests.
+    #[derive(Default)]
+    struct MockGitVersioningPort {
+        commits: std::sync::Mutex<Vec<(LoomId, KnotId, String, String, String)>>,
+    }
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            loom_id: &LoomId,
+            knot_id: &KnotId,
+            strand_path: &StrandPath,
+            event_type: &str,
+            tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            self.commits
+                .lock()
+                .unwrap()
+                .push((
+                    loom_id.clone(),
+                    knot_id.clone(),
+                    strand_path.0.display().to_string(),
+                    event_type.to_string(),
+                    tie_off_content.to_string(),
+                ));
             Ok(())
         }
     }
@@ -759,6 +821,43 @@ mod tests {
     }
 
     // ── Supporting Type Tests ───────────────────────────────────────────
+
+    #[test]
+    fn git_versioning_port_contract() {
+        let port = MockGitVersioningPort::default();
+
+        // Verify trait is object-safe
+        let _obj: &dyn GitVersioningPort = &port;
+
+        // Verify commit method compiles and is callable
+        let loom_id = LoomId("test-loom".to_string());
+        let knot_id = KnotId("k1".to_string());
+        let strand = StrandPath(PathBuf::from("input/strand.md"));
+        let result = port.commit(
+            &loom_id,
+            &knot_id,
+            &strand,
+            "Created",
+            "tie-off output here",
+        );
+        assert!(result.is_ok());
+
+        // Verify the commit was recorded
+        let commits = port.commits.lock().unwrap();
+        assert_eq!(commits.len(), 1);
+        let (lid, kid, sp, et, content) = &commits[0];
+        assert_eq!(*lid, loom_id);
+        assert_eq!(*kid, knot_id);
+        assert_eq!(sp, "input/strand.md");
+        assert_eq!(et, "Created");
+        assert_eq!(content, "tie-off output here");
+    }
+
+    #[test]
+    fn port_error_git_commit_display() {
+        let err = PortError::GitCommitFailed("not a git repo".to_string());
+        assert_eq!(err.to_string(), "git commit failed: not a git repo");
+    }
 
     #[test]
     fn knot_state_fields() {

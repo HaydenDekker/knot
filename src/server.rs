@@ -6,8 +6,9 @@
 use crate::adapters::inbound::AppContext;
 use crate::adapters::subprocess::SubprocessAgentRunner;
 use crate::application;
+use crate::application::ports::{GitVersioningPort, PortError};
 use crate::domain;
-use crate::domain::entities::Loom;
+use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath};
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::RigAgentConfig;
@@ -18,6 +19,27 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
+
+// ── No-op Git Versioning (Phase 1 placeholder) ─────────────────────────
+
+/// No-op implementation of `GitVersioningPort`.
+///
+/// Used by the application layer during Phase 1. Replaced by the real
+/// filesystem git adapter in Phase 2.
+pub struct NoOpGitVersioningPort;
+
+impl GitVersioningPort for NoOpGitVersioningPort {
+    fn commit(
+        &self,
+        _loom_id: &LoomId,
+        _knot_id: &KnotId,
+        _strand_path: &StrandPath,
+        _event_type: &str,
+        _tie_off_content: &str,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+}
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -227,6 +249,7 @@ pub fn start_event_pipeline(
             base_dir,
             profile_repo,
             rig_log_port.clone(),
+            Arc::new(NoOpGitVersioningPort),
         );
 
         // Process strand events with queue idle detection.
