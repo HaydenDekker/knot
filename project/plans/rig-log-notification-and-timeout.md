@@ -12,6 +12,8 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 
 2. **Timeout errors pollute the tie-off** — currently `ProcessStrand::execute` writes `Processing failed: ...` into the tie-off file on any error (including timeout). The tie-off is the agent's output and should contain only agent-produced content. Operational errors belong in logs.
 
+3. **No per-profile timeout** — the agent runner timeout is a single global value set at composition root. Different agent profiles may need different timeouts (e.g. a fast model at 60s vs. a slow reasoning model at 600s). The user needs to configure timeout per profile so each knot gets the right deadline for its model.
+
 ## Target
 
 1. **Rig-log** (`rig/.rig-log`) — append-only JSONL file recording `TimeoutExceeded` and `QueueIdle` events. Survives server restarts. Multiple consumers can watch it safely.
@@ -19,6 +21,8 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 2. **Timeout handling** — on `PortError::Timeout`, `ProcessStrand` writes to loom-log and rig-log only, **not** to the tie-off file. Previous tie-off content is preserved unchanged.
 
 3. **Queue idle** — after processing completes and no events are pending, a `QueueIdle` entry is written to the rig-log so the user knows the system is quiet.
+
+4. **Per-profile timeout** — `AgentProfile` has an optional `timeout` field (seconds). When a profile specifies `timeout`, the agent runner uses that value for the session deadline. When not set, the runner's global default is used. This lets fast models use short timeouts (60s) and slow models use long ones (600s).
 
 ## Implementation Status: ⬜ Draft
 
@@ -42,6 +46,9 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 - No test for queue idle detection
 - No integration test for the full timeout → rig-log → user observes flow
 - No test for tie-off preservation on timeout (tie-off should NOT receive error content)
+- No test for profile timeout field parsing (timeout in YAML frontmatter)
+- No test for `ExecutionContext` timeout override (per-profile timeout reaching the runner)
+- No test for profile timeout round-trip (save → load → execute with correct timeout)
 
 ## Phases
 
@@ -68,7 +75,60 @@ Both variants are `serde::Serialize + Deserialize + Clone + Debug + PartialEq + 
 - [ ] Add serialisation round-trip tests for all `RigLogEvent` variants
 - [ ] Run `cargo test` — all existing tests still pass
 
-### Phase 1: Application — RigLogPort
+### Phase 1: Domain — AgentProfile timeout field
+
+Hex layer: **Domain**
+
+Add an optional `timeout` field to `AgentProfile` so each profile can declare its own session timeout. This is the configuration side of Story 9.
+
+- `AgentProfile` gains an optional field:
+  - `timeout: Option<u64>` — session timeout in seconds (e.g. 60, 300, 600). `None` means use the runner's default.
+
+The `AgentProfile::new()` constructor keeps its existing signature (no timeout). A new builder method `with_timeout()` or a `with_timeout` helper on the struct lets callers set it. The `AgentConfig::new()` is unaffected — timeout is a profile concern, not a per-knot config.
+
+A constant or associated function provides the default: `AgentProfile::DEFAULT_TIMEOUT_SECS = 300` (matches current `AppConfig.agent_timeout`).
+
+**Tests:**
+- Unit test: `AgentProfile` with `timeout = Some(600)` serialises/deserialises correctly
+- Unit test: `AgentProfile` with `timeout = None` serialises/deserialises correctly
+- Unit test: `AgentProfile::with_timeout()` builder sets the field correctly
+- Unit test: default `AgentProfile` (no timeout) still constructs fine
+
+**Tasks:**
+- [ ] Add `timeout: Option<u64>` field to `AgentProfile` struct in `src/domain/value_objects.rs`
+- [ ] Add `#[serde(default)]` to the field so profiles without `timeout` parse correctly
+- [ ] Add `#[serde(skip_serializing_if = "Option::is_none")]` so the field is omitted from YAML when `None`
+- [ ] Add `AgentProfile::with_timeout()` builder method
+- [ ] Add `AgentProfile::DEFAULT_TIMEOUT_SECS` constant
+- [ ] Add serialisation round-trip tests for profiles with and without timeout
+- [ ] Add unit tests for `with_timeout` builder
+- [ ] Run `cargo test` — all existing tests still pass
+
+### Phase 2: Domain — Parse timeout from profile frontmatter
+
+Hex layer: **Domain (knot_file parsing)**
+
+Update `parse_agent_profile()` to read the `timeout` field from YAML frontmatter.
+
+- `RawProfileFrontmatter` in `src/domain/knot_file.rs` gains an optional `timeout` field (`Option<u64>`)
+- `parse_agent_profile()` passes the parsed timeout to `AgentProfile::with_timeout()`
+- Existing profiles without `timeout` in frontmatter parse as `None` (backwards compatible)
+- Invalid timeout values (negative numbers) are rejected at parse time — though `u64` from YAML can't be negative, so this is naturally enforced
+
+**Tests:**
+- Unit test: profile file with `timeout: 600` parses correctly with `timeout = Some(600)`
+- Unit test: profile file without `timeout` key parses with `timeout = None`
+- Unit test: profile file with `timeout: null` parses with `timeout = None`
+- Round-trip test: profile with timeout serialises to YAML, parses back, timeout preserved
+
+**Tasks:**
+- [ ] Add `timeout: Option<u64>` to `RawProfileFrontmatter` in `src/domain/knot_file.rs`
+- [ ] Update `parse_agent_profile()` to call `.with_timeout(raw.timeout)` on the built profile
+- [ ] Add parsing unit tests for timeout present, absent, and null
+- [ ] Add round-trip test (parse → serialise → parse)
+- [ ] Run `cargo test` — all existing tests still pass
+
+### Phase 3: Application — RigLogPort
 
 Hex layer: **Application (ports)**
 
@@ -87,7 +147,7 @@ New port trait:
 - [ ] Add mock `RigLogPort` in test module
 - [ ] Run `cargo test` — all existing tests still pass
 
-### Phase 2: Outbound Adapters — FileSystemRigLog
+### Phase 4: Outbound Adapters — FileSystemRigLog
 
 Hex layer: **Outbound adapters**
 
@@ -106,7 +166,36 @@ Concrete filesystem implementation:
 - [ ] Export in `src/adapters/outbound/mod.rs`
 - [ ] Run `cargo test` — all tests pass
 
-### Phase 3: ProcessStrand — Timeout handling change + rig-log writes
+### Phase 5: Ports — ExecutionContext timeout + AgentRunner interface change
+
+Hex layer: **Application (ports)** + **Outbound adapters**
+
+Currently `SubprocessAgentRunner` has a single `timeout` value set at construction time (composition root). To support per-profile timeouts, the runner needs to read the timeout from the execution context instead.
+
+Changes:
+
+1. `ExecutionContext` gains an optional `timeout: Option<Duration>` field.
+2. `AgentRunner::execute()` signature stays the same — it already receives the full `ExecutionContext`.
+3. `SubprocessAgentRunner::execute()` reads `ctx.timeout`, falling back to its own `self.timeout` (the global default from composition root) if `None`. This preserves backward compatibility — any code constructing an `ExecutionContext` without setting timeout still gets the runner's default.
+4. The `MockAgentRunner` in the ports test module ignores the timeout field (no-op).
+
+This is a **non-breaking change** to the trait — the method signature doesn't change, only the context struct gains a field.
+
+**Tests:**
+- Unit test: `SubprocessAgentRunner` with 120s default timeout, context has `timeout = Some(5s)` → kills after 5s
+- Unit test: `SubprocessAgentRunner` with 120s default timeout, context has `timeout = None` → uses 120s default
+- Unit test: `SubprocessAgentRunner` with 120s default timeout, context has `timeout = Some(300s)` → uses 300s
+- Unit test: existing timeout test (no context override) still passes — regression guard
+
+**Tasks:**
+- [ ] Add `timeout: Option<Duration>` field to `ExecutionContext` in `src/application/ports.rs`
+- [ ] Update `AgentRunner` trait doc comment to document the timeout behaviour
+- [ ] In `SubprocessAgentRunner::execute()`: `let effective_timeout = ctx.timeout.unwrap_or(self.timeout);`
+- [ ] Update mock `ExecutionContext` in port tests to include `timeout: None`
+- [ ] Add unit tests for per-context timeout (override, fallback, large value)
+- [ ] Run `cargo test` — all existing tests still pass
+
+### Phase 6: ProcessStrand — Timeout handling change + rig-log writes
 
 Hex layer: **Application (use cases)** + **Composition root**
 
@@ -137,7 +226,35 @@ Add `RigLogPort` to `ProcessStrand` struct and composition root.
 - [ ] Add unit test for non-timeout error path (tie-off still receives error — regression guard)
 - [ ] Run `cargo test` — all tests pass
 
-### Phase 4: Queue Idle detection + rig-log QueueIdle entry
+### Phase 7: ProcessStrand — Resolve profile timeout and pass to ExecutionContext
+
+Hex layer: **Application (use cases)** + **Composition root**
+
+Update `ProcessStrand` to resolve the timeout from the agent profile and pass it into the execution context.
+
+Changes:
+
+1. `resolve_agent_config()` returns a tuple of `(AgentConfig, String, Option<Duration>)` — the third element is the profile's timeout converted to a `Duration` (or `None` if not set).
+2. In `execute()`, the resolved timeout is passed into `ExecutionContext::timeout`.
+3. The composition root (`server.rs`) keeps `AppConfig.agent_timeout` as the **fallback** — it's still passed to `SubprocessAgentRunner::with_timeout()` as the global default. Profiles that set `timeout` override this; profiles that don't fall back to it.
+
+The `resolve_agent_config()` return type change is a single-use case internal API — only `ProcessStrand::execute()` calls it, so this is a local refactor.
+
+**Tests:**
+- Unit test: `ProcessStrand::execute` with a mock profile that has `timeout = Some(60)` → `ExecutionContext.timeout` is `Some(Duration::from_secs(60))`
+- Unit test: `ProcessStrand::execute` with a mock profile that has `timeout = None` → `ExecutionContext.timeout` is `None` (falls back to runner default)
+- Unit test: `resolve_agent_config()` returns correct timeout from profile
+
+**Tasks:**
+- [ ] Update `resolve_agent_config()` to also return the profile's timeout as `Option<Duration>`:
+  - `pub fn resolve_agent_config(&self, knot: &Knot) -> Result<(AgentConfig, String, Option<std::time::Duration>), PortError>`
+  - Convert `profile.timeout` (Option<u64>) to `Option<Duration>` via `.map(Duration::from_secs)`
+- [ ] In `execute()`, extract timeout from resolved tuple and pass to `ExecutionContext`
+- [ ] Update mock `AgentProfile` instances in existing tests to include `timeout: None`
+- [ ] Add unit tests for timeout resolution from profile
+- [ ] Run `cargo test` — all existing tests still pass
+
+### Phase 8: Queue Idle detection + rig-log QueueIdle entry
 
 Hex layer: **Application (use cases)**
 
@@ -160,7 +277,7 @@ This is a "drain check" — it doesn't block processing, just checks if the chan
 - [ ] Integration test in `tests/rig_log.rs`: burst of 3 events → only one `QueueIdle` after all complete
 - [ ] Run `cargo test` — all tests pass
 
-### Phase 5: Integration tests and cleanup
+### Phase 9: Integration tests and cleanup
 
 Full integration test coverage for the rig-log and timeout flows:
 
@@ -172,8 +289,15 @@ Full integration test coverage for the rig-log and timeout flows:
   - Tie-off preserved on timeout (no error content appended)
   - Tie-off receives error on non-timeout failure (regression guard)
 
+- `tests/profile_timeout.rs` — integration tests for profile timeout:
+  - Profile with `timeout: 2` → agent session killed after 2 seconds, `TimeoutExceeded` in rig-log
+  - Profile with no timeout field → uses runner default (e.g. 120s), long-running agent doesn't timeout at 2s
+  - Profile with `timeout: 600` → overrides runner default of 120s, agent allowed to run for 600s
+  - Profile file with `timeout: 30` serialises/deserialises correctly (round-trip via FileSystemAgentProfileRepository)
+
 **Tasks:**
 - [ ] Create `tests/rig_log.rs` with integration tests
+- [ ] Create `tests/profile_timeout.rs` with profile timeout integration tests
 - [ ] Run `cargo test` — all tests pass
 - [ ] Update `project/domain-glossary.md` with new term: `Rig-log`
 - [ ] Run `cargo clippy` — no warnings
