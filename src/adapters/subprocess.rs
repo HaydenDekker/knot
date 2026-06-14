@@ -1,6 +1,8 @@
 //! Subprocess agent runner — invokes an agent CLI via a child process.
 
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::application::ports::{
@@ -96,19 +98,31 @@ impl AgentRunner for SubprocessAgentRunner {
 
         let child_pid = child.id() as i32;
         let cli_path = ctx.cli_path.clone();
+        let strand_desc = ctx.strand_path.0.display().to_string();
+        let strand_desc_warn = strand_desc.clone(); // for timeout thread closure
         let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
+
+        // Shared flag: set to true when the child exits normally so the
+        // timeout thread can suppress its warning (avoids spurious messages
+        // when the agent finishes well before the deadline).
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_thread = Arc::clone(&cancelled);
 
         // Spawn a background thread that kills the child on timeout.
         let _timeout_thread = std::thread::Builder::new()
             .name("subprocess-timeout".to_string())
             .spawn(move || {
                 std::thread::sleep(effective_timeout);
+                // If the child already exited, skip the kill + warning.
+                if cancelled_for_thread.load(Ordering::Relaxed) {
+                    return;
+                }
                 let _ = unsafe {
                     libc::kill(child_pid, libc::SIGKILL)
                 };
                 eprintln!(
-                    "WARNING: killed '{}' after timeout of {:?}",
-                    cli_path, effective_timeout
+                    "WARNING: killed '{}' after timeout of {:?} (strand: {})",
+                    cli_path, effective_timeout, strand_desc_warn
                 );
             })
             .map_err(|e| {
@@ -142,12 +156,16 @@ impl AgentRunner for SubprocessAgentRunner {
             ))
         })?;
 
+        // Mark cancelled so the background timeout thread suppresses its
+        // warning if the child exited before the deadline.
+        cancelled.store(true, Ordering::Relaxed);
+
         // If status code is None, the process was killed by a signal
         // (SIGKILL from our timeout thread).
         if output.status.code().is_none() {
             return Err(PortError::Timeout(format!(
-                "'{}' exceeded timeout of {:?}",
-                ctx.cli_path, effective_timeout
+                "'{}' exceeded timeout of {:?} (strand: {})",
+                ctx.cli_path, effective_timeout, strand_desc
             )));
         }
 

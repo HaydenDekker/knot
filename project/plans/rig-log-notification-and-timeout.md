@@ -27,6 +27,8 @@ It implements Story 6 (Rig-Log Notification) and the timeout/error handling chan
 ## Implementation Status: ✅ Complete
 
 **Completed:** 2026-06-14
+**Bugfix (Phase X):** 2026-06-15 — Spurious timeout warning from detached thread not checking child exit status; missing knot context in processing logs. Fixed via `AtomicBool` cancelled flag + strand/knot context in logs. Version bumped to `0.5.1`.
+
 **Result:** Rig-log (`rig/.rig-log`) records `TimeoutExceeded` and `QueueIdle` events as JSONL. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only). Per-profile timeout via `AgentProfile.timeout` field (optional, in seconds). `SubprocessAgentRunner` reads effective timeout from `ExecutionContext.timeout`, falling back to runner default. 362 tests pass (11 new unit + 11 new integration). Domain glossary updated with `Rig-log` term. Clippy clean (no new warnings).
 
 ## Existing Tests
@@ -305,9 +307,49 @@ Full integration test coverage for the rig-log and timeout flows:
 - [x] Update `project/domain-glossary.md` with new term: `Rig-log`
 - [x] Run `cargo clippy` — no warnings
 
+### Phase X: Bugfix — Spurious timeout warning + missing knot context in logs
+
+Hex layer: **Outbound adapters** + **Application (use cases)**
+
+**Discovered:** 2026-06-15 in production use.
+
+**Bug 1: Spurious `WARNING: killed 'pi' after timeout of 300s` on normal completion.**
+
+Phase 5 spawned a detached background thread (`std::thread::Builder::new().spawn()`) that sleeps for `effective_timeout` then unconditionally sends `SIGKILL` and prints a warning. When the child process exits *before* the deadline (the common case — agents completing in ~13s against a 300s default), the detached thread keeps sleeping in the background. When its sleep finally expires, it prints the warning even though the process already finished cleanly.
+
+**Root cause:** The timeout thread has no way to know the child exited normally. It always assumes the child is still alive when its sleep completes. The plan's tests only verified "does the agent get killed?" and "does it complete?" — never "does the thread suppress its action when the child exits first?" The spurious warning is invisible in CI because tests use timeouts of 50ms–100ms where the race is negligible.
+
+**Fix:** `AtomicBool` cancelled flag shared between the main thread and the timeout thread. After `wait_with_output()` returns, the main thread sets the flag. The timeout thread checks it after its sleep — if cancelled, returns silently without `SIGKILL` or warning.
+
+**Bug 2: Processing logs lack knot/strand context.**
+
+The `log_strand_event` calls in `ProcessStrand::execute()` emit messages like `Modified processing start — /path/to/file.md` but omit *which knot* is processing. With multiple knots per loom, the user cannot tell which knot triggered the log line. The `SubprocessAgentRunner` timeout warning similarly omits strand context.
+
+**Fix:**
+- `ProcessStrand` logs now include `knot=<knot_id>` in processing start, completed, and failed messages
+- `SubprocessAgentRunner` timeout warning and `PortError::Timeout` now include `(strand: <path>)`
+
+**Files changed:**
+- `src/adapters/subprocess.rs` — `AtomicBool` cancelled flag, strand context in warning/error
+- `src/application/usecases.rs` — knot context in all `log_strand_event` calls
+
+**Why the plan missed it:**
+- Phase 5's test matrix covered the *correctness* dimension (right timeout value used) but not the *lifecycle* dimension (what happens to the detached thread when the child exits early). A test case for "agent completes in 10ms, timeout is 5s, no spurious output" would have caught this.
+- The knot context gap was a missing observability concern — the plan focused on the rig-log as the notification mechanism and didn't consider that the existing `eprintln`-based logs also needed context.
+
+**Tasks:**
+- [x] Add `AtomicBool` cancelled flag to `SubprocessAgentRunner::execute()`
+- [x] Timeout thread checks cancelled flag before SIGKILL + warning
+- [x] Main thread sets cancelled flag after `wait_with_output()` returns
+- [x] Add strand path to timeout warning and `PortError::Timeout` message
+- [x] Add knot ID to `log_strand_event` messages (start, completed, failed)
+- [x] Run `cargo test` — all 362 tests pass
+- [x] Run `cargo clippy` — no new warnings
+
 ## Notes
 
 - Phase 1 sub-agent proactively completed Phase 2 tasks (parsing timeout from profile frontmatter) since they were tightly coupled domain-layer changes.
 - Phase 6 required updating `AppContext` and all test files that manually construct it (`swagger_ui.rs`, `skill_integration.rs`, `loom.rs`, `usecases.rs`) — significant ripple from adding `rig_log_port` field.
 - Phase 8 queue idle detection was implemented in `server.rs` event loop (not inside `ProcessStrand`) since the event loop owns the debounce channel receiver.
 - Pre-existing `ConfigurableAgentRunner::set_result` unused method warning existed before this plan — not introduced by our changes.
+- Phase X bugfix: spurious timeout warning from detached thread not checking child exit status, plus missing knot context in processing logs. Detached thread pattern needs lifecycle awareness — any future timeout implementation should cancel the watcher when the watched handle completes.

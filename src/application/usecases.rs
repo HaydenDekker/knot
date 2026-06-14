@@ -699,7 +699,7 @@ impl ProcessStrand {
             StrandEvent::Deleted { .. } => "Deleted",
         };
         logging::log_strand_event(
-            &format!("{} processing start", strand_kind),
+            &format!("{} processing start (knot={})", strand_kind, knot_id.0),
             &strand_path.0,
         );
 
@@ -770,7 +770,7 @@ impl ProcessStrand {
                     timestamp: format_timestamp(),
                 });
                 logging::log_strand_event(
-                    &format!("{} failed: {}", strand_kind, error_msg),
+                    &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
                 );
             })?;
@@ -851,7 +851,7 @@ impl ProcessStrand {
                 })?;
 
                 logging::log_strand_event(
-                    &format!("{} completed", strand_kind),
+                    &format!("{} completed (knot={})", strand_kind, knot_id.0),
                     &strand_path.0,
                 );
                 Ok(())
@@ -904,7 +904,7 @@ impl ProcessStrand {
                 })?;
 
                 logging::log_strand_event(
-                    &format!("{} failed: {}", strand_kind, error_msg),
+                    &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
                 );
                 Ok(())
