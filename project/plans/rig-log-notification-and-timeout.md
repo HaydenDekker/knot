@@ -215,16 +215,16 @@ Add `RigLogPort` to `ProcessStrand` struct and composition root.
 - Unit test: `ProcessStrand::execute` with non-timeout error → verify error IS written to tie-off (existing behaviour preserved)
 
 **Tasks:**
-- [ ] Add `rig_log: Arc<dyn RigLogPort>` field to `ProcessStrand` struct
-- [ ] Update `ProcessStrand::new()` constructor to accept `RigLogPort`
-- [ ] In `execute()` error branch, match on `PortError::Timeout`:
+- [x] Add `rig_log: Arc<dyn RigLogPort>` field to `ProcessStrand` struct
+- [x] Update `ProcessStrand::new()` constructor to accept `RigLogPort`
+- [x] In `execute()` error branch, match on `PortError::Timeout`:
   - On timeout: skip `tie_off_sink.append()`, write `RigLogEvent::TimeoutExceeded`
   - On other errors: existing behaviour (write error to tie-off)
-- [ ] Update `server.rs` composition root to create `FileSystemRigLog` and wire into `ProcessStrand`
-- [ ] Add mock `AgentRunner` that returns `PortError::Timeout` in unit tests
-- [ ] Add unit tests for timeout path (loom-log, rig-log, tie-off unchanged)
-- [ ] Add unit test for non-timeout error path (tie-off still receives error — regression guard)
-- [ ] Run `cargo test` — all tests pass
+- [x] Update `server.rs` composition root to create `FileSystemRigLog` and wire into `ProcessStrand`
+- [x] Add mock `AgentRunner` that returns `PortError::Timeout` in unit tests
+- [x] Add unit tests for timeout path (loom-log, rig-log, tie-off unchanged)
+- [x] Add unit test for non-timeout error path (tie-off still receives error — regression guard)
+- [x] Run `cargo test` — all tests pass
 
 ### Phase 7: ProcessStrand — Resolve profile timeout and pass to ExecutionContext
 
