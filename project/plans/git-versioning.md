@@ -16,6 +16,8 @@ Each knot run produces a static git commit in the project root. The commit messa
 
 ## Implementation Status: ⬜ Draft | 🔄 Active | ✅ Complete
 
+**Completed:** 2026-06-14
+
 ## Existing Tests
 | Test Class | What it covers | Status |
 |------------|---------------|--------|

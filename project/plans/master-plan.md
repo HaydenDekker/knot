@@ -48,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
-| 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ⬜ Planned | 2026-06-13 |
+| 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
@@ -96,9 +96,16 @@ Full details in [rig-log-notification-and-timeout.md](rig-log-notification-and-t
 
 ### 27. Git Versioning — Automatic Commit History for Agent Work
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-13
+**Completed:** 2026-06-14
 **Goal:** Each knot run produces a git commit in the project root with structured message and tie-off body. Opt-out per-knot via `git-versioned: false` in frontmatter. Gracefully skips if not a git repo.
+
+**Result:** `git_versioned: bool` field on `Knot` entity and `KnotFile` (parsed from `git-versioned` frontmatter, defaults `true`). `GitVersioningPort` trait + `MockGitVersioningPort`. `FileSystemGitVersioner` adapter uses `std::process::Command` to run `git` (no C dependency) — stages all changes with `git add -A`, commits with structured subject (`knot: <knot-id> — processed <strand-name> (<event-type>)`) and tie-off body. Graceful degradation: skips if not a git repo, git unavailable, or commit fails (non-fatal warnings). `ProcessStrand::execute()` calls git port after tie-off write when `knot.git_versioned` is `true`. Wired in composition root via `start_event_pipeline`. 17 new unit tests + 3 new integration tests in `tests/git_versioning.rs`. All 293+ tests pass.
+
+**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
+
+Full details in [git-versioning.md](git-versioning.md).
 
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
