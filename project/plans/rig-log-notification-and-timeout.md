@@ -160,11 +160,11 @@ Concrete filesystem implementation:
 - `FileSystemRigLog` concurrent writes — multiple threads append safely
 
 **Tasks:**
-- [ ] Create `src/adapters/outbound/rig_log.rs` with `FileSystemRigLog`
-- [ ] Implement `RigLogPort` for `FileSystemRigLog`
-- [ ] Add unit tests for `FileSystemRigLog` (create, append, read_all, concurrent writes)
-- [ ] Export in `src/adapters/outbound/mod.rs`
-- [ ] Run `cargo test` — all tests pass
+- [x] Create `src/adapters/outbound/rig_log.rs` with `FileSystemRigLog`
+- [x] Implement `RigLogPort` for `FileSystemRigLog`
+- [x] Add unit tests for `FileSystemRigLog` (create, append, read_all, concurrent writes)
+- [x] Export in `src/adapters/outbound/mod.rs`
+- [x] Run `cargo test` — all tests pass
 
 ### Phase 5: Ports — ExecutionContext timeout + AgentRunner interface change
 
