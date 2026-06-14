@@ -70,10 +70,10 @@ Both variants are `serde::Serialize + Deserialize + Clone + Debug + PartialEq + 
 - Unit test for `RigLogPath` construction
 
 **Tasks:**
-- [ ] Add `RigLogPath` to `src/domain/entities.rs`
-- [ ] Add `RigLogEvent` enum to `src/domain/events.rs`
-- [ ] Add serialisation round-trip tests for all `RigLogEvent` variants
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] Add `RigLogPath` to `src/domain/entities.rs`
+- [x] Add `RigLogEvent` enum to `src/domain/events.rs`
+- [x] Add serialisation round-trip tests for all `RigLogEvent` variants
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 1: Domain — AgentProfile timeout field
 
