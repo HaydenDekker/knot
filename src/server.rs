@@ -6,9 +6,9 @@
 use crate::adapters::inbound::AppContext;
 use crate::adapters::subprocess::SubprocessAgentRunner;
 use crate::application;
-use crate::application::ports::{GitVersioningPort, PortError};
+use crate::application::ports::GitVersioningPort;
 use crate::domain;
-use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath};
+use crate::domain::entities::Loom;
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::RigAgentConfig;
@@ -19,27 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-
-// ── No-op Git Versioning (Phase 1 placeholder) ─────────────────────────
-
-/// No-op implementation of `GitVersioningPort`.
-///
-/// Used by the application layer during Phase 1. Replaced by the real
-/// filesystem git adapter in Phase 2.
-pub struct NoOpGitVersioningPort;
-
-impl GitVersioningPort for NoOpGitVersioningPort {
-    fn commit(
-        &self,
-        _loom_id: &LoomId,
-        _knot_id: &KnotId,
-        _strand_path: &StrandPath,
-        _event_type: &str,
-        _tie_off_content: &str,
-    ) -> Result<(), PortError> {
-        Ok(())
-    }
-}
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -239,6 +218,16 @@ pub fn start_event_pipeline(
     let profile_repo = Arc::clone(&ctx.profile_repo);
     let rig_log_port = Arc::clone(&ctx.rig_log_port);
 
+    // Git versioning: project root is the parent of the rig directory.
+    // Falls back to base_dir itself if parent does not exist.
+    let project_root = base_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| base_dir.clone());
+    let git_versioning_port: Arc<dyn GitVersioningPort> = Arc::new(
+        crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
+    );
+
     join_set.spawn(async move {
         let use_case = application::usecases::ProcessStrand::new(
             store,
@@ -249,7 +238,7 @@ pub fn start_event_pipeline(
             base_dir,
             profile_repo,
             rig_log_port.clone(),
-            Arc::new(NoOpGitVersioningPort),
+            git_versioning_port,
         );
 
         // Process strand events with queue idle detection.

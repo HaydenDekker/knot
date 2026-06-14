@@ -3,8 +3,10 @@
 //! Verifies that `build_app_context` wires all hexagonal layers correctly.
 //! Non-network test — does not spin up an HTTP server.
 
+use std::sync::Arc;
+
 use knot::application::ports::{
-    AgentRunner, LoomLogPort, LoomRepository, TieOffSink,
+    AgentRunner, GitVersioningPort, LoomLogPort, LoomRepository, TieOffSink,
 };
 use knot::AppConfig;
 
@@ -32,4 +34,17 @@ fn build_app_context_wires_layers() {
     // Both event senders are present; receivers are returned for wiring
     let _ = _strand_rx;
     let _ = _config_rx;
+}
+
+/// Verify `FileSystemGitVersioner` is wired as `Arc<dyn GitVersioningPort>`
+/// in the composition root (`start_event_pipeline`).
+///
+/// This is a compile-time check: if the types don't match, this test
+/// fails to compile.
+#[test]
+fn git_versioner_is_trait_object_safe() {
+    let versioner = knot::adapters::outbound::FileSystemGitVersioner::new(
+        std::path::PathBuf::from("/tmp"),
+    );
+    let _obj: Arc<dyn GitVersioningPort> = Arc::new(versioner);
 }
