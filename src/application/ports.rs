@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
-use crate::domain::events::LoomEvent;
+use crate::domain::events::{LoomEvent, RigLogEvent};
 use crate::domain::value_objects::AgentProfile;
 
 // ── Error Types ────────────────────────────────────────────────────────────
@@ -49,6 +49,10 @@ pub enum PortError {
     ProfileScanFailed(String),
     /// Failed to save a profile to disk.
     ProfileSaveFailed(String),
+    /// Failed to write to the rig-log.
+    RigLogWriteFailed(String),
+    /// Failed to read from the rig-log.
+    RigLogReadFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -104,6 +108,12 @@ impl std::fmt::Display for PortError {
             }
             PortError::ProfileSaveFailed(msg) => {
                 write!(f, "profile save failed: {msg}")
+            }
+            PortError::RigLogWriteFailed(msg) => {
+                write!(f, "rig-log write failed: {msg}")
+            }
+            PortError::RigLogReadFailed(msg) => {
+                write!(f, "rig-log read failed: {msg}")
             }
         }
     }
@@ -286,6 +296,19 @@ pub trait TieOffSink: Send + Sync {
     fn read_content(&self, path: &TieOffPath) -> Result<String, PortError>;
 }
 
+/// Port for appending and querying the rig-log.
+///
+/// The rig-log is an append-only JSONL file at `rig/.rig-log` that records
+/// serious operational events (timeouts, queue idle) so the user or an
+/// external watcher can monitor and react.
+pub trait RigLogPort: Send + Sync {
+    /// Append a rig-log event.
+    fn append(&self, event: RigLogEvent) -> Result<(), PortError>;
+
+    /// Read all rig-log events.
+    fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError>;
+}
+
 /// Port for discovering and persisting agent profiles.
 ///
 /// Profiles are stored as `.md` files in `{rig}/profiles/` with YAML
@@ -423,6 +446,23 @@ mod tests {
                 .get(&path.0.display().to_string())
                 .cloned()
                 .unwrap_or_default())
+        }
+    }
+
+    /// In-memory mock of `RigLogPort`.
+    #[derive(Default)]
+    struct MockRigLogPort {
+        events: std::sync::Mutex<Vec<RigLogEvent>>,
+    }
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(&self, event: RigLogEvent) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
         }
     }
 
@@ -588,6 +628,55 @@ mod tests {
         let path = Path::new("/tmp/watched");
         assert!(source.watch(path).is_ok());
         assert!(source.unwatch(path).is_ok());
+    }
+
+    #[test]
+    fn rig_log_port_contract() {
+        let port = MockRigLogPort::default();
+
+        // Verify trait is object-safe
+        let _obj: &dyn RigLogPort = &port;
+
+        // Verify append and read_all work
+        let event = RigLogEvent::QueueIdle {
+            timestamp: "2026-06-14T10:00:00Z".to_string(),
+        };
+        assert!(port.append(event.clone()).is_ok());
+
+        let events = port.read_all().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0], event);
+
+        // Append a second event
+        let event2 = RigLogEvent::TimeoutExceeded {
+            loom_id: LoomId("test".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input.md")),
+            error: "deadline exceeded".to_string(),
+            timestamp: "2026-06-14T10:01:00Z".to_string(),
+        };
+        assert!(port.append(event2).is_ok());
+
+        let events = port.read_all().unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn port_error_rig_log_variants_display() {
+        let err = PortError::RigLogWriteFailed("disk full".to_string());
+        assert_eq!(err.to_string(), "rig-log write failed: disk full");
+
+        let err = PortError::RigLogReadFailed("file not found".to_string());
+        assert_eq!(err.to_string(), "rig-log read failed: file not found");
+    }
+
+    #[test]
+    fn port_error_rig_log_variants_are_std_error() {
+        let err = PortError::RigLogWriteFailed("io".to_string());
+        let _: &dyn std::error::Error = &err;
+
+        let err = PortError::RigLogReadFailed("io".to_string());
+        let _: &dyn std::error::Error = &err;
     }
 
     #[test]
