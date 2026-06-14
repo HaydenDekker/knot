@@ -95,14 +95,14 @@ A constant or associated function provides the default: `AgentProfile::DEFAULT_T
 - Unit test: default `AgentProfile` (no timeout) still constructs fine
 
 **Tasks:**
-- [ ] Add `timeout: Option<u64>` field to `AgentProfile` struct in `src/domain/value_objects.rs`
-- [ ] Add `#[serde(default)]` to the field so profiles without `timeout` parse correctly
-- [ ] Add `#[serde(skip_serializing_if = "Option::is_none")]` so the field is omitted from YAML when `None`
-- [ ] Add `AgentProfile::with_timeout()` builder method
-- [ ] Add `AgentProfile::DEFAULT_TIMEOUT_SECS` constant
-- [ ] Add serialisation round-trip tests for profiles with and without timeout
-- [ ] Add unit tests for `with_timeout` builder
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] Add `timeout: Option<u64>` field to `AgentProfile` struct in `src/domain/value_objects.rs`
+- [x] Add `#[serde(default)]` to the field so profiles without `timeout` parse correctly
+- [x] Add `#[serde(skip_serializing_if = "Option::is_none")]` so the field is omitted from YAML when `None`
+- [x] Add `AgentProfile::with_timeout()` builder method
+- [x] Add `AgentProfile::DEFAULT_TIMEOUT_SECS` constant
+- [x] Add serialisation round-trip tests for profiles with and without timeout
+- [x] Add unit tests for `with_timeout` builder
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 2: Domain — Parse timeout from profile frontmatter
 
@@ -122,11 +122,11 @@ Update `parse_agent_profile()` to read the `timeout` field from YAML frontmatter
 - Round-trip test: profile with timeout serialises to YAML, parses back, timeout preserved
 
 **Tasks:**
-- [ ] Add `timeout: Option<u64>` to `RawProfileFrontmatter` in `src/domain/knot_file.rs`
-- [ ] Update `parse_agent_profile()` to call `.with_timeout(raw.timeout)` on the built profile
-- [ ] Add parsing unit tests for timeout present, absent, and null
-- [ ] Add round-trip test (parse → serialise → parse)
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] Add `timeout: Option<u64>` to `RawProfileFrontmatter` in `src/domain/knot_file.rs`
+- [x] Update `parse_agent_profile()` to call `.with_timeout(raw.timeout)` on the built profile
+- [x] Add parsing unit tests for timeout present, absent, and null
+- [x] Add round-trip test (parse → serialise → parse)
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 3: Application — RigLogPort
 
