@@ -142,10 +142,10 @@ New port trait:
 - Unit tests for mock `RigLogPort`
 
 **Tasks:**
-- [ ] Add `RigLogPort` trait to `src/application/ports.rs`
-- [ ] Add new `PortError` variants and `Display` implementations
-- [ ] Add mock `RigLogPort` in test module
-- [ ] Run `cargo test` — all existing tests still pass
+- [x] Add `RigLogPort` trait to `src/application/ports.rs`
+- [x] Add new `PortError` variants and `Display` implementations
+- [x] Add mock `RigLogPort` in test module
+- [x] Run `cargo test` — all existing tests still pass
 
 ### Phase 4: Outbound Adapters — FileSystemRigLog
 
