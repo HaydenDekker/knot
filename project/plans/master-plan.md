@@ -2,7 +2,7 @@
 
 > **Last Updated:** 2026-06-15
 > **Plan Created:** Auto-Discovery Reliability Fixes
-> **Plan Completed:** Knot Modification Observability and Path Resolution Consistency
+> **Plan Completed:** Auto-Discovery Reliability Fixes
 
 ## How to Add a Plan
 
@@ -48,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ⬜ Planned | 2026-06-15 |
+| 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
@@ -82,6 +82,19 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 29. Auto-Discovery Reliability Fixes
+
+**Status:** ✅ Complete
+**Created:** 2026-06-15
+**Completed:** 2026-06-15
+**Goal:** Fix four reliability defects in the auto-discovery feature (Plan #14): path canonicalisation mismatch in rig watch, wasteful full rig re-scan on `LoomAdded`, missing loom path in `LoomAdded` events, and silent event drops when config channel is full.
+
+**Result:** `ConfigEvent::LoomAdded` carries `loom_dir: String` for targeted scanning. `register_watch()` canonicalises rig paths via `resolve_path()` so notify absolute paths match. `handle_loom_added()` scans only the new loom directory via `LoomRepository::scan_knot_files()`. `ReloadConfig` use case + `POST /config/reload` endpoint provides manual recovery. 12 new tests across domain, outbound, application, inbound, and integration layers. Version bumped to 0.6.0. 303+ tests pass.
+
+**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
+
+Full details in [auto-discovery-reliability.md](auto-discovery-reliability.md).
 
 ### 28. Rig-Log Notification, Timeout Handling and Rollback
 
