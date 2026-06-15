@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-15
+> **Plan Created:** Auto-Discovery Reliability Fixes
 > **Plan Completed:** Knot Modification Observability and Path Resolution Consistency
 
 ## How to Add a Plan
@@ -47,6 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ⬜ Planned | 2026-06-15 |
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
