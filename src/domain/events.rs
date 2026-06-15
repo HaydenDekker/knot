@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 use crate::domain::entities::{
     Knot, KnotId, LoomId, StrandPath, TieOffPath,
@@ -166,7 +165,7 @@ pub enum ConfigEvent {
         /// Absolute path to the loom directory (e.g. `/project/rig/new-loom`).
         /// Used by `ConfigEventHandler` to scan only this directory instead of
         /// re-scanning the full rig.
-        loom_dir: PathBuf,
+        loom_dir: String,
     },
     /// A new knot `.md` file was created in a loom directory.
     KnotAdded {
@@ -630,7 +629,7 @@ mod tests {
     #[test]
     fn config_event_loom_added_has_path() {
         let loom_id = LoomId("my-loom".to_string());
-        let loom_dir = PathBuf::from("/project/rig/my-loom");
+        let loom_dir = "/project/rig/my-loom".to_string();
 
         let event = ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
@@ -664,7 +663,7 @@ mod tests {
         // Build all four variants
         let loom_added = ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
-            loom_dir: PathBuf::from("/project/rig/prds-loom"),
+            loom_dir: "/project/rig/prds-loom".to_string(),
         };
         let knot_added = ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
@@ -686,10 +685,7 @@ mod tests {
                 loom_dir,
             } => {
                 assert_eq!(*lid, LoomId("prds".to_string()));
-                assert_eq!(
-                    loom_dir,
-                    &PathBuf::from("/project/rig/prds-loom")
-                );
+                assert_eq!(loom_dir, &"/project/rig/prds-loom".to_string());
             }
             _ => panic!("Expected LoomAdded variant"),
         }

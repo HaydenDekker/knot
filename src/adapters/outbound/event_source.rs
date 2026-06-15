@@ -195,7 +195,7 @@ impl InnerState {
                     .and_then(|n| n.to_str())
                     && name.ends_with("-loom") {
                         let loom_id = LoomId(name.to_string());
-                        let loom_dir = path.to_path_buf();
+                        let loom_dir = path.to_string_lossy().to_string();
                         return (
                             None,
                             Some(ConfigEvent::LoomAdded {

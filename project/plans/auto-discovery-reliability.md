@@ -19,7 +19,7 @@ The result: creating a new loom directory while Knot is running can silently fai
 When this plan is done:
 
 - New looms are discovered reliably within ~500ms of directory creation
-- Path canonicalisation is consistent between watch registration and notify event reporting
+- Path canonicalisation is consistent between watch registration and notify event reporting.
 - `handle_loom_added` scans only the new loom directory (not the full rig)
 - `ConfigEvent::LoomAdded` carries the loom directory path for targeted scanning
 - `POST /config/reload` endpoint provides manual recovery when the watcher misses an event
@@ -77,10 +77,10 @@ LoomAdded {
 },
 ```
 
-- [ ] Failing test: `config_event_loom_added_has_path` — `LoomAdded` carries `loom_id` and `loom_dir`, serialises round-trip
-- [ ] Implement: update `ConfigEvent::LoomAdded` variant in `src/domain/events.rs`
-- [ ] Update existing `config_event_types` test to verify new variant shape
-- [ ] All domain tests green
+- [x] Failing test: `config_event_loom_added_has_path` — `LoomAdded` carries `loom_id` and `loom_dir`, serialises round-trip
+- [x] Implement: update `ConfigEvent::LoomAdded` variant in `src/domain/events.rs`
+- [x] Update existing `config_event_types` test to verify new variant shape
+- [x] All domain tests green
 
 ### Phase 1: Outbound Adapters — Canonicalise watch paths + propagate loom path
 

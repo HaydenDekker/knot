@@ -1126,7 +1126,7 @@ impl ConfigEventHandler {
             } => {
                 logging::log_config_event(
                     "LoomAdded",
-                    &format!("loom={} dir={}", loom_id.0, loom_dir.display()),
+                    &format!("loom={} dir={}", loom_id.0, loom_dir),
                 );
                 self.handle_loom_added(loom_id, loom_dir)
             }
@@ -1162,7 +1162,7 @@ impl ConfigEventHandler {
     fn handle_loom_added(
         &self,
         loom_id: &LoomId,
-        _loom_dir: &Path,
+        _loom_dir: &str,
     ) -> Result<(), PortError> {
         // Skip if already registered
         if self.store.get(loom_id).is_some() {
@@ -1693,7 +1693,7 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
-            loom_dir: PathBuf::from("/rig/new-loom"),
+            loom_dir: "/rig/new-loom".to_string(),
         });
 
         // Should succeed
@@ -1778,7 +1778,7 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
-            loom_dir: PathBuf::from("/rig/existing-loom"),
+            loom_dir: "/rig/existing-loom".to_string(),
         });
 
         // Should succeed (idempotent)
