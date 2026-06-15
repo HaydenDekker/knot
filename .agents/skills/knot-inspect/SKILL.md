@@ -132,6 +132,11 @@ When asked to list or view agent profiles:
    - On `404`: Report "Profile `{name}` not found. Run `GET /profiles`
      to see available profiles."
    - Show: name, provider, model, tools, system_prompt.
+   - The API response does not include `timeout`. If the user asks
+     about timeout, read the file directly from
+     `rig/profiles/{name}.md` and check the YAML frontmatter.
+     Timeout is in seconds; omitted means the runner default of
+     300 seconds (5 minutes) is used.
 
 ---
 
@@ -269,6 +274,12 @@ Before making calls, review the OpenAPI spec at:
   "system_prompt": "You are a fast reviewer. Keep responses concise and direct."
 }
 ```
+
+> **Note:** The `timeout` field is not included in API responses.
+> To inspect a profile's timeout, read the file at
+> `rig/profiles/{name}.md` directly. The timeout value (in seconds)
+> appears in the YAML frontmatter. If omitted, the runner default
+> of 300 seconds (5 minutes) applies.
 
 ### Processing Status Values
 

@@ -22,6 +22,7 @@ The configuration that determines *which agent* runs. Contains:
 - The skills available to the agent (driving the prompt).
 - The tools available to the agent (executing the prompt).
 - The agent's initial system prompt.
+- The session timeout (optional, in seconds; defaults to 300s / 5 min).
 
 Part of a **knot**.
 

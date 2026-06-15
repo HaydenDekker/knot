@@ -791,7 +791,27 @@ impl ProcessStrand {
                 };
                 self.tie_off_sink.append(tie_off)?;
 
-                // 4b. Git versioning commit (best-effort, non-fatal)
+                // 5. Append KnotCompleted to loom-log (before commit so
+                //    the log entries are included in this commit)
+                self.log_port.append(LoomEvent::KnotCompleted {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    tie_off_path: tie_off_path.clone(),
+                    timestamp: format_timestamp(),
+                })?;
+
+                // 6. Append StrandProcessed to loom-log
+                self.log_port.append(LoomEvent::StrandProcessed {
+                    loom_id: loom_id.clone(),
+                    strand_path: strand_path.clone(),
+                    error: None,
+                    timestamp: format_timestamp(),
+                })?;
+
+                // 7. Git versioning commit (best-effort, non-fatal).
+                //    Runs AFTER loom-log appends so the commit captures
+                //    the tie-off, KnotCompleted, and StrandProcessed entries.
                 if knot.git_versioned {
                     let commit_result = self.git_versioning_port.commit(
                         &loom_id,
@@ -807,23 +827,6 @@ impl ProcessStrand {
                         );
                     }
                 }
-
-                // 5. Append KnotCompleted to loom-log
-                self.log_port.append(LoomEvent::KnotCompleted {
-                    loom_id: loom_id.clone(),
-                    knot_id: knot_id.clone(),
-                    strand_path: strand_path.clone(),
-                    tie_off_path: tie_off_path.clone(),
-                    timestamp: format_timestamp(),
-                })?;
-
-                // 6. Append StrandProcessed
-                self.log_port.append(LoomEvent::StrandProcessed {
-                    loom_id,
-                    strand_path: strand_path.clone(),
-                    error: None,
-                    timestamp: format_timestamp(),
-                })?;
 
                 logging::log_strand_event(
                     &format!("{} completed (knot={})", strand_kind, knot_id.0),

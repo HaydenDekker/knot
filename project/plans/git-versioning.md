@@ -23,6 +23,10 @@ Each knot run produces a static git commit in the project root. The commit messa
 - Wired in composition root via `start_event_pipeline` in `src/server.rs`
 - Version bumped to 0.5.0 (MINOR — new backwards-compatible feature)
 
+### Bugfix: Commit ordering (2026-06-15)
+
+`KnotCompleted` and `StrandProcessed` loom-log entries were written *after* the `git add -A` commit, so they were left uncommitted and picked up by the *next* agent invoke instead. Fixed by reordering `ProcessStrand::execute()` so the commit runs after both loom-log appends (the log adapter already flushes on each write).
+
 ## Existing Tests
 | Test Class | What it covers | Status |
 |------------|---------------|--------|

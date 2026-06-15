@@ -105,6 +105,8 @@ first, then create knots that reference it.
    - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
    - `system_prompt`: The agent's system prompt/persona
    - `tools` (optional): List of tool names (e.g. `fs`, `web`)
+   - `timeout` (optional): Session timeout in seconds. If omitted,
+     the runner's default of 300 seconds (5 minutes) is used.
 
 2. **Check for existing profiles**: Send `GET /profiles` to list all
    profiles. If a profile with the same name exists, ask the user
@@ -125,6 +127,26 @@ first, then create knots that reference it.
    # Fast Profile
 
    Lightweight profile for quick reviews.
+   ```
+
+   For long-running tasks (e.g. code generation across many files),
+   set a higher timeout:
+
+   ```markdown
+   ---
+   name: coder
+   provider: openai
+   model: gpt-4o
+   tools:
+     - fs
+   timeout: 600
+   system-prompt: |
+     You are a code generation agent. Take your time to be thorough.
+   ---
+
+   # Coder Profile
+
+   Profile for long-running code tasks with extended timeout.
    ```
    - Ensure the `rig/profiles/` directory exists (create it if needed).
    - The `name` in frontmatter should match the filename stem.
@@ -393,6 +415,7 @@ Lightweight profile for quick reviews.
 | `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
 | `system-prompt` | **Yes** | The agent's system prompt/persona instructions |
+| `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
 
 ### How Profiles Are Used at Processing Time
 
@@ -488,6 +511,10 @@ state after writing or editing files.
   "system_prompt": "You are a fast reviewer. Keep responses concise and direct."
 }
 ```
+
+> **Note:** The API response does not include the `timeout` field.
+> To check a profile's timeout, read the profile file directly from
+> `rig/profiles/{name}.md` and inspect the YAML frontmatter.
 
 ---
 
