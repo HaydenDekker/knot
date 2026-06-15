@@ -205,9 +205,9 @@ Manual trigger for re-running loom discovery. Provides recovery when the file wa
 
 **Hex Layer:** Integration
 
-- [ ] Failing test: `auto_discovery_with_absolute_rig_path` — start server with absolute rig path → create loom dir → `GET /looms` shows new loom → create strand → tie-off produced
-- [ ] Failing test: `manual_config_reload_discovers_new_looms` — create loom dir → `POST /config/reload` → new loom in `GET /looms`
-- [ ] Full integration test suite green
+- [x] Failing test: `auto_discovery_with_absolute_rig_path` — start server with absolute rig path → create loom dir → `GET /looms` shows new loom → create strand → tie-off produced
+- [x] Failing test: `manual_config_reload_discovers_new_looms` — create loom dir → `POST /config/reload` → new loom in `GET /looms`
+- [x] Full integration test suite green
 
 ### Phase 6: Composition Root — Canonicalise `rig_dir` before watch registration
 
