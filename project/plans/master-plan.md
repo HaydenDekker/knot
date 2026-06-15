@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-15
+> **Last Updated:** 2026-06-16
 > **Plan Created:** Context Management — Slim Agent Prompt and Tie-Off Headers
 > **Plan Completed:** Context Management — Slim Agent Prompt and Tie-Off Headers
 
@@ -48,6 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
 | 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
 | 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
@@ -83,6 +84,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 31. Agent Profile Skills
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-16
+**Goal:** Add `skills` field to agent profiles so Knot passes `--no-skills` + `--skill <path>` to `pi`, making the agent's skill set explicit and keeping context concise.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [agent-profile-skills.md](agent-profile-skills.md).
 
 ### 30. Context Management — Slim Agent Prompt and Tie-Off Headers
 
