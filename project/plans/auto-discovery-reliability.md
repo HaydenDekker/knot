@@ -24,7 +24,17 @@ When this plan is done:
 - `ConfigEvent::LoomAdded` carries the loom directory path for targeted scanning
 - `POST /config/reload` endpoint provides manual recovery when the watcher misses an event
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
+
+**Completed:** 2026-06-15
+
+**Result:** All four auto-discovery reliability defects fixed:
+1. Rig watch path canonicalised in `register_watch()` via `resolve_path()` — notify absolute paths now match stored watch paths
+2. `handle_loom_added` scans only the new loom directory via `LoomRepository::scan_knot_files()` instead of full rig re-scan
+3. `ConfigEvent::LoomAdded` carries `loom_dir: String` for targeted scanning
+4. `POST /config/reload` endpoint provides manual recovery via `ReloadConfig` use case
+
+**Tests:** 2 new domain tests, 2 new outbound adapter tests, 2 new application tests, 2 new inbound tests, 2 new integration tests. Full suite passes (303+ unit + integration tests).
 
 ## Hex Layers
 
@@ -215,8 +225,8 @@ Manual trigger for re-running loom discovery. Provides recovery when the file wa
 
 `run_startup()` in `server.rs` calls `register_watch(rig_dir, WatchType::Rig)`. Canonicalise `rig_dir` before registration so the stored watch path matches notify's reported paths.
 
-- [ ] Implement: `fs::canonicalize(rig_dir)` in `run_startup()` before `register_watch()`
-- [ ] Build succeeds, all tests pass
+- [x] Implement: `fs::canonicalize(rig_dir)` in `run_startup()` before `register_watch()` — already handled by Phase 1 (canonicalisation in `register_watch()` for `WatchType::Rig` using `resolve_path()`)
+- [x] Build succeeds, all tests pass
 
 ## Notes
 
