@@ -1,8 +1,8 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-15
-> **Plan Created:** Auto-Discovery Reliability Fixes
-> **Plan Completed:** Auto-Discovery Reliability Fixes
+> **Plan Created:** Context Management — Slim Agent Prompt and Tie-Off Headers
+> **Plan Completed:** Context Management — Slim Agent Prompt and Tie-Off Headers
 
 ## How to Add a Plan
 
@@ -48,6 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
 | 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
@@ -82,6 +83,17 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 30. Context Management — Slim Agent Prompt and Tie-Off Headers
+
+**Status:** ✅ Complete
+**Created:** 2026-06-15
+**Completed:** 2026-06-15
+**Goal:** Remove full tie-off history from agent prompt (replaced with single trigger line), update tie-off section headers to single-line format, and remove `previous_tie_off` from `ExecutionContext`.
+
+**Result:** Agent prompt now contains only: system prompt, knot instruction, input file via `@{path}`, and a short trigger line (`**knot-name** triggered by **event-type** on **file-name**`). Tie-off headers changed from three-line format to single-line (`## knot-name triggered by event-type file-name`). `previous_tie_off` field removed from `ExecutionContext`; `knot_name` added. 7 source files changed, 359 tests pass.
+
+Full details in [context-management.md](context-management.md).
 
 ### 29. Auto-Discovery Reliability Fixes
 

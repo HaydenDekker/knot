@@ -342,8 +342,8 @@ async fn full_pipeline_create_modify_delete() {
     let content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
-        content.contains("## Event: Deleted"),
-        "tie-off should have Deleted event header, got: {content}"
+        content.contains("review-knot triggered by Deleted"),
+        "tie-off should have Deleted trigger header, got: {content}"
     );
     assert!(
         content.contains("processed"),

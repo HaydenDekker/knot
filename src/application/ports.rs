@@ -195,8 +195,8 @@ pub struct ExecutionContext {
     pub strand_path: StrandPath,
     /// The type of strand event (e.g. "Created", "Modified", "Deleted").
     pub event_type: String,
-    /// Content of the previous tie-off file, if it existed.
-    pub previous_tie_off: String,
+    /// Knot name for the trigger line in the prompt.
+    pub knot_name: Option<String>,
     /// Per-context timeout override.
     ///
     /// When `Some(d)`, the agent runner uses `d` as the session deadline.
@@ -688,7 +688,7 @@ mod tests {
             prompt: "Review this document".to_string(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
             event_type: "Created".to_string(),
-            previous_tie_off: String::new(),
+            knot_name: Some("review".to_string()),
             timeout: None,
         };
         let result = runner.execute(ctx);
@@ -711,6 +711,7 @@ mod tests {
             content: "Generated content".to_string(),
             path: TieOffPath(PathBuf::from("output/review.md")),
             status: crate::domain::entities::TieOffStatus::Produced,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -905,7 +906,7 @@ mod tests {
             prompt: "Process this file".to_string(),
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
             event_type: "Created".to_string(),
-            previous_tie_off: String::new(),
+            knot_name: Some("review".to_string()),
             timeout: None,
         };
 
@@ -913,7 +914,7 @@ mod tests {
         assert_eq!(ctx.cli_args.len(), 2);
         assert!(!ctx.prompt.is_empty());
         assert_eq!(ctx.event_type, "Created");
-        assert!(ctx.previous_tie_off.is_empty());
+        assert_eq!(ctx.knot_name.as_deref(), Some("review"));
         assert!(ctx.timeout.is_none());
     }
 

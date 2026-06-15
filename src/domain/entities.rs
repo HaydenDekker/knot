@@ -100,6 +100,8 @@ pub struct TieOff {
     pub content: String,
     pub path: TieOffPath,
     pub status: TieOffStatus,
+    /// Knot name for the section header (e.g. `"review-docs"`).
+    pub knot_name: Option<String>,
     /// Optional event type metadata for append-mode sections.
     pub event_type: Option<String>,
     /// Optional strand path metadata for append-mode sections.
@@ -197,6 +199,7 @@ mod tests {
             content: content.clone(),
             path: path.clone(),
             status: status.clone(),
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -339,6 +342,7 @@ mod tests {
             content: "output".to_string(),
             path: TieOffPath(PathBuf::from("out.md")),
             status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
             event_type: Some("created".to_string()),
             strand_path: Some("in.md".to_string()),
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
@@ -355,6 +359,7 @@ mod tests {
             content: String::new(),
             path: TieOffPath(PathBuf::from("err.md")),
             status: TieOffStatus::Failed,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,

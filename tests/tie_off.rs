@@ -65,9 +65,8 @@ async fn full_tie_off_history() {
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     // Should have event metadata (Modified or Created depending on watcher)
     assert!(
-        content.contains("## Event:")
-            && content.contains("## Strand:")
-            && content.contains("## Timestamp:"),
+        content.contains("triggered by")
+            && content.contains("Timestamp:"),
         "should have event metadata headers: {}", content
     );
     assert!(
@@ -89,7 +88,7 @@ async fn full_tie_off_history() {
         delimiter_count, content
     );
     // Both sections should have event headers
-    let event_count = content.matches("## Event:").count();
+    let event_count = content.matches("triggered by").count();
     assert!(
         event_count >= 2,
         "should have at least 2 event sections, found {}: {}",
@@ -103,7 +102,7 @@ async fn full_tie_off_history() {
     let content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
     assert!(
-        content.contains("## Event: Deleted"),
+        content.contains("triggered by Deleted"),
         "should have Deleted section: {}", content
     );
     // Should have 3 sections now
@@ -113,7 +112,7 @@ async fn full_tie_off_history() {
         "should have 3 sections with delimiters, found {}: {}",
         delimiter_count, content
     );
-    let event_count = content.matches("## Event:").count();
+    let event_count = content.matches("triggered by").count();
     assert!(
         event_count >= 3,
         "should have 3 event sections, found {}: {}",
@@ -121,8 +120,8 @@ async fn full_tie_off_history() {
     );
 
     // Verify chronological order: Deleted should come last
-    let first_event = content.find("## Event:").unwrap();
-    let deleted_event = content.rfind("## Event: Deleted").unwrap();
+    let first_event = content.find("triggered by").unwrap();
+    let deleted_event = content.rfind("triggered by Deleted").unwrap();
     assert!(
         first_event < deleted_event,
         "Deleted should come after earlier events"
@@ -191,10 +190,10 @@ async fn tie_off_sections_readable() {
         sections.len(), content
     );
 
-    // Collect all header sections (those containing ## Event:)
+    // Collect all header sections (those containing the trigger line)
     let header_sections: Vec<&str> = sections
         .iter()
-        .filter(|s| s.contains("## Event:"))
+        .filter(|s| s.contains("triggered by"))
         .copied()
         .collect();
 
@@ -207,58 +206,36 @@ async fn tie_off_sections_readable() {
     // Verify each header section has complete metadata
     for (i, section) in header_sections.iter().enumerate() {
         assert!(
-            section.contains("## Event:"),
-            "header section {} should have event type: {}",
+            section.contains("triggered by"),
+            "header section {} should have trigger line: {}",
             i, section
         );
         assert!(
-            section.contains("## Strand:"),
-            "header section {} should have strand path: {}",
+            section.contains("sections-strand.md"),
+            "header section {} should reference strand file: {}",
             i, section
         );
         assert!(
-            section.contains("## Timestamp:"),
+            section.contains("Timestamp:"),
             "header section {} should have timestamp: {}",
             i, section
         );
 
         // Verify timestamp format (ISO 8601)
-        if let Some(ts_start) = section.find("## Timestamp:") {
+        if let Some(ts_start) = section.find("Timestamp:") {
             let ts_line = section[ts_start..]
                 .lines()
                 .next()
                 .unwrap_or("");
             let ts_value = ts_line
                 .trim()
-                .strip_prefix("## Timestamp:")
+                .strip_prefix("Timestamp:")
                 .unwrap_or("")
                 .trim();
             assert!(
                 ts_value.contains('T') && ts_value.ends_with('Z'),
                 "timestamp should be ISO 8601 format, got: {}",
                 ts_value
-            );
-        }
-
-        // Verify strand path is present
-        if let Some(strand_start) = section.find("## Strand:") {
-            let strand_line = section[strand_start..]
-                .lines()
-                .next()
-                .unwrap_or("");
-            let strand_value = strand_line
-                .trim()
-                .strip_prefix("## Strand:")
-                .unwrap_or("")
-                .trim();
-            assert!(
-                !strand_value.is_empty(),
-                "strand path should not be empty"
-            );
-            assert!(
-                strand_value.contains("sections-strand.md"),
-                "strand path should reference the strand file: {}",
-                strand_value
             );
         }
     }

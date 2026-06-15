@@ -63,13 +63,17 @@ impl TieOffSink for FileSystemTieOffSink {
             .strand_path
             .clone()
             .unwrap_or_default();
+        let knot_name = tie_off
+            .knot_name
+            .clone()
+            .unwrap_or_else(|| "knot".to_string());
         let timestamp = tie_off.timestamp.clone().unwrap_or_else(|| {
             Self::format_timestamp(SystemTime::now())
         });
 
         let mut new_content = String::new();
         new_content.push_str(&format!(
-            "## Event: {event_label}\n## Strand: {strand_label}\n## Timestamp: {timestamp}\n---\n"
+            "## {knot_name} triggered by {event_label} {strand_label}\nTimestamp: {timestamp}\n---\n"
         ));
         new_content.push_str(&tie_off.content);
 
@@ -148,6 +152,7 @@ mod tests {
             content: "Generated content".to_string(),
             path: TieOffPath(dir.path().join("review.tie-off.md")),
             status: TieOffStatus::Produced,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -185,6 +190,7 @@ mod tests {
             content: "First content".to_string(),
             path: path.clone(),
             status: TieOffStatus::Produced,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -196,6 +202,7 @@ mod tests {
             content: "Second content".to_string(),
             path: path.clone(),
             status: TieOffStatus::Produced,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -223,6 +230,7 @@ mod tests {
             content: "Deep content".to_string(),
             path: TieOffPath(base.join("sub/dir/deep.tie-off.md")),
             status: TieOffStatus::Produced,
+            knot_name: None,
             event_type: None,
             strand_path: None,
             timestamp: None,
@@ -276,6 +284,7 @@ mod tests {
             content: "First section content".to_string(),
             path: TieOffPath(file_path.clone()),
             status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
             event_type: Some("Created".to_string()),
             strand_path: Some("strand1.md".to_string()),
             timestamp: Some("2026-06-05T00:00:00Z".to_string()),
@@ -292,16 +301,12 @@ mod tests {
 
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(
-            content.contains("## Event: Created"),
-            "content should have event header: {}", content
+            content.contains("## review triggered by Created strand1.md"),
+            "content should have trigger header: {}", content
         );
         assert!(
-            content.contains("## Strand: strand1.md"),
-            "content should have strand header: {}", content
-        );
-        assert!(
-            content.contains("## Timestamp: 2026-06-05T00:00:00Z"),
-            "content should have timestamp header: {}", content
+            content.contains("Timestamp: 2026-06-05T00:00:00Z"),
+            "content should have timestamp: {}", content
         );
         assert!(
             content.contains("First section content"),
@@ -325,6 +330,7 @@ mod tests {
             content: "Section one".to_string(),
             path: TieOffPath(file_path.clone()),
             status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
             event_type: Some("Created".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
@@ -336,6 +342,7 @@ mod tests {
             content: "Section two".to_string(),
             path: TieOffPath(file_path.clone()),
             status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
             event_type: Some("Modified".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
@@ -360,12 +367,12 @@ mod tests {
             "should have second section: {}", content
         );
         assert!(
-            content.contains("Event: Created"),
-            "should have first event type: {}", content
+            content.contains("review triggered by Created strand.md"),
+            "should have first event trigger: {}", content
         );
         assert!(
-            content.contains("Event: Modified"),
-            "should have second event type: {}", content
+            content.contains("review triggered by Modified strand.md"),
+            "should have second event trigger: {}", content
         );
         // Section two should come after section one
         let pos_one = content.find("Section one").unwrap();
@@ -405,6 +412,7 @@ mod tests {
                 content: body.clone(),
                 path: TieOffPath(file_path.clone()),
                 status: TieOffStatus::Produced,
+                knot_name: Some("review".to_string()),
                 event_type: Some(event_type.clone()),
                 strand_path: Some("strand.md".to_string()),
                 timestamp: Some(ts.clone()),
@@ -416,24 +424,24 @@ mod tests {
 
         // All three sections should be present
         assert!(
-            content.contains("## Event: Created"),
-            "should have Created event: {}", content
+            content.contains("review triggered by Created strand.md"),
+            "should have Created trigger: {}", content
         );
         assert!(
             content.contains("Initial content"),
             "should have initial content: {}", content
         );
         assert!(
-            content.contains("## Event: Modified"),
-            "should have Modified event: {}", content
+            content.contains("review triggered by Modified strand.md"),
+            "should have Modified trigger: {}", content
         );
         assert!(
             content.contains("Updated content"),
             "should have updated content: {}", content
         );
         assert!(
-            content.contains("## Event: Deleted"),
-            "should have Deleted event: {}", content
+            content.contains("review triggered by Deleted strand.md"),
+            "should have Deleted trigger: {}", content
         );
         assert!(
             content.contains("Deleted content"),

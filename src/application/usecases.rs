@@ -775,6 +775,7 @@ impl ProcessStrand {
                     content: format!("Processing failed: {}", error_msg),
                     path: tie_off_path.clone(),
                     status: crate::domain::entities::TieOffStatus::Failed,
+                    knot_name: Some(knot.id.0.clone()),
                     event_type: Some(event_label.clone()),
                     strand_path: Some(strand_path.0.display().to_string()),
                     timestamp: None,
@@ -809,19 +810,14 @@ impl ProcessStrand {
             format!("@{}", strand_path.0.display()),
         );
 
-        // 3. Read previous tie-off content (for event context)
-        let previous_tie_off = self.tie_off_sink
-            .read_content(&tie_off_path)
-            .unwrap_or_default();
-
-        // 4. Build execution context with event metadata
+        // 3. Build execution context with event metadata
         let ctx = ExecutionContext {
             cli_path: self.rig_config.cli_path.clone(),
             cli_args,
             prompt: knot.prompt_template.instructions.clone(),
             strand_path: strand_path.clone(),
             event_type: event_label.clone(),
-            previous_tie_off,
+            knot_name: Some(knot.id.0.clone()),
             timeout: profile_timeout,
         };
 
@@ -836,6 +832,7 @@ impl ProcessStrand {
                     content: output.stdout,
                     path: tie_off_path.clone(),
                     status: crate::domain::entities::TieOffStatus::Produced,
+                    knot_name: Some(knot.id.0.clone()),
                     event_type: Some(event_label.clone()),
                     strand_path: Some(strand_path.0.display().to_string()),
                     timestamp: None,
@@ -908,6 +905,7 @@ impl ProcessStrand {
                         content: format!("Processing failed: {}", error_msg),
                         path: tie_off_path.clone(),
                         status: crate::domain::entities::TieOffStatus::Failed,
+                        knot_name: Some(knot.id.0.clone()),
                         event_type: Some(event_label.clone()),
                         strand_path: Some(strand_path.0.display().to_string()),
                         timestamp: None,

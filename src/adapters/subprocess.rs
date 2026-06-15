@@ -39,30 +39,22 @@ impl SubprocessAgentRunner {
         Self { timeout }
     }
 
-    /// Build the prompt with event context block prepended.
+    /// Build the prompt with a short event trigger line prepended.
     ///
-    /// If event context fields are present, a `## Event Context` block
-    /// is prepended to the prompt before writing to stdin. This gives
-    /// the agent metadata about the strand event being processed.
+    /// Prepends a single trigger line identifying the knot and event,
+    /// then the original prompt. The strand file is referenced via
+    /// `@{path}` in CLI args — not injected into the prompt body.
     fn build_prompt_with_context(ctx: &ExecutionContext) -> String {
         let mut full_prompt = String::new();
 
-        // Prepend event context block if any fields are set
-        if !ctx.event_type.is_empty() || !ctx.previous_tie_off.is_empty() {
-            full_prompt.push_str("## Event Context\n");
-            if !ctx.event_type.is_empty() {
-                full_prompt.push_str(&format!("Event: {}\n", ctx.event_type));
-            }
+        // Prepend a short trigger line for event awareness
+        if !ctx.event_type.is_empty() {
             full_prompt.push_str(&format!(
-                "Strand: {}\n",
+                "**{}** triggered by **{}** on **{}**\n\n",
+                ctx.knot_name.as_deref().unwrap_or("unknown"),
+                ctx.event_type,
                 ctx.strand_path.0.display()
             ));
-            if !ctx.previous_tie_off.is_empty() {
-                full_prompt.push_str("Previous tie-off:\n");
-                full_prompt.push_str(&ctx.previous_tie_off);
-                full_prompt.push('\n');
-            }
-            full_prompt.push('\n');
         }
 
         full_prompt.push_str(&ctx.prompt);
@@ -204,7 +196,7 @@ mod tests {
             prompt: "test prompt".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: None,
         }
     }
@@ -310,7 +302,7 @@ mod tests {
             prompt: prompt.to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: None,
         };
 
@@ -333,7 +325,7 @@ mod tests {
             prompt: prompt.to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("strand.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: None,
         };
 
@@ -347,8 +339,8 @@ mod tests {
         );
     }
 
-    /// Verify that `SubprocessAgentRunner` prepends event context to the
-    /// prompt when `event_type` or `previous_tie_off` are set.
+    /// Verify that `SubprocessAgentRunner` prepends a trigger line to the
+    /// prompt when `event_type` is set.
     #[test]
     fn runner_passes_event_metadata() {
         let runner = SubprocessAgentRunner::new();
@@ -358,7 +350,7 @@ mod tests {
             prompt: "Review this file.".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("doc.md")),
             event_type: "Modified".to_string(),
-            previous_tie_off: "Previous review done.".to_string(),
+            knot_name: Some("review".to_string()),
             timeout: None,
         };
 
@@ -366,36 +358,22 @@ mod tests {
         assert!(result.is_ok(), "should succeed: {result:?}");
 
         let output = result.unwrap();
-        // Output should contain the event context block
+        // Output should contain the trigger line (bold markdown)
         assert!(
-            output.stdout.contains("## Event Context"),
-            "output should contain event context header: {}",
-            output.stdout
-        );
-        assert!(
-            output.stdout.contains("Event: Modified"),
-            "output should contain event type: {}",
-            output.stdout
-        );
-        assert!(
-            output.stdout.contains("Strand: doc.md"),
-            "output should contain strand path: {}",
-            output.stdout
-        );
-        assert!(
-            output.stdout.contains("Previous tie-off:"),
-            "output should contain previous tie-off header: {}",
-            output.stdout
-        );
-        assert!(
-            output.stdout.contains("Previous review done."),
-            "output should contain previous tie-off content: {}",
+            output.stdout.contains("**review** triggered by **Modified** on **doc.md**"),
+            "output should contain trigger line: {}",
             output.stdout
         );
         // Original prompt should still be present
         assert!(
             output.stdout.contains("Review this file."),
             "output should still contain original prompt: {}",
+            output.stdout
+        );
+        // Should NOT contain old event context format
+        assert!(
+            !output.stdout.contains("## Event Context"),
+            "output should NOT contain old event context header: {}",
             output.stdout
         );
     }
@@ -412,7 +390,7 @@ mod tests {
             prompt: "test prompt".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: Some(Duration::from_millis(50)),
         };
 
@@ -444,7 +422,7 @@ mod tests {
             prompt: "test prompt".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: None,
         };
 
@@ -478,7 +456,7 @@ mod tests {
             prompt: "test prompt".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
-            previous_tie_off: String::new(),
+            knot_name: None,
             timeout: Some(Duration::from_secs(3)),
         };
 
