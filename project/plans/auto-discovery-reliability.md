@@ -175,10 +175,10 @@ impl ReloadConfig {
 
 This is essentially `DiscoverLooms::execute()` called on demand. We'll create a thin `ReloadConfig` that delegates to `DiscoverLooms` to avoid duplication.
 
-- [ ] Failing test: `reload_config_discovers_new_looms` — new looms on disk are registered
-- [ ] Failing test: `reload_config_skips_registered` — existing looms are not re-registered
-- [ ] Implement: `ReloadConfig` use case in `src/application/usecases.rs`
-- [ ] All application tests green
+- [x] Failing test: `reload_config_discovers_new_looms` — new looms on disk are registered
+- [x] Failing test: `reload_config_skips_registered` — existing looms are not re-registered
+- [x] Implement: `ReloadConfig` use case in `src/application/usecases.rs`
+- [x] All application tests green
 
 ### Phase 4: Inbound Adapters — `POST /config/reload` Endpoint
 
