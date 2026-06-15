@@ -192,12 +192,12 @@ Manual trigger for re-running loom discovery. Provides recovery when the file wa
 |--------|------|----------|
 | `POST` | `/config/reload` | `200` — JSON array of `LoomSummary` for newly discovered looms |
 
-- [ ] Failing test: `post_config_reload_success` — `POST /config/reload` → 200 with new looms
-- [ ] Failing test: `post_config_reload_no_new_looms` — no new looms → 200 with empty array
-- [ ] Implement: `reload_config` handler in `src/adapters/inbound/system.rs`
-- [ ] Wire route: `.route("/config/reload", post(reload_config))` in `router.rs`
-- [ ] Add OpenAPI annotation
-- [ ] All inbound tests green
+- [x] Failing test: `post_config_reload_success` — `POST /config/reload` → 200 with new looms
+- [x] Failing test: `post_config_reload_no_new_looms` — no new looms → 200 with empty array
+- [x] Implement: `reload_config` handler in `src/adapters/inbound/system.rs`
+- [x] Wire route: `.route("/config/reload", post(reload_config))` in `router.rs`
+- [x] Add OpenAPI annotation
+- [x] All inbound tests green
 
 ### Phase 5: Integration Tests — Runtime Discovery and Manual Reload
 
