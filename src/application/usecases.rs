@@ -181,6 +181,57 @@ impl DiscoverLooms {
     }
 }
 
+// ── ReloadConfig ───────────────────────────────────────────────────────────
+
+/// Use case: re-scan the rig and register any looms not already in the store.
+///
+/// Provides the business logic for the manual reload endpoint
+/// (`POST /config/reload`). Delegates to `DiscoverLooms` to avoid
+/// duplicating discovery and registration logic.
+///
+/// Returns the list of *newly* registered loom IDs (those not already
+/// in the store). Already-registered looms are silently skipped.
+pub struct ReloadConfig {
+    repository: Arc<dyn LoomRepository>,
+    log_port: Arc<dyn LoomLogPort>,
+    store: LoomStore,
+    event_source: Arc<dyn EventSource>,
+    rig_dir: PathBuf,
+}
+
+impl ReloadConfig {
+    /// Create a new `ReloadConfig` use case.
+    pub fn new(
+        repository: Arc<dyn LoomRepository>,
+        log_port: Arc<dyn LoomLogPort>,
+        store: LoomStore,
+        event_source: Arc<dyn EventSource>,
+        rig_dir: PathBuf,
+    ) -> Self {
+        Self {
+            repository,
+            log_port,
+            store,
+            event_source,
+            rig_dir,
+        }
+    }
+
+    /// Re-scan the rig and register any looms not already in the store.
+    ///
+    /// Returns the list of newly registered loom IDs.
+    pub fn execute(&self) -> Result<Vec<LoomId>, PortError> {
+        let discover = DiscoverLooms::new(
+            self.repository.clone(),
+            self.log_port.clone(),
+            self.store.clone(),
+            self.event_source.clone(),
+        );
+        let new_looms = discover.execute(&self.rig_dir)?;
+        Ok(new_looms.into_iter().map(|l| l.id).collect())
+    }
+}
+
 // ── RegisterLoom ───────────────────────────────────────────────────────────
 
 /// Use case: register a single loom.
@@ -5220,5 +5271,256 @@ mod phase8_git_versioning_tests {
         // Git port was still called (the error is non-fatal)
         let commits = commits.lock().unwrap();
         assert_eq!(commits.len(), 1, "commit should still be attempted");
+    }
+}
+
+// ── ReloadConfig Tests ─────────────────────────────────────────────────
+
+#[cfg(test)]
+mod reload_config_tests {
+    use super::*;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::PromptTemplate;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Tracking EventSource Mock ──────────────────────────────────────
+
+    /// A mock `EventSource` that records all `watch()` calls.
+    struct TrackingEventSource {
+        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
+    }
+
+    impl TrackingEventSource {
+        fn new(
+        ) -> (
+            Self,
+            Arc<Mutex<Vec<PathBuf>>>,
+        ) {
+            let watch_calls = Arc::new(Mutex::new(vec![]));
+            let source = Self {
+                watch_calls: watch_calls.clone(),
+            };
+            (source, watch_calls)
+        }
+    }
+
+    impl EventSource for TrackingEventSource {
+        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
+            self.watch_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&self, _path: &std::path::Path) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Mock LoomLogPort ───────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock LoomRepository ────────────────────────────────────────────
+
+    struct MockLoomRepository {
+        scan_looms: Vec<Loom>,
+    }
+
+    impl LoomRepository for MockLoomRepository {
+        fn scan(
+            &self,
+            _rig: &std::path::Path,
+        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((self.scan_looms.clone(), vec![]))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
+        }
+
+        fn get(
+            &self,
+            _id: &LoomId,
+        ) -> Result<Option<Loom>, PortError> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<Loom>, PortError> {
+            Ok(vec![])
+        }
+
+        fn save(&self, _loom: Loom) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────
+
+    /// Build a loom with the given ID and optional knots.
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    /// Build a knot with the given ID.
+    fn build_knot(id: impl Into<String>) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        }
+    }
+
+    // ── Tests ──────────────────────────────────────────────────────────
+
+    /// `ReloadConfig` re-scans the rig and registers any looms not
+    /// already in the store. Returns the IDs of newly registered looms.
+    #[test]
+    fn reload_config_discovers_new_looms() {
+        let new_loom = build_loom("new-loom", vec![build_knot("k1")]);
+        let new_loom2 = build_loom("new-loom2", vec![]);
+
+        let store = LoomStore::new();
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: vec![new_loom, new_loom2],
+        });
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+
+        let use_case = ReloadConfig::new(
+            repo,
+            Arc::new(MockLoomLogPort),
+            store.clone(),
+            es,
+            PathBuf::from("/workspace/rig"),
+        );
+
+        let result = use_case.execute();
+
+        // Should succeed and return 2 new loom IDs
+        assert!(result.is_ok());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 2);
+        let id_set: HashSet<_> = ids.iter().map(|id| id.0.as_str()).collect();
+        assert!(id_set.contains("new-loom"));
+        assert!(id_set.contains("new-loom2"));
+
+        // Both looms are in the store
+        assert!(store.get(&LoomId("new-loom".to_string())).is_some());
+        assert!(store.get(&LoomId("new-loom2".to_string())).is_some());
+
+        // Watchers started for new looms (1 knot in new-loom, 0 in new-loom2)
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+    }
+
+    /// `ReloadConfig` skips looms that are already in the store.
+    /// Only new looms are registered and returned.
+    #[test]
+    fn reload_config_skips_registered() {
+        let existing_loom = build_loom("existing", vec![build_knot("k1")]);
+        let new_loom = build_loom("new-loom", vec![build_knot("k2")]);
+
+        // Pre-register one loom
+        let store = LoomStore::new();
+        store.register(existing_loom.clone());
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: vec![existing_loom, new_loom],
+        });
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+
+        let use_case = ReloadConfig::new(
+            repo,
+            Arc::new(MockLoomLogPort),
+            store.clone(),
+            es,
+            PathBuf::from("/workspace/rig"),
+        );
+
+        let result = use_case.execute();
+
+        // Should succeed and return only 1 new loom ID
+        assert!(result.is_ok());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], LoomId("new-loom".to_string()));
+
+        // Existing loom is still in the store (unchanged)
+        assert!(store.get(&LoomId("existing".to_string())).is_some());
+        // New loom is now in the store
+        assert!(store.get(&LoomId("new-loom".to_string())).is_some());
+
+        // Watchers started only for the new loom
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+    }
+
+    /// `ReloadConfig` when all looms are already registered returns
+    /// empty vector (no side effects).
+    #[test]
+    fn reload_config_all_registered_returns_empty() {
+        let loom1 = build_loom("loom-a", vec![build_knot("k1")]);
+        let loom2 = build_loom("loom-b", vec![build_knot("k2")]);
+
+        let store = LoomStore::new();
+        store.register(loom1.clone());
+        store.register(loom2.clone());
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: vec![loom1, loom2],
+        });
+        let (event_source, watch_calls) = TrackingEventSource::new();
+        let es: Arc<dyn EventSource> = Arc::new(event_source);
+
+        let use_case = ReloadConfig::new(
+            repo,
+            Arc::new(MockLoomLogPort),
+            store.clone(),
+            es,
+            PathBuf::from("/workspace/rig"),
+        );
+
+        let result = use_case.execute();
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+
+        // No watchers started
+        let watches = watch_calls.lock().unwrap();
+        assert!(watches.is_empty());
     }
 }
