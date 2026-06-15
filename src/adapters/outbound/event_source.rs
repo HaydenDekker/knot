@@ -476,7 +476,22 @@ impl NotifyEventSource {
             WatchType::Rig => "Rig",
             WatchType::Loom(_) => "Loom",
         };
-        logging::log_watch_event("register", &path, wt_label);
+
+        // Canonicalise the rig watch path so it matches the absolute
+        // paths that notify reports. Without this, `find_watch_types()`
+        // fails to match when `run_startup()` registers with a relative
+        // path like `./rig` but notify fires events with absolute paths.
+        // Use resolve_path() which joins against project_root first,
+        // then canonicalises — matching the resolution used elsewhere.
+        let canonical_path =
+            if matches!(watch_type, WatchType::Rig) && !path.is_absolute() {
+                let project_root = self.state.lock().unwrap().project_root.clone();
+                resolve_path(&project_root, &path)
+            } else {
+                path
+            };
+
+        logging::log_watch_event("register", &canonical_path, wt_label);
         let mut inner = self.state.lock().unwrap();
         // Update if the exact (path, watch_type) pair already exists,
         // otherwise push. Multiple knots can watch the same directory,
@@ -484,11 +499,11 @@ impl NotifyEventSource {
         if let Some(pos) = inner
             .watched_dirs
             .iter()
-            .position(|(p, wt)| p == &path && Self::watch_types_equal(wt, &watch_type))
+            .position(|(p, wt)| p == &canonical_path && Self::watch_types_equal(wt, &watch_type))
         {
-            inner.watched_dirs[pos] = (path, watch_type);
+            inner.watched_dirs[pos] = (canonical_path.clone(), watch_type);
         } else {
-            inner.watched_dirs.push((path, watch_type));
+            inner.watched_dirs.push((canonical_path, watch_type));
         }
     }
 
@@ -556,13 +571,19 @@ impl EventSource for NotifyEventSource {
     }
 
     fn watch(&self, path: &Path) -> Result<(), PortError> {
+        // Canonicalise the path so it matches stored entries.
+        // `register_watch()` canonicalises Rig paths, so we need the
+        // same form here for the lookup to succeed.
+        let canonical_path =
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
         // Determine watch type and mode
         let watch_type = {
             let inner = self.state.lock().unwrap();
             inner
                 .watched_dirs
                 .iter()
-                .find(|(p, _)| p == path)
+                .find(|(p, _)| p == &canonical_path)
                 .map(|(_, wt)| wt.clone())
                 // Fall back to default IDs if no per-directory mapping
                 .or_else(|| {
@@ -585,12 +606,12 @@ impl EventSource for NotifyEventSource {
                 if let Some(pos) = inner
                     .watched_dirs
                     .iter()
-                    .position(|(p, _)| p == path)
+                    .position(|(p, _)| p == &canonical_path)
                 {
                     inner.watched_dirs[pos].1 = wt.clone();
                 } else {
                     inner.watched_dirs
-                        .push((path.to_path_buf(), wt.clone()));
+                        .push((canonical_path.clone(), wt.clone()));
                 }
             } else {
                 // Default: treat as strand watch with unknown IDs
@@ -599,7 +620,7 @@ impl EventSource for NotifyEventSource {
                     KnotId("unknown".to_string()),
                 );
                 inner.watched_dirs
-                    .push((path.to_path_buf(), default));
+                    .push((canonical_path.clone(), default));
             }
         } // state lock dropped here — notify callback can now proceed
 
@@ -621,14 +642,18 @@ impl EventSource for NotifyEventSource {
         self.watcher
             .lock()
             .unwrap()
-            .watch(path, mode)
+            .watch(&canonical_path, mode)
             .map_err(|e| PortError::EventWatchFailed(e.to_string()))?;
 
-        logging::log_watch_event("started", path, wt_label);
+        logging::log_watch_event("started", &canonical_path, wt_label);
         Ok(())
     }
 
     fn unwatch(&self, path: &Path) -> Result<(), PortError> {
+        // Canonicalise the path so it matches stored entries.
+        let canonical_path =
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
         // Look up watch type and remove from map, then drop lock
         // BEFORE calling watcher.unwatch() to avoid deadlock with
         // the notify callback.
@@ -637,16 +662,16 @@ impl EventSource for NotifyEventSource {
             let wt = inner
                 .watched_dirs
                 .iter()
-                .find(|(p, _)| p == path)
+                .find(|(p, _)| p == &canonical_path)
                 .map(|(_, wt)| wt.clone());
-            inner.watched_dirs.retain(|(p, _)| p != path);
+            inner.watched_dirs.retain(|(p, _)| p != &canonical_path);
             wt
         }; // state lock dropped here
 
         self.watcher
             .lock()
             .unwrap()
-            .unwatch(path)
+            .unwatch(&canonical_path)
             .map_err(|e| PortError::EventUnwatchFailed(e.to_string()))?;
 
         let wt_label = match &watch_type {
@@ -655,7 +680,7 @@ impl EventSource for NotifyEventSource {
             Some(WatchType::Loom(_)) => "Loom",
             None => "Unknown",
         };
-        logging::log_watch_event("stopped", path, wt_label);
+        logging::log_watch_event("stopped", &canonical_path, wt_label);
 
         Ok(())
     }
@@ -1435,5 +1460,115 @@ Just some markdown.
             count, 1,
             "duplicate (path, watch_type) should be deduplicated"
         );
+    }
+
+    /// Registering a `WatchType::Rig` watch with a relative path
+    /// canonicalises it to an absolute path, so `find_watch_types()`
+    /// matches against the absolute paths that notify reports.
+    #[test]
+    fn rig_watch_path_canonicalised() {
+        let rig_dir = TempDir::new().unwrap();
+        let (strand_tx, _strand_rx) = mpsc::channel::<StrandEvent>(100);
+        let (config_tx, _config_rx) = mpsc::channel::<ConfigEvent>(100);
+
+        // Use the tempdir as project_root so we can create a relative
+        // path from within it.
+        let project_root = rig_dir.path().to_path_buf();
+        let source =
+            NotifyEventSource::new(strand_tx, config_tx, project_root.clone());
+
+        // Create a subdirectory to act as the rig (so we can refer to it
+        // with a relative path).
+        let rig_subdir = rig_dir.path().join("rig");
+        fs::create_dir(&rig_subdir).unwrap();
+
+        // Register a rig watch using a relative path.
+        let relative_path = PathBuf::from("rig");
+        source.register_watch(relative_path.clone(), WatchType::Rig);
+
+        let inner = source.state.lock().unwrap();
+        let stored_path = inner
+            .watched_dirs
+            .iter()
+            .find(|(_, wt)| matches!(wt, WatchType::Rig))
+            .map(|(p, _)| p.clone());
+
+        assert!(
+            stored_path.is_some(),
+            "rig watch should be registered"
+        );
+        let stored_path = stored_path.unwrap();
+
+        // The stored path should be canonicalised (absolute), matching
+        // what notify would report.
+        assert!(
+            stored_path.is_absolute(),
+            "rig watch path should be canonicalised to absolute, got: {:?}",
+            stored_path
+        );
+        assert_eq!(
+            stored_path,
+            fs::canonicalize(&rig_subdir).unwrap(),
+            "canonicalised path should match the actual directory"
+        );
+    }
+
+    /// Creating a `*-loom` directory under a rig watch emits
+    /// `ConfigEvent::LoomAdded` that includes the absolute `loom_dir`
+    /// path from the notify event.
+    #[test]
+    fn rig_loom_added_event_includes_path() {
+        let rig_dir = TempDir::new().unwrap();
+        let (source, mut strand_rx, mut config_rx) = create_source_fresh();
+
+        // Register rig watch with absolute path
+        source.register_watch(
+            rig_dir.path().to_path_buf(),
+            WatchType::Rig,
+        );
+        source.watch(rig_dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        // Create a new loom directory
+        let loom_path = rig_dir.path().join("discovered-loom");
+        fs::create_dir(&loom_path).unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        // Strand channel: no events
+        assert!(
+            recv_strand_event(&mut strand_rx, Duration::from_millis(200))
+                .is_none(),
+            "rig watch should not emit strand events"
+        );
+
+        // Config channel: should receive LoomAdded with loom_dir
+        let event =
+            recv_config_event(&mut config_rx, Duration::from_millis(500))
+                .expect("should receive a LoomAdded config event");
+        match event {
+            ConfigEvent::LoomAdded {
+                loom_id,
+                loom_dir,
+            } => {
+                assert_eq!(loom_id.0, "discovered-loom");
+                // loom_dir should be the absolute path from notify
+                let loom_dir_path = PathBuf::from(&loom_dir);
+                assert!(
+                    loom_dir_path.is_absolute(),
+                    "loom_dir should be an absolute path, got: {}",
+                    loom_dir
+                );
+                assert!(
+                    loom_dir_path.ends_with("discovered-loom"),
+                    "loom_dir should end with the loom name, got: {}",
+                    loom_dir
+                );
+            }
+            other => panic!(
+                "Expected ConfigEvent::LoomAdded, got: {:?}",
+                other
+            ),
+        }
     }
 }
