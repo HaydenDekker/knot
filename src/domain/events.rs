@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::domain::entities::{
     Knot, KnotId, LoomId, StrandPath, TieOffPath,
@@ -162,6 +163,10 @@ pub enum ConfigEvent {
     /// A new loom directory was detected (ends in `-loom`).
     LoomAdded {
         loom_id: LoomId,
+        /// Absolute path to the loom directory (e.g. `/project/rig/new-loom`).
+        /// Used by `ConfigEventHandler` to scan only this directory instead of
+        /// re-scanning the full rig.
+        loom_dir: PathBuf,
     },
     /// A new knot `.md` file was created in a loom directory.
     KnotAdded {
@@ -620,6 +625,36 @@ mod tests {
         }
     }
 
+    /// `ConfigEvent::LoomAdded` carries both `loom_id` and `loom_dir`.
+    /// Verifies the variant shape and JSON round-trip serialisation.
+    #[test]
+    fn config_event_loom_added_has_path() {
+        let loom_id = LoomId("my-loom".to_string());
+        let loom_dir = PathBuf::from("/project/rig/my-loom");
+
+        let event = ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+            loom_dir: loom_dir.clone(),
+        };
+
+        // Verify both fields are present
+        match &event {
+            ConfigEvent::LoomAdded {
+                loom_id: lid,
+                loom_dir: dir,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(dir, &loom_dir);
+            }
+            _ => panic!("Expected LoomAdded variant"),
+        }
+
+        // Verify JSON serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ConfigEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
     #[test]
     fn config_event_types() {
         let loom_id = LoomId("prds".to_string());
@@ -629,6 +664,7 @@ mod tests {
         // Build all four variants
         let loom_added = ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
+            loom_dir: PathBuf::from("/project/rig/prds-loom"),
         };
         let knot_added = ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
@@ -645,8 +681,15 @@ mod tests {
 
         // Verify LoomAdded carries correct data
         match &loom_added {
-            ConfigEvent::LoomAdded { loom_id: lid } => {
+            ConfigEvent::LoomAdded {
+                loom_id: lid,
+                loom_dir,
+            } => {
                 assert_eq!(*lid, LoomId("prds".to_string()));
+                assert_eq!(
+                    loom_dir,
+                    &PathBuf::from("/project/rig/prds-loom")
+                );
             }
             _ => panic!("Expected LoomAdded variant"),
         }

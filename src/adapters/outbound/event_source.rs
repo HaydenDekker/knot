@@ -195,7 +195,14 @@ impl InnerState {
                     .and_then(|n| n.to_str())
                     && name.ends_with("-loom") {
                         let loom_id = LoomId(name.to_string());
-                        return (None, Some(ConfigEvent::LoomAdded { loom_id }));
+                        let loom_dir = path.to_path_buf();
+                        return (
+                            None,
+                            Some(ConfigEvent::LoomAdded {
+                                loom_id,
+                                loom_dir,
+                            }),
+                        );
                     }
             // Directory events that don't match the above are ignored.
             return (None, None);
@@ -985,8 +992,9 @@ mod tests {
             recv_config_event(&mut config_rx, Duration::from_millis(500))
                 .expect("should receive a LoomAdded config event");
         match event {
-            ConfigEvent::LoomAdded { loom_id } => {
+            ConfigEvent::LoomAdded { loom_id, loom_dir } => {
                 assert_eq!(loom_id.0, "my-loom");
+                assert!(loom_dir.ends_with("my-loom"));
             }
             other => panic!(
                 "Expected ConfigEvent::LoomAdded, got: {:?}",

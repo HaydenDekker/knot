@@ -1120,12 +1120,15 @@ impl ConfigEventHandler {
     /// Handle a single configuration event.
     pub fn execute(&self, event: ConfigEvent) -> Result<(), PortError> {
         match event {
-            ConfigEvent::LoomAdded { ref loom_id } => {
+            ConfigEvent::LoomAdded {
+                ref loom_id,
+                ref loom_dir,
+            } => {
                 logging::log_config_event(
                     "LoomAdded",
-                    &format!("loom={}", loom_id.0),
+                    &format!("loom={} dir={}", loom_id.0, loom_dir.display()),
                 );
-                self.handle_loom_added(loom_id)
+                self.handle_loom_added(loom_id, loom_dir)
             }
             ConfigEvent::KnotAdded { ref loom_id, ref knot } => {
                 logging::log_config_event(
@@ -1156,7 +1159,11 @@ impl ConfigEventHandler {
     /// Scans the rig via `LoomRepository::scan()` to get the full loom
     /// (with parsed knots and resolved paths), then registers it using
     /// the same flow as `RegisterLoom`.
-    fn handle_loom_added(&self, loom_id: &LoomId) -> Result<(), PortError> {
+    fn handle_loom_added(
+        &self,
+        loom_id: &LoomId,
+        _loom_dir: &Path,
+    ) -> Result<(), PortError> {
         // Skip if already registered
         if self.store.get(loom_id).is_some() {
             logging::log_config_event(
@@ -1686,6 +1693,7 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
+            loom_dir: PathBuf::from("/rig/new-loom"),
         });
 
         // Should succeed
@@ -1770,6 +1778,7 @@ mod config_handler_tests {
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
+            loom_dir: PathBuf::from("/rig/existing-loom"),
         });
 
         // Should succeed (idempotent)
