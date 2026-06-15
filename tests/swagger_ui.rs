@@ -10,7 +10,7 @@ use knot::application::ports::{
     LoomRepository, PortError, RigLogPort, TieOffSink,
 };
 use knot::application::store::LoomStore;
-use knot::domain::entities::{Loom, LoomId};
+use knot::domain::entities::{Knot, Loom, LoomId};
 use knot::domain::events::StrandEvent;
 use knot::domain::value_objects::RigAgentConfig;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,12 @@ struct MockLoomRepository;
 
 impl LoomRepository for MockLoomRepository {
     fn scan(&self, _rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+        Ok((vec![], vec![]))
+    }
+    fn scan_knot_files(
+        &self,
+        _loom_dir: &Path,
+    ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
         Ok((vec![], vec![]))
     }
     fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {

@@ -1096,7 +1096,8 @@ pub struct ConfigEventHandler {
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
     event_source: Arc<dyn EventSource>,
-    rig_path: PathBuf,
+    /// Project root (parent of rig_dir), used to resolve relative paths.
+    project_root: PathBuf,
 }
 
 impl ConfigEventHandler {
@@ -1108,12 +1109,18 @@ impl ConfigEventHandler {
         event_source: Arc<dyn EventSource>,
         rig_path: PathBuf,
     ) -> Self {
+        // Derive project root from rig_path parent (same as FileSystemLoomRepository::scan).
+        // Falls back to rig_path itself if no parent exists.
+        let project_root = rig_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| rig_path.clone());
         Self {
             repository,
             log_port,
             store,
             event_source,
-            rig_path,
+            project_root,
         }
     }
 
@@ -1128,7 +1135,7 @@ impl ConfigEventHandler {
                     "LoomAdded",
                     &format!("loom={} dir={}", loom_id.0, loom_dir),
                 );
-                self.handle_loom_added(loom_id, loom_dir)
+                self.handle_loom_added(loom_id, Path::new(loom_dir))
             }
             ConfigEvent::KnotAdded { ref loom_id, ref knot } => {
                 logging::log_config_event(
@@ -1156,13 +1163,14 @@ impl ConfigEventHandler {
 
     /// Handle `ConfigEvent::LoomAdded`.
     ///
-    /// Scans the rig via `LoomRepository::scan()` to get the full loom
-    /// (with parsed knots and resolved paths), then registers it using
-    /// the same flow as `RegisterLoom`.
+    /// Scans only the new loom directory via `LoomRepository::scan_knot_files()`
+    /// (not the full rig), resolves knot paths relative to the project root,
+    /// builds a `Loom` directly, and registers it using the same flow as
+    /// `RegisterLoom`.
     fn handle_loom_added(
         &self,
         loom_id: &LoomId,
-        _loom_dir: &str,
+        loom_dir: &Path,
     ) -> Result<(), PortError> {
         // Skip if already registered
         if self.store.get(loom_id).is_some() {
@@ -1173,12 +1181,23 @@ impl ConfigEventHandler {
             return Ok(());
         }
 
-        // Scan the rig to get the loom with full knot data
-        let (looms, warnings) = self.repository.scan(&self.rig_path)?;
-        let loom = looms
-            .into_iter()
-            .find(|l| l.id == *loom_id)
-            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
+        // Scan only the new loom directory (not the full rig)
+        let (mut knots, warnings) =
+            self.repository.scan_knot_files(loom_dir)?;
+
+        // Resolve per-knot paths relative to the project root
+        for knot in &mut knots {
+            knot.strand_dir =
+                crate::adapters::outbound::loom_repository::FileSystemLoomRepository::resolve_path(
+                    &self.project_root,
+                    &knot.strand_dir,
+                );
+        }
+
+        let loom = Loom {
+            id: loom_id.clone(),
+            knots,
+        };
 
         self.register_loom(&loom, &warnings)?;
         logging::log_loom_event(
@@ -1594,6 +1613,7 @@ mod config_handler_tests {
     struct MockLoomRepository {
         scan_looms: Arc<Mutex<Vec<Loom>>>,
         scan_warnings: Arc<Mutex<Vec<String>>>,
+        scan_knots: Arc<Mutex<Vec<Knot>>>,
     }
 
     impl LoomRepository for MockLoomRepository {
@@ -1603,6 +1623,16 @@ mod config_handler_tests {
         ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
             Ok((
                 self.scan_looms.lock().unwrap().clone(),
+                self.scan_warnings.lock().unwrap().clone(),
+            ))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((
+                self.scan_knots.lock().unwrap().clone(),
                 self.scan_warnings.lock().unwrap().clone(),
             ))
         }
@@ -1660,19 +1690,18 @@ mod config_handler_tests {
     // ── Tests ──────────────────────────────────────────────────────────
 
     /// `ConfigEventHandler` with `ConfigEvent::LoomAdded`: scans the
-    /// loom dir via repository, registers loom in store, logs events,
-    /// and starts watchers for each knot's strand directory.
+    /// loom dir via repository `scan_knot_files()`, registers loom in
+    /// store, logs events, and starts watchers for each knot's strand
+    /// directory.
     #[test]
     fn config_handler_loom_added() {
         let loom_id = LoomId("new-loom".to_string());
-        let loom = build_loom(
-            "new-loom",
-            vec![build_knot("k1"), build_knot("k2")],
-        );
+        let knots = vec![build_knot("k1"), build_knot("k2")];
 
         let repo = Arc::new(MockLoomRepository {
-            scan_looms: Arc::new(Mutex::new(vec![loom.clone()])),
+            scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(knots)),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let store = LoomStore::new();
@@ -1706,7 +1735,7 @@ mod config_handler_tests {
         assert_eq!(stored.id, loom_id);
         assert_eq!(stored.knots.len(), 2);
 
-        // Log events: open, 2x KnotRegistered, LoomStarted
+        // Log events: 2x KnotRegistered, LoomStarted
         let events = logged_events.lock().unwrap();
         assert_eq!(
             events.len(),
@@ -1743,7 +1772,8 @@ mod config_handler_tests {
         );
         let watched: HashSet<_> =
             watches.iter().map(|p| p.as_path()).collect();
-        assert!(watched.contains(Path::new("strands")));
+        // strand_dir "strands" resolved relative to project_root "/" -> "/strands"
+        assert!(watched.contains(Path::new("/strands")));
     }
 
     /// `ConfigEventHandler` with `ConfigEvent::LoomAdded` for an
@@ -1759,6 +1789,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _logged_events) = MockLoomLogPort::new();
         let (
@@ -1807,6 +1838,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -1877,6 +1909,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -1923,6 +1956,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -1965,6 +1999,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _logged_events) = MockLoomLogPort::new();
         let (
@@ -2025,6 +2060,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (
@@ -2078,6 +2114,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2146,6 +2183,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2213,6 +2251,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2282,6 +2321,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, logged_events) = MockLoomLogPort::new();
         let (
@@ -2353,6 +2393,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -2387,6 +2428,7 @@ mod config_handler_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
             scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
         });
         let (log_port, _) = MockLoomLogPort::new();
         let (event_source, _, _, _) = TrackingEventSource::new();
@@ -2615,6 +2657,153 @@ mod phase2_tests {
         let stored = store.get(&LoomId("dup".to_string())).unwrap();
         assert_eq!(stored.knots.len(), 1);
         assert_eq!(stored.knots[0].id, KnotId("k1".to_string()));
+    }
+
+    // ── Mock LoomRepository for ConfigEventHandler tests ───────────────
+
+    struct MockLoomRepository {
+        scan_knots: Arc<Mutex<Vec<Knot>>>,
+        scan_error: Arc<Mutex<Option<String>>>,
+    }
+
+    impl LoomRepository for MockLoomRepository {
+        fn scan(
+            &self,
+            _rig: &std::path::Path,
+        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            if let Some(ref err) = *self.scan_error.lock().unwrap() {
+                return Err(PortError::RigScanFailed(err.clone()));
+            }
+            Ok((self.scan_knots.lock().unwrap().clone(), vec![]))
+        }
+
+        fn get(
+            &self,
+            _id: &LoomId,
+        ) -> Result<Option<Loom>, PortError> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<Loom>, PortError> {
+            Ok(vec![])
+        }
+
+        fn save(&self, _loom: Loom) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── ConfigEventHandler: targeted loom scan tests ───────────────────
+
+    /// `handle_loom_added` uses `scan_knot_files(loom_dir)` to scan only
+    /// the new loom directory (not the full rig), then resolves paths and
+    /// builds a `Loom` directly.
+    #[test]
+    fn config_handler_loom_added_scans_specific_dir() {
+        let loom_id = LoomId("new-loom".to_string());
+        let knots = vec![build_knot("k1"), build_knot("k2")];
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_knots: Arc::new(Mutex::new(knots)),
+            scan_error: Arc::new(Mutex::new(None)),
+        });
+        let store = LoomStore::new();
+        let (event_source, watch_calls) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(MockLoomLogPort),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/workspace/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+            loom_dir: "/workspace/rig/new-loom".to_string(),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom is in the store with correct knots
+        let stored = store.get(&loom_id).unwrap();
+        assert_eq!(stored.id, loom_id);
+        assert_eq!(stored.knots.len(), 2);
+        let knot_ids: Vec<_> =
+            stored.knots.iter().map(|k| k.id.0.as_str()).collect();
+        assert!(knot_ids.contains(&"k1"));
+        assert!(knot_ids.contains(&"k2"));
+
+        // Watchers started for each knot's strand directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 2);
+        // strand_dir "strands" resolved relative to project_root
+        // "/workspace" -> "/workspace/strands"
+        let watched: HashSet<_> =
+            watches.iter().map(|p| p.as_path()).collect();
+        assert!(
+            watched.contains(Path::new("/workspace/strands")),
+            "expected /workspace/strands, got {:?}",
+            watches
+        );
+    }
+
+    /// `handle_loom_added` returns an error when the loom directory
+    /// scan fails (e.g. directory does not exist).
+    #[test]
+    fn config_handler_loom_added_dir_missing() {
+        let loom_id = LoomId("missing-loom".to_string());
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_knots: Arc::new(Mutex::new(vec![])),
+            scan_error: Arc::new(Mutex::new(Some(
+                "No such file or directory".to_string(),
+            ))),
+        });
+        let store = LoomStore::new();
+        let (event_source, _watch_calls) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(MockLoomLogPort),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/workspace/rig"),
+        );
+
+        let result = handler.execute(ConfigEvent::LoomAdded {
+            loom_id: loom_id.clone(),
+            loom_dir: "/workspace/rig/missing-loom".to_string(),
+        });
+
+        // Should fail with RigScanFailed
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::RigScanFailed(msg) => {
+                assert!(
+                    msg.contains("No such file or directory"),
+                    "expected scan error, got: {}",
+                    msg
+                );
+            }
+            other => {
+                panic!("Expected RigScanFailed, got {other:?}");
+            }
+        }
+
+        // Loom should NOT be in the store
+        assert!(
+            store.get(&loom_id).is_none(),
+            "loom should not be registered after scan failure"
+        );
     }
 }
 
@@ -2894,6 +3083,13 @@ mod phase4_tests {
     impl LoomRepository for MockLoomRepository {
         fn scan(&self, _rig: &std::path::Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
             Ok((self.scan_looms.clone(), vec![]))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
         }
 
         fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {

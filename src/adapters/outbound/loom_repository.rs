@@ -46,6 +46,13 @@ impl FileSystemLoomRepository {
 }
 
 impl LoomRepository for FileSystemLoomRepository {
+    fn scan_knot_files(
+        &self,
+        loom_dir: &Path,
+    ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+        Self::scan_knot_files(loom_dir)
+    }
+
     fn scan(&self, rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
         // Canonicalise the rig directory, then use its parent as the
         // base for resolving per-knot paths (project root).

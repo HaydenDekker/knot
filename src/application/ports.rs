@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::domain::entities::{KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath};
+use crate::domain::entities::{
+    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
+};
 use crate::domain::events::{LoomEvent, RigLogEvent};
 use crate::domain::value_objects::AgentProfile;
 
@@ -224,6 +226,16 @@ pub trait LoomRepository: Send + Sync {
     /// any knot parse warnings (unknown YAML properties in knot files).
     fn scan(&self, rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError>;
 
+    /// Scan a single loom directory for `.md` knot definition files.
+    ///
+    /// Returns parsed `Knot` instances with unresolved `strand_dir` paths
+    /// (caller must resolve them relative to the project root), plus any
+    /// parse warnings for unknown YAML properties.
+    fn scan_knot_files(
+        &self,
+        loom_dir: &Path,
+    ) -> Result<(Vec<Knot>, Vec<String>), PortError>;
+
     /// Get a single loom by its ID.
     fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError>;
 
@@ -406,6 +418,13 @@ mod tests {
     impl LoomRepository for MockLoomRepository {
         fn scan(&self, _rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
             Ok((self.looms.values().cloned().collect(), Vec::new()))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
         }
 
         fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {

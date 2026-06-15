@@ -328,6 +328,13 @@ mod tests {
             Ok((vec![], vec![]))
         }
 
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
+        }
+
         fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
             Ok(self.looms.lock().unwrap().get(id).cloned())
         }

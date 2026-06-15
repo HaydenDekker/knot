@@ -37,6 +37,12 @@ impl LoomRepository for MockLoomRepository {
     ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
         Ok((vec![], vec![]))
     }
+    fn scan_knot_files(
+        &self,
+        _loom_dir: &Path,
+    ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+        Ok((vec![], vec![]))
+    }
     fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
         Ok(None)
     }
