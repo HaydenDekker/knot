@@ -102,12 +102,12 @@ Some(ConfigEvent::LoomAdded {
 })
 ```
 
-- [ ] Failing test: `rig_watch_path_canonicalised` — register watch with relative path → stored as absolute in watched_dirs
-- [ ] Failing test: `rig_loom_added_event_includes_path` — create `*-loom` dir → emitted event includes `loom_dir`
-- [ ] Implement: canonicalise path in `register_watch()` for `WatchType::Rig`
-- [ ] Implement: `loom_dir` field in `map_rig_event()` → `ConfigEvent::LoomAdded`
-- [ ] Update existing `rig_dir_new_loom_emits_config_event` test
-- [ ] All outbound adapter tests green
+- [x] Failing test: `rig_watch_path_canonicalised` — register watch with relative path → stored as absolute in watched_dirs
+- [x] Failing test: `rig_loom_added_event_includes_path` — create `*-loom` dir → emitted event includes `loom_dir`
+- [x] Implement: canonicalise path in `register_watch()` for `WatchType::Rig`
+- [x] Implement: `loom_dir` field in `map_rig_event()` → `ConfigEvent::LoomAdded`
+- [x] Update existing `rig_dir_new_loom_emits_config_event` test
+- [x] All outbound adapter tests green
 
 ### Phase 2: Application — `handle_loom_added` scans only the new loom directory
 
