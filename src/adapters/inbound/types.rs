@@ -15,6 +15,11 @@ use crate::domain::entities::LoomId;
 use crate::domain::events::StrandEvent;
 use crate::domain::value_objects::RigAgentConfig;
 
+// ── Re-exports ────────────────────────────────────────────────────────────
+
+/// Re-export `LoomSummary` for use by HTTP handlers.
+pub use crate::application::usecases::LoomSummary;
+
 // ── Response Bodies ───────────────────────────────────────────────────────
 
 /// Response body for profile GET endpoints.

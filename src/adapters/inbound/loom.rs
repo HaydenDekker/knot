@@ -1313,4 +1313,161 @@ mod tests {
             "body field should be omitted when None, got: {text}"
         );
     }
+
+    // ── Configurable MockLoomRepository for scan tests ────────────────
+
+    /// Mock `LoomRepository` that returns configurable looms from `scan()`.
+    struct ScanableMockLoomRepository {
+        scan_looms: StdArc<Mutex<Vec<Loom>>>,
+    }
+
+    impl ScanableMockLoomRepository {
+        fn new() -> Self {
+            Self {
+                scan_looms: StdArc::new(Mutex::new(vec![])),
+            }
+        }
+
+        fn set_scan_results(&self, looms: Vec<Loom>) {
+            self.scan_looms.lock().unwrap().clear();
+            self.scan_looms.lock().unwrap().extend(looms);
+        }
+    }
+
+    impl LoomRepository for ScanableMockLoomRepository {
+        fn scan(
+            &self,
+            _rig: &std::path::Path,
+        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
+            Ok((
+                self.scan_looms.lock().unwrap().clone(),
+                vec![],
+            ))
+        }
+
+        fn scan_knot_files(
+            &self,
+            _loom_dir: &std::path::Path,
+        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
+            Ok((vec![], vec![]))
+        }
+
+        fn get(&self, id: &LoomId) -> Result<Option<Loom>, PortError> {
+            Ok(self
+                .scan_looms
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|l| l.id == *id)
+                .cloned())
+        }
+
+        fn list(&self) -> Result<Vec<Loom>, PortError> {
+            Ok(self.scan_looms.lock().unwrap().clone())
+        }
+
+        fn save(&self, loom: Loom) -> Result<(), PortError> {
+            self.scan_looms
+                .lock()
+                .unwrap()
+                .push(loom);
+            Ok(())
+        }
+    }
+
+    /// Build an `AppContext` with a `ScanableMockLoomRepository` so that
+    /// `POST /config/reload` can discover looms from `scan()`.
+    #[allow(clippy::type_complexity)]
+    fn build_test_context_with_scanable_repo() -> (
+        AppContext,
+        StdArc<Mutex<Vec<Loom>>>,
+    ) {
+        let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
+        let _ = _event_rx;
+        let (event_source, _watch, _unwatch) = TrackingEventSource::new();
+        let _ = (_watch, _unwatch);
+        let repo = ScanableMockLoomRepository::new();
+        let scan_looms = repo.scan_looms.clone();
+
+        (
+            AppContext {
+                store: LoomStore::new(),
+                loom_repo: Arc::new(repo),
+                loom_log_port: Arc::new(MockLoomLogPort { events: vec![] }),
+                tie_off_sink: Arc::new(MockTieOffSink),
+                event_source: Arc::new(event_source),
+                event_sender,
+                agent_runner: Arc::new(MockAgentRunner),
+                profile_repo: Arc::new(MockProfileRepository::default()),
+                rig_log_port: Arc::new(MockRigLogPort),
+                rig_config: RigAgentConfig::default_config(),
+                loom_ids: Vec::new(),
+                rig_dir: PathBuf::from("./rig"),
+            },
+            scan_looms,
+        )
+    }
+
+    // ── POST /config/reload Tests ──────────────────────────────────────────
+
+    /// `POST /config/reload` discovers new looms and returns their summaries.
+    #[tokio::test]
+    async fn post_config_reload_success() {
+        let (ctx, scan_looms) = build_test_context_with_scanable_repo();
+
+        // Seed the mock repo with a loom that is NOT in the store
+        scan_looms.lock().unwrap().clear();
+        scan_looms.lock().unwrap().push(build_test_loom(
+            "new-discovered-loom",
+            &["k1", "k2"],
+        ));
+
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/config/reload")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].id,
+            LoomId("new-discovered-loom".to_string())
+        );
+        assert_eq!(summaries[0].knot_count, 2);
+    }
+
+    /// `POST /config/reload` with no new looms returns 200 with empty array.
+    #[tokio::test]
+    async fn post_config_reload_no_new_looms() {
+        let (ctx, scan_looms) = build_test_context_with_scanable_repo();
+
+        // No looms in the mock repo's scan results
+        scan_looms.lock().unwrap().clear();
+
+        let app = build_app(ctx);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/config/reload")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: Vec<LoomSummary> =
+            serde_json::from_slice(&body).unwrap();
+        assert!(summaries.is_empty());
+    }
 }

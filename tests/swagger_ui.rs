@@ -236,15 +236,32 @@ async fn openapi_json_returns_valid_spec() {
     assert!(paths.contains_key("/profiles"), "GET /profiles should exist");
     assert!(paths.contains_key("/profiles/{name}"), "GET /profiles/{{name}} should exist");
 
+    // Verify /config/reload POST endpoint is present (manual recovery)
+    assert!(
+        paths.contains_key("/config/reload"),
+        "POST /config/reload should exist for manual reload"
+    );
+    let reload_path = &paths["/config/reload"];
+    let reload_map = reload_path
+        .as_object()
+        .expect("/config/reload should be object");
+    assert!(
+        reload_map.contains_key("post"),
+        "/config/reload should have POST method"
+    );
+
     // Verify control endpoints are NOT present (removed — file-first approach)
+    // POST /config/reload is the only allowed POST endpoint
     for (path_key, path_obj) in paths.iter() {
         let path_str: &str = path_key;
         let path_map = path_obj.as_object().expect("path should be object");
-        // No POST/PATCH/DELETE methods should exist on any path
-        assert!(
-            !path_map.contains_key("post"),
-            "POST method should not exist on {path_str} — control endpoints removed"
-        );
+        // Only /config/reload is allowed to have POST
+        if path_str != "/config/reload" {
+            assert!(
+                !path_map.contains_key("post"),
+                "POST method should not exist on {path_str} — only /config/reload allowed"
+            );
+        }
         assert!(
             !path_map.contains_key("patch"),
             "PATCH method should not exist on {path_str} — control endpoints removed"

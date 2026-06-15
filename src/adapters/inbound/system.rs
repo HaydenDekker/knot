@@ -7,7 +7,8 @@ use axum::{
 };
 use std::path::PathBuf;
 
-use crate::adapters::inbound::types::{AppContext, RigConfigResponse};
+use crate::adapters::inbound::types::{AppContext, LoomSummary, RigConfigResponse};
+use crate::application::usecases::ReloadConfig;
 
 /// HTTP handler — health check.
 #[utoipa::path(
@@ -65,4 +66,45 @@ pub async fn get_rig_config(State(ctx): State<AppContext>) -> Response {
         cli_args: ctx.rig_config.cli_args.clone(),
     };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+/// Re-scan the rig and register any looms not already in the store.
+///
+/// Provides manual recovery when the file watcher misses an event.
+/// Returns JSON array of `LoomSummary` for newly discovered looms.
+#[utoipa::path(
+    post,
+    path = "/config/reload",
+    responses(
+        (status = 200, body = Vec<LoomSummary>, description = "Newly discovered looms"),
+    ),
+)]
+pub async fn reload_config(State(ctx): State<AppContext>) -> Response {
+    let use_case = ReloadConfig::new(
+        ctx.loom_repo.clone(),
+        ctx.loom_log_port.clone(),
+        ctx.store.clone(),
+        ctx.event_source.clone(),
+        ctx.rig_dir.clone(),
+    );
+
+    match use_case.execute() {
+        Ok(new_loom_ids) => {
+            let summaries: Vec<LoomSummary> = new_loom_ids
+                .into_iter()
+                .filter_map(|id| {
+                    ctx.store.get(&id).map(|loom| LoomSummary {
+                        id: loom.id.clone(),
+                        knot_count: loom.knots.len(),
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(summaries)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }

@@ -1,7 +1,7 @@
 //! OpenAPI documentation and router construction.
 
 use axum::{
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use utoipa::OpenApi;
@@ -10,7 +10,7 @@ use crate::adapters::inbound::loom::{
     get_knot_status, get_loom, get_loom_activity, get_loom_knots, get_profile,
     list_looms, list_profiles,
 };
-use crate::adapters::inbound::system::{get_rig_config, health, list_agents};
+use crate::adapters::inbound::system::{get_rig_config, health, list_agents, reload_config};
 use crate::adapters::inbound::types::AppContext;
 use crate::application::ports::{KnotEventType, KnotState, ProcessingStatus};
 use crate::application::usecases::{KnotStatus as KnotStatusDto, LoomSummary};
@@ -39,6 +39,7 @@ use crate::domain::value_objects::{
         crate::adapters::inbound::system::health,
         crate::adapters::inbound::system::list_agents,
         crate::adapters::inbound::system::get_rig_config,
+        crate::adapters::inbound::system::reload_config,
         crate::adapters::inbound::loom::list_looms,
         crate::adapters::inbound::loom::get_loom,
         crate::adapters::inbound::loom::get_loom_activity,
@@ -99,6 +100,7 @@ pub fn build_app(ctx: AppContext) -> Router {
         .route("/agents/{dir}", get(list_agents))
         // Config endpoints
         .route("/config/rig", get(get_rig_config))
+        .route("/config/reload", post(reload_config))
         // Loom endpoints
         .route("/looms", get(list_looms))
         .route("/looms/{id}", get(get_loom))

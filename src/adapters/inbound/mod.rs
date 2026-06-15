@@ -14,5 +14,5 @@ pub use loom::{
     list_looms, list_profiles,
 };
 pub use router::build_app;
-pub use system::{get_rig_config, health, list_agents};
+pub use system::{get_rig_config, health, list_agents, reload_config};
 pub use types::{AppContext, RigConfigResponse};
