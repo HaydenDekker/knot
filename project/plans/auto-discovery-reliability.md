@@ -138,14 +138,14 @@ pub trait LoomRepository {
 }
 ```
 
-- [ ] Failing test: `config_handler_loom_added_scans_specific_dir` — handler scans only the new loom dir
-- [ ] Failing test: `config_handler_loom_added_dir_missing` — loom dir doesn't exist → returns error
-- [ ] Implement: `scan_knot_files` on `LoomRepository` trait in `application/ports.rs`
-- [ ] Implement: `scan_knot_files` on `FileSystemLoomRepository` (delegate to existing method)
-- [ ] Implement: `scan_knot_files` on `MockLoomRepository` (return empty vec)
-- [ ] Implement: `handle_loom_added()` uses `scan_knot_files(loom_dir)` + builds `Loom` directly
-- [ ] Update existing config handler tests
-- [ ] All application tests green
+- [x] Failing test: `config_handler_loom_added_scans_specific_dir` — handler scans only the new loom dir
+- [x] Failing test: `config_handler_loom_added_dir_missing` — loom dir doesn't exist → returns error
+- [x] Implement: `scan_knot_files` on `LoomRepository` trait in `application/ports.rs`
+- [x] Implement: `scan_knot_files` on `FileSystemLoomRepository` (delegate to existing method)
+- [x] Implement: `scan_knot_files` on `MockLoomRepository` (return empty vec)
+- [x] Implement: `handle_loom_added()` uses `scan_knot_files(loom_dir)` + builds `Loom` directly
+- [x] Update existing config handler tests
+- [x] All application tests green
 
 ### Phase 3: Application — `ReloadConfig` Use Case
 
