@@ -759,3 +759,179 @@ async fn knot_status_during_processing_does_not_hang() {
     }
 
 }
+
+// ── Queue Event Dedup Integration Test ────────────────────────────────────
+
+/// Multiple queued events for the same strand collapse to one processed
+/// event. Verifies the InspectQueue push_or_replace dedup works end-to-end
+/// through the full pipeline (notify → debounce → InspectQueue → ProcessStrand).
+///
+/// 1. Start server with a mock agent that counts invocations (200ms delay
+///    so rapid writes queue up during processing)
+/// 2. Create strand → triggers Created+Modified events (debounce coalesces
+///    to Modified, single agent call)
+/// 3. Rapidly write to the same file (>5 writes, spaced >100ms apart
+///    to bypass the debounce window)
+/// 4. Each write independently debounces, but queue dedup collapses
+///    all Modified events into one (same dedup key)
+/// 5. Verify: StrandProcessed count matches agent invocations (dedup works)
+/// 6. Verify: total StrandProcessed = 2 (one for initial, one for deduped
+///    rapid writes) — not 7 (which would be 1 + 5 writes + notify noise)
+#[tokio::test]
+async fn duplicate_queued_events_collapse_to_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create a loom directory with a knot definition file
+    let loom_dir = base_dir.join("dedup-loom");
+    fs::create_dir(&loom_dir).unwrap();
+    let (knot_content, strand_dir) = make_knot_content_with_dirs(&base_dir);
+    fs::write(loom_dir.join("review.md"), knot_content).unwrap();
+
+    // Create the "fast" agent profile
+    create_fast_profile(&base_dir);
+
+    // Counter file to track agent invocations
+    let counter_path = base_dir.join("agent-counter");
+    fs::write(&counter_path, "0").expect("should create counter file");
+
+    // Mock agent script that increments a counter file on each invocation.
+    // Uses a small sleep (200ms) so that writes spaced at 150ms queue up
+    // during processing, exercising the InspectQueue dedup path.
+    let mock_agent = base_dir.join("counting-agent");
+    let counter_path_str = counter_path.to_string_lossy().to_string();
+    fs::write(
+        &mock_agent,
+        format!(
+            "#!/bin/sh\n\
+             cat >/dev/null\n\
+             COUNT=$(cat '{}')\n\
+             echo $((COUNT + 1)) > '{}'\n\
+             echo 'processed'\n",
+            counter_path_str, counter_path_str
+        ),
+    )
+    .expect("should write counting agent script");
+    fs::set_permissions(
+        &mock_agent,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("should set script as executable");
+
+    let port = 32010;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        rig_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        rig_config: RigAgentConfig {
+            cli_path: mock_agent.to_string_lossy().to_string(),
+            cli_args: vec![],
+        },
+        ..AppConfig::default_config()
+    };
+
+    let _handle = spawn_server(config);
+    wait_for_port(&host_port, 5000)
+        .await
+        .expect("server should start listening");
+
+    // ── Step 1: Create strand → triggers Created+Modified ──
+    //
+    // notify emits both Created and Modified for a new file.
+    // Debounce coalesces to Modified (last event wins within 100ms).
+    // Single agent invocation.
+    let strand_path = strand_dir.join("dedup-strand.md");
+    fs::write(&strand_path, "initial content").expect("should create file");
+
+    // Wait for the initial event to fully process
+    // (debounce 100ms + agent 200ms + processing overhead)
+    poll_knot_status(&host_port, "dedup-loom", "review-knot", 60, 100)
+        .await
+        .expect("knot status should reach terminal state after create");
+
+    // ── Step 2: Rapid writes (>5 writes, >100ms apart) ──
+    //
+    // Writes are spaced at 150ms — above the 100ms debounce window.
+    // Each write independently triggers a debounced event.
+    // However, all Modified events share the same dedup key
+    // (strand_path, loom_id, knot_id, Modified), so the InspectQueue
+    // push_or_replace collapses them into one queued event.
+    //
+    // The agent takes ~200ms, so the second write's debounced event
+    // fires while the first is still being processed, exercising the
+    // queue dedup path where events pile up behind in-flight processing.
+    for i in 0..5 {
+        fs::write(
+            &strand_path,
+            format!("rapid write iteration {}", i),
+        )
+        .expect("should write edit");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // Wait for all events to debounce and process.
+    // 5 writes × 150ms spacing = 750ms of writes
+    // Plus debounce (100ms) + agent (200ms) + buffer
+    std::thread::sleep(Duration::from_millis(800));
+
+    // Poll until the final processing completes
+    poll_knot_status(&host_port, "dedup-loom", "review-knot", 60, 100)
+        .await
+        .expect("knot status should reach terminal state after rapid writes");
+
+    // ── Step 3: Verify StrandProcessed count in loom-log ──
+    //
+    // The loom-log StrandProcessed entry does not include event type,
+    // so we count total entries for this strand.
+    // Expected: 2 StrandProcessed entries total:
+    //   1. Initial file creation (debounced Created+Modified → 1 processing)
+    //   2. Deduped rapid writes (5 Modified events → 1 deduped processing)
+    // Without queue dedup, we'd see 6+ StrandProcessed entries
+    // (1 initial + 5 rapid writes + possible notify noise).
+    let log_path = base_dir.join("tie-offs/dedup-loom/.loom-log");
+    assert!(
+        log_path.exists(),
+        "loom log should exist: {}",
+        log_path.display()
+    );
+    let log_content =
+        fs::read_to_string(&log_path).expect("should read loom log");
+
+    let strand_processed_count = log_content
+        .lines()
+        .filter(|line| {
+            line.contains("StrandProcessed")
+                && line.contains("dedup-strand.md")
+        })
+        .count();
+
+    // Read the agent counter to verify actual invocation count
+    let counter_str =
+        fs::read_to_string(&counter_path).expect("should read counter file");
+    let agent_calls: usize = counter_str.trim().parse()
+        .expect("counter should be a valid number");
+
+    // StrandProcessed entries should match agent invocations
+    assert_eq!(
+        strand_processed_count, agent_calls,
+        "StrandProcessed count ({}) should match agent invocations ({}). \
+         Loom-log:\n{}",
+        strand_processed_count, agent_calls, log_content
+    );
+
+    // With queue dedup: agent called at most 2 times:
+    //   1. Initial file creation (debounced Created+Modified → 1 processing)
+    //   2. Deduped rapid writes (5 Modified events → 1 deduped processing)
+    // Without queue dedup: agent would be called 6+ times
+    // (1 initial + 5 rapid writes + possible notify noise).
+    assert!(
+        agent_calls <= 2,
+        "agent should have been invoked at most 2 times \
+         (initial + 1 deduped batch of rapid writes), got {}. \
+         Queue dedup collapsed 5 rapid Modified events into at most 1. \
+         Loom-log:\n{}",
+        agent_calls, log_content
+    );
+
+}
