@@ -40,14 +40,14 @@ At knot registration (initial loom registration and dynamic knot addition), if `
 - [x] Add unit test in `loom_log.rs` verifying `DirectoryCreated` serialises and round-trips correctly
 
 ### Phase 1: Application — Ensure Strand Directory Exists Before Watch
-- [ ] Add private helper method `ensure_strand_dir_and_watch(&self, loom_id, knot_id, strand_dir)` on `ConfigEventHandler` in `src/application/usecases.rs`:
+- [x] Add private helper method `ensure_strand_dir_and_watch(&self, loom_id, knot_id, strand_dir)` on `ConfigEventHandler` in `src/application/usecases.rs`:
   - Check `strand_dir.exists()`
   - If missing: `fs::create_dir_all(&strand_dir)`, log `LoomEvent::DirectoryCreated` via `self.log_port`, log via `logging::log_knot_event()`
   - Call `self.event_source.set_loom_ids()` and `self.event_source.watch()`
-- [ ] Replace direct `event_source.watch()` calls in `register_loom()` with the helper
-- [ ] Replace direct `event_source.watch()` calls in `handle_knot_added()` with the helper
-- [ ] Add unit test in `usecases.rs` using `MockEventSource` + `MockLoomLogPort` + `tempfile` — verifies `DirectoryCreated` event is logged when strand_dir is missing, and watcher is started regardless
-- [ ] Add integration test in `tests/auto_discovery_and_knot_crud.rs` — create a knot with nonexistent strand_dir, verify loom-log contains `DirectoryCreated`, verify knot is active
+- [x] Replace direct `event_source.watch()` calls in `register_loom()` with the helper
+- [x] Replace direct `event_source.watch()` calls in `handle_knot_added()` with the helper
+- [x] Add unit test in `usecases.rs` using `MockEventSource` + `MockLoomLogPort` + `tempfile` — verifies `DirectoryCreated` event is logged when strand_dir is missing, and watcher is started regardless
+- [x] Add integration test in `tests/auto_discovery_and_knot_crud.rs` — create a knot with nonexistent strand_dir, verify loom-log contains `DirectoryCreated`, verify knot is active
 
 ### Phase 2: Knot Modification — Auto-Create on Strand Dir Change
 - [ ] In `handle_knot_modified()`, when `strand_dir` changes, also call the helper for the new directory (covers the case where the user updates a knot to point to a new directory)
