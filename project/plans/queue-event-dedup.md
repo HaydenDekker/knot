@@ -95,11 +95,11 @@ loop {
 
 Shutdown: the debounce engine pushes a sentinel (use `Option<StrandEvent>`) — `None` means "drain complete, exit". ProcessStrand breaks on `None`.
 
-- [ ] Replace `debounce_rx.recv()` with InspectQueue pop loop
-- [ ] Handle `Option<StrandEvent>` sentinel for shutdown
-- [ ] Preserve burst-active / QueueIdle logic (500ms timeout after each event)
-- [ ] Compile check: `cargo build` passes
-- [ ] Full test suite: `cargo test` passes
+- [x] Replace `debounce_rx.recv()` with InspectQueue pop loop
+- [x] Handle `Option<StrandEvent>` sentinel for shutdown
+- [x] Preserve burst-active / QueueIdle logic (500ms timeout after each event)
+- [x] Compile check: `cargo build` passes
+- [x] Full test suite: `cargo test` passes
 
 ### Phase 3: Integration test — duplicate events collapse
 
