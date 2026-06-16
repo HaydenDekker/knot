@@ -34,10 +34,10 @@ At knot registration (initial loom registration and dynamic knot addition), if `
 ## Phases
 
 ### Phase 0: Domain — Add `DirectoryCreated` LoomEvent Variant
-- [ ] Add `DirectoryCreated` variant to `LoomEvent` enum in `src/domain/events.rs`
+- [x] Add `DirectoryCreated` variant to `LoomEvent` enum in `src/domain/events.rs`
   - Fields: `loom_id`, `knot_id`, `directory` (the strand_dir path created), `timestamp`
-- [ ] Add `DirectoryCreated` arm to `LoomEvent` match in `FileSystemLoomLog::append()` in `src/adapters/outbound/loom_log.rs` (extracts `loom_id` for file routing)
-- [ ] Add unit test in `loom_log.rs` verifying `DirectoryCreated` serialises and round-trips correctly
+- [x] Add `DirectoryCreated` arm to `LoomEvent` match in `FileSystemLoomLog::append()` in `src/adapters/outbound/loom_log.rs` (extracts `loom_id` for file routing)
+- [x] Add unit test in `loom_log.rs` verifying `DirectoryCreated` serialises and round-trips correctly
 
 ### Phase 1: Application — Ensure Strand Directory Exists Before Watch
 - [ ] Add private helper method `ensure_strand_dir_and_watch(&self, loom_id, knot_id, strand_dir)` on `ConfigEventHandler` in `src/application/usecases.rs`:
