@@ -984,3 +984,148 @@ async fn discover_endpoint_removed() {
     );
 
 }
+
+// ── Strand Directory Auto-Creation ──────────────────────────────────────
+
+/// Create a loom with a knot whose `strand_dir` does not exist → Knot
+/// auto-creates the directory → loom-log contains `DirectoryCreated` →
+/// knot is active and registered.
+///
+/// Verifies the `ensure_strand_dir_and_watch` flow end-to-end:
+/// directory creation, loom-log event recording, and successful watcher
+/// registration.
+#[tokio::test]
+async fn strand_dir_auto_creation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+
+    // Create rig directory (empty at startup)
+    fs::create_dir_all(&base_dir).unwrap();
+
+    // Create a "fast" agent profile
+    create_fast_profile(&base_dir);
+
+    let port = 32120;
+    let host_port = format!("127.0.0.1:{port}");
+
+    let config = AppConfig {
+        rig_dir: base_dir.clone(),
+        bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        ..AppConfig::default_config()
+    };
+
+    let _handle = spawn_server(config);
+    wait_for_port(&host_port, 5000)
+        .await
+        .expect("server should start listening");
+
+    // 1. GET /looms should be empty
+    let (status, body) =
+        http_get_retry(&host_port, "/looms", 30, 100)
+            .await
+            .expect("looms endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let summaries: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+    assert!(summaries.is_empty(), "no looms at startup");
+
+    // 2. Create a loom directory with a knot that has a NONEXISTENT strand_dir
+    let loom_dir = base_dir.join("auto-strand-dir-loom");
+    fs::create_dir_all(&loom_dir).unwrap();
+    let nonexistent_strand_dir = base_dir.join("auto-created-strands");
+    assert!(
+        !nonexistent_strand_dir.exists(),
+        "strand_dir must not exist before test"
+    );
+    let knot_content = format!(
+        "---\nname: codegen-knot\nagent-profile-ref: fast\nstrand-dir: \"{}\"\n\
+         prompt-template:\n  input-bundling: \"full-file\"\n  \
+         instructions: \"Generate code\"\n---\n\n# Codegen Knot\n",
+        nonexistent_strand_dir.display()
+    );
+    fs::write(loom_dir.join("codegen-knot.md"), knot_content).unwrap();
+
+    // 3. Wait for auto-discovery to register the loom
+    assert!(
+        wait_for_loom_discovery(&host_port, 1).await,
+        "auto-discovery should have found the new loom"
+    );
+
+    // 4. Verify the loom is registered with its knot
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/auto-strand-dir-loom", 30, 100)
+            .await
+            .expect("get loom should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let loom: serde_json::Value =
+        serde_json::from_str(&body).expect("should be JSON");
+    let knots = loom["knots"].as_array().unwrap();
+    assert_eq!(knots.len(), 1, "loom should have 1 knot");
+    assert_eq!(
+        knots[0]["id"].as_str().unwrap(),
+        "codegen-knot",
+        "knot id should match"
+    );
+
+    // 5. Verify the strand directory was auto-created
+    assert!(
+        nonexistent_strand_dir.exists(),
+        "strand_dir should have been auto-created: {}",
+        nonexistent_strand_dir.display()
+    );
+    assert!(
+        nonexistent_strand_dir.is_dir(),
+        "auto-created path should be a directory"
+    );
+
+    // 6. Verify the loom-log contains DirectoryCreated event
+    let (status, body) =
+        http_get_retry(&host_port, "/looms/auto-strand-dir-loom/activity", 30, 100)
+            .await
+            .expect("activity endpoint should respond");
+    assert!(status.contains("200"), "expected 200, got: {status}");
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&body).expect("should be JSON array");
+
+    // Find DirectoryCreated event
+    let dir_created = events.iter().find(|e| {
+        e.get("DirectoryCreated").is_some()
+    });
+    assert!(
+        dir_created.is_some(),
+        "loom-log should contain DirectoryCreated event, got: {:?}",
+        events
+    );
+    let dir_created = dir_created.unwrap();
+    let dir_data = dir_created["DirectoryCreated"].as_object().unwrap();
+    assert_eq!(
+        dir_data.get("loom_id").and_then(|v| v.as_str()),
+        Some("auto-strand-dir-loom"),
+        "DirectoryCreated should reference correct loom"
+    );
+    assert_eq!(
+        dir_data.get("knot_id").and_then(|v| v.as_str()),
+        Some("codegen-knot"),
+        "DirectoryCreated should reference correct knot"
+    );
+    assert!(
+        dir_data.get("directory").and_then(|v| v.as_str())
+            == Some(nonexistent_strand_dir.display().to_string().as_str())
+            || dir_data.get("directory").and_then(|v| v.as_str())
+                .map(|d| d.ends_with("auto-created-strands"))
+                .unwrap_or(false),
+        "DirectoryCreated should record the directory path"
+    );
+
+    // 7. Verify knot is active (status should be idle or similar)
+    let (status, _body) =
+        http_get_retry(
+            &host_port,
+            "/looms/auto-strand-dir-loom/knots/codegen-knot",
+            30,
+            100,
+        )
+        .await
+        .expect("knot status should respond");
+    assert!(status.contains("200"), "knot should be active, got: {status}");
+}

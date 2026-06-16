@@ -162,22 +162,54 @@ impl DiscoverLooms {
 
         // Start file watchers for each knot's strand directory
         for knot in &loom.knots {
-            self.event_source.set_loom_ids(
-                &knot.strand_dir,
+            self.ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
-            );
-            self.event_source.watch(&knot.strand_dir)
-                .map_err(|e| {
-                    PortError::LoomSaveFailed(format!(
-                        "failed to watch '{}': {}",
-                        knot.strand_dir.display(),
-                        e
-                    ))
-                })?;
+                &knot.strand_dir,
+            )?;
         }
 
         Ok(())
+    }
+
+    /// Ensure `strand_dir` exists on disk, then start the watcher.
+    fn ensure_strand_dir_and_watch(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_dir: &Path,
+    ) -> Result<(), PortError> {
+        if !strand_dir.exists() {
+            std::fs::create_dir_all(strand_dir).map_err(|e| {
+                PortError::LoomSaveFailed(format!(
+                    "failed to create strand dir '{}': {}",
+                    strand_dir.display(),
+                    e,
+                ))
+            })?;
+            self.log_port.append(LoomEvent::DirectoryCreated {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                directory: strand_dir.display().to_string(),
+                timestamp: format_timestamp(),
+            })?;
+            logging::log_knot_event(
+                "dir-created",
+                &loom_id.0,
+                &knot_id.0,
+                &format!("auto-created strand dir: {}", strand_dir.display()),
+            );
+        }
+
+        self.event_source
+            .set_loom_ids(strand_dir, loom_id, knot_id);
+        self.event_source.watch(strand_dir).map_err(|e| {
+            PortError::LoomSaveFailed(format!(
+                "failed to watch '{}': {}",
+                strand_dir.display(),
+                e,
+            ))
+        })
     }
 }
 
@@ -302,19 +334,11 @@ impl RegisterLoom {
 
         // Start file watchers for each knot's strand directory
         for knot in &loom.knots {
-            self.event_source.set_loom_ids(
-                &knot.strand_dir,
+            self.ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
-            );
-            self.event_source.watch(&knot.strand_dir)
-                .map_err(|e| {
-                    PortError::LoomSaveFailed(format!(
-                        "failed to watch '{}': {}",
-                        knot.strand_dir.display(),
-                        e
-                    ))
-                })?;
+                &knot.strand_dir,
+            )?;
         }
 
         logging::log_loom_event(
@@ -323,6 +347,46 @@ impl RegisterLoom {
             &format!("{} knots, watchers started", loom.knots.len()),
         );
         Ok(())
+    }
+
+    /// Ensure `strand_dir` exists on disk, then start the watcher.
+    fn ensure_strand_dir_and_watch(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_dir: &Path,
+    ) -> Result<(), PortError> {
+        if !strand_dir.exists() {
+            std::fs::create_dir_all(strand_dir).map_err(|e| {
+                PortError::LoomSaveFailed(format!(
+                    "failed to create strand dir '{}': {}",
+                    strand_dir.display(),
+                    e,
+                ))
+            })?;
+            self.log_port.append(LoomEvent::DirectoryCreated {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                directory: strand_dir.display().to_string(),
+                timestamp: format_timestamp(),
+            })?;
+            logging::log_knot_event(
+                "dir-created",
+                &loom_id.0,
+                &knot_id.0,
+                &format!("auto-created strand dir: {}", strand_dir.display()),
+            );
+        }
+
+        self.event_source
+            .set_loom_ids(strand_dir, loom_id, knot_id);
+        self.event_source.watch(strand_dir).map_err(|e| {
+            PortError::LoomSaveFailed(format!(
+                "failed to watch '{}': {}",
+                strand_dir.display(),
+                e,
+            ))
+        })
     }
 }
 
@@ -1283,20 +1347,8 @@ impl ConfigEventHandler {
             timestamp: format_timestamp(),
         })?;
 
-        // Start watcher for knot's strand directory
-        self.event_source.set_loom_ids(
-            &knot_strand_dir,
-            loom_id,
-            &knot_id,
-        );
-        self.event_source.watch(&knot_strand_dir)
-            .map_err(|e| {
-                PortError::EventWatchFailed(format!(
-                    "failed to watch '{}': {}",
-                    knot_strand_dir.display(),
-                    e
-                ))
-            })?;
+        // Start watcher (auto-creates strand_dir if missing)
+        self.ensure_strand_dir_and_watch(loom_id, &knot_id, &knot_strand_dir)?;
 
         logging::log_knot_event(
             "added",
@@ -1348,19 +1400,11 @@ impl ConfigEventHandler {
                             ))
                         })?;
 
-                    self.event_source.set_loom_ids(
-                        &new_strand_dir,
+                    self.ensure_strand_dir_and_watch(
                         loom_id,
                         &knot_id,
-                    );
-                    self.event_source.watch(&new_strand_dir)
-                        .map_err(|e| {
-                            PortError::EventWatchFailed(format!(
-                                "failed to watch '{}': {}",
-                                new_strand_dir.display(),
-                                e
-                            ))
-                        })?;
+                        &new_strand_dir,
+                    )?;
 
                     logging::log_knot_event(
                         "modified",
@@ -1400,20 +1444,12 @@ impl ConfigEventHandler {
                     timestamp: format_timestamp(),
                 })?;
 
-                // Start watcher for knot's strand directory
-                self.event_source.set_loom_ids(
-                    &knot_strand_dir,
+                // Start watcher (auto-creates strand_dir if missing)
+                self.ensure_strand_dir_and_watch(
                     loom_id,
                     &knot_id,
-                );
-                self.event_source.watch(&knot_strand_dir)
-                    .map_err(|e| {
-                        PortError::EventWatchFailed(format!(
-                            "failed to watch '{}': {}",
-                            knot_strand_dir.display(),
-                            e
-                        ))
-                    })?;
+                    &knot_strand_dir,
+                )?;
 
                 logging::log_knot_event(
                     "added",
@@ -1520,19 +1556,70 @@ impl ConfigEventHandler {
 
         // Start file watchers for each knot's strand directory
         for knot in &loom.knots {
-            self.event_source.set_loom_ids(
-                &knot.strand_dir,
+            self.ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
+                &knot.strand_dir,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Ensure `strand_dir` exists on disk, then start the watcher.
+    ///
+    /// If the directory is missing, creates it (including any parent
+    /// directories), logs a `LoomEvent::DirectoryCreated` event, and
+    /// emits a log line. The watcher is always started regardless of
+    /// whether creation was needed.
+    fn ensure_strand_dir_and_watch(
+        &self,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_dir: &Path,
+    ) -> Result<(), PortError> {
+        let dir_created = if !strand_dir.exists() {
+            std::fs::create_dir_all(strand_dir).map_err(|e| {
+                PortError::EventWatchFailed(format!(
+                    "failed to create strand dir '{}': {}",
+                    strand_dir.display(),
+                    e,
+                ))
+            })?;
+            self.log_port.append(LoomEvent::DirectoryCreated {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                directory: strand_dir.display().to_string(),
+                timestamp: format_timestamp(),
+            })?;
+            logging::log_knot_event(
+                "dir-created",
+                &loom_id.0,
+                &knot_id.0,
+                &format!("auto-created strand dir: {}", strand_dir.display()),
             );
-            self.event_source.watch(&knot.strand_dir)
-                .map_err(|e| {
-                    PortError::EventWatchFailed(format!(
-                        "failed to watch '{}': {}",
-                        knot.strand_dir.display(),
-                        e
-                    ))
-                })?;
+            true
+        } else {
+            false
+        };
+
+        self.event_source
+            .set_loom_ids(strand_dir, loom_id, knot_id);
+        self.event_source.watch(strand_dir).map_err(|e| {
+            PortError::EventWatchFailed(format!(
+                "failed to watch '{}': {}",
+                strand_dir.display(),
+                e,
+            ))
+        })?;
+
+        if dir_created {
+            logging::log_knot_event(
+                "watch-started",
+                &loom_id.0,
+                &knot_id.0,
+                "watcher started on newly created dir",
+            );
         }
 
         Ok(())
@@ -1735,7 +1822,14 @@ mod config_handler_tests {
     #[test]
     fn config_handler_loom_added() {
         let loom_id = LoomId("new-loom".to_string());
-        let knots = vec![build_knot("k1"), build_knot("k2")];
+        // Use a temp directory so strand_dirs can be auto-created
+        let tmp = tempfile::tempdir().unwrap();
+        let rig_path = tmp.path().to_path_buf();
+        let strand_dir = rig_path.join("strands");
+        let knots = vec![
+            build_knot_with_strand_dir("k1", strand_dir.clone()),
+            build_knot_with_strand_dir("k2", strand_dir.clone()),
+        ];
 
         let repo = Arc::new(MockLoomRepository {
             scan_looms: Arc::new(Mutex::new(vec![])),
@@ -1756,12 +1850,12 @@ mod config_handler_tests {
             Arc::new(log_port),
             store.clone(),
             Arc::new(event_source),
-            PathBuf::from("/rig"),
+            rig_path.clone(),
         );
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
-            loom_dir: "/rig/new-loom".to_string(),
+            loom_dir: rig_path.join("new-loom").display().to_string(),
         });
 
         // Should succeed
@@ -1774,12 +1868,12 @@ mod config_handler_tests {
         assert_eq!(stored.id, loom_id);
         assert_eq!(stored.knots.len(), 2);
 
-        // Log events: 2x KnotRegistered, LoomStarted
+        // Log events: 2x KnotRegistered, LoomStarted, DirectoryCreated
         let events = logged_events.lock().unwrap();
         assert_eq!(
             events.len(),
-            3,
-            "should log KnotRegistered x2 + LoomStarted"
+            4,
+            "should log KnotRegistered x2 + LoomStarted + DirectoryCreated"
         );
         match &events[0] {
             LoomEvent::KnotRegistered { loom_id: lid, knot_id, .. } => {
@@ -1801,6 +1895,18 @@ mod config_handler_tests {
             }
             other => panic!("Expected LoomStarted, got {other:?}"),
         }
+        // DirectoryCreated logged for first knot (second shares same dir)
+        match &events[3] {
+            LoomEvent::DirectoryCreated {
+                loom_id: lid,
+                knot_id,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("Expected DirectoryCreated, got {other:?}"),
+        }
 
         // Watchers started for each knot's strand directory
         let watches = watch_calls.lock().unwrap();
@@ -1811,8 +1917,10 @@ mod config_handler_tests {
         );
         let watched: HashSet<_> =
             watches.iter().map(|p| p.as_path()).collect();
-        // strand_dir "strands" resolved relative to project_root "/" -> "/strands"
-        assert!(watched.contains(Path::new("/strands")));
+        assert!(
+            watched.contains(strand_dir.as_path()),
+            "watcher should be started for strand_dir"
+        );
     }
 
     /// `ConfigEventHandler` with `ConfigEvent::LoomAdded` for an
@@ -2493,6 +2601,118 @@ mod config_handler_tests {
             other => panic!("Expected LoomNotFound, got {other:?}"),
         }
     }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotAdded` when
+    /// `strand_dir` does not exist: auto-creates the directory,
+    /// logs `DirectoryCreated`, and starts the watcher.
+    #[test]
+    fn config_handler_knot_added_missing_strand_dir() {
+        let loom_id = LoomId("auto-dir-loom".to_string());
+        let existing_loom =
+            build_loom("auto-dir-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        // Create a temp dir for the nonexistent strand_dir
+        let tmp = tempfile::tempdir().unwrap();
+        let nonexistent_dir = tmp.path().join("nonexistent-strands");
+        assert!(
+            !nonexistent_dir.exists(),
+            "strand_dir must not exist before test"
+        );
+
+        let new_knot = build_knot_with_strand_dir("k2", nonexistent_dir.clone());
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: new_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // strand_dir was auto-created
+        assert!(
+            nonexistent_dir.exists(),
+            "strand_dir should have been auto-created"
+        );
+
+        // Log contains KnotRegistered + DirectoryCreated
+        let events = logged_events.lock().unwrap();
+        let event_names: Vec<_> = events.iter().map(|e| match e {
+            LoomEvent::KnotRegistered { .. } => "KnotRegistered",
+            LoomEvent::DirectoryCreated { .. } => "DirectoryCreated",
+            other => panic!("unexpected event variant: {:?}", other),
+        }).collect();
+        assert!(
+            event_names.contains(&"KnotRegistered"),
+            "should log KnotRegistered"
+        );
+        assert!(
+            event_names.contains(&"DirectoryCreated"),
+            "should log DirectoryCreated"
+        );
+
+        // Verify DirectoryCreated event fields
+        let dir_created_event = events.iter().find(|e| {
+            matches!(e, LoomEvent::DirectoryCreated { .. })
+        });
+        assert!(
+            dir_created_event.is_some(),
+            "DirectoryCreated event should be present"
+        );
+        match dir_created_event.unwrap() {
+            LoomEvent::DirectoryCreated {
+                loom_id: lid,
+                knot_id: kid,
+                directory: dir,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(kid.0, "k2");
+                assert_eq!(
+                    dir.as_str(),
+                    nonexistent_dir.display().to_string(),
+                    "DirectoryCreated should record the path"
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        // Watcher was started
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(
+            watches.len(),
+            1,
+            "watcher should be started after dir creation"
+        );
+        assert_eq!(watches[0], nonexistent_dir);
+
+        // Knot is in store
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+    }
 }
 
 // ── Phase 2 Tests ─────────────────────────────────────────────────────
@@ -2503,6 +2723,7 @@ mod phase2_tests {
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::PromptTemplate;
     use std::collections::HashSet;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -2568,7 +2789,7 @@ mod phase2_tests {
     }
 
     /// Build a knot with the given ID.
-        fn build_knot(id: impl Into<String>) -> Knot {
+    fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
@@ -2579,6 +2800,16 @@ mod phase2_tests {
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
         }
+    }
+
+    /// Build a knot with custom strand_dir.
+    fn build_knot_with_strand_dir(
+        id: impl Into<String>,
+        strand_dir: PathBuf,
+    ) -> Knot {
+        let mut knot = build_knot(id);
+        knot.strand_dir = strand_dir;
+        knot
     }
 
     // ── RegisterLoom Watcher Tests ─────────────────────────────────────
@@ -2746,8 +2977,17 @@ mod phase2_tests {
     /// builds a `Loom` directly.
     #[test]
     fn config_handler_loom_added_scans_specific_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        let rig_path = workspace.join("rig");
+        fs::create_dir_all(&rig_path).unwrap();
+        let strand_dir = workspace.join("strands");
+
         let loom_id = LoomId("new-loom".to_string());
-        let knots = vec![build_knot("k1"), build_knot("k2")];
+        let knots = vec![
+            build_knot_with_strand_dir("k1", strand_dir.clone()),
+            build_knot_with_strand_dir("k2", strand_dir.clone()),
+        ];
 
         let repo = Arc::new(MockLoomRepository {
             scan_knots: Arc::new(Mutex::new(knots)),
@@ -2761,12 +3001,12 @@ mod phase2_tests {
             Arc::new(MockLoomLogPort),
             store.clone(),
             Arc::new(event_source),
-            PathBuf::from("/workspace/rig"),
+            rig_path.clone(),
         );
 
         let result = handler.execute(ConfigEvent::LoomAdded {
             loom_id: loom_id.clone(),
-            loom_dir: "/workspace/rig/new-loom".to_string(),
+            loom_dir: rig_path.join("new-loom").display().to_string(),
         });
 
         // Should succeed
@@ -2784,13 +3024,11 @@ mod phase2_tests {
         // Watchers started for each knot's strand directory
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 2);
-        // strand_dir "strands" resolved relative to project_root
-        // "/workspace" -> "/workspace/strands"
         let watched: HashSet<_> =
             watches.iter().map(|p| p.as_path()).collect();
         assert!(
-            watched.contains(Path::new("/workspace/strands")),
-            "expected /workspace/strands, got {:?}",
+            watched.contains(strand_dir.as_path()),
+            "expected strand_dir in watches, got {:?}",
             watches
         );
     }
