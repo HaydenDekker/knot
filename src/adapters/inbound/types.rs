@@ -34,8 +34,8 @@ pub struct ProfileResponse {
     /// Optional list of tool identifiers.
     #[schema(value_type = Vec<String>)]
     pub tools: Vec<String>,
-    /// The system prompt.
-    pub system_prompt: String,
+    /// The profile-level prompt segment.
+    pub profile_prompt: String,
     /// Optional markdown body from the profile file (documentation only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,

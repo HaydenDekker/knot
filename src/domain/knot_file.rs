@@ -218,8 +218,8 @@ struct RawProfileFrontmatter {
     name: Option<String>,
     provider: Option<String>,
     model: Option<String>,
-    #[serde(rename = "system-prompt")]
-    system_prompt: Option<String>,
+    #[serde(rename = "profile-prompt")]
+    profile_prompt: Option<String>,
     #[serde(default)]
     tools: Option<Vec<String>>,
     #[serde(default)]
@@ -231,7 +231,7 @@ struct RawProfileFrontmatter {
 /// Extracts and validates the YAML frontmatter. The body (markdown after the
 /// closing `---`) is not parsed — it is documentation only.
 ///
-/// Required fields: `name`, `provider`, `model`, `system-prompt`.
+/// Required fields: `name`, `provider`, `model`, `profile-prompt`.
 /// Optional field: `tools`.
 pub fn parse_agent_profile(
     content: &str,
@@ -261,11 +261,11 @@ pub fn parse_agent_profile(
         .filter(|m| !m.trim().is_empty())
         .ok_or(AgentProfileError::EmptyModel)?;
 
-    // Validate system-prompt
-    let system_prompt = raw
-        .system_prompt
+    // Validate profile-prompt
+    let profile_prompt = raw
+        .profile_prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or(AgentProfileError::MissingSystemPrompt)?;
+        .ok_or(AgentProfileError::MissingProfilePrompt)?;
 
     // Build profile with optional tools and timeout
     AgentProfile::with_tools(
@@ -273,7 +273,7 @@ pub fn parse_agent_profile(
         provider,
         model,
         raw.tools.unwrap_or_default(),
-        system_prompt,
+        profile_prompt,
     )
     .map(|p| p.with_timeout(raw.timeout))
 }
@@ -655,7 +655,7 @@ provider: openai
 model: gpt-4o
 tools:
   - fs
-system-prompt: |
+profile-prompt: |
   You are a fast reviewer. Keep responses concise and direct.
 ---
 
@@ -674,7 +674,7 @@ Lightweight profile for quick reviews.
         assert_eq!(profile.provider, "openai");
         assert_eq!(profile.model, "gpt-4o");
         assert_eq!(profile.tools, vec!["fs"]);
-        assert!(profile.system_prompt.contains("fast reviewer"));
+        assert!(profile.profile_prompt.contains("fast reviewer"));
     }
 
     #[test]
@@ -683,7 +683,7 @@ Lightweight profile for quick reviews.
 name: minimal
 provider: anthropic
 model: claude-sonnet-4-20250514
-system-prompt: Review the document.
+profile-prompt: Review the document.
 ---
 
 Body.
@@ -693,16 +693,16 @@ Body.
         assert_eq!(profile.provider, "anthropic");
         assert_eq!(profile.model, "claude-sonnet-4-20250514");
         assert!(profile.tools.is_empty());
-        assert_eq!(profile.system_prompt, "Review the document.");
+        assert_eq!(profile.profile_prompt, "Review the document.");
     }
 
     #[test]
-    fn parse_profile_with_multiline_system_prompt() {
+    fn parse_profile_with_multiline_profile_prompt() {
         let content = "---
 name: detailed
 provider: openai
 model: gpt-4o
-system-prompt: |
+profile-prompt: |
   You are a detailed reviewer.
 
   Keep responses thorough.
@@ -711,8 +711,8 @@ system-prompt: |
 Body.
 ";
         let profile = parse_agent_profile(content).unwrap();
-        assert!(profile.system_prompt.contains("detailed reviewer"));
-        assert!(profile.system_prompt.contains("thorough"));
+        assert!(profile.profile_prompt.contains("detailed reviewer"));
+        assert!(profile.profile_prompt.contains("thorough"));
     }
 
     #[test]
@@ -720,7 +720,7 @@ Body.
         let content = "---
 provider: openai
 model: gpt-4o
-system-prompt: Review.
+profile-prompt: Review.
 ---
 
 Body.
@@ -732,7 +732,7 @@ Body.
 
     #[test]
     fn parse_profile_empty_name() {
-        let content = "---\nname: \nprovider: openai\nmodel: gpt-4o\nsystem-prompt: Review.\n---\n\nBody.\n";
+        let content = "---\nname: \nprovider: openai\nmodel: gpt-4o\nprofile-prompt: Review.\n---\n\nBody.\n";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
@@ -743,7 +743,7 @@ Body.
         let content = "---
 name: test
 model: gpt-4o
-system-prompt: Review.
+profile-prompt: Review.
 ---
 
 Body.
@@ -758,7 +758,7 @@ Body.
         let content = "---
 name: test
 provider: openai
-system-prompt: Review.
+profile-prompt: Review.
 ---
 
 Body.
@@ -769,7 +769,7 @@ Body.
     }
 
     #[test]
-    fn parse_profile_missing_system_prompt() {
+    fn parse_profile_missing_profile_prompt() {
         let content = "---
 name: test
 provider: openai
@@ -782,24 +782,24 @@ Body.
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AgentProfileError::MissingSystemPrompt
+            AgentProfileError::MissingProfilePrompt
         );
     }
 
     #[test]
-    fn parse_profile_empty_system_prompt() {
-        let content = "---\nname: test\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: \n---\n\nBody.\n";
+    fn parse_profile_empty_profile_prompt() {
+        let content = "---\nname: test\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: \n---\n\nBody.\n";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AgentProfileError::MissingSystemPrompt
+            AgentProfileError::MissingProfilePrompt
         );
     }
 
     #[test]
     fn parse_profile_whitespace_fields() {
-        let content = "---\nname:    \nprovider:    \nmodel:    \nsystem-prompt:      \n---\n\nBody.\n".to_string();
+        let content = "---\nname:    \nprovider:    \nmodel:    \nprofile-prompt:      \n---\n\nBody.\n".to_string();
         let result = parse_agent_profile(&content);
         assert!(result.is_err());
         // name is checked first
@@ -831,7 +831,7 @@ name: test
   broken: yaml: [
 provider: openai
 model: gpt-4o
-system-prompt: Review.
+profile-prompt: Review.
 ---
 
 Body.
@@ -855,8 +855,8 @@ Body.
             "agent profile model must not be empty"
         );
         assert_eq!(
-            AgentProfileError::MissingSystemPrompt.to_string(),
-            "agent profile system_prompt must not be empty"
+            AgentProfileError::MissingProfilePrompt.to_string(),
+            "agent profile profile_prompt must not be empty"
         );
         assert_eq!(
             AgentProfileError::InvalidFormat.to_string(),
@@ -874,7 +874,7 @@ tools:
   - fs
   - web
   - sql
-system-prompt: Full stack review.
+profile-prompt: Full stack review.
 ---
 
 Body.
@@ -890,7 +890,7 @@ name: slow-model
 provider: anthropic
 model: claude-sonnet-4-20250514
 timeout: 600
-system-prompt: Thorough review with long timeout.
+profile-prompt: Thorough review with long timeout.
 ---
 
 Body.
@@ -906,7 +906,7 @@ Body.
 name: fast
 provider: openai
 model: gpt-4o
-system-prompt: Quick review.
+profile-prompt: Quick review.
 ---
 
 Body.
@@ -925,7 +925,7 @@ tools:
   - fs
   - web
 timeout: 300
-system-prompt: Full review with timeout.
+profile-prompt: Full review with timeout.
 ---
 
 Body.

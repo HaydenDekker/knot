@@ -678,8 +678,8 @@ impl ProcessStrand {
                 PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
 
-        // Merge profile's system_prompt with knot's instructions.
-        // Profile system_prompt is the base (agent persona/instructions),
+        // Merge profile's profile_prompt with knot's instructions.
+        // Profile prompt is the base (agent persona/instructions),
         // knot instructions are appended as task-specific direction.
         let merged_system_prompt = if knot
             .prompt_template
@@ -687,11 +687,11 @@ impl ProcessStrand {
             .trim()
             .is_empty()
         {
-            profile.system_prompt.clone()
+            profile.profile_prompt.clone()
         } else {
             format!(
                 "{}\n\n{}",
-                profile.system_prompt,
+                profile.profile_prompt,
                 knot.prompt_template.instructions
             )
         };

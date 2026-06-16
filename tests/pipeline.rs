@@ -220,7 +220,7 @@ async fn full_pipeline_create_modify_delete() {
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
     )
     .unwrap();
 
@@ -411,7 +411,7 @@ async fn full_pipeline_with_subdirectory_rig() {
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
     )
     .unwrap();
 

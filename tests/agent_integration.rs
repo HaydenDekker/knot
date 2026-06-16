@@ -49,7 +49,7 @@ async fn full_pipeline_agent_error_in_state_and_log() {
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |
   You are a reviewer.\n---\n\nFast Profile\n",
     )
     .unwrap();
@@ -178,7 +178,7 @@ async fn full_pipeline_with_pi_agent() {
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |
   You are a reviewer.\n---\n\nFast Profile\n",
     )
     .unwrap();

@@ -34,7 +34,7 @@ pub fn create_profile_with_timeout(
     fs::write(
         profiles_dir.join(format!("{name}.md")),
         format!(
-            "---\nname: {name}\nprovider: openai\nmodel: gpt-4o\n{}system-prompt: |\n  You are a reviewer.\n---\n\nProfile {name}\n",
+            "---\nname: {name}\nprovider: openai\nmodel: gpt-4o\n{}profile-prompt: |\n  You are a reviewer.\n---\n\nProfile {name}\n",
             timeout_yaml,
         ),
     )

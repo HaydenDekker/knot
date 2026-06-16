@@ -30,8 +30,8 @@ pub enum AgentProfileError {
     EmptyProvider,
     /// The model is empty or whitespace-only.
     EmptyModel,
-    /// The system prompt is empty or whitespace-only.
-    MissingSystemPrompt,
+    /// The profile prompt is empty or whitespace-only.
+    MissingProfilePrompt,
     /// The profile file has no frontmatter delimiters or no closing delimiter.
     InvalidFormat,
 }
@@ -46,8 +46,8 @@ impl std::fmt::Display for AgentProfileError {
             AgentProfileError::EmptyModel => {
                 write!(f, "agent profile model must not be empty")
             }
-            AgentProfileError::MissingSystemPrompt => {
-                write!(f, "agent profile system_prompt must not be empty")
+            AgentProfileError::MissingProfilePrompt => {
+                write!(f, "agent profile profile_prompt must not be empty")
             }
             AgentProfileError::InvalidFormat => {
                 write!(f, "agent profile file has no valid frontmatter")
@@ -220,9 +220,9 @@ pub struct AgentProfile {
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
-    /// The system prompt given to the agent.
-    #[serde(rename = "system-prompt")]
-    pub system_prompt: String,
+    /// The profile-level prompt segment given to the agent.
+    #[serde(rename = "profile-prompt")]
+    pub profile_prompt: String,
     /// Session timeout in seconds. `None` means use the runner's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
@@ -251,7 +251,7 @@ impl AgentProfile {
         name: String,
         provider: String,
         model: String,
-        system_prompt: String,
+        profile_prompt: String,
     ) -> Result<Self, AgentProfileError> {
         if name.trim().is_empty() {
             return Err(AgentProfileError::MissingName);
@@ -262,15 +262,15 @@ impl AgentProfile {
         if model.trim().is_empty() {
             return Err(AgentProfileError::EmptyModel);
         }
-        if system_prompt.trim().is_empty() {
-            return Err(AgentProfileError::MissingSystemPrompt);
+        if profile_prompt.trim().is_empty() {
+            return Err(AgentProfileError::MissingProfilePrompt);
         }
         Ok(Self {
             name,
             provider,
             model,
             tools: Vec::new(),
-            system_prompt,
+            profile_prompt,
             timeout: None,
             body: None,
         })
@@ -282,7 +282,7 @@ impl AgentProfile {
         provider: String,
         model: String,
         tools: Vec<String>,
-        system_prompt: String,
+        profile_prompt: String,
     ) -> Result<Self, AgentProfileError> {
         if name.trim().is_empty() {
             return Err(AgentProfileError::MissingName);
@@ -293,15 +293,15 @@ impl AgentProfile {
         if model.trim().is_empty() {
             return Err(AgentProfileError::EmptyModel);
         }
-        if system_prompt.trim().is_empty() {
-            return Err(AgentProfileError::MissingSystemPrompt);
+        if profile_prompt.trim().is_empty() {
+            return Err(AgentProfileError::MissingProfilePrompt);
         }
         Ok(Self {
             name,
             provider,
             model,
             tools,
-            system_prompt,
+            profile_prompt,
             timeout: None,
             body: None,
         })
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(profile.provider, "openai");
         assert_eq!(profile.model, "gpt-4o");
         assert!(profile.tools.is_empty());
-        assert_eq!(profile.system_prompt, "You are a fast reviewer.");
+        assert_eq!(profile.profile_prompt, "You are a fast reviewer.");
     }
 
     #[test]
@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_profile_empty_system_prompt() {
+    fn agent_profile_empty_profile_prompt() {
         let result = AgentProfile::new(
             "fast".to_string(),
             "openai".to_string(),
@@ -666,12 +666,12 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AgentProfileError::MissingSystemPrompt
+            AgentProfileError::MissingProfilePrompt
         );
     }
 
     #[test]
-    fn agent_profile_whitespace_system_prompt() {
+    fn agent_profile_whitespace_profile_prompt() {
         let result = AgentProfile::new(
             "fast".to_string(),
             "openai".to_string(),
@@ -681,7 +681,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AgentProfileError::MissingSystemPrompt
+            AgentProfileError::MissingProfilePrompt
         );
     }
 
@@ -730,13 +730,13 @@ mod tests {
             "agent profile model must not be empty"
         );
         assert_eq!(
-            AgentProfileError::MissingSystemPrompt.to_string(),
-            "agent profile system_prompt must not be empty"
+            AgentProfileError::MissingProfilePrompt.to_string(),
+            "agent profile profile_prompt must not be empty"
         );
     }
 
     #[test]
-    fn agent_profile_with_multiline_system_prompt() {
+    fn agent_profile_with_multiline_profile_prompt() {
         let profile = AgentProfile::new(
             "detailed".to_string(),
             "openai".to_string(),
@@ -745,7 +745,7 @@ mod tests {
         );
         assert!(profile.is_ok());
         let profile = profile.unwrap();
-        assert!(profile.system_prompt.contains("\n\n"));
+        assert!(profile.profile_prompt.contains("\n\n"));
     }
 
     #[test]
@@ -836,7 +836,7 @@ mod tests {
             "provider": "openai",
             "model": "gpt-4o",
             "tools": [],
-            "system-prompt": "Legacy profile."
+            "profile-prompt": "Legacy profile."
         }"#;
         let profile: AgentProfile = serde_json::from_str(json).unwrap();
         assert_eq!(profile.timeout, None);
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn agent_profile_yaml_missing_timeout_defaults_to_none() {
-        let yaml = "name: legacy\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: Legacy.\n";
+        let yaml = "name: legacy\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: Legacy.\n";
         let profile: AgentProfile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.timeout, None);
         assert_eq!(profile.name, "legacy");

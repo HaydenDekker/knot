@@ -176,7 +176,7 @@ pub async fn list_profiles(State(ctx): State<AppContext>) -> Response {
                     provider: p.provider,
                     model: p.model,
                     tools: p.tools,
-                    system_prompt: p.system_prompt,
+                    profile_prompt: p.profile_prompt,
                     body: p.body,
                 })
                 .collect();
@@ -213,7 +213,7 @@ pub async fn get_profile(
                 provider: profile.provider,
                 model: profile.model,
                 tools: profile.tools,
-                system_prompt: profile.system_prompt,
+                profile_prompt: profile.profile_prompt,
                 body: profile.body,
             };
             (StatusCode::OK, Json(response)).into_response()
@@ -1220,7 +1220,7 @@ mod tests {
         assert_eq!(profile.name, "fast");
         assert_eq!(profile.provider, "openai");
         assert_eq!(profile.model, "gpt-4o");
-        assert!(profile.system_prompt.contains("fast"));
+        assert!(profile.profile_prompt.contains("fast"));
     }
 
     /// `GET /profiles/:name` for unknown profile returns 404.

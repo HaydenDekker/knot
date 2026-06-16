@@ -43,7 +43,7 @@ fn write_profile_file(
     name: &str,
     provider: &str,
     model: &str,
-    system_prompt: &str,
+    profile_prompt: &str,
     body: Option<&str>,
 ) -> std::path::PathBuf {
     fs::create_dir_all(profiles_dir).unwrap();
@@ -53,7 +53,7 @@ fn write_profile_file(
         .unwrap_or_default();
     let content = format!(
         "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n\
-         system-prompt: |\n  {system_prompt}\n---\n{body_section}",
+         profile-prompt: |\n  {profile_prompt}\n---\n{body_section}",
     );
     fs::write(&path, content).unwrap();
     path
@@ -291,7 +291,7 @@ async fn file_first_profile_modify() {
 name: editor
 provider: anthropic
 model: claude-sonnet-4-20250514
-system-prompt: |
+profile-prompt: |
   You are an editor.
 ---
 "#;

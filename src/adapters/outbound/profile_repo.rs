@@ -188,7 +188,7 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
         } else {
             format!(
                 "---\n{yaml}---\n\n# {}\n\n{}\n",
-                profile.name, profile.system_prompt
+                profile.name, profile.profile_prompt
             )
         };
 
@@ -234,12 +234,12 @@ mod tests {
         name: &str,
         provider: &str,
         model: &str,
-        system_prompt: &str,
+        profile_prompt: &str,
         tools: &[&str],
     ) {
         let content = if tools.is_empty() {
             format!(
-                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\nsystem-prompt: |\n  {system_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
+                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\nprofile-prompt: |\n  {profile_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
             )
         } else {
             let tools_yaml: String = tools
@@ -248,7 +248,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\ntools:\n{tools_yaml}\nsystem-prompt: |\n  {system_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
+                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\ntools:\n{tools_yaml}\nprofile-prompt: |\n  {profile_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
             )
         };
         fs::write(dir.join(format!("{name}.md")), content).unwrap();
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(profile.provider, "openai");
         assert_eq!(profile.model, "gpt-4o");
         assert_eq!(profile.tools, vec!["fs"]);
-        assert!(profile.system_prompt.contains("fast reviewer"));
+        assert!(profile.profile_prompt.contains("fast reviewer"));
     }
 
     #[test]
@@ -418,7 +418,7 @@ mod tests {
         // Create a malformed profile (no name).
         fs::write(
             profiles_dir.join("bad.md"),
-            "---\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: Review.\n---\n\nBad.\n",
+            "---\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: Review.\n---\n\nBad.\n",
         )
         .unwrap();
 
@@ -499,7 +499,7 @@ mod tests {
         let loaded = repo.get("shared").unwrap().unwrap();
         assert_eq!(loaded.provider, "anthropic");
         assert_eq!(loaded.model, "claude-sonnet");
-        assert!(loaded.system_prompt.contains("Updated"));
+        assert!(loaded.profile_prompt.contains("Updated"));
     }
 
     #[test]
@@ -511,7 +511,7 @@ mod tests {
         // Create initial profile with custom body.
         let repo = FileSystemAgentProfileRepository::new(profiles_dir.clone());
 
-        let initial_content = "---\nname: shared\nprovider: openai\nmodel: gpt-4o\nsystem-prompt: |\n  Original prompt.\n---\n\n# Shared Profile\n\nThis is custom documentation that should be preserved across saves.\n";
+        let initial_content = "---\nname: shared\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |\n  Original prompt.\n---\n\n# Shared Profile\n\nThis is custom documentation that should be preserved across saves.\n";
         fs::write(profiles_dir.join("shared.md"), initial_content).unwrap();
 
         // Overwrite with new profile (different provider/model).
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(loaded.provider, profile.provider);
         assert_eq!(loaded.model, profile.model);
         assert_eq!(loaded.tools, profile.tools);
-        assert_eq!(loaded.system_prompt, profile.system_prompt);
+        assert_eq!(loaded.profile_prompt, profile.profile_prompt);
     }
 
     #[test]
