@@ -16,7 +16,11 @@ The output `mpsc` channel is opaque — the debounce engine can't inspect what's
 
 At most one pending event per `(strand_path, loom_id, knot_id, event_type)` in the entire pipeline. The queue becomes inspectable so the debounce engine can check before emitting. Different event types (Created/Modified/Deleted) always pass through — only repeated events of the same type are deduped.
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-16)
+
+## Completion Notes
+- 4 phases executed via orchestrator, all tests passing (316 unit + integration)
+- No ADR/DPR needed — focused internal refactor, code is self-documenting
 
 ## Existing Tests
 
