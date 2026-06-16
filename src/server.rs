@@ -48,6 +48,19 @@ impl AppConfig {
             agent_timeout: Duration::from_secs(300),
         }
     }
+
+    /// Create configuration with an explicit rig directory.
+    ///
+    /// All other fields use the same defaults as `default_config()`
+    /// (bind `127.0.0.1:3000`, default rig config, 300s agent timeout).
+    pub fn with_rig_dir(rig_dir: PathBuf) -> Self {
+        Self {
+            rig_dir,
+            bind_addr: "127.0.0.1:3000".parse().unwrap(),
+            rig_config: RigAgentConfig::default_config(),
+            agent_timeout: Duration::from_secs(300),
+        }
+    }
 }
 
 /// Load the rig agent configuration from `.workspace-agent-config.yaml`
