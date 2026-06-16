@@ -2713,6 +2713,112 @@ mod config_handler_tests {
         let loom = store.get(&loom_id).unwrap();
         assert_eq!(loom.knots.len(), 2);
     }
+
+    /// `ConfigEventHandler` with `ConfigEvent::KnotModified` when the
+    /// new `strand_dir` does not exist: auto-creates the directory,
+    /// logs `DirectoryCreated`, stops the old watcher, and starts a
+    /// new watcher.
+    #[test]
+    fn config_handler_knot_modified_missing_strand_dir() {
+        let loom_id = LoomId("auto-mod-loom".to_string());
+        let existing_knot = build_knot("k1");
+        let existing_loom =
+            build_loom("auto-mod-loom", vec![existing_knot]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            PathBuf::from("/rig"),
+        );
+
+        // Create a temp dir for the nonexistent strand_dir
+        let tmp = tempfile::tempdir().unwrap();
+        let nonexistent_dir = tmp.path().join("new-strands");
+        assert!(
+            !nonexistent_dir.exists(),
+            "new strand_dir must not exist before test"
+        );
+
+        // Update knot to point to the nonexistent directory
+        let updated_knot =
+            build_knot_with_strand_dir("k1", nonexistent_dir.clone());
+
+        let result = handler.execute(ConfigEvent::KnotModified {
+            loom_id: loom_id.clone(),
+            knot: updated_knot,
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // strand_dir was auto-created
+        assert!(
+            nonexistent_dir.exists(),
+            "new strand_dir should have been auto-created"
+        );
+
+        // Log contains DirectoryCreated
+        let events = logged_events.lock().unwrap();
+        let dir_created_event = events.iter().find(|e| {
+            matches!(e, LoomEvent::DirectoryCreated { .. })
+        });
+        assert!(
+            dir_created_event.is_some(),
+            "DirectoryCreated event should be present"
+        );
+        match dir_created_event.unwrap() {
+            LoomEvent::DirectoryCreated {
+                loom_id: lid,
+                knot_id: kid,
+                directory: dir,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(kid.0, "k1");
+                assert_eq!(
+                    dir.as_str(),
+                    nonexistent_dir.display().to_string(),
+                    "DirectoryCreated should record the new path"
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        // Old watcher stopped
+        let unwatches = unwatch_calls.lock().unwrap();
+        assert_eq!(unwatches.len(), 1);
+        assert_eq!(unwatches[0], PathBuf::from("strands"));
+
+        // New watcher started on the created directory
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], nonexistent_dir);
+
+        // Knot is updated in store
+        let loom = store.get(&loom_id).unwrap();
+        let k1 = loom.knots.iter()
+            .find(|k| k.id == KnotId("k1".to_string()))
+            .unwrap();
+        assert_eq!(k1.strand_dir, nonexistent_dir);
+    }
 }
 
 // ── Phase 2 Tests ─────────────────────────────────────────────────────
