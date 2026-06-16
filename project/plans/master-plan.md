@@ -2,14 +2,6 @@
 
 > **Last Updated:** 2026-06-17
 
-## Master Progress Table
-
-| # | Plan | Status | Created |
-|---|------|--------|---------|
-| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ⬜ Planned | 2026-06-17 |
-| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
-| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
-
 ## How to Add a Plan
 
 Each plan file must contain a title (e.g. `# Plan: Plan Name`).
@@ -54,7 +46,9 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
+| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ⬜ Planned | 2026-06-17 |
+| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
+| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ✅ Complete | 2026-06-16 |
 | 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ✅ Complete | 2026-06-16 |
 | 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
 | 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
@@ -105,9 +99,12 @@ Full details in [rig-switching-and-sharing.md](rig-switching-and-sharing.md).
 
 ### 34. Strand Directory Auto-Creation
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-17
+**Completed:** 2026-06-17
 **Goal:** Automatically create a knot's `strand_dir` at registration time if it does not exist, logging the creation in the loom-log.
+
+**Result:** `LoomEvent::DirectoryCreated` variant added to domain. `ConfigEventHandler` gained `ensure_strand_dir_and_watch` helper that creates missing `strand_dir` with `fs::create_dir_all` and logs the creation before registering the watcher. Covers initial registration, dynamic knot addition, and knot modification when `strand_dir` changes. 320 tests pass. Version bumped to 0.10.0.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
@@ -115,9 +112,12 @@ Full details in [strand-dir-auto-create.md](strand-dir-auto-create.md).
 
 ### 33. Queue Event Dedup — Prevent Duplicate Strand Processing
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-16
+**Completed:** 2026-06-16
 **Goal:** Replace the debounce engine's output mpsc channel with an inspectable queue so duplicate events for the same strand are collapsed before reaching ProcessStrand.
+
+**Result:** `InspectQueue<StrandEvent>` type with `push_or_replace` dedup by `(strand_path, loom_id, knot_id, event_type)` key. DebounceEngine emits into the queue instead of an opaque mpsc channel. ProcessStrand reads from the queue with notifier-based wait. Shutdown via `Option<StrandEvent>` sentinel. Different event types always pass through — only repeated events of the same type collapse. 316 unit + integration tests pass.
 
 Full details in [queue-event-dedup.md](queue-event-dedup.md).
 
@@ -187,10 +187,6 @@ Full details in [rig-log-notification-and-timeout.md](rig-log-notification-and-t
 **Goal:** Each knot run produces a git commit in the project root with structured message and tie-off body. Opt-out per-knot via `git-versioned: false` in frontmatter. Gracefully skips if not a git repo.
 
 **Result:** `git_versioned: bool` field on `Knot` entity and `KnotFile` (parsed from `git-versioned` frontmatter, defaults `true`). `GitVersioningPort` trait + `MockGitVersioningPort`. `FileSystemGitVersioner` adapter uses `std::process::Command` to run `git` (no C dependency) — stages all changes with `git add -A`, commits with structured subject (`knot: <knot-id> — processed <strand-name> (<event-type>)`) and tie-off body. Graceful degradation: skips if not a git repo, git unavailable, or commit fails (non-fatal warnings). `ProcessStrand::execute()` calls git port after tie-off write when `knot.git_versioned` is `true`. Wired in composition root via `start_event_pipeline`. 17 new unit tests + 3 new integration tests in `tests/git_versioning.rs`. All 293+ tests pass.
-
-**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
-
-Full details in [git-versioning.md](git-versioning.md).
 
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
