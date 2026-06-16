@@ -47,13 +47,14 @@ pub fn event_kind(event: &StrandEvent) -> StrandEventKind {
     }
 }
 
+/// Deduplication key type: (path, loom, knot, event_kind).
+type DedupKey = (StrandPath, LoomId, KnotId, StrandEventKind);
+
 /// Build the deduplication key for a `StrandEvent`.
 ///
 /// The key includes the event kind so that different event types for the
 /// same file are treated as distinct entries.
-pub fn dedup_key(
-    event: &StrandEvent,
-) -> (StrandPath, LoomId, KnotId, StrandEventKind) {
+pub fn dedup_key(event: &StrandEvent) -> DedupKey {
     match event {
         StrandEvent::Created {
             strand_path,
@@ -78,6 +79,15 @@ pub fn dedup_key(
             )
         }
     }
+}
+
+/// Deduplication key for `Option<StrandEvent>`.
+///
+/// Returns `Some(key)` for real events and `None` for the shutdown
+/// sentinel. This ensures the sentinel never collides with real events
+/// in `push_or_replace`.
+fn dedup_opt_key(item: &Option<StrandEvent>) -> Option<DedupKey> {
+    item.as_ref().map(dedup_key)
 }
 
 // ── InspectQueue ───────────────────────────────────────────────────────────
@@ -158,103 +168,33 @@ impl<T> InspectQueue<T> {
     }
 }
 
-// ── InspectQueue<StrandEvent> shutdown support ─────────────────────────────
-
-/// A wrapper around `InspectQueue<StrandEvent>` that tracks a shutdown flag.
-///
-/// The debounce engine signals shutdown after flushing all pending events.
-/// This allows `QueueReceiver::recv()` to stop blocking once the engine
-/// has exited.
-struct QueueWithShutdown {
-    queue: InspectQueue<StrandEvent>,
-    /// Set to true when the debounce engine has flushed and exited.
-    /// Protected by the same mutex as the queue for atomic check-and-pop.
-    shutdown: Mutex<bool>,
-}
-
-impl QueueWithShutdown {
-    fn new() -> Self {
-        Self {
-            queue: InspectQueue::new(),
-            shutdown: Mutex::new(false),
-        }
-    }
-
-    /// Signal that the debounce engine has exited.
-    fn signal_shutdown(&self) {
-        *self.shutdown.lock().unwrap() = true;
-        // Wake any waiters in recv()
-        self.queue.notify.notify_one();
-    }
-
-    /// Pop an item from the queue.
-    ///
-    /// Returns `Some(event)` if an item is available, `None` if the queue
-    /// is empty (and the caller should wait or check shutdown).
-    fn pop(&self) -> Option<StrandEvent> {
-        self.queue.pop()
-    }
-
-    /// Check if shutdown has been signalled.
-    fn is_shutdown(&self) -> bool {
-        *self.shutdown.lock().unwrap()
-    }
-
-    /// Push an item with dedup, signaling waiters.
-    fn push_or_replace(&self, item: StrandEvent) {
-        self.queue.push_or_replace(item, dedup_key);
-    }
-
-    /// Await notification from a producer.
-    async fn notified(&self) {
-        self.queue.notified().await;
-    }
-
-}
-
 // ── QueueReceiver ──────────────────────────────────────────────────────────
 
-/// Async receiver wrapping a `QueueWithShutdown`.
+/// Async receiver wrapping an `InspectQueue<Option<StrandEvent>>`.
 ///
-/// Provides a `recv()` method that blocks until the next debounced event
-/// is available, or `None` when the debounce engine has exited (input
-/// channel closed + flush complete).
+/// The debounce engine pushes `Some(event)` for debounced events and
+/// `None` as a shutdown sentinel. `recv()` returns the inner value
+/// directly: `Some(event)` for real events, `None` on shutdown.
 pub struct QueueReceiver {
-    inner: Arc<QueueWithShutdown>,
+    inner: Arc<InspectQueue<Option<StrandEvent>>>,
 }
 
 impl QueueReceiver {
-    /// Create a new receiver from a queue-with-shutdown.
-    fn new(inner: Arc<QueueWithShutdown>) -> Self {
+    /// Create a new receiver from the shared queue.
+    fn new(inner: Arc<InspectQueue<Option<StrandEvent>>>) -> Self {
         Self { inner }
     }
 
     /// Receive the next debounced event, or `None` if the debounce engine
     /// has exited and the queue is drained.
     ///
-    /// Blocks until an event is available or shutdown is signalled.
+    /// Blocks until an event is available or the shutdown sentinel arrives.
     pub async fn recv(&self) -> Option<StrandEvent> {
-        // Fast path: item already in queue
-        if let Some(event) = self.inner.pop() {
-            return Some(event);
-        }
-
-        // Queue is empty — wait for notification (new item or shutdown).
-        // After waking, check queue first, then shutdown.
         loop {
+            if let Some(item) = self.inner.pop() {
+                return item;
+            }
             self.inner.notified().await;
-
-            // Check queue after notification.
-            if let Some(event) = self.inner.pop() {
-                return Some(event);
-            }
-
-            // Queue still empty — check if shutdown was signalled.
-            if self.inner.is_shutdown() {
-                return None;
-            }
-
-            // Spurious wakeup — loop back and wait again.
         }
     }
 }
@@ -281,10 +221,10 @@ impl DebounceEngine {
         JoinHandle<()>,
     ) {
         let (input_tx, input_rx) = mpsc::channel::<StrandEvent>(100);
-        let inner = Arc::new(QueueWithShutdown::new());
-        let receiver = QueueReceiver::new(Arc::clone(&inner));
+        let queue = Arc::new(InspectQueue::new());
+        let receiver = QueueReceiver::new(Arc::clone(&queue));
 
-        let handle = tokio::spawn(Self::run(input_rx, inner));
+        let handle = tokio::spawn(Self::run(input_rx, queue));
 
         (input_tx, receiver, handle)
     }
@@ -302,10 +242,10 @@ impl DebounceEngine {
     pub fn start_with_receiver(
         input_rx: mpsc::Receiver<StrandEvent>,
     ) -> (QueueReceiver, JoinHandle<()>) {
-        let inner = Arc::new(QueueWithShutdown::new());
-        let receiver = QueueReceiver::new(Arc::clone(&inner));
+        let queue = Arc::new(InspectQueue::new());
+        let receiver = QueueReceiver::new(Arc::clone(&queue));
 
-        let handle = tokio::spawn(Self::run(input_rx, inner));
+        let handle = tokio::spawn(Self::run(input_rx, queue));
 
         (receiver, handle)
     }
@@ -317,21 +257,28 @@ impl DebounceEngine {
     /// Used by the server startup to ensure pipeline tasks are children
     /// of the server task.
     ///
-    /// Returns a `QueueReceiver` for consuming debounced events.
+    /// Returns an `Arc<InspectQueue<Option<StrandEvent>>>` for the
+    /// ProcessStrand consumer to read from directly using `pop()` +
+    /// `notified()`. The debounce engine pushes `Some(event)` for
+    /// debounced events and `None` as a shutdown sentinel.
     pub fn spawn_with_receiver(
         input_rx: mpsc::Receiver<StrandEvent>,
         join_set: &mut tokio::task::JoinSet<()>,
-    ) -> QueueReceiver {
-        let inner = Arc::new(QueueWithShutdown::new());
-        let receiver = QueueReceiver::new(Arc::clone(&inner));
-        join_set.spawn(Self::run(input_rx, inner));
-        receiver
+    ) -> Arc<InspectQueue<Option<StrandEvent>>> {
+        let queue = Arc::new(InspectQueue::new());
+        join_set.spawn(Self::run(input_rx, Arc::clone(&queue)));
+        queue
     }
 
-    /// Internal event loop: watch for incoming events and emit debounced ones.
+    /// Internal event loop: watch for incoming events and emit debounced
+    /// ones.
+    ///
+    /// Emits to `queue` as `Some(event)`. On shutdown (input channel
+    /// closed), flushes all pending entries then pushes `None` as a
+    /// sentinel so the consumer knows to exit.
     async fn run(
         mut input_rx: mpsc::Receiver<StrandEvent>,
-        queue: Arc<QueueWithShutdown>,
+        queue: Arc<InspectQueue<Option<StrandEvent>>>,
     ) {
         // Maps (strand_path, loom_id, knot_id) → (last event, deadline).
         // The composite key ensures events for the same file but different
@@ -361,10 +308,10 @@ impl DebounceEngine {
                         None => {
                             // Input channel closed — drain remaining
                             // entries and exit.
-                            Self::flush_all(&pending, &queue).await;
-                            // Signal shutdown so recv() returns None
+                            Self::flush_all(&pending, &queue);
+                            // Push shutdown sentinel so recv() returns None
                             // after the queue is drained.
-                            queue.signal_shutdown();
+                            queue.push(None);
                             return;
                         }
                     }
@@ -382,7 +329,10 @@ impl DebounceEngine {
 
                     for key in expired {
                         if let Some((event, _)) = pending.remove(&key) {
-                            queue.push_or_replace(event);
+                            queue.push_or_replace(
+                                Some(event),
+                                dedup_opt_key,
+                            );
                         }
                     }
                 }
@@ -391,12 +341,15 @@ impl DebounceEngine {
     }
 
     /// Flush all pending entries to the output queue (used on shutdown).
-    async fn flush_all(
-        pending: &HashMap<(StrandPath, LoomId, KnotId), (StrandEvent, tokio::time::Instant)>,
-        queue: &QueueWithShutdown,
+    fn flush_all(
+        pending: &HashMap<
+            (StrandPath, LoomId, KnotId),
+            (StrandEvent, tokio::time::Instant),
+        >,
+        queue: &InspectQueue<Option<StrandEvent>>,
     ) {
         for (event, _) in pending.values() {
-            queue.push_or_replace(event.clone());
+            queue.push_or_replace(Some(event.clone()), dedup_opt_key);
         }
     }
 
@@ -931,5 +884,66 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
         assert!(extra.is_ok(), "recv() should return after shutdown");
         assert!(extra.unwrap().is_none(), "no extra events expected");
+    }
+
+    // ── Shutdown Sentinel Tests ─────────────────────────────────────────
+
+    /// The debounce engine pushes `None` as a shutdown sentinel after
+    /// flushing. `QueueReceiver::recv()` returns `None` on sentinel.
+    #[tokio::test]
+    async fn shutdown_sentinel_returns_none() {
+        let (tx, rx, handle) = DebounceEngine::start();
+
+        // Send one event and let it debounce.
+        tx.send(created("file-shutdown.md")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        // Consume the event.
+        let event =
+            tokio::time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .expect("should receive event")
+                .expect("should have event");
+        assert_eq!(event_path(&event), "file-shutdown.md");
+
+        // Drop sender to trigger shutdown.
+        drop(tx);
+        handle.await.unwrap();
+
+        // Next recv() should return None (shutdown sentinel).
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .expect("recv should complete");
+        assert!(result.is_none(), "recv should return None on shutdown");
+    }
+
+    /// Shutdown with pending events: flushed events arrive first,
+    /// then `None` sentinel.
+    #[tokio::test]
+    async fn shutdown_flushes_then_sentinel() {
+        let (tx, rx, handle) = DebounceEngine::start();
+
+        // Send event but don't wait for debounce window.
+        tx.send(created("file-flush.md")).await.unwrap();
+
+        // Drop sender immediately — debounce engine flushes pending.
+        drop(tx);
+        handle.await.unwrap();
+
+        // The flushed event arrives.
+        let event =
+            tokio::time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .expect("should receive flushed event")
+                .expect("should have flushed event");
+        assert_eq!(event_path(&event), "file-flush.md");
+
+        // Then the sentinel.
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .expect("recv should complete");
+        assert!(result.is_none(), "recv should return None after flush");
     }
 }

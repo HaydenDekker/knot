@@ -207,11 +207,11 @@ pub fn start_event_pipeline(
 ) {
     // Wire event_rx into the debounce engine, spawned into the join set.
     //
-    // `spawn_with_receiver` creates an InspectQueue, moves the queue and
-    // shutdown sender into the spawned debounce task, and returns a
-    // `QueueReceiver` to the caller. When the debounce task exits (input
-    // channel closed → flush → shutdown signal), the QueueReceiver's
-    // `recv()` returns None → ProcessStrand exits naturally.
+    // `spawn_with_receiver` creates an InspectQueue<Option<StrandEvent>>
+    // and returns an Arc to it. The debounce engine pushes `Some(event)`
+    // for debounced events and `None` as a shutdown sentinel after
+    // flushing pending entries. ProcessStrand reads from the queue
+    // directly using pop() + notified().await, breaking on `None`.
     let debounce_rx =
         application::debounce::DebounceEngine::spawn_with_receiver(event_rx, join_set);
 
@@ -256,15 +256,30 @@ pub fn start_event_pipeline(
         // `is_burst_active` controls whether the next recv is blocking
         // (idle, wait for first event) or timed (drain check, detect end
         // of burst). This keeps a single flat loop with no nesting.
+        //
+        // The queue holds `Option<StrandEvent>`: `Some(event)` for real
+        // events, `None` for the shutdown sentinel from the debounce
+        // engine. The inner pop+notified loop drains the queue; the
+        // outer match handles events vs. shutdown vs. timeout.
         let poll_window = Duration::from_millis(500);
         let mut is_burst_active = false;
 
         loop {
-            // If a burst is active, poll with a timeout.
-            // If idle, block indefinitely for the next event.
-            let next_event = if is_burst_active {
-                match tokio::time::timeout(poll_window, debounce_rx.recv()).await {
-                    Ok(res) => res,
+            // Read next item from the InspectQueue.
+            // queue.pop() returns Option<Option<StrandEvent>>:
+            //   Some(Some(event)) → real event
+            //   Some(None) → shutdown sentinel
+            //   None → queue empty, wait for notification
+            let next_event: Option<StrandEvent> = if is_burst_active {
+                match tokio::time::timeout(poll_window, async {
+                    loop {
+                        if let Some(item) = debounce_rx.pop() {
+                            break item;
+                        }
+                        debounce_rx.notified().await;
+                    }
+                }).await {
+                    Ok(item) => item,
                     Err(_) => {
                         // Timeout: burst has ended — queue is idle.
                         let ts = application::usecases::format_timestamp();
@@ -282,25 +297,32 @@ pub fn start_event_pipeline(
                             }
                         }
                         is_burst_active = false;
-                        continue; // Loop back — block indefinitely for next event
+                        continue;
                     }
                 }
             } else {
                 // Queue is idle; block until a fresh event arrives.
-                debounce_rx.recv().await
+                async {
+                    loop {
+                        if let Some(item) = debounce_rx.pop() {
+                            break item;
+                        }
+                        debounce_rx.notified().await;
+                    }
+                }.await
             };
 
-            // Handle the event (or channel close).
+            // Handle the event (or shutdown sentinel).
             match next_event {
                 Some(event) => {
                     is_burst_active = true;
                     if let Err(e) = use_case.execute(event) {
                         eprintln!("[pipeline] ProcessStrand error: {e}");
                     }
-                    // Loop continues — next recv will use timeout (drain check).
+                    // Loop continues — next poll will use timeout (drain check).
                 }
                 None => {
-                    // Channel closed — pipeline shutting down.
+                    // Shutdown sentinel — pipeline shutting down.
                     break;
                 }
             }
