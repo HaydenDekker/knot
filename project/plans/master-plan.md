@@ -1,6 +1,12 @@
 # Master Plan — Project Index
 
 > **Last Updated:** 2026-06-16
+
+## Master Progress Table
+
+| # | Plan | Status | Created |
+|---|------|--------|---------|
+| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
 > **Plan Created:** Context Management — Slim Agent Prompt and Tie-Off Headers
 > **Plan Completed:** Simplify Agent Invocation — Remove --system-prompt
 
@@ -48,6 +54,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
 | 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ✅ Complete | 2026-06-16 |
 | 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
 | 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
@@ -85,6 +92,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 33. Queue Event Dedup — Prevent Duplicate Strand Processing
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-16
+**Goal:** Replace the debounce engine's output mpsc channel with an inspectable queue so duplicate events for the same strand are collapsed before reaching ProcessStrand.
+
+Full details in [queue-event-dedup.md](queue-event-dedup.md).
 
 ### 32. Simplify Agent Invocation — Remove --system-prompt
 
