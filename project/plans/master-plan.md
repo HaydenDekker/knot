@@ -7,7 +7,7 @@
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ⬜ Planned | 2026-06-17 |
-| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ⬜ Planned | 2026-06-17 |
+| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
 | 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
 
 ## How to Add a Plan

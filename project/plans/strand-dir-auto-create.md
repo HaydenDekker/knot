@@ -14,7 +14,12 @@ When a knot's `strand_dir` does not exist on disk at registration time, `event_s
 
 At knot registration (initial loom registration and dynamic knot addition), if `strand_dir` does not exist, Knot creates it automatically and logs the creation in the loom-log. The knot is then registered normally with its watcher active.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-17)
+
+## Completion Notes
+- All 3 phases executed via plan orchestrator (qwen3-27b)
+- 320 unit + integration tests pass
+- Version bumped to 0.10.0
 
 ## Existing Tests
 | Test Class | What it covers | Status |
