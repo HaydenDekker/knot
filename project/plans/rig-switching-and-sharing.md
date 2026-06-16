@@ -100,7 +100,7 @@ The share command is composition-root logic (walk directories, write a zip). Not
 
 ### Phase 1: Domain — Implement Rig Discovery
 
-- [ ] Add `domain/rig_discovery.rs` module with:
+- [x] Add `domain/rig_discovery.rs` module with:
 
 ```rust
 pub enum RigDiscovery {
@@ -116,10 +116,10 @@ pub fn discover_rigs(
 ) -> RigDiscovery
 ```
 
-- [ ] `discover_rigs` scans `base_dir` for immediate subdirectories matching `*-rig` suffix, returns the appropriate variant
-- [ ] When `explicit_name` is `Some(name)`, returns `Named(base_dir.join(name))` — no scanning needed
-- [ ] Re-export from `domain/mod.rs`
-- [ ] Phase 0 tests pass
+- [x] `discover_rigs` scans `base_dir` for immediate subdirectories matching `*-rig` suffix, returns the appropriate variant
+- [x] When `explicit_name` is `Some(name)`, returns `Named(base_dir.join(name))` — no scanning needed
+- [x] Re-export from `domain/mod.rs`
+- [x] Phase 0 tests pass
 
 ### Phase 2: Composition Root — AppConfig Constructor
 
