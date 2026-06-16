@@ -123,9 +123,9 @@ pub fn discover_rigs(
 
 ### Phase 2: Composition Root — AppConfig Constructor
 
-- [ ] Add `AppConfig::with_rig_dir(rig_dir: PathBuf) -> Self` in `server.rs`
-- [ ] Verify `AppConfig::default_config()` unchanged (all existing tests still pass)
-- [ ] Verify `lib.rs` re-exports remain valid
+- [x] Add `AppConfig::with_rig_dir(rig_dir: PathBuf) -> Self` in `server.rs`
+- [x] Verify `AppConfig::default_config()` unchanged (all existing tests still pass)
+- [x] Verify `lib.rs` re-exports remain valid
 
 ### Phase 3: Composition Root — CLI Parsing and Auto-Discovery
 
