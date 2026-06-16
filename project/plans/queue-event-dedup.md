@@ -65,13 +65,13 @@ When a debounced event fires:
 
 The `spawn_with_receiver` API changes to return `(Arc<InspectQueue<StrandEvent>>, JoinHandle<()>)` instead of `(mpsc::Receiver<StrandEvent>, JoinHandle<()>)`.
 
-- [ ] Replace output mpsc with InspectQueue
-- [ ] Wire `push_or_replace` in the expiry handler
-- [ ] Wire `push_or_replace` in `flush_all` (shutdown drain)
-- [ ] Update `spawn_with_receiver` signature
-- [ ] Update existing debounce unit tests to compile against new API
-- [ ] New test: rapid events for same key produce exactly one queued event
-- [ ] New test: different event types both appear in queue
+- [x] Replace output mpsc with InspectQueue
+- [x] Wire `push_or_replace` in the expiry handler
+- [x] Wire `push_or_replace` in `flush_all` (shutdown drain)
+- [x] Update `spawn_with_receiver` signature
+- [x] Update existing debounce unit tests to compile against new API
+- [x] New test: rapid events for same key produce exactly one queued event
+- [x] New test: different event types both appear in queue
 
 ### Phase 2: ProcessStrand reads from `InspectQueue`
 
