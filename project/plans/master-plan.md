@@ -48,6 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ⬜ Planned | 2026-06-16 |
 | 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
 | 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
 | 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
@@ -84,6 +85,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 32. Simplify Agent Invocation — Remove --system-prompt
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-16
+**Goal:** Remove `--system-prompt` CLI flag from `pi` invocation, rename `AgentProfile.system_prompt` → `profile_prompt`, and merge profile prompt + knot instructions + trigger line into a single stdin prompt. Eliminates knot instruction duplication and makes the profile prompt visible in session files.
+
+Full details in [simplify-agent-invocation.md](simplify-agent-invocation.md).
 
 ### 31. Agent Profile Skills
 
