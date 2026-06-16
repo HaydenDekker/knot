@@ -87,16 +87,16 @@ The share command is composition-root logic (walk directories, write a zip). Not
 
 ### Phase 0: Domain — Failing Tests for Rig Discovery
 
-- [ ] Create `tests/rig_discovery.rs` with failing unit tests for `discover_rigs()`:
+- [x] Create `tests/rig_discovery.rs` with failing unit tests for `discover_rigs()`:
   - Zero `*-rig` directories → `RigDiscovery::None`
   - One `*-rig` directory → `RigDiscovery::Single(path)`
   - Two `*-rig` directories → `RigDiscovery::Multiple([path1, path2])`
   - Three or more `*-rig` directories → `RigDiscovery::Multiple(paths)`
   - Explicit name given → `RigDiscovery::Named(path)` regardless of other `-rig` dirs present
   - Non-rig directories ignored (e.g. `src/`, `rig/` (no suffix), `planning-loom/`)
-- [ ] Tests use `tempfile::TempDir` for isolated filesystem state — no shared state, no rig creation side effects
-- [ ] Tests exercise `domain::rig_discovery::discover_rigs()` directly — no CLI, no `AppConfig`, no server
-- [ ] Tests fail (function doesn't exist yet) → green light to implement
+- [x] Tests use `tempfile::TempDir` for isolated filesystem state — no shared state, no rig creation side effects
+- [x] Tests exercise `domain::rig_discovery::discover_rigs()` directly — no CLI, no `AppConfig`, no server
+- [x] Tests fail (function doesn't exist yet) → green light to implement
 
 ### Phase 1: Domain — Implement Rig Discovery
 
