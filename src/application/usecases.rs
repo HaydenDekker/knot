@@ -654,22 +654,21 @@ impl ProcessStrand {
         }
     }
 
-    /// Resolve the effective `AgentConfig` for a knot, along with the
-    /// system prompt to use for `--system-prompt` and the profile's
+    /// Resolve the effective `AgentConfig` for a knot and the profile's
     /// session timeout.
     ///
     /// Loads the profile from the repository and builds an `AgentConfig`
-    /// from it. The profile's `system_prompt` is merged with the knot's
-    /// prompt instructions to form the full system prompt for CLI args.
+    /// from it. The profile's `profile_prompt` is delivered via stdin
+    /// (not `--system-prompt`), so it is not merged here.
     /// If the profile specifies `timeout`, it is converted to a `Duration`.
     ///
-    /// Returns a tuple of `(AgentConfig, String, Option<Duration>)` where
-    /// the `String` is the merged system prompt and the `Option<Duration>`
-    /// is the profile's timeout (or `None` to use the runner's default).
+    /// Returns a tuple of `(AgentConfig, Option<Duration>)` where
+    /// the `Option<Duration>` is the profile's timeout
+    /// (or `None` to use the runner's default).
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
-    ) -> Result<(AgentConfig, String, Option<std::time::Duration>), PortError> {
+    ) -> Result<(AgentConfig, Option<std::time::Duration>), PortError> {
         let profile = self
             .profile_repo
             .get(&knot.agent_profile_ref)
@@ -677,24 +676,6 @@ impl ProcessStrand {
             .ok_or_else(|| {
                 PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
-
-        // Merge profile's profile_prompt with knot's instructions.
-        // Profile prompt is the base (agent persona/instructions),
-        // knot instructions are appended as task-specific direction.
-        let merged_system_prompt = if knot
-            .prompt_template
-            .instructions
-            .trim()
-            .is_empty()
-        {
-            profile.profile_prompt.clone()
-        } else {
-            format!(
-                "{}\n\n{}",
-                profile.profile_prompt,
-                knot.prompt_template.instructions
-            )
-        };
 
         let timeout = profile
             .timeout
@@ -707,7 +688,6 @@ impl ProcessStrand {
                 model: profile.model.clone(),
                 tools: profile.tools.clone(),
             },
-            merged_system_prompt,
             timeout,
         ))
     }
@@ -767,7 +747,7 @@ impl ProcessStrand {
 
         // 2. Resolve effective agent config (profile) and build CLI args
         let resolved = self.resolve_agent_config(knot);
-        let (agent_config, system_prompt, profile_timeout) = resolved
+        let (agent_config, profile_timeout) = resolved
             .inspect_err(|err| {
                 let error_msg = err.to_string();
                 // Write error tie-off
@@ -801,10 +781,19 @@ impl ProcessStrand {
                     &strand_path.0,
                 );
             })?;
-        let (agent_config, system_prompt, profile_timeout) =
-            (agent_config, system_prompt, profile_timeout);
-        let mut cli_args = agent_config
-            .build_cli_args(&knot.prompt_template, Some(&system_prompt));
+        let (agent_config, profile_timeout) =
+            (agent_config, profile_timeout);
+
+        // Load profile to get profile_prompt for stdin delivery
+        let profile = self
+            .profile_repo
+            .get(&knot.agent_profile_ref)
+            .map_err(|e| PortError::ProfileNotFound(e.to_string()))?
+            .ok_or_else(|| {
+                PortError::ProfileNotFound(knot.agent_profile_ref.clone())
+            })?;
+
+        let mut cli_args = agent_config.build_cli_args();
         // Append strand content reference using pi's @file syntax
         cli_args.push(
             format!("@{}", strand_path.0.display()),
@@ -815,6 +804,7 @@ impl ProcessStrand {
             cli_path: self.rig_config.cli_path.clone(),
             cli_args,
             prompt: knot.prompt_template.instructions.clone(),
+            profile_prompt: profile.profile_prompt,
             strand_path: strand_path.clone(),
             event_type: event_label.clone(),
             knot_name: Some(knot.id.0.clone()),
@@ -3767,7 +3757,7 @@ mod phase3_profile_resolution_tests {
 
     /// Profile ref resolves to profile fields: provider, model, tools.
     /// Goal comes from the knot's prompt template instructions.
-    /// System prompt comes from the profile (merged with knot instructions).
+    /// Profile prompt is delivered via stdin (not --system-prompt).
     #[test]
     fn resolve_agent_config_from_profile() {
         let store = LoomStore::new();
@@ -3801,7 +3791,7 @@ mod phase3_profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
-        let (config, system_prompt, profile_timeout) =
+        let (config, profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
 
         // Resolved config should use profile values
@@ -3815,9 +3805,6 @@ mod phase3_profile_resolution_tests {
             config.goal,
             profile_knot.prompt_template.instructions
         );
-        // System prompt should contain profile's system_prompt + knot instructions
-        assert!(system_prompt.contains("You are fast."));
-        assert!(system_prompt.contains("check with profile"));
     }
 
     /// Profile not found returns PortError::ProfileNotFound.
@@ -3888,9 +3875,9 @@ mod phase3_profile_resolution_tests {
         let knot1 = build_profile_knot("k1", "detailed");
         let knot2 = build_profile_knot("k2", "detailed");
 
-        let (config1, system_prompt1, timeout1) =
+        let (config1, timeout1) =
             use_case.resolve_agent_config(&knot1).unwrap();
-        let (config2, system_prompt2, timeout2) =
+        let (config2, timeout2) =
             use_case.resolve_agent_config(&knot2).unwrap();
 
         // Both should resolve to the same profile values
@@ -3903,12 +3890,6 @@ mod phase3_profile_resolution_tests {
         assert_eq!(config2.model, "claude-sonnet-4-20250514");
         assert_eq!(config1.tools, vec!["fs", "web"]);
         assert_eq!(config2.tools, vec!["fs", "web"]);
-
-        // System prompts contain profile system_prompt + knot instructions
-        assert!(system_prompt1.contains("Be thorough."));
-        assert!(system_prompt1.contains("check with profile"));
-        assert!(system_prompt2.contains("Be thorough."));
-        assert!(system_prompt2.contains("check with profile"));
     }
 
     /// Dynamic profile pickup: adding a profile to the repository
@@ -3948,25 +3929,22 @@ mod phase3_profile_resolution_tests {
         profile_repo.save(profile).unwrap();
 
         // Now the same knot should resolve successfully
-        let (config, system_prompt, profile_timeout) =
+        let (config, profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
         assert_eq!(config.provider, "openai");
         // Profile has no timeout set
         assert_eq!(profile_timeout, None);
         assert_eq!(config.model, "gpt-4o");
         assert_eq!(config.tools, vec!["fs"]);
-        // System prompt contains profile's system_prompt + knot instructions
-        assert!(system_prompt.contains("You are new."));
-        assert!(system_prompt.contains("check with profile"));
     }
 
-    /// Profile system_prompt flows into CLI --system-prompt arg.
+/// Profile prompt does NOT flow into CLI args (delivered via stdin).
     ///
     /// Verifies that when a profile-ref knot is resolved, the resulting
-    /// CLI args contain the profile's system_prompt as the --system-prompt
-    /// value (merged with knot instructions).
+    /// CLI args contain --model but NOT --system-prompt. Profile prompt
+    /// and knot instructions are delivered via stdin instead.
     #[test]
-    fn profile_ref_cli_args_include_system_prompt() {
+    fn profile_ref_cli_args_no_system_prompt_flag() {
         let store = LoomStore::new();
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([(
@@ -3995,22 +3973,16 @@ mod phase3_profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
-        let (config, system_prompt, _profile_timeout) =
+        let (config, _profile_timeout) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
-        let args = config.build_cli_args(&profile_knot.prompt_template, Some(&system_prompt));
+        let args = config.build_cli_args();
 
-        // CLI args should contain the merged system prompt
-        let system_prompt_index = args.iter().position(|a| a == "--system-prompt").expect("--system-prompt flag missing");
-        let system_prompt_value = &args[system_prompt_index + 1];
+        // CLI args should NOT contain --system-prompt
         assert!(
-            system_prompt_value.contains("careful reviewer"),
-            "system prompt should contain profile instructions: {system_prompt_value}"
+            !args.contains(&"--system-prompt".to_string()),
+            "CLI args should NOT contain --system-prompt"
         );
-        assert!(
-            system_prompt_value.contains("check with profile"),
-            "system prompt should contain knot instructions: {system_prompt_value}"
-        );
-        // Should also have the model arg
+        // Should have the model arg
         let model_index = args.iter().position(|a| a == "--model").expect("--model flag missing");
         assert_eq!(args[model_index + 1], "gpt-4o");
     }
@@ -4779,7 +4751,7 @@ mod phase7_timeout_resolution_tests {
         );
 
         let knot = build_knot("k1", "slow");
-        let (_config, _system_prompt, timeout) =
+        let (_config, timeout) =
             use_case.resolve_agent_config(&knot).unwrap();
 
         assert_eq!(timeout, Some(Duration::from_secs(600)));
@@ -4819,7 +4791,7 @@ mod phase7_timeout_resolution_tests {
         );
 
         let knot = build_knot("k1", "fast");
-        let (_config, _system_prompt, timeout) =
+        let (_config, timeout) =
             use_case.resolve_agent_config(&knot).unwrap();
 
         assert_eq!(timeout, None);

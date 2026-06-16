@@ -102,33 +102,22 @@ impl AgentConfig {
         })
     }
 
-    /// Build a list of `pi` CLI arguments from this config and a
-    /// `PromptTemplate`.
+    /// Build a list of `pi` CLI arguments from this config.
     ///
     /// Produces arguments in the format:
     /// ```text
-    /// ["-p", "--model", "<model>", "--system-prompt",
-    ///  "<system_prompt>"]
+    /// ["-p", "--model", "<model>"]
     /// ```
     ///
-    /// If `system_prompt` is provided, it is used for `--system-prompt`
-    /// instead of `template.instructions`. This is the primary path for
-    /// profile-ref knots where the profile's `system_prompt` should
-    /// override the default.
-    ///
     /// If `tools` is non-empty, appends `--tools <comma-separated-list>`.
-    pub fn build_cli_args(
-        &self,
-        template: &PromptTemplate,
-        system_prompt: Option<&str>,
-    ) -> Vec<String> {
-        let system_prompt = system_prompt.unwrap_or(&template.instructions);
+    ///
+    /// The profile prompt and knot instructions are delivered via stdin
+    /// (not `--system-prompt`), so they are not included in CLI args.
+    pub fn build_cli_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "-p".to_string(),
             "--model".to_string(),
             self.model.clone(),
-            "--system-prompt".to_string(),
-            system_prompt.to_string(),
         ];
         if !self.tools.is_empty() {
             args.push("--tools".to_string());
@@ -390,22 +379,11 @@ mod tests {
             "gpt-4o".to_string(),
         )
         .unwrap();
-        let template = PromptTemplate::new(
-            "full-file".to_string(),
-            "Review this document.".to_string(),
-        )
-        .unwrap();
 
-        let args = config.build_cli_args(&template, None);
+        let args = config.build_cli_args();
         assert_eq!(
             args,
-            vec![
-                "-p",
-                "--model",
-                "gpt-4o",
-                "--system-prompt",
-                "Review this document.",
-            ]
+            vec!["-p", "--model", "gpt-4o"]
         );
     }
 
@@ -418,69 +396,28 @@ mod tests {
         )
         .unwrap();
         config.tools = vec!["fs".to_string(), "web".to_string()];
-        let template = PromptTemplate::new(
-            "full-file".to_string(),
-            "Do something.".to_string(),
-        )
-        .unwrap();
 
-        let args = config.build_cli_args(&template, None);
-        // --tools flag with comma-separated list
-        assert!(args.contains(&"--tools".to_string()));
-        assert!(args.contains(&"fs,web".to_string()));
+        let args = config.build_cli_args();
+        assert_eq!(
+            args,
+            vec!["-p", "--model", "gpt-4o", "--tools", "fs,web"]
+        );
     }
 
     #[test]
-    fn agent_config_build_cli_args_with_overridden_system_prompt() {
+    fn agent_config_build_cli_args_no_system_prompt_flag() {
+        // build_cli_args no longer emits --system-prompt.
+        // Prompt content is delivered via stdin instead.
         let config = AgentConfig::new(
             "goal".to_string(),
             "openai".to_string(),
             "gpt-4o".to_string(),
         )
         .unwrap();
-        let template = PromptTemplate::new(
-            "full-file".to_string(),
-            "Task instructions.".to_string(),
-        )
-        .unwrap();
 
-        // When system_prompt is provided, it overrides template.instructions
-        let custom_prompt = "You are a specialized agent.";
-        let args = config.build_cli_args(&template, Some(custom_prompt));
-        assert_eq!(
-            args,
-            vec![
-                "-p",
-                "--model",
-                "gpt-4o",
-                "--system-prompt",
-                "You are a specialized agent.",
-            ]
-        );
-    }
-
-    #[test]
-    fn agent_config_build_cli_args_with_tools_and_overridden_system_prompt() {
-        let mut config = AgentConfig::new(
-            "goal".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-        )
-        .unwrap();
-        config.tools = vec!["fs".to_string(), "web".to_string()];
-        let template = PromptTemplate::new(
-            "full-file".to_string(),
-            "Do something.".to_string(),
-        )
-        .unwrap();
-
-        let custom_prompt = "Be thorough and detailed.";
-        let args = config.build_cli_args(&template, Some(custom_prompt));
-        // --system-prompt uses the override
-        assert!(args.contains(&"Be thorough and detailed.".to_string()));
-        // --tools flag still works
-        assert!(args.contains(&"--tools".to_string()));
-        assert!(args.contains(&"fs,web".to_string()));
+        let args = config.build_cli_args();
+        assert!(!args.contains(&"--system-prompt".to_string()));
+        assert_eq!(args, vec!["-p", "--model", "gpt-4o"]);
     }
 
     #[test]

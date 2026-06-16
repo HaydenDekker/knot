@@ -189,8 +189,12 @@ pub struct ExecutionContext {
     pub cli_path: String,
     /// Arguments passed to the CLI.
     pub cli_args: Vec<String>,
-    /// Prompt to send to the agent.
+    /// Prompt to send to the agent (knot instructions).
     pub prompt: String,
+    /// Profile-level prompt segment (agent persona).
+    ///
+    /// Prepend to stdin before knot instructions and trigger line.
+    pub profile_prompt: String,
     /// Path to the strand being processed.
     pub strand_path: StrandPath,
     /// The type of strand event (e.g. "Created", "Modified", "Deleted").
@@ -686,6 +690,7 @@ mod tests {
             cli_path: "/usr/bin/pi".to_string(),
             cli_args: vec!["--verbose".to_string()],
             prompt: "Review this document".to_string(),
+            profile_prompt: "You are a reviewer.".to_string(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
             event_type: "Created".to_string(),
             knot_name: Some("review".to_string()),
@@ -904,6 +909,7 @@ mod tests {
             cli_path: "pi".to_string(),
             cli_args: vec!["--mode".to_string(), "stream".to_string()],
             prompt: "Process this file".to_string(),
+            profile_prompt: "You are an agent.".to_string(),
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
             event_type: "Created".to_string(),
             knot_name: Some("review".to_string()),
@@ -913,6 +919,7 @@ mod tests {
         assert_eq!(ctx.cli_path, "pi");
         assert_eq!(ctx.cli_args.len(), 2);
         assert!(!ctx.prompt.is_empty());
+        assert!(!ctx.profile_prompt.is_empty());
         assert_eq!(ctx.event_type, "Created");
         assert_eq!(ctx.knot_name.as_deref(), Some("review"));
         assert!(ctx.timeout.is_none());

@@ -39,25 +39,38 @@ impl SubprocessAgentRunner {
         Self { timeout }
     }
 
-    /// Build the prompt with a short event trigger line prepended.
+    /// Build the prompt with profile prompt, trigger line, and knot
+    /// instructions.
     ///
-    /// Prepends a single trigger line identifying the knot and event,
-    /// then the original prompt. The strand file is referenced via
+    /// Ordering: profile prompt (persona) → knot instructions (task)
+    /// → trigger line (event context). The strand file is referenced via
     /// `@{path}` in CLI args — not injected into the prompt body.
-    fn build_prompt_with_context(ctx: &ExecutionContext) -> String {
+    fn build_prompt_with_context(
+        ctx: &ExecutionContext,
+        profile_prompt: &str,
+    ) -> String {
         let mut full_prompt = String::new();
+
+        // Profile prompt (agent persona/instructions)
+        if !profile_prompt.is_empty() {
+            full_prompt.push_str(profile_prompt);
+            full_prompt.push_str("\n\n");
+        }
+
+        // Knot instructions (task-specific direction)
+        full_prompt.push_str(&ctx.prompt);
 
         // Prepend a short trigger line for event awareness
         if !ctx.event_type.is_empty() {
+            full_prompt.push_str("\n\n");
             full_prompt.push_str(&format!(
-                "**{}** triggered by **{}** on **{}**\n\n",
+                "**{}** triggered by **{}** on **{}**",
                 ctx.knot_name.as_deref().unwrap_or("unknown"),
                 ctx.event_type,
                 ctx.strand_path.0.display()
             ));
         }
 
-        full_prompt.push_str(&ctx.prompt);
         full_prompt
     }
 }
@@ -127,8 +140,9 @@ impl AgentRunner for SubprocessAgentRunner {
         let mut stdin = child.stdin.take().expect("stdin was piped");
         use std::io::Write;
 
-        // Build event context block to prepend to prompt.
-        let prompt_with_context = Self::build_prompt_with_context(&ctx);
+        // Build full prompt: profile prompt → knot instructions → trigger line.
+        let profile_prompt = ctx.profile_prompt.clone();
+        let prompt_with_context = Self::build_prompt_with_context(&ctx, &profile_prompt);
 
         stdin
             .write_all(prompt_with_context.as_bytes())
@@ -194,6 +208,7 @@ mod tests {
             cli_path: cli.to_string(),
             cli_args: args.iter().map(|s| s.to_string()).collect(),
             prompt: "test prompt".to_string(),
+            profile_prompt: "You are a test agent.".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             knot_name: None,
@@ -290,16 +305,16 @@ mod tests {
         );
     }
 
-    /// Verify that `SubprocessAgentRunner` writes `ctx.prompt` to the child
-    /// process's stdin. Use `sh -c cat` which reads stdin and writes to stdout.
+    /// Verify that `SubprocessAgentRunner` writes the full prompt chain
+    /// (profile_prompt + prompt + trigger line) to the child process's stdin.
     #[test]
     fn runner_passes_prompt_via_stdin() {
         let runner = SubprocessAgentRunner::new();
-        let prompt = "hello from knot\n";
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "cat".to_string()],
-            prompt: prompt.to_string(),
+            prompt: "hello from knot\n".to_string(),
+            profile_prompt: String::new(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             knot_name: None,
@@ -310,7 +325,7 @@ mod tests {
         assert!(result.is_ok(), "should succeed: {result:?}");
 
         let output = result.unwrap();
-        assert_eq!(output.stdout, prompt, "stdout should contain prompt");
+        assert_eq!(output.stdout, "hello from knot\n", "stdout should contain prompt");
     }
 
     /// Verify that the full prompt content round-trips through stdin
@@ -318,11 +333,11 @@ mod tests {
     #[test]
     fn runner_passes_strand_via_at_syntax() {
         let runner = SubprocessAgentRunner::new();
-        let prompt = "strand content from file";
         let ctx = ExecutionContext {
             cli_path: "cat".to_string(),
             cli_args: vec![],
-            prompt: prompt.to_string(),
+            prompt: "strand content from file".to_string(),
+            profile_prompt: String::new(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("strand.md")),
             event_type: String::new(),
             knot_name: None,
@@ -334,13 +349,13 @@ mod tests {
 
         let output = result.unwrap();
         assert_eq!(
-            output.stdout, prompt,
+            output.stdout, "strand content from file",
             "cat should echo stdin content exactly"
         );
     }
 
-    /// Verify that `SubprocessAgentRunner` prepends a trigger line to the
-    /// prompt when `event_type` is set.
+    /// Verify that `SubprocessAgentRunner` includes profile prompt,
+    /// knot instructions, and trigger line in the correct order.
     #[test]
     fn runner_passes_event_metadata() {
         let runner = SubprocessAgentRunner::new();
@@ -348,6 +363,7 @@ mod tests {
             cli_path: "cat".to_string(),
             cli_args: vec![],
             prompt: "Review this file.".to_string(),
+            profile_prompt: "You are a reviewer.".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("doc.md")),
             event_type: "Modified".to_string(),
             knot_name: Some("review".to_string()),
@@ -358,22 +374,22 @@ mod tests {
         assert!(result.is_ok(), "should succeed: {result:?}");
 
         let output = result.unwrap();
-        // Output should contain the trigger line (bold markdown)
+        // Output should contain profile prompt at the start
+        assert!(
+            output.stdout.starts_with("You are a reviewer."),
+            "output should start with profile prompt: {}",
+            output.stdout
+        );
+        // Knot instructions should follow profile prompt
+        assert!(
+            output.stdout.contains("Review this file."),
+            "output should contain knot instructions: {}",
+            output.stdout
+        );
+        // Trigger line should be present
         assert!(
             output.stdout.contains("**review** triggered by **Modified** on **doc.md**"),
             "output should contain trigger line: {}",
-            output.stdout
-        );
-        // Original prompt should still be present
-        assert!(
-            output.stdout.contains("Review this file."),
-            "output should still contain original prompt: {}",
-            output.stdout
-        );
-        // Should NOT contain old event context format
-        assert!(
-            !output.stdout.contains("## Event Context"),
-            "output should NOT contain old event context header: {}",
             output.stdout
         );
     }
@@ -388,6 +404,7 @@ mod tests {
             cli_path: "sleep".to_string(),
             cli_args: vec!["30".to_string()],
             prompt: "test prompt".to_string(),
+            profile_prompt: String::new(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             knot_name: None,
@@ -420,6 +437,7 @@ mod tests {
             cli_path: "sleep".to_string(),
             cli_args: vec!["30".to_string()],
             prompt: "test prompt".to_string(),
+            profile_prompt: String::new(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             knot_name: None,
@@ -454,6 +472,7 @@ mod tests {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "echo ok".to_string()],
             prompt: "test prompt".to_string(),
+            profile_prompt: String::new(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
             knot_name: None,
