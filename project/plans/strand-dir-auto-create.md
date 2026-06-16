@@ -50,9 +50,9 @@ At knot registration (initial loom registration and dynamic knot addition), if `
 - [x] Add integration test in `tests/auto_discovery_and_knot_crud.rs` — create a knot with nonexistent strand_dir, verify loom-log contains `DirectoryCreated`, verify knot is active
 
 ### Phase 2: Knot Modification — Auto-Create on Strand Dir Change
-- [ ] In `handle_knot_modified()`, when `strand_dir` changes, also call the helper for the new directory (covers the case where the user updates a knot to point to a new directory)
-- [ ] Add unit test verifying `DirectoryCreated` is logged when `handle_knot_modified` changes to a nonexistent dir
-- [ ] Verify all existing tests still pass
+- [x] In `handle_knot_modified()`, when `strand_dir` changes, also call the helper for the new directory (covers the case where the user updates a knot to point to a new directory)
+- [x] Add unit test verifying `DirectoryCreated` is logged when `handle_knot_modified` changes to a nonexistent dir
+- [x] Verify all existing tests still pass
 
 ## Notes
 
