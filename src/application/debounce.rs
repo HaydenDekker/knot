@@ -4,6 +4,8 @@
 //! The adapter emits raw events; this engine filters them at 100ms per-file.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -17,6 +19,143 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 
 /// How often the engine checks for expired entries.
 const CHECK_INTERVAL: Duration = Duration::from_millis(5);
+
+// ── StrandEventKind ────────────────────────────────────────────────────────
+
+/// The variant kind of a `StrandEvent`.
+///
+/// Used as part of the deduplication key so that different event types
+/// (Created/Modified/Deleted) for the same file always pass through,
+/// while repeated events of the same type are collapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StrandEventKind {
+    /// A strand was created.
+    Created,
+    /// A strand was modified.
+    Modified,
+    /// A strand was deleted.
+    Deleted,
+}
+
+/// Extract the `StrandEventKind` from a `StrandEvent`.
+pub fn event_kind(event: &StrandEvent) -> StrandEventKind {
+    match event {
+        StrandEvent::Created { .. } => StrandEventKind::Created,
+        StrandEvent::Modified { .. } => StrandEventKind::Modified,
+        StrandEvent::Deleted { .. } => StrandEventKind::Deleted,
+    }
+}
+
+/// Build the deduplication key for a `StrandEvent`.
+///
+/// The key includes the event kind so that different event types for the
+/// same file are treated as distinct entries.
+fn dedup_key(
+    event: &StrandEvent,
+) -> (StrandPath, LoomId, KnotId, StrandEventKind) {
+    match event {
+        StrandEvent::Created {
+            strand_path,
+            loom_id,
+            knot_id,
+        }
+        | StrandEvent::Modified {
+            strand_path,
+            loom_id,
+            knot_id,
+        }
+        | StrandEvent::Deleted {
+            strand_path,
+            loom_id,
+            knot_id,
+        } => {
+            (
+                strand_path.clone(),
+                loom_id.clone(),
+                knot_id.clone(),
+                event_kind(event),
+            )
+        }
+    }
+}
+
+// ── InspectQueue ───────────────────────────────────────────────────────────
+
+/// A thread-safe FIFO queue that supports in-place replacement.
+///
+/// Wraps a `VecDeque<T>` behind a `Mutex` with a `tokio::sync::Notify`
+/// for signaling the consumer. The `push_or_replace` method scans the
+/// queue for an existing item with the same deduplication key and
+/// replaces it in-place rather than queuing a duplicate.
+///
+/// This replaces the opaque `mpsc::channel` between the debounce engine
+/// and the process-strand consumer, making the pipeline inspectable so
+/// that duplicate events can be collapsed before they are emitted.
+struct InspectQueue<T> {
+    inner: Mutex<VecDeque<T>>,
+    notify: tokio::sync::Notify,
+}
+
+impl<T> InspectQueue<T> {
+    /// Create a new empty queue.
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(VecDeque::new()),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// Push an item to the back of the queue and signal one waiter.
+    fn push(&self, item: T) {
+        self.inner.lock().unwrap().push_back(item);
+        self.notify.notify_one();
+    }
+
+    /// Push an item, or replace an existing item with the same key.
+    ///
+    /// Scans the queue for an existing item whose key (derived by `key_fn`)
+    /// matches the key of the new item. If found, replaces it in-place.
+    /// Otherwise pushes to the back. Always signals one waiter.
+    fn push_or_replace<F, K>(&self, item: T, key_fn: F)
+    where
+        F: Fn(&T) -> K,
+        K: PartialEq,
+    {
+        let mut queue = self.inner.lock().unwrap();
+        let new_key = key_fn(&item);
+
+        if let Some(pos) = queue
+            .iter()
+            .position(|existing| key_fn(existing) == new_key)
+        {
+            queue[pos] = item;
+        } else {
+            queue.push_back(item);
+        }
+
+        self.notify.notify_one();
+    }
+
+    /// Pop the first item from the front of the queue.
+    ///
+    /// Returns `None` if the queue is empty.
+    fn pop(&self) -> Option<T> {
+        self.inner.lock().unwrap().pop_front()
+    }
+
+    /// Await a signal that an item was pushed.
+    ///
+    /// Suspends the current task until `notify_one()` is called by a
+    /// producer. Used by the consumer loop to wait efficiently.
+    async fn notified(&self) {
+        self.notify.notified().await;
+    }
+
+    /// Return the current length of the queue (for tests).
+    fn len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+}
 
 // ── DebounceEngine ────────────────────────────────────────────────────────
 
@@ -440,5 +579,155 @@ mod tests {
         let extra = tokio::time::timeout(Duration::from_millis(50), rx.recv())
             .await;
         assert!(extra.is_err(), "no extra events expected");
+    }
+
+    // ── StrandEventKind ─────────────────────────────────────────────────
+
+    #[test]
+    fn strand_event_kind_maps_created() {
+        let event = created("file-a.md");
+        assert_eq!(super::event_kind(&event), StrandEventKind::Created);
+    }
+
+    #[test]
+    fn strand_event_kind_maps_modified() {
+        let event = modified("file-a.md");
+        assert_eq!(super::event_kind(&event), StrandEventKind::Modified);
+    }
+
+    #[test]
+    fn strand_event_kind_maps_deleted() {
+        let event = deleted("file-a.md");
+        assert_eq!(super::event_kind(&event), StrandEventKind::Deleted);
+    }
+
+    // ── InspectQueue ────────────────────────────────────────────────────
+
+    /// `push` adds to the back; `pop` removes from the front (FIFO).
+    #[test]
+    fn inspect_queue_push_pop_fifo() {
+        let queue = InspectQueue::new();
+
+        queue.push(1);
+        queue.push(2);
+        queue.push(3);
+
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(2));
+        assert_eq!(queue.pop(), Some(3));
+        assert_eq!(queue.pop(), None);
+    }
+
+    /// `push_or_replace` replaces an existing item with the same key
+    /// in-place, preserving queue order.
+    #[test]
+    fn inspect_queue_push_or_replace_existing() {
+        let queue = InspectQueue::new();
+
+        // Use (id, value) tuples — key is the id.
+        queue.push_or_replace((1, "first"), |item| item.0);
+        queue.push_or_replace((2, "second"), |item| item.0);
+        queue.push_or_replace((1, "replaced"), |item| item.0);
+
+        // Item 1 was replaced in-place; queue length is still 2.
+        assert_eq!(queue.len(), 2);
+
+        let first = queue.pop().unwrap();
+        assert_eq!(first.0, 1);
+        assert_eq!(first.1, "replaced");
+
+        let second = queue.pop().unwrap();
+        assert_eq!(second.0, 2);
+        assert_eq!(second.1, "second");
+
+        assert_eq!(queue.pop(), None);
+    }
+
+    /// `push_or_replace` pushes a new item when no matching key exists,
+    /// behaving like `push`.
+    #[test]
+    fn inspect_queue_push_or_replace_different_key() {
+        let queue = InspectQueue::new();
+
+        queue.push_or_replace((1, "a"), |item| item.0);
+        queue.push_or_replace((2, "b"), |item| item.0);
+        queue.push_or_replace((3, "c"), |item| item.0);
+
+        assert_eq!(queue.len(), 3);
+
+        assert_eq!(queue.pop().unwrap().1, "a");
+        assert_eq!(queue.pop().unwrap().1, "b");
+        assert_eq!(queue.pop().unwrap().1, "c");
+    }
+
+    /// `push_or_replace` with `StrandEvent` using `dedup_key`: same file
+    /// + same kind replaces; same file + different kind does not.
+    #[test]
+    fn inspect_queue_strand_event_same_kind_replaces() {
+        let queue = InspectQueue::new();
+
+        let e1 = created("file-a.md");
+        let e2 = created("file-a.md");
+
+        queue.push_or_replace(e1, dedup_key);
+        queue.push_or_replace(e2, dedup_key);
+
+        // Same (path, loom, knot, kind) — should replace in-place.
+        assert_eq!(queue.len(), 1);
+    }
+
+    /// Same file, different event kinds — both stay in the queue.
+    #[test]
+    fn inspect_queue_strand_event_different_kind_no_replace() {
+        let queue = InspectQueue::new();
+
+        let created_ev = created("file-a.md");
+        let modified_ev = modified("file-a.md");
+
+        queue.push_or_replace(created_ev, dedup_key);
+        queue.push_or_replace(modified_ev, dedup_key);
+
+        // Different kinds — both should be queued.
+        assert_eq!(queue.len(), 2);
+    }
+
+    /// Same file, different knot — both stay in the queue.
+    #[test]
+    fn inspect_queue_strand_event_different_knot_no_replace() {
+        let queue = InspectQueue::new();
+
+        let e_a = created_for("file-a.md", "loom-1", "knot-a");
+        let e_b = created_for("file-a.md", "loom-1", "knot-b");
+
+        queue.push_or_replace(e_a, dedup_key);
+        queue.push_or_replace(e_b, dedup_key);
+
+        // Different knots — both should be queued.
+        assert_eq!(queue.len(), 2);
+    }
+
+    /// `notified` suspends until a producer signals.
+    #[tokio::test]
+    async fn inspect_queue_notified_waits_for_push() {
+        use std::sync::Arc;
+
+        let queue = Arc::new(InspectQueue::<i32>::new());
+        let queue_clone = Arc::clone(&queue);
+
+        let handle = tokio::spawn(async move {
+            queue_clone.notified().await;
+        });
+
+        // Give the task a moment to enter the notified() call.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Push signals the waiter.
+        queue.push(42);
+
+        // The task should complete.
+        tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("notified() should unblock after push")
+            .unwrap();
     }
 }
