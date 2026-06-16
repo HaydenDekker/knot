@@ -68,15 +68,15 @@ Rename `system_prompt` → `profile_prompt` in the `AgentProfile` entity and YAM
 
 ### Phase 1: Application — Remove `--system-prompt` from CLI args, merge into stdin
 
-- [ ] In `AgentConfig::build_cli_args()` (`value_objects.rs`): remove `system_prompt` parameter and `--system-prompt` from returned args vector. Signature becomes `build_cli_args(&self, template: &PromptTemplate) -> Vec<String>`
-- [ ] In `ProcessStrand::resolve_agent_config()` (`usecases.rs`): remove system prompt merging logic. Return `(AgentConfig, Option<Duration>)` instead of `(AgentConfig, String, Option<Duration>)` — the profile_prompt is no longer part of the return tuple
-- [ ] In `ProcessStrand::execute()` (`usecases.rs`): call `build_cli_args()` without the system_prompt argument. Build the full stdin prompt as: `<profile.profile_prompt>\n\n<knot.instructions>\n\n<trigger line>`
-- [ ] In `SubprocessAgentRunner::build_prompt_with_context()` (`subprocess.rs`): accept `profile_prompt: &str` parameter, prepend it to the prompt before trigger line + original prompt. Signature becomes `build_prompt_with_context(ctx: &ExecutionContext, profile_prompt: &str) -> String`
-- [ ] In `ExecutionContext` (`ports.rs`): add `profile_prompt: String` field
-- [ ] Update `ProcessStrand::execute()` to populate `ctx.profile_prompt` from the resolved profile
-- [ ] Update all usecase unit tests that call `build_cli_args()` or `resolve_agent_config()`
-- [ ] Update subprocess unit tests that construct `ExecutionContext`
-- [ ] Compile check: `cargo build`, then `cargo test`
+- [x] In `AgentConfig::build_cli_args()` (`value_objects.rs`): remove `system_prompt` parameter and `--system-prompt` from returned args vector. Signature becomes `build_cli_args(&self, template: &PromptTemplate) -> Vec<String>`
+- [x] In `ProcessStrand::resolve_agent_config()` (`usecases.rs`): remove system prompt merging logic. Return `(AgentConfig, Option<Duration>)` instead of `(AgentConfig, String, Option<Duration>)` — the profile_prompt is no longer part of the return tuple
+- [x] In `ProcessStrand::execute()` (`usecases.rs`): call `build_cli_args()` without the system_prompt argument. Build the full stdin prompt as: `<profile.profile_prompt>\n\n<knot.instructions>\n\n<trigger line>`
+- [x] In `SubprocessAgentRunner::build_prompt_with_context()` (`subprocess.rs`): accept `profile_prompt: &str` parameter, prepend it to the prompt before trigger line + original prompt. Signature becomes `build_prompt_with_context(ctx: &ExecutionContext, profile_prompt: &str) -> String`
+- [x] In `ExecutionContext` (`ports.rs`): add `profile_prompt: String` field
+- [x] Update `ProcessStrand::execute()` to populate `ctx.profile_prompt` from the resolved profile
+- [x] Update all usecase unit tests that call `build_cli_args()` or `resolve_agent_config()`
+- [x] Update subprocess unit tests that construct `ExecutionContext`
+- [x] Compile check: `cargo build`, then `cargo test`
 
 **Rationale**: The profile prompt moves from CLI args into the stdin prompt chain. `ExecutionContext` gains a `profile_prompt` field so the runner can prepend it. The stdin ordering is: profile prompt (persona) → knot instructions (task) → trigger line (event context) → @file reference (input data).
 
