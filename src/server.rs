@@ -207,12 +207,12 @@ pub fn start_event_pipeline(
 ) {
     // Wire event_rx into the debounce engine, spawned into the join set.
     //
-    // `spawn_with_receiver` creates an output channel, moves `output_tx` into
-    // the spawned debounce task, and returns `output_rx` to the caller.
-    // When the debounce task exits (input channel closed → flush → return),
-    // its `output_tx` is dropped → `output_rx.recv()` yields None →
-    // ProcessStrand exits naturally.
-    let mut debounce_rx =
+    // `spawn_with_receiver` creates an InspectQueue, moves the queue and
+    // shutdown sender into the spawned debounce task, and returns a
+    // `QueueReceiver` to the caller. When the debounce task exits (input
+    // channel closed → flush → shutdown signal), the QueueReceiver's
+    // `recv()` returns None → ProcessStrand exits naturally.
+    let debounce_rx =
         application::debounce::DebounceEngine::spawn_with_receiver(event_rx, join_set);
 
     // ProcessStrand loop: read debounced events and process them.
