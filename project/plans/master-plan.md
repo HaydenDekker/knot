@@ -2,7 +2,7 @@
 
 > **Last Updated:** 2026-06-16
 > **Plan Created:** Context Management — Slim Agent Prompt and Tie-Off Headers
-> **Plan Completed:** Context Management — Slim Agent Prompt and Tie-Off Headers
+> **Plan Completed:** Simplify Agent Invocation — Remove --system-prompt
 
 ## How to Add a Plan
 
@@ -48,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ⬜ Planned | 2026-06-16 |
+| 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ✅ Complete | 2026-06-16 |
 | 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
 | 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
 | 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
@@ -88,9 +88,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 32. Simplify Agent Invocation — Remove --system-prompt
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-16
+**Completed:** 2026-06-16
 **Goal:** Remove `--system-prompt` CLI flag from `pi` invocation, rename `AgentProfile.system_prompt` → `profile_prompt`, and merge profile prompt + knot instructions + trigger line into a single stdin prompt. Eliminates knot instruction duplication and makes the profile prompt visible in session files.
+
+**Result:** `AgentConfig::build_cli_args()` no longer accepts system prompt — simplified to `build_cli_args(&self)`. `ExecutionContext` gained `profile_prompt` field. `SubprocessAgentRunner::build_prompt_with_context()` builds prompt chain: profile prompt → knot instructions → trigger line. `resolve_agent_config()` return type simplified from 3-tuple to 2-tuple. Domain glossary updated. ADR-007 documents the decision. 21 files changed, 303+ tests pass. Version bumped to 0.8.0.
 
 Full details in [simplify-agent-invocation.md](simplify-agent-invocation.md).
 

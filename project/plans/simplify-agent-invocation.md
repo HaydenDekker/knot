@@ -29,7 +29,13 @@ Simplify to a single stdin-only prompt. Remove `--system-prompt` entirely. The s
 
 Rename `system_prompt` → `profile_prompt` in the `AgentProfile` entity and YAML frontmatter (key becomes `profile-prompt`), making it clear this is a profile-level prompt segment, not a system role message.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-16)
+
+## Completion Notes
+- Version bumped to 0.8.0
+- ADR-007 documents the stdin-only invocation decision
+- All 3 phases complete, 303+ tests pass
+- Breaking change: profile files must use `profile-prompt:` instead of `system-prompt:` in YAML frontmatter
 
 ## Existing Tests
 
