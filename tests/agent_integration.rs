@@ -151,14 +151,14 @@ async fn full_pipeline_agent_error_in_state_and_log() {
 
 /// Full happy path using a stub `pi` CLI that mimics `pi -p` behaviour.
 ///
-/// The stub reads `--system-prompt` and `@<file>` args, then echoes them
+/// The stub reads `--model` and `@<file>` args, then echoes them
 /// back. This verifies that Knot constructs the correct CLI invocation
 /// from the knot's agent config and prompt template, and that the
 /// subprocess runner passes strand content to the agent.
 ///
 /// 1. Create loom with knot (provider/openai, model/gpt-4o)
 /// 2. Start server with stub-pi.sh as cli_path
-/// 3. Create strand → tie-off contains system prompt + strand content
+/// 3. Create strand → tie-off contains knot instructions + strand content
 /// 4. Verify knot-state is `completed`
 /// 5. Verify loom-log contains `StrandProcessed` with no error
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -222,10 +222,10 @@ async fn full_pipeline_with_pi_agent() {
     let tie_off_content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
 
-    // Tie-off should contain the system prompt from --system-prompt arg
+    // Tie-off should contain knot instructions (now delivered via stdin)
     assert!(
         tie_off_content.contains("Review the goals section"),
-        "tie-off should contain system prompt, got: {tie_off_content}"
+        "tie-off should contain knot instructions, got: {tie_off_content}"
     );
 
     // Tie-off should contain the strand file content (read via @<file>)
@@ -270,8 +270,8 @@ async fn full_pipeline_with_pi_agent() {
 
 }
 
-/// Verify the stub `pi` CLI receives system prompt and strand content,
-/// and that a nonexistent model causes knot-state to show `failed`.
+/// Verify the stub `pi` CLI receives profile prompt (via stdin) and strand
+/// content, and that a nonexistent profile causes knot-state to show `failed`.
 ///
 /// 1. Start server with stub-pi.sh and a knot using `nonexistent-model`
 /// 2. Create strand → stub exits with code 1 (simulates model not found)
@@ -279,7 +279,7 @@ async fn full_pipeline_with_pi_agent() {
 /// 4. Verify tie-off contains error details
 /// 5. Verify loom-log contains `StrandProcessed` with error field
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pi_agent_receives_system_prompt_and_strand() {
+async fn pi_agent_receives_profile_prompt_and_strand() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().to_path_buf();
 

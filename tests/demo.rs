@@ -126,10 +126,10 @@ processing pipeline.
     let tie_off_content =
         fs::read_to_string(&tie_off_path).expect("should read tie-off");
 
-    // Tie-off should contain system prompt (proves --system-prompt was passed)
+    // Tie-off should contain knot instructions (now delivered via stdin)
     assert!(
         tie_off_content.contains("Review the provided document"),
-        "tie-off should contain system prompt, got: {tie_off_content}"
+        "tie-off should contain knot instructions, got: {tie_off_content}"
     );
 
     // Tie-off should contain model name (proves --model was passed)

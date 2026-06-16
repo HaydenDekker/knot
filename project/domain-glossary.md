@@ -21,7 +21,7 @@ The configuration that determines *which agent* runs. Contains:
 - The LLM provider to use.
 - The skills available to the agent (driving the prompt).
 - The tools available to the agent (executing the prompt).
-- The agent's initial system prompt.
+- The profile prompt (YAML key `profile-prompt`) — persona instructions delivered via stdin.
 - The session timeout (optional, in seconds; defaults to 300s / 5 min).
 
 Part of a **knot**.
@@ -122,7 +122,7 @@ Rig (`./rig/`)
             │     ├── LLM Provider
             │     ├── Skills
             │     ├── Tools
-            │     └── System Prompt
+            │     └── Profile Prompt
             ├── Prompt Template
             │     ├── Goal Description
             │     └── Input Bundling Rules

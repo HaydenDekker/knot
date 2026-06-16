@@ -96,3 +96,36 @@ Rename `system_prompt` → `profile_prompt` in the `AgentProfile` entity and YAM
 - This is a breaking change for existing profile files (`system-prompt` → `profile-prompt` in YAML frontmatter). Users must update their `rig/profiles/*.md` files.
 - The `--system-prompt` flag is a pi CLI feature — removing it from Knot means Knot no longer relies on pi's system prompt mechanism. This is a simplification, not a loss of capability.
 - The profile prompt in stdin is effectively the same as a system prompt for the LLM — it's the first text in the conversation. The difference is it's now visible in the session file.
+
+## Migration: Profile YAML Key Rename (`system-prompt` → `profile-prompt`)
+
+Existing profile files in `rig/profiles/*.md` use the YAML key `system-prompt:`. After this change, Knot expects `profile-prompt:`. Files with the old key will fail to parse.
+
+**Migration steps:**
+1. Open each file in `rig/profiles/*.md`
+2. Replace `system-prompt:` with `profile-prompt:` in the YAML frontmatter
+3. No other changes needed — the value format is identical
+
+**Example before:**
+```yaml
+---
+name: reviewer
+provider: openai
+model: gpt-4o
+system-prompt: |
+  You are a code reviewer.
+---
+```
+
+**Example after:**
+```yaml
+---
+name: reviewer
+provider: openai
+model: gpt-4o
+profile-prompt: |
+  You are a code reviewer.
+---
+```
+
+No automated migration is provided — profile files are few in number and the change is a simple find-and-replace.

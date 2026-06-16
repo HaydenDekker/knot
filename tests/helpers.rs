@@ -74,7 +74,7 @@ pub fn create_mock_agent(
 /// Create a stub-pi.sh script that mimics `pi -p` behaviour.
 ///
 /// The stub:
-/// 1. Parses `--model`, `--system-prompt`, and `@<file>` arguments
+/// 1. Parses `--model` and `@<file>` arguments
 /// 2. If model contains "nonexistent", exits with code 1 (simulates error)
 /// 3. Otherwise reads `@<file>` content and stdin, echoes them back
 ///
@@ -85,7 +85,6 @@ pub fn create_stub_pi_agent(dir: &Path) -> std::path::PathBuf {
     let script = r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SYSTEM_PROMPT=""
 MODEL=""
 FILE_ARGS=()
 
@@ -96,10 +95,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model)
             MODEL="$2"
-            shift 2
-            ;;
-        --system-prompt)
-            SYSTEM_PROMPT="$2"
             shift 2
             ;;
         --tools)
@@ -126,8 +121,6 @@ STDIN_CONTENT=$(cat)
 
 # Output what we received so integration tests can verify
 {
-    echo "=== SYSTEM PROMPT ==="
-    echo "$SYSTEM_PROMPT"
     echo "=== MODEL ==="
     echo "$MODEL"
     echo "=== STRAND FILES ==="
