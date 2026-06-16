@@ -48,9 +48,9 @@ Create `InspectQueue<T>` — a `VecDeque<T>` behind `Mutex` with a `Notify` for 
 
 Key type is `(StrandPath, LoomId, KnotId, StrandEventKind)` where `StrandEventKind` is a new small enum: `Created`, `Modified`, `Deleted`.
 
-- [ ] Define `StrandEventKind` enum in debounce module
-- [ ] Implement `InspectQueue<StrandEvent>` with `push_or_replace`
-- [ ] Unit tests: push/pop, replace existing, no-replace different key
+- [x] Define `StrandEventKind` enum in debounce module
+- [x] Implement `InspectQueue<StrandEvent>` with `push_or_replace`
+- [x] Unit tests: push/pop, replace existing, no-replace different key
 
 ### Phase 1: DebounceEngine emits into `InspectQueue`
 
