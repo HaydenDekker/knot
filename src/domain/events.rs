@@ -117,6 +117,15 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// The strand directory for a knot was auto-created.
+    DirectoryCreated {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        /// Absolute path of the directory that was created.
+        directory: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -799,6 +808,12 @@ mod tests {
                 message: "unknown property 'tie-off-dir'".to_string(),
                 timestamp: ts.clone(),
             },
+            LoomEvent::DirectoryCreated {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                directory: "/project/rig/prds-loom/strands".to_string(),
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -806,6 +821,44 @@ mod tests {
             let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, *event, "round-trip failed for variant");
         }
+    }
+
+    /// `DirectoryCreated` carries `loom_id`, `knot_id`, `directory`, and
+    /// `timestamp`. Verifies the variant shape and JSON round-trip.
+    #[test]
+    fn loom_event_directory_created_serialisation() {
+        let loom_id = LoomId("auto-strand-dir-loom".to_string());
+        let knot_id = KnotId("codegen".to_string());
+        let directory = "/project/rig/auto-strand-dir-loom/strands".to_string();
+        let ts = "2026-06-17T09:00:00Z".to_string();
+
+        let event = LoomEvent::DirectoryCreated {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            directory: directory.clone(),
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::DirectoryCreated {
+                loom_id: lid,
+                knot_id: kid,
+                directory: dir,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(dir, &directory);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected DirectoryCreated variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
     }
 
     #[test]

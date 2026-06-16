@@ -69,6 +69,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::KnotParseWarning { loom_id, .. } => {
                 loom_id.clone()
             }
+            LoomEvent::DirectoryCreated { loom_id, .. } => {
+                loom_id.clone()
+            }
         };
 
         let line = serde_json::to_string(&event)
