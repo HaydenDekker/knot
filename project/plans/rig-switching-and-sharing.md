@@ -129,19 +129,19 @@ pub fn discover_rigs(
 
 ### Phase 3: Composition Root — CLI Parsing and Auto-Discovery
 
-- [ ] Modify `src/main.rs` to parse CLI arguments using `std::env::args()`:
+- [x] Modify `src/main.rs` to parse CLI arguments using `std::env::args()`:
   - `knot` — no args, trigger auto-discovery
   - `knot <rig-name>` — named rig
-  - `knot share <rig-name>` — package rig
+  - `knot share <rig-name>` — package rig (stub — exits with error, Phase 4 implements)
   - `knot --version` / `knot -V` — existing version check (preserved)
   - `knot --help` — print usage
-- [ ] Wire auto-discovery into `main`:
+- [x] Wire auto-discovery into `main`:
   - Call `discover_rigs(cwd, None)`
   - On `None` → fall through to `AppConfig::default_config()` (creates `rig/`)
   - On `Single(path)` → `AppConfig::with_rig_dir(path)`
   - On `Multiple(paths)` → `eprintln!` the found names with usage hint, `std::process::exit(1)`
   - On `Named(path)` → `AppConfig::with_rig_dir(path)`
-- [ ] Build succeeds, all existing tests still pass
+- [x] Build succeeds, all existing tests still pass
 
 ### Phase 4: Composition Root — Share Command
 
