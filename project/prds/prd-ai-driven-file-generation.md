@@ -36,8 +36,11 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - [ ] When a strand is processed (create/modify/delete), the tie-off file records the full event history — each agent response is appended as a new section with metadata (event type, strand path, timestamp) separated by `---` delimiters, so the output document tells the complete story of what has happened. (*Plan 12*)
 - [ ] Users can define, update, and remove looms and knots programmatically via Knot's HTTP interface **or manually via the file system** — without restarting the service. Looms created as directories on disk (or via `POST /looms`) are auto-discovered at runtime: a rig directory watcher detects new `*-loom` directories and registers them with file watchers immediately. Knots defined as `.md` files inside a loom directory are auto-discovered: new `.md` files are parsed and the knot is registered for processing, edited `.md` files update the in-memory knot config, and deleted `.md` files deregister the knot. The HTTP interface (`GET /looms`, `GET /looms/{id}/knots`) reflects the current in-memory state, which is always in sync with the filesystem. (*Planned*)
 - [x] The file generation pipeline is observable via Knot's HTTP interface — users can see which events fired, what tie-offs were produced, and any errors. (*Plans 2, 4*)
+- [ ] When a knot's `strand_dir` does not exist at registration time, Knot creates the directory automatically so the knot can begin watching immediately. The creation is recorded in the loom-log so the user knows the directory was provisioned by Knot rather than pre-existing. This allows users to define knots pointing to directories they intend to populate later — no manual directory creation is required.
 - [ ] Users can watch a parent directory and invoke a knot for every child event within that directory, so that the knot can make a judgement call with respect to the whole (e.g. a new plan subdirectory triggers processing for each file it contains).
 - [ ] Users can define agent profiles as shared, named entities outside of any single knot, so that multiple knots reference the same profile and the LLM target can be changed dynamically from one place.
+- [ ] Users can switch between multiple rigs on the same project, so that they can stop one rig and start another without losing loom definitions or needing to reconfigure.
+- [ ] Users can share a rig with colleagues by packaging its looms — the rig's portable unit is its loom definitions; tie-offs and logs are derived state that regenerate on the recipient's machine.
 
 ## Non-Goals
 
@@ -45,6 +48,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - Support for arbitrary CI/CD pipelines or cloud deployment targets.
 - Conflict resolution when multiple events overlap on the same file.
 - Support for non-file data sources (e.g., databases, APIs) as inputs.
+- Rig sharing as a sync/merge service — sharing is a one-way handoff of loom definitions; the recipient owns their own state.
 
 ## User Stories
 
@@ -55,6 +59,7 @@ As a developer, I want to create a knot in a loom and confirm it is active, so t
 **Scenarios:**
 
 1. Given I have created a knot file in a loom directory, when I check the loom-log or query the HTTP interface, then I can see the knot is registered and active.
+2. Given I have created a knot file with a `strand_dir` that does not yet exist on disk, when the knot is registered, then Knot creates the directory automatically and I can see in the loom-log that the directory was created by Knot, and the knot is registered and active.
 
 ### Story 2: Watch a Loom and Generate Tie-offs
 
@@ -124,6 +129,21 @@ As a user, I want to swap out a model to re-run a phase or undertake some work o
 3. Given a strand was processed with model A and produced an unsatisfactory tie-off, when I update the shared agent profile to model B and replay the event, then the replay uses model B — I don't need to edit the knot definition itself
 4. Given I have two shared profiles — `fast-profile` (gpt-4o, 60s timeout) and `thorough-profile` (claude-sonnet, 600s timeout) — when I switch a knot's profile reference from one to the other, then future processing uses the new profile's provider, model, and timeout
 
+### Story 9: Rig Switching and Sharing
+
+As a user, I want to switch between multiple rigs on the same project, so that I can stop one rig and start another — for example, switching from a development rig to a review rig, or from one team's configuration to another's. As a rig matures, I want to share it with colleagues so they can benefit from the loom definitions we've built.
+
+The rig's portable unit is its loom definitions. Tie-offs and logs are derived state — they are removed when sharing, and regenerate when the recipient starts the rig. This means a rig is essentially its looms and profiles.
+
+**Scenarios:**
+
+1. Given I have two rigs — `rig-dev` and `rig-review` — when I stop Knot and restart it pointing at the other rig, then Knot loads the new rig's looms and begins processing against its configurations
+2. Given a rig has been running and has accumulated tie-offs and loom-logs, when I share the rig with a colleague, then only the loom definitions and profiles are packaged — tie-offs and logs are excluded as derived state
+3. Given I receive a shared rig from a colleague, when I start Knot with that rig and drop strands into its watched directories, then tie-offs and logs regenerate on my machine using my own agent profiles and LLM providers
+4. Given I have a mature rig I want to share, when I request the rig be packaged, then Knot produces a distributable artifact containing the rig's looms, knot definitions, and profiles — nothing else
+
+## Non-Goals
+
 ## Success Criteria
 
 - [x] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
@@ -137,6 +157,8 @@ As a user, I want to swap out a model to re-run a phase or undertake some work o
 - [ ] A knot can watch a parent directory and be triggered by subdirectory creation, receiving child file context for holistic processing
 - [ ] Agent profiles are shareable, named entities that multiple knots can reference
 - [ ] Updating a shared agent profile's LLM target is reflected in all knots that reference it on their next invocation
+- [ ] A user can start Knot with a named rig (not just the default `rig/` directory), enabling switching between rigs on the same project
+- [ ] A rig can be packaged as a distributable artifact containing looms and profiles, excluding tie-offs and logs
 
 ## Dependencies & Constraints
 
@@ -147,6 +169,8 @@ As a user, I want to swap out a model to re-run a phase or undertake some work o
 - **Configuration constraint:** Knot is started with respect to its rig directory. Looms and knots are discovered by watching the rig and loom directories for filesystem events (directory creation, `.md` file creation/modification/deletion), not by periodic scanning. No separate top-level config file is required.
 - **Technical constraint:** Parent directory strand processing requires directory creation events to trigger knots (currently filtered out). The `map_strand_event` method in `NotifyEventSource` skips directory events — a new event type or watch mode is needed.
 - **Technical constraint:** Shared agent profiles require a new domain entity and a reference mechanism in the knot definition (e.g. `agent-profile-ref` instead of inline `agent-config`). Profile resolution at processing time replaces the current inline config lookup.
+- **Design decision:** A rig is portable — its durable state is loom definitions and agent profiles. Tie-offs and logs are derived state that regenerate on any machine. Sharing a rig means sharing only its looms and profiles.
+- **Design decision:** Rig sharing is a one-way handoff. No sync, merge, or conflict resolution between shared rigs and recipient rigs is required.
 
 ## Implementation Status: ✅ Complete (2026-06-04)
 

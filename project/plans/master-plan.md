@@ -1,14 +1,14 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-16
+> **Last Updated:** 2026-06-17
 
 ## Master Progress Table
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ⬜ Planned | 2026-06-17 |
+| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ⬜ Planned | 2026-06-17 |
 | 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ⬜ Planned | 2026-06-16 |
-> **Plan Created:** Context Management — Slim Agent Prompt and Tie-Off Headers
-> **Plan Completed:** Simplify Agent Invocation — Remove --system-prompt
 
 ## How to Add a Plan
 
@@ -92,6 +92,26 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 35. Rig Switching and Sharing
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-17
+**Goal:** Enable switching between multiple rigs on the same project and packaging rigs for sharing with colleagues by distributing loom definitions (excluding derived state).
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [rig-switching-and-sharing.md](rig-switching-and-sharing.md).
+
+### 34. Strand Directory Auto-Creation
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-17
+**Goal:** Automatically create a knot's `strand_dir` at registration time if it does not exist, logging the creation in the loom-log.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [strand-dir-auto-create.md](strand-dir-auto-create.md).
 
 ### 33. Queue Event Dedup — Prevent Duplicate Strand Processing
 
