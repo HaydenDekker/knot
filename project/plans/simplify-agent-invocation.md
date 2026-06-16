@@ -82,12 +82,14 @@ Rename `system_prompt` → `profile_prompt` in the `AgentProfile` entity and YAM
 
 ### Phase 2: Integration tests and existing profile file compatibility
 
-- [ ] Update integration tests in `tests/profile_timeout.rs` if they reference `system_prompt` or `--system-prompt`
-- [ ] Update integration tests in `tests/agent_profile_crud.rs` if they reference `system-prompt` YAML key
-- [ ] Add a migration note: existing profile files use `system-prompt:` YAML key — Knot will fail to parse them. Document the rename (`system-prompt` → `profile-prompt`) in the plan notes.
-- [ ] Run full test suite: `cargo test`
-- [ ] Run clippy: `cargo clippy -- -D warnings`
-- [ ] Update domain glossary if `system-prompt` / `system prompt` is referenced
+- [x] Update integration tests in `tests/profile_timeout.rs` if they reference `system_prompt` or `--system-prompt`
+- [x] Update integration tests in `tests/agent_profile_crud.rs` if they reference `system-prompt` YAML key (file does not exist — skipped)
+- [x] Add a migration note: existing profile files use `system-prompt:` YAML key — Knot will fail to parse them. Document the rename (`system-prompt` → `profile-prompt`) in the plan notes.
+- [x] Run full test suite: `cargo test`
+- [x] Run clippy: `cargo clippy -- -D warnings` (4 pre-existing warnings unrelated to this plan)
+- [x] Update domain glossary if `system-prompt` / `system prompt` is referenced
+
+**Additionally cleaned up**: Removed `--system-prompt` from stub-pi script in `tests/helpers.rs`, updated comments in `tests/demo.rs` and `tests/agent_integration.rs`.
 
 **Rationale**: Profile files are user-facing config. The YAML key change is a breaking change for existing rigs. The migration path is: edit each `rig/profiles/*.md` file, change `system-prompt:` to `profile-prompt:`.
 
