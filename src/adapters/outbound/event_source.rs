@@ -471,10 +471,10 @@ impl NotifyEventSource {
     /// Call this before `watch()` so events carry the correct metadata
     /// and map to the right event type.
     pub fn register_watch(&self, path: PathBuf, watch_type: WatchType) {
-        let wt_label = match &watch_type {
-            WatchType::Strand(_, _) => "Strand",
-            WatchType::Rig => "Rig",
-            WatchType::Loom(_) => "Loom",
+        let (wt_label, extra) = match &watch_type {
+            WatchType::Strand(_, knot_id) => ("Strand", Some(format!("knot={}", knot_id.0))),
+            WatchType::Rig => ("Rig", None),
+            WatchType::Loom(loom_id) => ("Loom", Some(format!("loom={}", loom_id.0))),
         };
 
         // Canonicalise the rig watch path so it matches the absolute
@@ -491,7 +491,7 @@ impl NotifyEventSource {
                 path
             };
 
-        logging::log_watch_event("register", &canonical_path, wt_label);
+        logging::log_watch_event("register", &canonical_path, wt_label, extra.as_deref());
         let mut inner = self.state.lock().unwrap();
         // Update if the exact (path, watch_type) pair already exists,
         // otherwise push. Multiple knots can watch the same directory,
@@ -633,11 +633,11 @@ impl EventSource for NotifyEventSource {
             _ => RecursiveMode::Recursive,
         };
 
-        let wt_label = match &watch_type {
-            Some(WatchType::Strand(_, _)) => "Strand",
-            Some(WatchType::Rig) => "Rig",
-            Some(WatchType::Loom(_)) => "Loom",
-            None => "Default",
+        let (wt_label, extra) = match &watch_type {
+            Some(WatchType::Strand(_, knot_id)) => ("Strand", Some(format!("knot={}", knot_id.0))),
+            Some(WatchType::Rig) => ("Rig", None),
+            Some(WatchType::Loom(loom_id)) => ("Loom", Some(format!("loom={}", loom_id.0))),
+            None => ("Default", None),
         };
         self.watcher
             .lock()
@@ -645,7 +645,7 @@ impl EventSource for NotifyEventSource {
             .watch(&canonical_path, mode)
             .map_err(|e| PortError::EventWatchFailed(e.to_string()))?;
 
-        logging::log_watch_event("started", &canonical_path, wt_label);
+        logging::log_watch_event("started", &canonical_path, wt_label, extra.as_deref());
         Ok(())
     }
 
@@ -674,13 +674,13 @@ impl EventSource for NotifyEventSource {
             .unwatch(&canonical_path)
             .map_err(|e| PortError::EventUnwatchFailed(e.to_string()))?;
 
-        let wt_label = match &watch_type {
-            Some(WatchType::Strand(_, _)) => "Strand",
-            Some(WatchType::Rig) => "Rig",
-            Some(WatchType::Loom(_)) => "Loom",
-            None => "Unknown",
+        let (wt_label, extra) = match &watch_type {
+            Some(WatchType::Strand(_, knot_id)) => ("Strand", Some(format!("knot={}", knot_id.0))),
+            Some(WatchType::Rig) => ("Rig", None),
+            Some(WatchType::Loom(loom_id)) => ("Loom", Some(format!("loom={}", loom_id.0))),
+            None => ("Unknown", None),
         };
-        logging::log_watch_event("stopped", &canonical_path, wt_label);
+        logging::log_watch_event("stopped", &canonical_path, wt_label, extra.as_deref());
 
         Ok(())
     }

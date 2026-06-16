@@ -87,11 +87,17 @@ pub fn log_knot_event(event: &str, loom_id: &str, knot_id: &str, detail: &str) {
 }
 
 /// Log a watch/unwatch operation.
-pub fn log_watch_event(action: &str, path: &std::path::Path, watch_type: &str) {
+///
+/// `extra` is an optional detail string appended inside the parens
+/// (e.g. `knot=my-knot` for Strand watches).
+pub fn log_watch_event(action: &str, path: &std::path::Path, watch_type: &str, extra: Option<&str>) {
+    let detail = match extra {
+        Some(e) => format!("type={watch_type} {e}"),
+        None => format!("type={watch_type}"),
+    };
     eprintln!(
-        "[{}] [KNOT][WATCH] {action} {} (type={})",
+        "[{}] [KNOT][WATCH] {action} {} ({detail})",
         format_timestamp(),
         path.display(),
-        watch_type,
     );
 }
