@@ -16,7 +16,7 @@ The output `mpsc` channel is opaque — the debounce engine can't inspect what's
 
 At most one pending event per `(strand_path, loom_id, knot_id, event_type)` in the entire pipeline. The queue becomes inspectable so the debounce engine can check before emitting. Different event types (Created/Modified/Deleted) always pass through — only repeated events of the same type are deduped.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -113,9 +113,9 @@ Integration test that verifies the end-to-end dedup behaviour:
 4. Verify only one `StrandProcessed` appears in loom-log per event type
 5. Verify only one agent execution occurs
 
-- [ ] Write integration test in `tests/pipeline.rs`
-- [ ] Test passes
-- [ ] Full test suite passes, clippy clean
+- [x] Write integration test in `tests/pipeline.rs`
+- [x] Test passes
+- [x] Full test suite passes, clippy clean
 
 ## Notes
 
