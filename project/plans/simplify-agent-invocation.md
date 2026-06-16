@@ -52,15 +52,17 @@ Rename `system_prompt` → `profile_prompt` in the `AgentProfile` entity and YAM
 
 ### Phase 0: Domain — Rename `system_prompt` → `profile_prompt` in `AgentProfile`
 
-- [ ] Rename `AgentProfile.system_prompt` field to `profile_prompt` in `src/domain/value_objects.rs`
-- [ ] Update `serde(rename = "system-prompt")` → `serde(rename = "profile-prompt")`
-- [ ] Update `AgentProfile::new()` and `AgentProfile::with_tools()` parameter name
-- [ ] Update `AgentProfileError::MissingSystemPrompt` → `MissingProfilePrompt`
-- [ ] Update all unit tests in `value_objects.rs` (agent_profile_* tests)
-- [ ] Update `parse_agent_profile()` in `knot_file.rs`: rename `system_prompt` field in `RawProfileFrontmatter`, update `serde(rename)`, update validation error mapping
-- [ ] Update all unit tests in `knot_file.rs` (profile parsing tests)
-- [ ] Update `FileSystemAgentProfileRepository` tests that reference `system_prompt`
-- [ ] Compile check: `cargo build`
+- [x] Rename `AgentProfile.system_prompt` field to `profile_prompt` in `src/domain/value_objects.rs`
+- [x] Update `serde(rename = "system-prompt")` → `serde(rename = "profile-prompt")`
+- [x] Update `AgentProfile::new()` and `AgentProfile::with_tools()` parameter name
+- [x] Update `AgentProfileError::MissingSystemPrompt` → `MissingProfilePrompt`
+- [x] Update all unit tests in `value_objects.rs` (agent_profile_* tests)
+- [x] Update `parse_agent_profile()` in `knot_file.rs`: rename `system_prompt` field in `RawProfileFrontmatter`, update `serde(rename)`, update validation error mapping
+- [x] Update all unit tests in `knot_file.rs` (profile parsing tests)
+- [x] Update `FileSystemAgentProfileRepository` tests that reference `system_prompt`
+- [x] Compile check: `cargo build`
+
+**Additionally completed**: Updated `ProfileResponse` in inbound types, all handler mappings in `loom.rs`, `usecases.rs` references, and all integration test profile fixtures across 10 test files.
 
 **Rationale**: Renaming first makes the intent clear — this is a profile-level prompt segment, not an HTTP/API system role. The serde rename keeps the YAML key distinct (`profile-prompt`), which will require updating any existing profile files.
 
