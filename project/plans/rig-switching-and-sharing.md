@@ -25,7 +25,7 @@ After this plan:
 - `knot <rig-name>` — starts Knot with the named rig directory (`<rig-name>/`). The rig name must exist or will be created.
 - `knot share <rig-name>` — packages the rig's looms and profiles into a `.zip` artifact in the current directory. Excludes tie-offs and logs (derived state).
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-17)
 
 ## Existing Tests
 
@@ -167,11 +167,11 @@ pub fn discover_rigs(
 
 ### Phase 6: Error Handling and Polish
 
-- [ ] Named rig doesn't exist → create it (existing `run_startup` behaviour)
-- [ ] Share: rig doesn't exist → error with clear message
-- [ ] Share: rig has no looms → still produce valid zip
-- [ ] `--help` and unknown arg handling
-- [ ] Full test suite passes (`cargo test` + `cargo clippy`)
+- [x] Named rig doesn't exist → create it (existing `run_startup` behaviour)
+- [x] Share: rig doesn't exist → error with clear message
+- [x] Share: rig has no looms → still produce valid zip
+- [x] `--help` and unknown arg handling
+- [x] Full test suite passes (`cargo test` + `cargo clippy`)
 
 ## Notes
 
