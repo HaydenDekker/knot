@@ -38,9 +38,11 @@ Prompt content ordering is unchanged (profile prompt → knot instructions → t
 - [x] Edge case: if strand has no file name (shouldn't happen, but guard with `unwrap_or_default`)
 
 ### Phase 2: Tests
-- [ ] Unit test in `subprocess.rs` — verify CLI args contain `--name` flag when passed through (use `sh -c 'cat >/dev/null; echo "$@"'` or inspect args)
-- [ ] Unit test in `usecases.rs` — verify the title format matches trigger line: `{knot-id} triggered by {event-type} on {strand-filename}`
-- [ ] Existing `runner_passes_prompt_via_stdin` test remains green (prompt content unchanged)
+- [x] Unit test in `subprocess.rs` — `runner_passes_name_flag_through_cli_args` — verifies `--name` and its value pass through CLI args via `sh -c 'echo "$@"'`
+- [x] Unit test in `usecases.rs` — `process_strand_cli_args_contain_name_flag` — verifies title format: `{knot-id} triggered by {event-type} on {strand-filename}`
+- [x] Additional tests: `process_strand_title_format_created_event`, `process_strand_title_format_deleted_event`, `process_strand_title_unique_per_strand`
+- [x] `process_strand_prompt_content_unchanged_by_name_flag` — verifies prompt/stdin content is unaffected by `--name` flag
+- [x] Existing `runner_passes_prompt_via_stdin` test remains green (prompt content unchanged)
 
 ## Notes
 

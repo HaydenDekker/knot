@@ -503,4 +503,43 @@ mod tests {
             "expected Timeout, got {err:?}"
         );
     }
+
+    /// Verify that `--name` and its value are passed through in CLI args.
+    /// Uses `sh -c` to echo the args so we can inspect them in stdout.
+    #[test]
+    fn runner_passes_name_flag_through_cli_args() {
+        let runner = SubprocessAgentRunner::new();
+        let ctx = ExecutionContext {
+            cli_path: "sh".to_string(),
+            cli_args: vec![
+                "-c".to_string(),
+                "cat >/dev/null; echo \"$@\"".to_string(),
+                // These become $0, $1, $2, $3 etc. in the shell
+                "--".to_string(),
+                "--name".to_string(),
+                "my-knot triggered by Modified on doc.md".to_string(),
+            ],
+            prompt: "test prompt".to_string(),
+            profile_prompt: String::new(),
+            strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
+            event_type: String::new(),
+            knot_name: None,
+            timeout: None,
+        };
+
+        let result = runner.execute(ctx);
+        assert!(result.is_ok(), "should succeed: {result:?}");
+
+        let output = result.unwrap();
+        assert!(
+            output.stdout.contains("--name"),
+            "stdout should contain --name flag: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("my-knot triggered by Modified on doc.md"),
+            "stdout should contain session title: {}",
+            output.stdout
+        );
+    }
 }

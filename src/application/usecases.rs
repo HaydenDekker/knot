@@ -5849,3 +5849,489 @@ mod reload_config_tests {
         assert!(watches.is_empty());
     }
 }
+
+// ── Phase 9: Session Title (--name) Tests ──────────────────────────
+
+#[cfg(test)]
+mod phase9_session_title_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    // ── Mock LoomLogPort ─────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockLoomLogPort;
+
+    impl LoomLogPort for MockLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Tracking AgentRunner (captures ExecutionContext) ────────────
+
+    /// Mock agent runner that records the ExecutionContext passed to it.
+    struct TrackingAgentRunner {
+        contexts: Arc<Mutex<Vec<ExecutionContext>>>,
+    }
+
+    impl TrackingAgentRunner {
+        fn new() -> (Self, Arc<Mutex<Vec<ExecutionContext>>>) {
+            let contexts = Arc::new(Mutex::new(vec![]));
+            (
+                Self { contexts: contexts.clone() },
+                contexts,
+            )
+        }
+    }
+
+    impl AgentRunner for TrackingAgentRunner {
+        fn execute(
+            &self,
+            ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            self.contexts.lock().unwrap().push(ctx);
+            Ok(AgentOutput {
+                stdout: "mock output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Mock TieOffSink ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockTieOffSink;
+
+    impl TieOffSink for MockTieOffSink {
+        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_content(
+            &self,
+            _path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(String::new())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockRigLogPort;
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            _event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    struct MockProfileRepository {
+        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self
+                .profiles
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
+        }
+
+        fn save(
+            &self,
+            profile: AgentProfile,
+        ) -> Result<(), PortError> {
+            self.profiles
+                .lock()
+                .unwrap()
+                .insert(profile.name.clone(), profile);
+            Ok(())
+        }
+
+        fn delete(&self, name: &str) -> Result<(), PortError> {
+            let mut map = self.profiles.lock().unwrap();
+            if map.remove(name).is_none() {
+                return Err(PortError::ProfileNotFound(name.to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: profile.to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        }
+    }
+
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    fn default_profile() -> AgentProfile {
+        AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+    }
+
+    /// Find the value after `--name` in a CLI args list.
+    fn find_name_value(args: &[String]) -> Option<String> {
+        let pos = args.iter().position(|a| a == "--name")?;
+        args.get(pos + 1).cloned()
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    /// `ProcessStrand::execute` appends `--name <title>` to CLI args.
+    /// Title format: `{knot-id} triggered by {event-type} on {strand-filename}`.
+    #[test]
+    fn process_strand_cli_args_contain_name_flag() {
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot("plan-architect", "fast")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+        );
+
+        let event = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("plan-architect".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/004-manifest-resources.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify CLI args contain --name with correct title
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1, "should have called execute once");
+        let args = &contexts[0].cli_args;
+        assert!(
+            args.contains(&"--name".to_string()),
+            "CLI args should contain --name flag: {:?}",
+            args
+        );
+        let name_value = find_name_value(args).expect("--name should have a value");
+        assert_eq!(
+            name_value,
+            "plan-architect triggered by Modified on 004-manifest-resources.md",
+        );
+    }
+
+    /// Title format matches trigger line for Created events.
+    #[test]
+    fn process_strand_title_format_created_event() {
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("review-loom", vec![build_knot("reviewer", "fast")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+        );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("review-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/new-file.md")),
+        };
+
+        use_case.execute(event).unwrap();
+
+        let contexts = captured_contexts.lock().unwrap();
+        let args = &contexts[0].cli_args;
+        let name_value = find_name_value(args).expect("--name should have a value");
+        assert_eq!(
+            name_value,
+            "reviewer triggered by Created on new-file.md",
+        );
+    }
+
+    /// Title format matches trigger line for Deleted events.
+    #[test]
+    fn process_strand_title_format_deleted_event() {
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot("cleanup", "fast")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+        );
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("cleanup".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/old-file.md")),
+        };
+
+        use_case.execute(event).unwrap();
+
+        let contexts = captured_contexts.lock().unwrap();
+        let args = &contexts[0].cli_args;
+        let name_value = find_name_value(args).expect("--name should have a value");
+        assert_eq!(
+            name_value,
+            "cleanup triggered by Deleted on old-file.md",
+        );
+    }
+
+    /// Different strands produce different `--name` values,
+    /// ensuring each session gets a unique title.
+    #[test]
+    fn process_strand_title_unique_per_strand() {
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot("reviewer", "fast")]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+        );
+
+        // Process first strand
+        let event1 = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/file-a.md")),
+        };
+        use_case.execute(event1).unwrap();
+
+        // Process second strand
+        let event2 = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/file-b.md")),
+        };
+        use_case.execute(event2).unwrap();
+
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+
+        let name1 = find_name_value(&contexts[0].cli_args)
+            .expect("first call should have --name");
+        let name2 = find_name_value(&contexts[1].cli_args)
+            .expect("second call should have --name");
+
+        assert_eq!(name1, "reviewer triggered by Modified on file-a.md");
+        assert_eq!(name2, "reviewer triggered by Modified on file-b.md");
+        assert_ne!(name1, name2, "titles should differ per strand");
+    }
+
+    /// The existing `runner_passes_prompt_via_stdin` test pattern:
+    /// prompt content (profile_prompt + instructions + trigger line)
+    /// is delivered via stdin and is NOT affected by the `--name` flag.
+    #[test]
+    fn process_strand_prompt_content_unchanged_by_name_flag() {
+        let profile = AgentProfile::new(
+            "reviewer".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are a reviewer.".to_string(),
+        )
+        .unwrap();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("reviewer".to_string(), profile),
+            ]))),
+        });
+
+        let store = LoomStore::new();
+        let knot = Knot {
+            id: KnotId("reviewer".to_string()),
+            agent_profile_ref: "reviewer".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "Review this file.".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        };
+        let loom = build_loom("test-loom", vec![knot]);
+        store.register(loom);
+
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(MockLoomLogPort),
+            Arc::new(runner),
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+        );
+
+        let event = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/doc.md")),
+        };
+
+        use_case.execute(event).unwrap();
+
+        let contexts = captured_contexts.lock().unwrap();
+        let ctx = &contexts[0];
+
+        // Profile prompt is in profile_prompt field (delivered via stdin)
+        assert_eq!(ctx.profile_prompt, "You are a reviewer.");
+        // Knot instructions are in prompt field
+        assert_eq!(ctx.prompt, "Review this file.");
+        // Event metadata is present
+        assert_eq!(ctx.event_type, "Modified");
+        assert_eq!(ctx.knot_name.as_deref(), Some("reviewer"));
+        // --name is in CLI args, not in prompt content
+        assert!(ctx.cli_args.contains(&"--name".to_string()));
+        assert!(!ctx.prompt.contains("--name"),
+            "--name should not appear in prompt content");
+        assert!(!ctx.profile_prompt.contains("--name"),
+            "--name should not appear in profile prompt");
+    }
+}
