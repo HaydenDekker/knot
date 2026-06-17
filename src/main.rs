@@ -209,6 +209,16 @@ fn resolve_config() -> AppConfig {
         std::process::exit(0);
     }
 
+    // Reject unknown flags (arguments starting with `--` that aren't known)
+    let known_flags = ["--version", "-V", "--help", "-h"];
+    for arg in &args {
+        if arg.starts_with("--") && !known_flags.contains(&arg.as_str()) {
+            eprintln!("Error: unknown flag '{}'", arg);
+            eprintln!("Run `knot --help` for usage.");
+            std::process::exit(1);
+        }
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| {
         eprintln!("Error: cannot determine current working directory");
         std::process::exit(1);

@@ -361,6 +361,165 @@ fn cli_share_nonexistent_rig_exits_with_error() {
     );
 }
 
+// ── Named rig that doesn't exist → auto-created on startup ────────────────
+
+#[tokio::test]
+async fn cli_named_rig_does_not_exist_creates_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+
+    // Don't create any rig — let knot create it
+    let new_rig = cwd.join("new-rig");
+    assert!(
+        !new_rig.exists(),
+        "rig should not exist before test"
+    );
+
+    let mut knot = KnotProcess::spawn(cwd, &["new-rig"]);
+
+    // Wait for the server to attempt to bind
+    thread::sleep(Duration::from_secs(2));
+
+    let still_alive = knot.is_alive();
+
+    // Rig directory should have been created by run_startup
+    assert!(
+        new_rig.exists(),
+        "rig directory should have been created at {}",
+        new_rig.display()
+    );
+
+    let output = knot.kill_and_wait();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        still_alive || stderr.contains("Address already in use"),
+        "server process should be running or have a port conflict.\n\
+         still_alive={}, stderr: {}",
+        still_alive,
+        stderr
+    );
+}
+
+// ── Share: rig has no looms → still produces valid zip ────────────────────
+
+#[test]
+fn cli_share_rig_with_no_looms_produces_valid_zip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+
+    // Create an empty rig (no looms, no profiles)
+    let rig = cwd.join("empty-rig");
+    fs::create_dir_all(&rig).unwrap();
+
+    let output = Command::new(binary_path())
+        .current_dir(cwd)
+        .args(["share", "empty-rig"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("should execute knot binary");
+
+    assert!(
+        output.status.success(),
+        "share should succeed even with no looms, got stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify zip file was created
+    let zip_path = cwd.join("empty-rig.zip");
+    assert!(
+        zip_path.exists(),
+        "zip file should exist at {}",
+        zip_path.display()
+    );
+
+    // Verify zip is valid (openable, even if empty)
+    let file = fs::File::open(&zip_path).expect("should open zip file");
+    let archive = ZipArchive::new(file).expect("should open zip archive");
+    assert_eq!(
+        archive.len(),
+        0,
+        "zip should be empty when rig has no looms"
+    );
+}
+
+// ── Share: rig has profiles but no looms → zip has profiles only ──────────
+
+#[test]
+fn cli_share_rig_profiles_only_produces_valid_zip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+
+    // Create rig with profiles but no looms
+    let rig = cwd.join("profiles-only-rig");
+    fs::create_dir_all(&rig).unwrap();
+    write_fast_profile(&rig);
+
+    let output = Command::new(binary_path())
+        .current_dir(cwd)
+        .args(["share", "profiles-only-rig"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("should execute knot binary");
+
+    assert!(
+        output.status.success(),
+        "share should succeed, got stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let zip_path = cwd.join("profiles-only-rig.zip");
+    assert!(
+        zip_path.exists(),
+        "zip file should exist at {}",
+        zip_path.display()
+    );
+
+    let file = fs::File::open(&zip_path).expect("should open zip file");
+    let mut archive = ZipArchive::new(file).expect("should open zip archive");
+
+    let entries: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+
+    assert!(
+        entries.iter().any(|e| e.contains("profiles/fast.md")),
+        "zip should contain profile. Entries: {:?}",
+        entries
+    );
+}
+
+// ── Unknown flag → error with usage hint ──────────────────────────────────
+
+#[test]
+fn cli_unknown_flag_exits_with_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+
+    let output = Command::new(binary_path())
+        .current_dir(cwd)
+        .arg("--unknown-flag")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("should execute knot binary");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for unknown flag"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown") || stderr.contains("unsupported")
+            || stderr.contains("unrecognized"),
+        "stderr should mention unknown/unsupported flag, got: {}",
+        stderr
+    );
+}
+
 // ── Share command without rig name → error ─────────────────────────────────
 
 #[test]
