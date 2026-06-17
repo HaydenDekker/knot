@@ -858,6 +858,17 @@ impl ProcessStrand {
             })?;
 
         let mut cli_args = agent_config.build_cli_args();
+        // Append --name for pi session title (matches trigger line format)
+        let strand_filename = strand_path.0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot.id.0, event_label, strand_filename,
+        );
+        cli_args.push("--name".to_string());
+        cli_args.push(session_title);
         // Append strand content reference using pi's @file syntax
         cli_args.push(
             format!("@{}", strand_path.0.display()),
