@@ -155,13 +155,15 @@ pub fn discover_rigs(
 
 ### Phase 5: Integration Tests — End-to-End via `std::process::Command`
 
-- [ ] Create `tests/rig_cli.rs` with integration tests that invoke the `knot` binary:
+- [x] Create `tests/rig_cli.rs` with integration tests that invoke the `knot` binary:
   - Two rigs exist, no args → non-zero exit, stderr contains rig names
   - One rig exists, no args → server starts, health check succeeds
   - Named rig → server starts, correct looms loaded
   - `knot share dev-rig` → zip exists with looms + profiles, no tie-offs
-- [ ] Each test uses `tempfile::TempDir` for isolation
-- [ ] All integration tests pass
+  - `knot share` nonexistent rig → non-zero exit
+  - `knot share` without rig name → non-zero exit
+- [x] Each test uses `tempfile::TempDir` for isolation
+- [x] All integration tests pass
 
 ### Phase 6: Error Handling and Polish
 
