@@ -145,13 +145,13 @@ pub fn discover_rigs(
 
 ### Phase 4: Composition Root — Share Command
 
-- [ ] Add `zip` crate to `Cargo.toml`
-- [ ] Smoke test in `tests/rig_discovery.rs`: verify `zip::ZipWriter` can create an in-memory zip and `zip::ZipArchive` can read it back, confirming the crate wires correctly
-- [ ] Implement `share` in `main.rs`:
+- [x] Add `zip` crate to `Cargo.toml`
+- [x] Smoke test in `tests/rig_discovery.rs`: verify `zip::ZipWriter` can create an in-memory zip and `zip::ZipArchive` can read it back, confirming the crate wires correctly
+- [x] Implement `share` in `main.rs`:
   - Walk rig directory, collect all `*-loom/` directories and `profiles/`
   - Write `<rig-name>-rig.zip` in current directory
   - Exclude `tie-offs/`, `.rig-log`, `.workspace-agent-config.yaml`
-- [ ] Build succeeds
+- [x] Build succeeds
 
 ### Phase 5: Integration Tests — End-to-End via `std::process::Command`
 
