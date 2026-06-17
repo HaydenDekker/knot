@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ⬜ Planned | 2026-06-17 |
+| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
 | 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
 | 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ✅ Complete | 2026-06-16 |
 | 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ✅ Complete | 2026-06-16 |
@@ -89,9 +89,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 35. Rig Switching and Sharing
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-17
+**Completed:** 2026-06-17
 **Goal:** Enable switching between multiple rigs on the same project and packaging rigs for sharing with colleagues by distributing loom definitions (excluding derived state).
+
+**Result:** CLI parsing via `std::env::args()` — no external crate needed. `knot` (no args) auto-discovers `*-rig` directories: zero matches creates `rig/`, one match uses it, multiple refuses with usage hint. `knot <rig-name>` uses named rig. `knot share <rig-name>` packages looms + profiles into `.zip` via `zip` crate (excludes tie-offs, logs, config). `RigDiscovery` domain enum + `discover_rigs()` pure function. `AppConfig::with_rig_dir()` convenience constructor. 13 new tests (8 unit + 10 integration, some shared across files). 395+ tests pass. Version bumped to 0.11.0.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
