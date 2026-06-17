@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 36 | [Explicit Pi Session Title](pi-session-title.md) | ⬜ Planned | 2026-06-17 |
+| 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
 | 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
 | 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ✅ Complete | 2026-06-16 |
@@ -90,9 +90,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 36. Explicit Pi Session Title
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-17
+**Completed:** 2026-06-17
 **Goal:** Add `--name` CLI flag to pi invocation so each session gets a unique, descriptive resume title derived from knot ID and strand filename.
+
+**Result:** `--name` appended to CLI args in `ProcessStrand::execute()` with title format `{knot-id} triggered by {event-type} on {strand-filename}` (e.g. `plan-architect triggered by Modified on 004-manifest-resources.md`). Edge case guarded with `unwrap_or_default()`. 6 new tests (1 in `subprocess.rs`, 5 in `usecases.rs`) covering flag passthrough, title formats for Created/Modified/Deleted events, uniqueness per strand, and prompt content regression guard. 325 tests pass. Version bumped to 0.12.0.
 
 Full details in [pi-session-title.md](pi-session-title.md).
 

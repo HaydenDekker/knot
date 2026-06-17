@@ -14,7 +14,7 @@ plan-architect triggered by Modified on 004-manifest-resources.md
 
 Prompt content ordering is unchanged (profile prompt → knot instructions → trigger line).
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-17)
 
 ## Existing Tests
 
