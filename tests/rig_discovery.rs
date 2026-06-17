@@ -6,10 +6,56 @@
 use std::fs;
 use std::path::Path;
 
+use std::io::{Read, Write};
+use std::io::Cursor;
+
 use knot::domain::rig_discovery::{discover_rigs, RigDiscovery};
+use zip::write::FileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 fn make_rig_dir(parent: &Path, name: &str) {
     fs::create_dir_all(parent.join(name)).unwrap();
+}
+
+// ── Zip crate smoke test ──────────────────────────────────────────────
+
+fn default_zip_options() -> FileOptions {
+    FileOptions::default()
+}
+
+#[test]
+fn zip_smoke_create_and_read_back() {
+    let buf = Vec::new();
+    let mut cursor = Cursor::new(buf);
+    {
+        let mut writer = ZipWriter::new(&mut cursor);
+        writer.start_file("test-dir/hello.txt", default_zip_options())
+            .unwrap();
+        writer.write_all(b"hello zip").unwrap();
+        writer.start_file("test-dir/nested/deep.txt", default_zip_options())
+            .unwrap();
+        writer.write_all(b"deep content").unwrap();
+        writer.finish().unwrap();
+    }
+
+    let data = cursor.into_inner();
+    let reader = Cursor::new(&data);
+    let mut archive = ZipArchive::new(reader).unwrap();
+    assert_eq!(archive.len(), 2);
+
+    {
+        let mut hello = archive.by_name("test-dir/hello.txt").unwrap();
+        let mut contents = String::new();
+        hello.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "hello zip");
+    }
+
+    {
+        let mut deep = archive.by_name("test-dir/nested/deep.txt").unwrap();
+        let mut deep_contents = String::new();
+        deep.read_to_string(&mut deep_contents).unwrap();
+        assert_eq!(deep_contents, "deep content");
+    }
 }
 
 fn make_non_rig_dir(parent: &Path, name: &str) {
