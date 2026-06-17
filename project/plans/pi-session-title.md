@@ -33,9 +33,9 @@ Prompt content ordering is unchanged (profile prompt → knot instructions → t
 ## Phases
 
 ### Phase 1: Add `--name` to CLI args in ProcessStrand
-- [ ] In `usecases.rs`, after building `cli_args` and before constructing `ExecutionContext`, append `--name` with a title matching the trigger line format
-- [ ] Title format: `{knot-id} triggered by {event-type} on {strand-filename}` (e.g. `plan-architect triggered by Modified on 004-manifest-resources.md`)
-- [ ] Edge case: if strand has no file name (shouldn't happen, but guard with `unwrap_or_default`)
+- [x] In `usecases.rs`, after building `cli_args` and before constructing `ExecutionContext`, append `--name` with a title matching the trigger line format
+- [x] Title format: `{knot-id} triggered by {event-type} on {strand-filename}` (e.g. `plan-architect triggered by Modified on 004-manifest-resources.md`)
+- [x] Edge case: if strand has no file name (shouldn't happen, but guard with `unwrap_or_default`)
 
 ### Phase 2: Tests
 - [ ] Unit test in `subprocess.rs` — verify CLI args contain `--name` flag when passed through (use `sh -c 'cat >/dev/null; echo "$@"'` or inspect args)
