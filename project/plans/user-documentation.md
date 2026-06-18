@@ -79,13 +79,13 @@ Create end-to-end tutorials from PRD scenarios — original writing guided by th
 
 - [x] **`docs/workflows/file-generation-workflow.md`** — "Transform source files into structured output": from rig init through creating a generation knot, watching a source directory, collecting tie-offs. Use the PRD scenarios from `prd-ai-driven-file-generation.md`.
 
-### Phase 3: Write Troubleshooting and Release Notes
+### Phase 3: Write Troubleshooting and Release Notes ✅ Complete
 
 - [x] **`docs/troubleshooting.md`** — extract error handling tables from all 4 skills, add common issues (Knot not running, profile not found, strand dir missing, loom not discovered). Organise by symptom → cause → fix.
 
 - [x] **`docs/release-notes.md`** — extract from `master-plan.md` completed plans, grouped by feature area (not chronological). Feature areas: Configuration (file-first, shared profiles, rig switching), Processing (tie-off append, context management, dedup), Observability (rig-log, loom-log, HTTP endpoints, Swagger), Integration (Pi agent, skills, git versioning). Include version number (0.12.0).
 
-- [ ] **Update `README.md`** — add a "Documentation" section linking to `docs/`, keep the high-level philosophy and concepts.
+- [x] **Update `README.md`** — add a "Documentation" section linking to `docs/`, keep the high-level philosophy and concepts.
 
 ### Phase 4: Create `project-documentation` Skill
 
