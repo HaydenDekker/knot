@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-17
+> **Last Updated:** 2026-06-18
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 37 | [User Documentation and Documentation Skill](user-documentation.md) | ⬜ Planned | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
 | 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
@@ -87,6 +88,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ## Plan Overviews
 
 _Overview sections for active and recently completed plans go here._
+
+### 37. User Documentation and Documentation Skill
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-18
+**Goal:** Create user-facing documentation from existing project artifacts (skills, glossary, PRDs, completed plans) and package the extraction methodology into a reusable `project-documentation` skill.
+
+Full details in [user-documentation.md](user-documentation.md).
 
 ### 36. Explicit Pi Session Title
 
