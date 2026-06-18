@@ -14,7 +14,7 @@ The HTTP interface is a half-measure: all configuration is file-driven, but all 
 - All HTTP-related test files and helpers removed or rewritten to use file-based verification.
 - The binary is lighter, simpler, and truly file-first end-to-end.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-19)
 
 ## Existing Tests
 

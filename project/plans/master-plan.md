@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-18
+> **Last Updated:** 2026-06-19
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ⬜ Planned | 2026-06-18 |
+| 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
 | 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
@@ -90,9 +90,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 38. Removal of HTTP Interface — Full File-First
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-18
+**Completed:** 2026-06-19
 **Goal:** Remove the Axum HTTP server entirely and replace all state observation with `rig/state.json` written on a 5-second poll cycle.
+
+**Result:** HTTP server and all inbound adapter code removed (~7000 lines). `axum`, `utoipa`, `utoipa-swagger-ui`, `tower` dependencies removed. `RigState` domain type + `StateWriter` background task writes `rig/state.json` atomically every 5 seconds. All skills updated to read `rig/state.json`. All integration tests rewritten from HTTP to file-based polling. 546 tests pass. Version bumped to 0.13.0. ADR-008 documents the decision.
 
 Full details in [removal-of-http-interface.md](removal-of-http-interface.md).
 
