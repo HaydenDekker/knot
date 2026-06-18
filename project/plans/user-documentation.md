@@ -35,11 +35,11 @@ Source map:
 | Completed plans (master-plan.md) | `docs/release-notes.md` | Extract + group |
 | `README.md` | `docs/concepts.md` (philosophy section) | Extract |
 
-### Phase 1: Write Core User Docs
+### Phase 1: Write Core User Docs ✅ Complete
 
 Create the foundational docs directory and write the human-facing versions:
 
-- [ ] Create `docs/` directory structure:
+- [x] Create `docs/` directory structure:
   ```
   docs/
     getting-started.md
@@ -57,33 +57,33 @@ Create the foundational docs directory and write the human-facing versions:
     release-notes.md
   ```
 
-- [ ] **`docs/getting-started.md`** — extract from `knot-init` skill: install steps, first rig init, verification, quick reference. Reformat from agent-instruction style to human tutorial style.
+- [x] **`docs/getting-started.md`** — extract from `knot-init` skill: install steps, first rig init, verification, quick reference. Reformat from agent-instruction style to human tutorial style.
 
-- [ ] **`docs/concepts.md`** — extract from `domain-glossary.md` and `README.md`: the mental model (rig → loom → knot → strand → tie-off), the philosophy (file-first, version-controllable), the relationship diagram. Add narrative flow rather than term-by-term definitions.
+- [x] **`docs/concepts.md`** — extract from `domain-glossary.md` and `README.md`: the mental model (rig → loom → knot → strand → tie-off), the philosophy (file-first, version-controllable), the relationship diagram. Add narrative flow rather than term-by-term definitions.
 
-- [ ] **`docs/configuration/profiles.md`** — extract from `knot-create` skill: profile file format, frontmatter fields, how profiles are used at processing time, example profiles. Reformat tables and examples for human readability.
+- [x] **`docs/configuration/profiles.md`** — extract from `knot-create` skill: profile file format, frontmatter fields, how profiles are used at processing time, example profiles. Reformat tables and examples for human readability.
 
-- [ ] **`docs/configuration/knots.md`** — extract from `knot-create` skill: knot file format, frontmatter fields, directory resolution, example knots, how to add/modify/delete.
+- [x] **`docs/configuration/knots.md`** — extract from `knot-create` skill: knot file format, frontmatter fields, directory resolution, example knots, how to add/modify/delete.
 
-- [ ] **`docs/configuration/rig-structure.md`** — extract from `knot-create` skill: rig directory tree, how looms are named and discovered, tie-off paths, log locations.
+- [x] **`docs/configuration/rig-structure.md`** — extract from `knot-create` skill: rig directory tree, how looms are named and discovered, tie-off paths, log locations.
 
-- [ ] **`docs/api-reference.md`** — extract from `router.rs` and skill API sections: list all GET endpoints with purpose and example curl commands. Link to Swagger UI.
+- [x] **`docs/api-reference.md`** — extract from `router.rs` and skill API sections: list all GET endpoints with purpose and example curl commands. Link to Swagger UI.
 
-- [ ] **`docs/design-guide.md`** — extract from `knot-design` skill: naming conventions, idempotency, responsibility boundaries, loop design. Reformat for human readers.
+- [x] **`docs/design-guide.md`** — extract from `knot-design` skill: naming conventions, idempotency, responsibility boundaries, loop design. Reformat for human readers.
 
-### Phase 2: Write Workflow Tutorials
+### Phase 2: Write Workflow Tutorials ✅ Complete
 
 Create end-to-end tutorials from PRD scenarios — original writing guided by the domain model:
 
-- [ ] **`docs/workflows/review-workflow.md`** — "Review all PRDs in your project": from rig init through creating a profile, creating a loom with a review knot, dropping strands, checking tie-offs. Use the PRD scenarios from `prd-knot-skills.md` as the narrative backbone.
+- [x] **`docs/workflows/review-workflow.md`** — "Review all PRDs in your project": from rig init through creating a profile, creating a loom with a review knot, dropping strands, checking tie-offs. Use the PRD scenarios from `prd-knot-skills.md` as the narrative backbone.
 
-- [ ] **`docs/workflows/file-generation-workflow.md`** — "Transform source files into structured output": from rig init through creating a generation knot, watching a source directory, collecting tie-offs. Use the PRD scenarios from `prd-ai-driven-file-generation.md`.
+- [x] **`docs/workflows/file-generation-workflow.md`** — "Transform source files into structured output": from rig init through creating a generation knot, watching a source directory, collecting tie-offs. Use the PRD scenarios from `prd-ai-driven-file-generation.md`.
 
 ### Phase 3: Write Troubleshooting and Release Notes
 
-- [ ] **`docs/troubleshooting.md`** — extract error handling tables from all 4 skills, add common issues (Knot not running, profile not found, strand dir missing, loom not discovered). Organise by symptom → cause → fix.
+- [x] **`docs/troubleshooting.md`** — extract error handling tables from all 4 skills, add common issues (Knot not running, profile not found, strand dir missing, loom not discovered). Organise by symptom → cause → fix.
 
-- [ ] **`docs/release-notes.md`** — extract from `master-plan.md` completed plans, grouped by feature area (not chronological). Feature areas: Configuration (file-first, shared profiles, rig switching), Processing (tie-off append, context management, dedup), Observability (rig-log, loom-log, HTTP endpoints, Swagger), Integration (Pi agent, skills, git versioning). Include version number (0.12.0).
+- [x] **`docs/release-notes.md`** — extract from `master-plan.md` completed plans, grouped by feature area (not chronological). Feature areas: Configuration (file-first, shared profiles, rig switching), Processing (tie-off append, context management, dedup), Observability (rig-log, loom-log, HTTP endpoints, Swagger), Integration (Pi agent, skills, git versioning). Include version number (0.12.0).
 
 - [ ] **Update `README.md`** — add a "Documentation" section linking to `docs/`, keep the high-level philosophy and concepts.
 
