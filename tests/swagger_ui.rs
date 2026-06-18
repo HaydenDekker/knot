@@ -7,7 +7,7 @@ use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
     AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-    LoomRepository, PortError, RigLogPort, TieOffSink,
+    LoomRepository, PortError, RigLogPort, StateWriterPort, TieOffSink,
 };
 use knot::application::store::LoomStore;
 use knot::domain::entities::{Knot, Loom, LoomId};
@@ -150,6 +150,18 @@ impl RigLogPort for MockRigLogPort {
     }
 }
 
+/// No-op state writer for tests.
+struct MockStateWriter;
+
+impl StateWriterPort for MockStateWriter {
+    fn write_state(
+        &self,
+        _state: &knot::domain::entities::RigState,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
 fn build_test_context() -> AppContext {
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
     let _ = _event_rx;
@@ -167,6 +179,7 @@ fn build_test_context() -> AppContext {
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         rig_dir: PathBuf::from("./rig"),
+        state_writer: Arc::new(MockStateWriter),
     }
 }
 

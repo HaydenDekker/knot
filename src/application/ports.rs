@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
+    Knot, KnotId, Loom, LoomId, RigState, StrandPath, TieOff, TieOffPath,
 };
 use crate::domain::events::{LoomEvent, RigLogEvent};
 use crate::domain::value_objects::AgentProfile;
@@ -58,6 +58,8 @@ pub enum PortError {
     RigLogReadFailed(String),
     /// Failed to create a git commit.
     GitCommitFailed(String),
+    /// Failed to write the state file.
+    StateWriteFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -122,6 +124,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::GitCommitFailed(msg) => {
                 write!(f, "git commit failed: {msg}")
+            }
+            PortError::StateWriteFailed(msg) => {
+                write!(f, "state write failed: {msg}")
             }
         }
     }
@@ -403,6 +408,16 @@ pub trait GitVersioningPort: Send + Sync {
     ) -> Result<(), PortError>;
 }
 
+/// Port for writing the rig state snapshot file.
+///
+/// The state writer atomically writes `RigState` JSON to
+/// `{rig_dir}/state.json` (write to `.state.json.tmp`, then rename).
+/// This provides a file-first replacement for the HTTP interface.
+pub trait StateWriterPort: Send + Sync {
+    /// Write the given `RigState` to disk atomically.
+    fn write_state(&self, state: &RigState) -> Result<(), PortError>;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -616,6 +631,21 @@ mod tests {
                     event_type.to_string(),
                     tie_off_content.to_string(),
                 ));
+            Ok(())
+        }
+    }
+
+    /// In-memory mock of `StateWriterPort`.
+    ///
+    /// Records all write calls for inspection in tests.
+    #[derive(Default)]
+    struct MockStateWriter {
+        writes: std::sync::Mutex<Vec<RigState>>,
+    }
+
+    impl StateWriterPort for MockStateWriter {
+        fn write_state(&self, state: &RigState) -> Result<(), PortError> {
+            self.writes.lock().unwrap().push(state.clone());
             Ok(())
         }
     }
@@ -882,6 +912,35 @@ mod tests {
     fn port_error_git_commit_display() {
         let err = PortError::GitCommitFailed("not a git repo".to_string());
         assert_eq!(err.to_string(), "git commit failed: not a git repo");
+    }
+
+    #[test]
+    fn state_writer_port_contract() {
+        let writer = MockStateWriter::default();
+
+        // Verify trait is object-safe
+        let _obj: &dyn StateWriterPort = &writer;
+
+        // Verify write_state compiles and is callable
+        let state = RigState {
+            rig_path: "/tmp/rig".to_string(),
+            looms: vec![],
+            profiles: vec![],
+            updated_at: "2026-06-18T00:00:00Z".to_string(),
+        };
+        let result = writer.write_state(&state);
+        assert!(result.is_ok());
+
+        // Verify the write was recorded
+        let writes = writer.writes.lock().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].rig_path, "/tmp/rig");
+    }
+
+    #[test]
+    fn port_error_state_write_display() {
+        let err = PortError::StateWriteFailed("permission denied".to_string());
+        assert_eq!(err.to_string(), "state write failed: permission denied");
     }
 
     #[test]

@@ -1,0 +1,25 @@
+{
+  "rig_path": "/home/hayden/workspace/ai/knot/rig",
+  "looms": [
+    {
+      "id": "workflow-loom",
+      "knots": [
+        {
+          "id": "review-knot",
+          "status": "idle"
+        }
+      ]
+    },
+    {
+      "id": "new-loom",
+      "knots": [
+        {
+          "id": "review-knot",
+          "status": "idle"
+        }
+      ]
+    }
+  ],
+  "profiles": [],
+  "updated_at": "2026-06-18T11:42:48Z"
+}

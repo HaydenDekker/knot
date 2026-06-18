@@ -12,7 +12,8 @@ use axum::{body::Body, http::Request};
 use knot::adapters::inbound::AppContext;
 use knot::application::ports::{
     AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-    LoomRepository, ProcessingStatus, PortError, RigLogPort, TieOffSink,
+    LoomRepository, ProcessingStatus, PortError, RigLogPort, StateWriterPort,
+    TieOffSink,
 };
 use knot::application::store::LoomStore;
 use knot::domain::entities::{
@@ -152,6 +153,18 @@ impl RigLogPort for MockRigLogPort {
     }
 }
 
+/// No-op state writer for tests.
+struct MockStateWriter;
+
+impl StateWriterPort for MockStateWriter {
+    fn write_state(
+        &self,
+        _state: &knot::domain::entities::RigState,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
 /// Build an AppContext with mock ports and a pre-registered loom.
 fn build_context_with_loom() -> AppContext {
     let (event_sender, _event_rx) = mpsc::channel::<StrandEvent>(100);
@@ -170,6 +183,7 @@ fn build_context_with_loom() -> AppContext {
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         rig_dir: PathBuf::from("./rig"),
+        state_writer: Arc::new(MockStateWriter),
     };
 
     // Register a test loom with a knot
@@ -561,6 +575,7 @@ async fn knot_inspect_loom_activity() {
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         rig_dir: PathBuf::from("./rig"),
+        state_writer: Arc::new(MockStateWriter),
     };
     let app = knot::adapters::inbound::build_app(ctx);
 
@@ -660,6 +675,7 @@ async fn knot_inspect_knot_status_with_state() {
         rig_config: RigAgentConfig::default_config(),
         loom_ids: Vec::new(),
         rig_dir: PathBuf::from("./rig"),
+        state_writer: Arc::new(MockStateWriter),
     };
     ctx.store.register(Loom {
         id: LoomId("test-loom".to_string()),

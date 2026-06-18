@@ -4,9 +4,10 @@
 //! (startup, event pipeline, graceful shutdown).
 
 use crate::adapters::inbound::AppContext;
+use crate::adapters::outbound::FileSystemStateWriter;
 use crate::adapters::subprocess::SubprocessAgentRunner;
 use crate::application;
-use crate::application::ports::GitVersioningPort;
+use crate::application::ports::{GitVersioningPort, StateWriterPort};
 use crate::domain;
 use crate::domain::entities::Loom;
 use crate::domain::events::{ConfigEvent, StrandEvent};
@@ -156,6 +157,11 @@ pub fn build_app_context(
             ),
         );
 
+    // State writer: writes rig/state.json on a poll cycle.
+    let state_writer: Arc<dyn StateWriterPort> = Arc::new(
+        FileSystemStateWriter::new(config.rig_dir.clone()),
+    );
+
     // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
     // Strand receiver is wired into the debounce engine.
     // Config receiver is wired into the ConfigEventHandler.
@@ -195,6 +201,7 @@ pub fn build_app_context(
             rig_config,
             loom_ids: Vec::new(),
             rig_dir: config.rig_dir.clone(),
+            state_writer,
         },
         strand_rx,
         config_rx,
@@ -423,6 +430,53 @@ pub fn start_config_pipeline(
     });
 }
 
+/// Start the state writer background task.
+///
+/// Spawns a `tokio::task` that polls every 5 seconds, builds a
+/// `RigState` snapshot from the current in-memory state, and writes
+/// it atomically to `{rig_dir}/state.json`.
+///
+/// The task writes immediately on start (so `state.json` exists right
+/// away), then enters the 5-second poll cycle.
+///
+/// Spawns into the provided `JoinSet` so it is a child of the server
+/// task and is aborted when the server stops.
+pub fn start_state_writer(
+    ctx: &AppContext,
+    join_set: &mut tokio::task::JoinSet<()>,
+) {
+    let store = ctx.store.clone();
+    let log_port = Arc::clone(&ctx.loom_log_port);
+    let profile_repo = Arc::clone(&ctx.profile_repo);
+    let state_writer = Arc::clone(&ctx.state_writer);
+    let rig_dir = ctx.rig_dir.clone();
+
+    join_set.spawn(async move {
+        let use_case = application::usecases::WriteState::new(
+            store,
+            log_port,
+            profile_repo,
+            state_writer,
+            rig_dir,
+        );
+
+        // Write immediately on start so state.json exists right away
+        if let Err(e) = use_case.execute() {
+            eprintln!("[state-writer] initial write failed: {e}");
+        }
+
+        let poll_interval = Duration::from_secs(5);
+        let mut interval = tokio::time::interval(poll_interval);
+
+        loop {
+            interval.tick().await;
+            if let Err(e) = use_case.execute() {
+                eprintln!("[state-writer] write failed: {e}");
+            }
+        }
+    });
+}
+
 // ── Server Lifecycle ───────────────────────────────────────────────────────
 
 /// Shutdown signal type for the server.
@@ -470,6 +524,9 @@ pub async fn start_server_with_shutdown(
 
     // Start the strand event pipeline: debounce + ProcessStrand (child of this task)
     start_event_pipeline(&ctx, strand_rx, &mut join_set);
+
+    // Start the state writer: writes rig/state.json every 5 seconds
+    start_state_writer(&ctx, &mut join_set);
 
     // Startup: discover looms, create state files, start watchers
     let looms = run_startup(&ctx, &config.rig_dir).unwrap_or_else(|e| {

@@ -110,6 +110,66 @@ pub struct TieOff {
     pub timestamp: Option<String>,
 }
 
+// ── RigState — File-first state snapshot ─────────────────────────────
+
+/// Snapshot of the entire rig's runtime state, written to `rig/state.json`.
+///
+/// This is the replacement for the HTTP interface — external consumers
+/// (skills, scripts, other tools) read this file instead of calling
+/// REST endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RigState {
+    /// Absolute path to the rig directory.
+    pub rig_path: String,
+    /// All registered looms and their knots.
+    pub looms: Vec<RigStateLoom>,
+    /// All registered agent profiles.
+    pub profiles: Vec<RigStateProfile>,
+    /// ISO 8601 UTC timestamp of the last state write.
+    pub updated_at: String,
+}
+
+/// A loom as represented in the state snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RigStateLoom {
+    /// The loom's unique ID.
+    pub id: String,
+    /// Knots within this loom.
+    pub knots: Vec<RigStateKnot>,
+}
+
+/// A knot as represented in the state snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RigStateKnot {
+    /// The knot's unique ID.
+    pub id: String,
+    /// Current processing status.
+    pub status: String,
+    /// Path to the last strand processed (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_strand_path: Option<String>,
+    /// Path to the last tie-off produced (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_tie_off_path: Option<String>,
+    /// Error message from the last failed processing (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// ISO 8601 UTC timestamp of the last event for this knot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<String>,
+}
+
+/// An agent profile as represented in the state snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RigStateProfile {
+    /// Profile name.
+    pub name: String,
+    /// The LLM provider identifier.
+    pub provider: String,
+    /// The model name to use.
+    pub model: String,
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -370,5 +430,180 @@ mod tests {
         let json = serde_json::to_string(&tieoff).unwrap();
         let deserialized: TieOff = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.status, TieOffStatus::Failed);
+    }
+
+    // ── RigState Tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn rig_state_construction() {
+        let state = RigState {
+            rig_path: "/path/to/rig".to_string(),
+            looms: vec![RigStateLoom {
+                id: "my-loom".to_string(),
+                knots: vec![RigStateKnot {
+                    id: "review-knot".to_string(),
+                    status: "idle".to_string(),
+                    last_strand_path: None,
+                    last_tie_off_path: None,
+                    last_error: None,
+                    last_event_at: None,
+                }],
+            }],
+            profiles: vec![RigStateProfile {
+                name: "fast".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+            }],
+            updated_at: "2026-06-18T12:00:00Z".to_string(),
+        };
+
+        assert_eq!(state.rig_path, "/path/to/rig");
+        assert_eq!(state.looms.len(), 1);
+        assert_eq!(state.looms[0].id, "my-loom");
+        assert_eq!(state.looms[0].knots.len(), 1);
+        assert_eq!(state.looms[0].knots[0].id, "review-knot");
+        assert_eq!(state.looms[0].knots[0].status, "idle");
+        assert_eq!(state.profiles.len(), 1);
+        assert_eq!(state.profiles[0].name, "fast");
+    }
+
+    #[test]
+    fn rig_state_serialization_roundtrip() {
+        let state = RigState {
+            rig_path: "/path/to/rig".to_string(),
+            looms: vec![RigStateLoom {
+                id: "prds-loom".to_string(),
+                knots: vec![RigStateKnot {
+                    id: "review".to_string(),
+                    status: "completed".to_string(),
+                    last_strand_path: Some("input/prd.md".to_string()),
+                    last_tie_off_path: Some("output/review.md".to_string()),
+                    last_error: None,
+                    last_event_at: Some("2026-06-18T10:00:00Z".to_string()),
+                }],
+            }],
+            profiles: vec![RigStateProfile {
+                name: "fast".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+            }],
+            updated_at: "2026-06-18T12:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: RigState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, state);
+    }
+
+    #[test]
+    fn rig_state_serialization_omits_null_fields() {
+        let state = RigState {
+            rig_path: "/rig".to_string(),
+            looms: vec![RigStateLoom {
+                id: "loom".to_string(),
+                knots: vec![RigStateKnot {
+                    id: "k1".to_string(),
+                    status: "idle".to_string(),
+                    last_strand_path: None,
+                    last_tie_off_path: None,
+                    last_error: None,
+                    last_event_at: None,
+                }],
+            }],
+            profiles: vec![],
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        // None fields should be omitted, not serialized as null
+        assert!(!json.contains("null"));
+    }
+
+    #[test]
+    fn rig_state_empty() {
+        let state = RigState {
+            rig_path: "/empty/rig".to_string(),
+            looms: vec![],
+            profiles: vec![],
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: RigState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, state);
+        assert!(deserialized.looms.is_empty());
+        assert!(deserialized.profiles.is_empty());
+    }
+
+    #[test]
+    fn rig_state_knot_with_error() {
+        let knot = RigStateKnot {
+            id: "k1".to_string(),
+            status: "failed".to_string(),
+            last_strand_path: Some("input.md".to_string()),
+            last_tie_off_path: None,
+            last_error: Some("timeout".to_string()),
+            last_event_at: Some("2026-06-18T10:00:00Z".to_string()),
+        };
+
+        let json = serde_json::to_string(&knot).unwrap();
+        let deserialized: RigStateKnot = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, knot);
+        assert_eq!(deserialized.last_error, Some("timeout".to_string()));
+    }
+
+    #[test]
+    fn rig_state_multiple_looms_and_knots() {
+        let state = RigState {
+            rig_path: "/multi".to_string(),
+            looms: vec![
+                RigStateLoom {
+                    id: "loom-a".to_string(),
+                    knots: vec![
+                        RigStateKnot {
+                            id: "k1".to_string(),
+                            status: "idle".to_string(),
+                            last_strand_path: None,
+                            last_tie_off_path: None,
+                            last_error: None,
+                            last_event_at: None,
+                        },
+                        RigStateKnot {
+                            id: "k2".to_string(),
+                            status: "processing".to_string(),
+                            last_strand_path: Some("in.md".to_string()),
+                            last_tie_off_path: None,
+                            last_error: None,
+                            last_event_at: Some("2026-06-18T10:00:00Z".to_string()),
+                        },
+                    ],
+                },
+                RigStateLoom {
+                    id: "loom-b".to_string(),
+                    knots: vec![],
+                },
+            ],
+            profiles: vec![
+                RigStateProfile {
+                    name: "fast".to_string(),
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                },
+                RigStateProfile {
+                    name: "detailed".to_string(),
+                    provider: "anthropic".to_string(),
+                    model: "claude-sonnet".to_string(),
+                },
+            ],
+            updated_at: "2026-06-18T12:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: RigState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, state);
+        assert_eq!(deserialized.looms.len(), 2);
+        assert_eq!(deserialized.looms[0].knots.len(), 2);
+        assert_eq!(deserialized.looms[1].knots.len(), 0);
+        assert_eq!(deserialized.profiles.len(), 2);
     }
 }

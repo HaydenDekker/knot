@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-    LoomRepository, RigLogPort, TieOffSink,
+    LoomRepository, RigLogPort, StateWriterPort, TieOffSink,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::LoomId;
@@ -85,4 +85,6 @@ pub struct AppContext {
     pub loom_ids: Vec<LoomId>,
     /// Rig directory path — used by discover and config endpoints.
     pub rig_dir: PathBuf,
+    /// State writer port — writes rig/state.json.
+    pub state_writer: Arc<dyn StateWriterPort>,
 }

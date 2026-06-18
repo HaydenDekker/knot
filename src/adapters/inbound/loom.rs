@@ -236,7 +236,7 @@ mod tests {
     use crate::adapters::inbound::types::AppContext;
     use crate::application::ports::{
         AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
-        LoomRepository, PortError, RigLogPort, TieOffSink,
+        LoomRepository, PortError, RigLogPort, StateWriterPort, TieOffSink,
     };
     use crate::application::store::LoomStore;
     use crate::application::usecases::LoomSummary;
@@ -497,6 +497,18 @@ mod tests {
         }
     }
 
+    /// No-op state writer for tests.
+    struct MockStateWriter;
+
+    impl StateWriterPort for MockStateWriter {
+        fn write_state(
+            &self,
+            _state: &crate::domain::entities::RigState,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
     fn build_test_context_with_events(
         log_events: Vec<LoomEvent>,
     ) -> AppContext {
@@ -518,6 +530,7 @@ mod tests {
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             rig_dir: PathBuf::from("./rig"),
+            state_writer: Arc::new(MockStateWriter),
         }
     }
 
@@ -550,6 +563,7 @@ mod tests {
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
                 rig_dir: PathBuf::from("./rig"),
+                state_writer: Arc::new(MockStateWriter),
             },
             watch_calls,
             unwatch_calls,
@@ -1151,6 +1165,7 @@ mod tests {
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             rig_dir: PathBuf::from("./rig"),
+            state_writer: Arc::new(MockStateWriter),
         }
     }
 
@@ -1269,6 +1284,7 @@ mod tests {
             rig_config: RigAgentConfig::default_config(),
             loom_ids: Vec::new(),
             rig_dir: PathBuf::from("./rig"),
+            state_writer: Arc::new(MockStateWriter),
         };
         let app = build_app(ctx);
 
@@ -1403,6 +1419,7 @@ mod tests {
                 rig_config: RigAgentConfig::default_config(),
                 loom_ids: Vec::new(),
                 rig_dir: PathBuf::from("./rig"),
+                state_writer: Arc::new(MockStateWriter),
             },
             scan_looms,
         )
