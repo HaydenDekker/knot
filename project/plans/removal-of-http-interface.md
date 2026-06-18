@@ -126,11 +126,11 @@ Remove the HTTP server and all its infrastructure from the binary.
 
 Remove HTTP test files and replace `tests/helpers.rs` infrastructure.
 
-- [ ] Delete: `tests/http_interface.rs`
-- [ ] Delete: `tests/swagger_ui.rs`
-- [ ] Delete: `tests/axum_server_test_integration.rs`
-- [ ] Delete: `tests/server_startup_smoke.rs` (was only testing HTTP bind)
-- [ ] Rewrite `tests/helpers.rs`:
+- [x] Delete: `tests/http_interface.rs`
+- [x] Delete: `tests/swagger_ui.rs`
+- [x] Delete: `tests/axum_server_test_integration.rs`
+- [x] Delete: `tests/server_startup_smoke.rs` (was only testing HTTP bind)
+- [x] Rewrite `tests/helpers.rs`:
   - Remove: `http_get`, `http_post_json`, `http_patch_json`, `http_delete`, `read_response`
   - Remove: `wait_for_port`, `spawn_server`, `spawn_server_with_shutdown`
   - Remove: `wait_for_loom_discovery`, `wait_for_knot_count`, `poll_knot_status`
@@ -139,7 +139,7 @@ Remove HTTP test files and replace `tests/helpers.rs` infrastructure.
   - Add: `wait_for_state_field(path: &str, selector: &str, expected: &str)` — polls `rig/state.json` and checks a JSON path matches expected value
   - Add: `wait_for_loom_in_state(rig_dir, loom_id, expected_knots)` — polls state file for loom registration
   - Add: `wait_for_knot_status_in_state(rig_dir, loom_id, knot_id, status)` — polls state file for knot status
-- [ ] Verify: `cargo test --test helpers` (or compile check)
+- [x] Verify: `cargo test --test helpers` (or compile check)
 
 ### Phase 3: Rewrite Remaining Integration Tests
 
