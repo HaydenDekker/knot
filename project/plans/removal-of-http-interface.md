@@ -145,24 +145,24 @@ Remove HTTP test files and replace `tests/helpers.rs` infrastructure.
 
 Convert all remaining integration tests from HTTP verification to file-based polling.
 
-- [ ] **`tests/skill_integration.rs`** (10 tests) — rewrite to verify state via `rig/state.json` instead of HTTP endpoints. Verify skill files still exist and reference correct paths.
-- [ ] **`tests/discovery.rs`** (4 tests) — use `wait_for_loom_in_state` instead of `http_get("/looms")`
-- [ ] **`tests/pipeline.rs`** (7 tests) — use `wait_for_knot_status_in_state` instead of `poll_knot_status`. Verify activity via loom-log file reads instead of HTTP.
-- [ ] **`tests/agent_integration.rs`** (10 tests) — verify agent execution results via tie-off files and `rig/state.json`
-- [ ] **`tests/auto_discovery_and_knot_crud.rs`** (9 tests) — rewrite to use file-based polling helpers. Heavy HTTP usage (59 calls) — largest rewrite.
-- [ ] **`tests/git_versioning.rs`** (3 tests) — use `start_knot` instead of `spawn_server`, verify via git log + state file
-- [ ] **`tests/multi_loom.rs`** — use file-based helpers
-- [ ] **`tests/profile_timeout.rs`** — use file-based helpers
-- [ ] **`tests/rig_lifecycle.rs`** (5 tests) — verify rig creation and config via filesystem reads and state file
-- [ ] **`tests/rig_log.rs`** — verify via filesystem reads
-- [ ] **`tests/shutdown.rs`** (2 tests) — rewrite with `start_knot` + oneshot shutdown, verify LoomStopped in loom-log
-- [ ] **`tests/skill_e2e.rs`** — rewrite with file-based helpers
-- [ ] **`tests/tie_off.rs`** — use `start_knot` instead of `spawn_server`
-- [ ] **`tests/task_management.rs`** — use `start_knot` instead of `spawn_server`
-- [ ] **`tests/composition.rs`** — update to use new composition root (no `start_server`)
-- [ ] **`tests/demo.rs`** — use file-based helpers
-- [ ] **`tests/rig_cli.rs`** (3 tests) — minimal changes, update `AppConfig` usage
-- [ ] Verify: `cargo test` passes, test count reasonable (should be similar or slightly higher than before)
+- [x] **`tests/skill_integration.rs`** (10 tests) — rewrite to verify state via `rig/state.json` instead of HTTP endpoints. Verify skill files still exist and reference correct paths.
+- [x] **`tests/discovery.rs`** (4 tests) — use `wait_for_loom_in_state` instead of `http_get("/looms")`
+- [x] **`tests/pipeline.rs`** (7 tests) — use `wait_for_knot_status_in_state` instead of `poll_knot_status`. Verify activity via loom-log file reads instead of HTTP.
+- [x] **`tests/agent_integration.rs`** (10 tests) — verify agent execution results via tie-off files and `rig/state.json`
+- [x] **`tests/auto_discovery_and_knot_crud.rs`** (9 tests) — rewrite to use file-based polling helpers. Heavy HTTP usage (59 calls) — largest rewrite.
+- [x] **`tests/git_versioning.rs`** (3 tests) — use `start_knot` instead of `spawn_server`, verify via git log + state file
+- [x] **`tests/multi_loom.rs`** — use file-based helpers
+- [x] **`tests/profile_timeout.rs`** — use file-based helpers
+- [x] **`tests/rig_lifecycle.rs`** (5 tests) — verify rig creation and config via filesystem reads and state file
+- [x] **`tests/rig_log.rs`** — verify via filesystem reads
+- [x] **`tests/shutdown.rs`** (2 tests) — rewrite with `start_knot` + oneshot shutdown, verify LoomStopped in loom-log
+- [x] **`tests/skill_e2e.rs`** — rewrite with file-based helpers
+- [x] **`tests/tie_off.rs`** — use `start_knot` instead of `spawn_server`
+- [x] **`tests/task_management.rs`** — use `start_knot` instead of `spawn_server`
+- [x] **`tests/composition.rs`** — update to use new composition root (no `start_server`)
+- [x] **`tests/demo.rs`** — use file-based helpers
+- [x] **`tests/rig_cli.rs`** (3 tests) — minimal changes, update `AppConfig` usage
+- [x] Verify: `cargo test` passes, test count reasonable (should be similar or slightly higher than before)
 
 ### Phase 4: Update Agent Skills
 
