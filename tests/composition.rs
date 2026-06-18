@@ -19,7 +19,6 @@ fn app_config_with_rig_dir_uses_custom_path() {
     let config = AppConfig::with_rig_dir(custom.clone());
 
     assert_eq!(config.rig_dir, custom);
-    assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
     assert_eq!(config.rig_config.cli_path, "pi");
     assert!(config.rig_config.cli_args.is_empty());
 }
@@ -53,7 +52,6 @@ fn app_config_default_config_unchanged() {
     let config = AppConfig::default_config();
     let cwd = std::env::current_dir().unwrap();
     assert_eq!(config.rig_dir, cwd.join("rig"));
-    assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
 }
 
 /// Verify `build_app_context` wires all hex layers correctly.

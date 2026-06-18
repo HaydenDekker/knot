@@ -8,40 +8,38 @@ pub use crate::domain::value_objects::AgentProfile;
 // ── Value Objects (identifiers and paths) ──────────────────────────────────
 
 /// Unique identifier for a Knot.
+/// Unique identifier for a Knot.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
 pub struct KnotId(pub String);
 
 /// Unique identifier for a Loom.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
 pub struct LoomId(pub String);
 
 /// Path to a strand (input file being processed).
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
-#[schema(value_type = String)]
 pub struct StrandPath(pub PathBuf);
 
 /// Path to a tie-off (output file produced).
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
-#[schema(value_type = String)]
 pub struct TieOffPath(pub PathBuf);
 
 /// Path to the rig-log (append-only JSONL operational log at `rig/.rig-log`).
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
-#[schema(value_type = String)]
 pub struct RigLogPath(pub PathBuf);
 
 /// Status of a TieOff output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TieOffStatus {
     /// Output has been produced and written.
@@ -62,14 +60,18 @@ fn default_git_versioned() -> bool {
 /// All agent configuration comes from a shared profile referenced by
 /// `agent_profile_ref`. The knot's `prompt_template.instructions` provides
 /// task-specific direction appended to the profile's system prompt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+/// A Knot is the core unit of work: an agent goal paired with a prompt template.
+///
+/// All agent configuration comes from a shared profile referenced by
+/// `agent_profile_ref`. The knot's `prompt_template.instructions` provides
+/// task-specific direction appended to the profile's system prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Knot {
     pub id: KnotId,
     /// Reference to a named agent profile stored in `profiles/{name}.md`.
     pub agent_profile_ref: String,
     pub prompt_template: PromptTemplate,
     /// Directory to watch for strand files (required).
-    #[schema(value_type = String)]
     pub strand_dir: PathBuf,
     /// When `true` (default), a git commit is created after each successful
     /// knot run. Set to `false` in frontmatter via `git-versioned: false` to
@@ -82,20 +84,20 @@ pub struct Knot {
 ///
 /// The loom directory is static and derived from the loom ID and rig base
 /// path — not stored as a field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Loom {
     pub id: LoomId,
     pub knots: Vec<Knot>,
 }
 
 /// A Strand is an input file being processed by a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Strand {
     pub path: StrandPath,
 }
 
 /// A TieOff is the output produced from processing a Strand with a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TieOff {
     pub content: String,
     pub path: TieOffPath,

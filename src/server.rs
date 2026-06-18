@@ -3,7 +3,6 @@
 //! Wires all hexagonal layers together and manages the server lifecycle
 //! (startup, event pipeline, graceful shutdown).
 
-use crate::adapters::inbound::AppContext;
 use crate::adapters::outbound::FileSystemStateWriter;
 use crate::adapters::subprocess::SubprocessAgentRunner;
 use crate::application;
@@ -14,22 +13,55 @@ use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::RigAgentConfig;
 
-use std::net::SocketAddr;
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-// ── Configuration ──────────────────────────────────────────────────────────
+// ── AppContext ────────────────────────────────────────────────────────────
 
-/// Configuration for starting the Knot server.
+/// Application context passed to all layers.
+///
+/// Holds port instances, the in-memory store, and rig configuration.
+/// Cloned and passed to use cases and background tasks.
+#[derive(Clone)]
+pub struct AppContext {
+    /// In-memory loom registry.
+    pub store: application::store::LoomStore,
+    /// Loom repository port.
+    pub loom_repo: Arc<dyn application::ports::LoomRepository>,
+    /// Loom log port.
+    pub loom_log_port: Arc<dyn application::ports::LoomLogPort>,
+    /// Tie-off sink port.
+    pub tie_off_sink: Arc<dyn application::ports::TieOffSink>,
+    /// File-system event source — used to watch/unwatch source dirs.
+    pub event_source: Arc<dyn application::ports::EventSource>,
+    /// Debounce engine sender — feed raw strand events.
+    pub event_sender: mpsc::Sender<StrandEvent>,
+    /// Agent runner for subprocess execution.
+    pub agent_runner: Arc<dyn application::ports::AgentRunner>,
+    /// Agent profile repository for dynamic profile resolution.
+    pub profile_repo: Arc<dyn application::ports::AgentProfileRepository>,
+    /// Rig-log port for recording operational events (timeouts, idle).
+    pub rig_log_port: Arc<dyn application::ports::RigLogPort>,
+    /// Rig-level agent configuration.
+    pub rig_config: RigAgentConfig,
+    /// Discovered loom IDs (populated at startup, used for shutdown logging).
+    pub loom_ids: Vec<domain::entities::LoomId>,
+    /// Rig directory path — used by discover and config endpoints.
+    pub rig_dir: PathBuf,
+    /// State writer port — writes rig/state.json.
+    pub state_writer: Arc<dyn StateWriterPort>,
+}
+
+// ── Configuration ─────────────────────────────────────────────────────────
+
+/// Configuration for starting the Knot service.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     /// Rig directory for filesystem adapters.
     pub rig_dir: PathBuf,
-    /// Address to bind the HTTP server on.
-    pub bind_addr: SocketAddr,
     /// Rig-level agent configuration.
     pub rig_config: RigAgentConfig,
     /// Timeout for subprocess agent runner.
@@ -37,14 +69,13 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Create default configuration: bind `127.0.0.1:3000`, rig dir `./rig`.
+    /// Create default configuration: rig dir `./rig`.
     pub fn default_config() -> Self {
         let rig_dir = std::env::current_dir()
             .map(|cwd| cwd.join("rig"))
             .unwrap_or_else(|_| PathBuf::from("./rig"));
         Self {
             rig_dir,
-            bind_addr: "127.0.0.1:3000".parse().unwrap(),
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
         }
@@ -53,11 +84,10 @@ impl AppConfig {
     /// Create configuration with an explicit rig directory.
     ///
     /// All other fields use the same defaults as `default_config()`
-    /// (bind `127.0.0.1:3000`, default rig config, 300s agent timeout).
+    /// (default rig config, 300s agent timeout).
     pub fn with_rig_dir(rig_dir: PathBuf) -> Self {
         Self {
             rig_dir,
-            bind_addr: "127.0.0.1:3000".parse().unwrap(),
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
         }
@@ -479,41 +509,18 @@ pub fn start_state_writer(
 
 // ── Server Lifecycle ───────────────────────────────────────────────────────
 
-/// Shutdown signal type for the server.
-pub enum ShutdownSignal {
-    /// Wait for Ctrl+C (default for production).
-    CtrlC,
-    /// Wait for the provided oneshot channel (useful for tests).
-    Channel(tokio::sync::oneshot::Receiver<()>),
-}
-
-/// Start the Knot HTTP server with the given configuration.
+/// Start the Knot service.
 ///
-/// Builds the `AppContext`, wires the axum router, and binds to
-/// `config.bind_addr`. Blocks until the shutdown signal is received.
-///
-/// Returns the `SocketAddr` the server is actually listening on.
-/// This is useful when `bind_addr.port()` is `0` (random port).
-pub async fn start_server(config: AppConfig) -> std::io::Result<()> {
-    start_server_with_shutdown(config, ShutdownSignal::CtrlC).await
-}
-
-/// Start the Knot HTTP server with a custom shutdown signal.
-///
-/// This variant allows callers (especially tests) to control when
-/// the server shuts down via an oneshot channel.
+/// Builds the `AppContext`, starts background pipelines (event, config,
+/// state writer), runs startup discovery, then blocks until Ctrl+C is
+/// received.
 ///
 /// Graceful shutdown sequence:
-/// 1. Awaits shutdown signal (Ctrl+C or oneshot channel)
-/// 2. Stops accepting new HTTP connections (axum graceful shutdown)
-/// 3. Drops NotifyEventSource (stops file watcher, closes event channel)
-/// 4. Waits for debounce engine + processing pipeline to drain
-/// 5. Writes `LoomStopped` to each loom's activity log
-/// 6. Returns
-pub async fn start_server_with_shutdown(
-    config: AppConfig,
-    shutdown_signal: ShutdownSignal,
-) -> std::io::Result<()> {
+/// 1. Awaits Ctrl+C
+/// 2. Drains pipeline tasks with timeout safety net
+/// 3. Writes `LoomStopped` to each loom's activity log
+/// 4. Returns
+pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
 
     // JoinSet ties the pipeline task lifetimes to the server task.
@@ -540,59 +547,30 @@ pub async fn start_server_with_shutdown(
         ctx.loom_ids = loom_ids;
     }
 
-    // Preserve references needed after AppContext is consumed by the router.
+    // Preserve references needed after AppContext is consumed.
     let shutdown_log_port: Arc<dyn application::ports::LoomLogPort> =
         Arc::clone(&ctx.loom_log_port);
     let shutdown_loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
 
-    let app = crate::adapters::inbound::build_app(ctx);
-
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-
-    let shutdown = async {
-        match shutdown_signal {
-            ShutdownSignal::CtrlC => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-            ShutdownSignal::Channel(rx) => {
-                let _ = rx.await;
-            }
-        }
-    };
-
-    // Serve HTTP with graceful shutdown.
-    // When the shutdown signal fires, axum stops accepting new connections
-    // and waits for existing requests to complete.
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    // Wait for Ctrl+C
+    let _ = tokio::signal::ctrl_c().await;
 
     // ── Graceful Cascade Shutdown ─────────────────────────────────────
     //
     // The shutdown sequence is a cooperative cascade, not forced abort:
     //
-    // 1. axum::serve has exited — HTTP server stopped, AppContext dropped,
-    //    NotifyEventSource dropped (file watcher stopped).
+    // 1. Ctrl+C received — AppContext is still alive but no new events
+    //    will be triggered.
     //
-    // 2. The event_sender clone held by AppContext is dropped. Any other
-    //    clones (e.g., from route handlers) are also gone.
+    // 2. The event_sender clone held by AppContext will be dropped when
+    //    ctx goes out of scope (after this function returns).
     //
-    // 3. DebounceEngine: its input rx.recv() yields None → flushes all
-    //    pending entries to output channel → task exits naturally.
+    // 3. We abort the JoinSet tasks — they are background workers that
+    //    will be reaped on next startup. The notify watcher thread
+    //    holds its own Arc references and will be cleaned up by the
+    //    OS when the process exits.
     //
-    // 4. ProcessStrand: finishes in-flight agent execution → writes
-    //    tie-off → its debounce_rx.recv() yields None → exits naturally.
-    //
-    // 5. ConfigEventHandler: its config_rx.recv() yields None (config_tx
-    //    was dropped with NotifyEventSource) → task exits naturally.
-    //
-    // 6. JoinSet drained: `while let Some` loop waits for ALL tasks to
-    //    complete. No tasks are aborted — they all exit cooperatively.
-    //
-    // 7. LoomStopped written to each loom-log.
-    //
-    // Safety net: if a task has a bug and never exits, the JoinSet Drop
-    // will abort it. This is a last resort, not the primary mechanism.
+    // 4. LoomStopped written to each loom-log.
 
     // Drain all pipeline tasks with a timeout safety net.
     //
@@ -601,8 +579,6 @@ pub async fn start_server_with_shutdown(
     // holds an Arc reference to the event senders, which can delay channel
     // closure by tens of milliseconds. If the drain doesn't complete within
     // the timeout, abort remaining tasks as a last resort.
-    //
-    // See ADR-003 pattern 4 for the timeout safety net rationale.
     let drain_timeout = Duration::from_secs(5);
     let drain_result = tokio::time::timeout(drain_timeout, async {
         while let Some(res) = join_set.join_next().await {

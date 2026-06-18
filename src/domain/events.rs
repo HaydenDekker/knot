@@ -7,7 +7,7 @@ use crate::domain::entities::{
 // ── Domain Events ──────────────────────────────────────────────────────────
 
 /// An event that describes the lifecycle of a Strand.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StrandEvent {
     /// A new strand (input file) was detected.
     Created {
@@ -30,7 +30,7 @@ pub enum StrandEvent {
 }
 
 /// A TieOff (output file) was successfully produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TieOffProduced {
     pub knot_id: KnotId,
     pub strand_path: StrandPath,
@@ -38,7 +38,7 @@ pub struct TieOffProduced {
 }
 
 /// Processing of a strand failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessingFailed {
     pub knot_id: KnotId,
     pub strand_path: StrandPath,
@@ -46,7 +46,7 @@ pub struct ProcessingFailed {
 }
 
 /// An event that describes the lifecycle of a Loom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoomEvent {
     /// A new Knot was registered with the Loom.
     KnotRegistered {
@@ -129,7 +129,7 @@ pub enum LoomEvent {
 }
 
 /// A Knot was registered with a Loom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnotRegistered {
     pub loom_id: LoomId,
     pub knot_id: KnotId,
@@ -141,7 +141,7 @@ pub struct KnotRegistered {
 ///
 /// The rig-log is an append-only JSONL file that records serious operational
 /// events so the user or an external watcher can monitor and react.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RigLogEvent {
     /// An agent session exceeded its timeout deadline.
     TimeoutExceeded {
@@ -166,7 +166,7 @@ pub enum RigLogEvent {
 /// Unlike [`StrandEvent`] which tracks input file lifecycle, config events
 /// track changes to the loom/knot definition files themselves (the `.md` knot
 /// files and `*-loom` directories).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigEvent {
     /// A new loom directory was detected (ends in `-loom`).
     LoomAdded {

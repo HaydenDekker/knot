@@ -137,7 +137,7 @@ impl std::error::Error for PortError {}
 // ── Supporting Types ──────────────────────────────────────────────────────
 
 /// Status of a knot's processing lifecycle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessingStatus {
     /// The knot is registered but not yet processing.
@@ -151,7 +151,7 @@ pub enum ProcessingStatus {
 }
 
 /// The type of event recorded in knot state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KnotEventType {
     /// A new strand was created.
@@ -165,7 +165,7 @@ pub enum KnotEventType {
 /// Per-knot processing state.
 ///
 /// Records the current status of a knot as it processes strands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnotState {
     /// The knot this state belongs to.
     pub knot_id: KnotId,

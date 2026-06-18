@@ -61,7 +61,7 @@ impl std::error::Error for AgentProfileError {}
 // ── Value Objects ──────────────────────────────────────────────────────────
 
 /// Configuration for the agent that runs a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// The goal this knot's agent should accomplish.
     pub goal: String,
@@ -128,7 +128,7 @@ impl AgentConfig {
 }
 
 /// Prompt template used when executing a Knot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptTemplate {
     /// How input is bundled: e.g. "full-file", "diff", "chunked".
     pub input_bundling: String,
@@ -163,7 +163,7 @@ impl PromptTemplate {
 
 /// Rig-level agent configuration. One config per rig,
 /// shared by all knots in that rig.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RigAgentConfig {
     /// Path to the agent CLI binary.
     pub cli_path: String,
@@ -198,7 +198,7 @@ impl RigAgentConfig {
 /// Stored as a `.md` file in `profiles/{name}.md` with YAML frontmatter.
 /// Knots reference it by `agent-profile-ref: {name}` and may override
 /// individual fields (model, tools) inline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfile {
     /// Profile name (becomes the filename: `profiles/{name}.md`).
     pub name: String,

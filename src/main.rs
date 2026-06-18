@@ -275,6 +275,6 @@ fn resolve_config() -> AppConfig {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let config = resolve_config();
-    knot::start_server(config).await?;
+    knot::start_knot(config).await?;
     Ok(())
 }

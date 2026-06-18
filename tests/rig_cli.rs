@@ -2,8 +2,8 @@
 //!
 //! Invokes the `knot` binary via `std::process::Command` to verify:
 //! - Multiple rigs found (no args) → non-zero exit with rig names
-//! - Single rig found (no args) → server starts, health check passes
-//! - Named rig → server starts with correct looms loaded
+//! - Single rig found (no args) → server starts, process stays alive
+//! - Named rig → server starts with rig directory created
 //! - Share command → zip contains looms + profiles, excludes tie-offs
 
 use std::fs;
@@ -11,9 +11,6 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 use zip::ZipArchive;
-
-mod helpers;
-use helpers::wait_for_port;
 
 /// Resolve the path to the compiled `knot` binary.
 ///
@@ -140,10 +137,10 @@ fn cli_multiple_rigs_no_args_exits_with_error() {
     );
 }
 
-// ── Single rig, no args → server starts ────────────────────────────────────
+// ── Single rig, no args → process stays alive ─────────────────────────────
 
-#[tokio::test]
-async fn cli_single_rig_no_args_server_starts() {
+#[test]
+fn cli_single_rig_no_args_starts() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
 
@@ -154,91 +151,18 @@ async fn cli_single_rig_no_args_server_starts() {
 
     let mut knot = KnotProcess::spawn(cwd, &[]);
 
-    // Wait for the server to attempt to bind
+    // Wait for the process to start
     thread::sleep(Duration::from_secs(2));
 
     // Check if the process is still running (didn't crash)
     let still_alive = knot.is_alive();
 
-    // If alive, try the health check. If port is busy, process won't be alive.
-    if still_alive {
-        let host_port = "127.0.0.1:3000";
-        let result = wait_for_port(host_port, 3000).await;
-        if result.is_ok() {
-            let (status, _body) = helpers::http_get(host_port, "/health")
-                .await
-                .expect("health endpoint should respond");
-            assert!(
-                status.contains("200"),
-                "expected 200 from health, got: {status}"
-            );
-        }
-    }
-
     let output = knot.kill_and_wait();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        still_alive || stderr.contains("Address already in use"),
-        "server process should be running or have a port conflict.\n\
-         still_alive={}, stderr: {}",
         still_alive,
-        stderr
-    );
-}
-
-// ── Named rig → server starts with looms ──────────────────────────────────
-
-#[tokio::test]
-async fn cli_named_rig_starts_with_looms() {
-    let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path();
-
-    // Create two rig directories but explicitly name one
-    fs::create_dir_all(cwd.join("dev-rig")).unwrap();
-    let target_rig = cwd.join("review-rig");
-    fs::create_dir_all(&target_rig).unwrap();
-    write_fast_profile(&target_rig);
-
-    // Create a loom in the target rig
-    let loom = create_loom(&target_rig, "definition");
-    write_knot(&loom, "review");
-
-    let mut knot = KnotProcess::spawn(cwd, &["review-rig"]);
-
-    // Wait for the server to start
-    thread::sleep(Duration::from_secs(2));
-
-    let still_alive = knot.is_alive();
-
-    // If alive and port available, check looms are loaded
-    if still_alive {
-        let host_port = "127.0.0.1:3000";
-        let result = wait_for_port(host_port, 3000).await;
-        if result.is_ok() {
-            let (status, body) = helpers::http_get(host_port, "/looms")
-                .await
-                .expect("looms endpoint should respond");
-            assert!(
-                status.contains("200"),
-                "expected 200 from /looms, got: {status}"
-            );
-            let looms: Vec<serde_json::Value> =
-                serde_json::from_str(&body).expect("should parse looms JSON");
-            assert!(
-                !looms.is_empty(),
-                "should have loaded at least one loom, got: {}",
-                body
-            );
-        }
-    }
-
-    let output = knot.kill_and_wait();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        still_alive || stderr.contains("Address already in use"),
-        "server process should be running or have a port conflict.\n\
+        "server process should be running.\n\
          still_alive={}, stderr: {}",
         still_alive,
         stderr
@@ -363,8 +287,8 @@ fn cli_share_nonexistent_rig_exits_with_error() {
 
 // ── Named rig that doesn't exist → auto-created on startup ────────────────
 
-#[tokio::test]
-async fn cli_named_rig_does_not_exist_creates_it() {
+#[test]
+fn cli_named_rig_does_not_exist_creates_it() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
 
@@ -377,7 +301,7 @@ async fn cli_named_rig_does_not_exist_creates_it() {
 
     let mut knot = KnotProcess::spawn(cwd, &["new-rig"]);
 
-    // Wait for the server to attempt to bind
+    // Wait for the process to start
     thread::sleep(Duration::from_secs(2));
 
     let still_alive = knot.is_alive();
@@ -393,8 +317,8 @@ async fn cli_named_rig_does_not_exist_creates_it() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        still_alive || stderr.contains("Address already in use"),
-        "server process should be running or have a port conflict.\n\
+        still_alive,
+        "server process should be running.\n\
          still_alive={}, stderr: {}",
         still_alive,
         stderr
