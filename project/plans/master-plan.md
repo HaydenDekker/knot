@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 37 | [User Documentation and Documentation Skill](user-documentation.md) | ⬜ Planned | 2026-06-18 |
+| 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
 | 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
@@ -91,9 +91,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 37. User Documentation and Documentation Skill
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-18
+**Completed:** 2026-06-18
 **Goal:** Create user-facing documentation from existing project artifacts (skills, glossary, PRDs, completed plans) and package the extraction methodology into a reusable `project-documentation` skill.
+
+**Result:** 11 user-facing docs created in `docs/`: getting-started, concepts, 3 configuration guides (profiles, knots, rig-structure), 2 workflow tutorials (review, file-generation), API reference, troubleshooting guide, design guide, and release notes. `project-documentation` skill (393 lines) created at `.agents/skills/project-documentation/SKILL.md` and published globally. README updated with documentation index. Documentation-only — no version bump needed.
 
 Full details in [user-documentation.md](user-documentation.md).
 
