@@ -1,20 +1,19 @@
 ---
 name: knot-create
-description: "Create looms, knots, and profiles by writing .md files directly. Knot auto-discovers looms (directories ending in `-loom`) and parses knot definition files (`.md` files inside loom directories). Profiles live in `rig/profiles/`. Use Knot's GET endpoints to verify state after file changes. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
+description: "Create looms, knots, and profiles by writing .md files directly. Knot auto-discovers looms (directories ending in `-loom`) and parses knot definition files (`.md` files inside loom directories). Profiles live in `rig/profiles/`. Read `rig/state.json` to verify state after file changes. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
 license: MIT
 metadata:
   author: Knot Team
   version: "3.0.0"
-  compatibility: "Knot 0.3.0+"
-  api_spec: "http://localhost:3000/swagger-ui/openapi.json"
+  compatibility: "Knot 0.4.0+"
 ---
 
 # Knot Create Skill
 
 Create and manage looms, knots, and agent profiles by writing `.md` files
 directly to disk. Knot auto-discovers changes through its file watcher —
-no HTTP registration is needed. Use Knot's `GET` endpoints to verify
-state after file changes.
+no registration is needed. Read `rig/state.json` to verify state after
+file changes.
 
 A **loom** is a directory inside the rig whose name ends in `-loom`.
 Knot discovers these directories automatically and parses `.md` knot
@@ -22,8 +21,7 @@ definition files inside them. Each **knot** references a shared
 **agent profile** that provides the LLM provider, model, tools, and
 system prompt.
 
-**Knot API base URL:** `http://localhost:3000` (GET endpoints only)
-**OpenAPI spec:** `http://localhost:3000/swagger-ui/openapi.json`
+**State file:** `rig/state.json` (written every 5 seconds by Knot)
 
 ---
 
@@ -33,7 +31,7 @@ system prompt.
 
 All configuration is `.md` files with YAML frontmatter. Write files
 directly to disk — Knot's file watcher picks up changes automatically.
-No HTTP registration needed.
+No registration needed.
 
 ### Auto-Discovery
 
@@ -57,7 +55,8 @@ file. Summarise what will be removed.
 ## Prerequisites
 
 1. Knot must be running (use `knot-init` skill if not)
-2. A rig must be initialised (verified by `GET /config/rig` returning 200)
+2. A rig must be initialised (verified by checking `rig/state.json`
+   exists and contains a `rig_path`)
 
 ---
 
@@ -65,15 +64,16 @@ file. Summarise what will be removed.
 
 ```
 Rig (`./rig/`, top-level container)
+ ├── state.json              ← runtime state snapshot (auto-generated)
  ├── profiles/
- │     └── {name}.md           ← shared agent profiles
+ │     └── {name}.md         ← shared agent profiles
  ├── tie-offs/
  │     └── {loom-id}/
- │           ├── .loom-log      ← activity log
+ │           ├── .loom-log   ← activity log
  │           └── {knot-name}/
  │                 └── {knot-name}-tie-off.md
- └── {name}-loom/              ← loom directory (must end in `-loom`)
-      ├── {knot-name}.md       ← knot definition files
+ └── {name}-loom/            ← loom directory (must end in `-loom`)
+      ├── {knot-name}.md     ← knot definition files
       └── ...
 ```
 
@@ -108,9 +108,9 @@ first, then create knots that reference it.
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
 
-2. **Check for existing profiles**: Send `GET /profiles` to list all
-   profiles. If a profile with the same name exists, ask the user
-   whether to overwrite.
+2. **Check for existing profiles**: Read `rig/state.json` and check the
+   `profiles` array. If a profile with the same name exists, ask the
+   user whether to overwrite.
 
 3. **Write the profile file** to `rig/profiles/{name}.md`:
    ```markdown
@@ -151,8 +151,9 @@ first, then create knots that reference it.
    - Ensure the `rig/profiles/` directory exists (create it if needed).
    - The `name` in frontmatter should match the filename stem.
 
-4. **Verify creation**: Send `GET /profiles/{name}` to confirm the
-   profile is discoverable by Knot.
+4. **Verify creation**: Read `rig/state.json` (wait up to 5 seconds
+   for the state writer to flush) and confirm the profile appears in
+   the `profiles` array.
 
 5. **Report success**: "Profile `fast` created at `rig/profiles/fast.md`."
 
@@ -160,15 +161,17 @@ first, then create knots that reference it.
 
 When asked to modify a profile, edit the `.md` file directly:
 
-1. **Read the existing profile**: Send `GET /profiles/{name}` to see
-   current values. On `404`: Profile does not exist.
+1. **Read the existing profile**: Read `rig/profiles/{name}.md` to see
+   current values. If the file does not exist, the profile does not
+   exist.
 
 2. **Edit the file** at `rig/profiles/{name}.md` with updated
    frontmatter values. The markdown body (after the closing `---`)
    is preserved automatically when editing frontmatter.
 
-3. **Verify the change**: Send `GET /profiles/{name}` to confirm the
-   new values are picked up.
+3. **Verify the change**: Read `rig/state.json` and confirm the profile
+   entry is present. Note: `system_prompt` and `timeout` are not in the
+   state file — verify by re-reading the profile file.
 
 4. **Report what changed**.
 
@@ -176,14 +179,14 @@ When asked to modify a profile, edit the `.md` file directly:
 
 When asked to delete a profile:
 
-1. **Confirm with the user**: Show the profile's current configuration
-   by sending `GET /profiles/{name}`. Warn that knots referencing this
+1. **Confirm with the user**: Read `rig/profiles/{name}.md` to show the
+   profile's current configuration. Warn that knots referencing this
    profile will fail on next processing. Ask the user to confirm.
 
 2. **Delete the file** at `rig/profiles/{name}.md`.
 
-3. **Verify deletion**: Send `GET /profiles` to confirm the profile is
-   gone.
+3. **Verify deletion**: Read `rig/state.json` and confirm the profile
+   no longer appears in the `profiles` array.
 
 4. **Report success**: "Profile `fast` deleted."
 
@@ -191,8 +194,8 @@ When asked to delete a profile:
 
 When asked to show all profiles:
 
-1. Send `GET /profiles`.
-2. Present a summary table with: Name, Provider, Model, Tools.
+1. Read `rig/state.json` and extract the `profiles` array.
+2. Present a summary table with: Name, Provider, Model.
 
 ---
 
@@ -206,12 +209,12 @@ A loom is created by making a directory (ending in `-loom`) and writing
      (e.g. `prd-review-loom`, `docs-loom`)
    - At least one knot definition (see below)
 
-2. **Check for duplicates**: Send `GET /looms` to list existing looms.
-   If a loom with the same ID exists, ask the user whether to modify
-   the existing loom or choose a different ID.
+2. **Check for duplicates**: Read `rig/state.json` and check the
+   `looms` array. If a loom with the same ID exists, ask the user
+   whether to modify the existing loom or choose a different ID.
 
 3. **Verify profiles exist**: For each knot's `agent_profile_ref`,
-   send `GET /profiles/{name}` to confirm the profile exists.
+   read `rig/state.json` and check the `profiles` array for the name.
    If missing, ask the user to create it first.
 
 4. **Create the loom directory** at `rig/{id}/` (e.g. `rig/prd-review-loom/`).
@@ -235,8 +238,9 @@ A loom is created by making a directory (ending in `-loom`) and writing
    ```
    Write this to `rig/prd-review-loom/goals-review.md`.
 
-6. **Verify registration**: Send `GET /looms/{id}` to confirm Knot has
-   discovered the loom and its knots.
+6. **Verify registration**: Read `rig/state.json` (wait up to 5 seconds
+   for the state writer to flush) and confirm the loom and its knots
+   appear in the `looms` array.
 
 7. **Report success**: "Loom `prd-review-loom` created with 1 knot."
 
@@ -244,10 +248,11 @@ A loom is created by making a directory (ending in `-loom`) and writing
 
 When asked to add a knot to an existing loom:
 
-1. **Verify the loom exists**: Send `GET /looms/{id}`.
+1. **Verify the loom exists**: Read `rig/state.json` and find the loom
+   in the `looms` array.
 
-2. **Verify the profile exists**: Send `GET /profiles/{name}` for the
-   knot's `agent_profile_ref`.
+2. **Verify the profile exists**: Read `rig/state.json` and check the
+   `profiles` array for the knot's `agent_profile_ref`.
 
 3. **Write the knot file** as `{knot-name}.md` inside the loom
    directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
@@ -265,8 +270,8 @@ When asked to add a knot to an existing loom:
    # Non-Goals Review Knot
    ```
 
-4. **Verify**: Send `GET /looms/{id}/knots` to confirm the new knot
-   appears in the list.
+4. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+   the new knot appears in the loom's `knots` array.
 
 5. **Report success**: "Knot `non-goals-review` added to loom
    `prd-review-loom`."
@@ -275,14 +280,14 @@ When asked to add a knot to an existing loom:
 
 When asked to modify a knot, edit its `.md` file directly:
 
-1. **Read the existing loom**: Send `GET /looms/{id}` to see current
-   knots.
+1. **Read the existing loom**: Read `rig/state.json` to see current
+   looms and knots.
 
 2. **Edit the file** at `rig/{loom-id}/{knot-name}.md` with updated
    frontmatter values.
 
-3. **Verify**: Send `GET /looms/{id}` to confirm the changes are picked
-   up.
+3. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+   the knot entry is present.
 
 4. **Report what changed**.
 
@@ -290,12 +295,13 @@ When asked to modify a knot, edit its `.md` file directly:
 
 When asked to delete a knot:
 
-1. **Confirm with the user**: Show the loom's current knots via
-   `GET /looms/{id}/knots`. Ask the user to confirm deletion.
+1. **Confirm with the user**: Read `rig/state.json` to show the loom's
+   current knots. Ask the user to confirm deletion.
 
 2. **Delete the file** at `rig/{loom-id}/{knot-name}.md`.
 
-3. **Verify**: Send `GET /looms/{id}/knots` to confirm the knot is gone.
+3. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+   the knot no longer appears in the loom's `knots` array.
 
 4. **Report success**: "Knot `non-goals-review` deleted from loom
    `prd-review-loom`."
@@ -304,13 +310,14 @@ When asked to delete a knot:
 
 When asked to delete a loom:
 
-1. **Confirm with the user**: Show the loom's current configuration
-   by sending `GET /looms/{id}`. Ask the user to confirm deletion.
+1. **Confirm with the user**: Read `rig/state.json` to show the loom's
+   current configuration. Ask the user to confirm deletion.
    Note: this deletes the entire directory and all its knot files.
 
 2. **Remove the loom directory** at `rig/{id}/`.
 
-3. **Verify deletion**: Send `GET /looms` to confirm the loom is gone.
+3. **Verify deletion**: Read `rig/state.json` (wait up to 5 seconds)
+   and confirm the loom no longer appears in the `looms` array.
 
 4. **Report success**: "Loom `prd-review-loom` deleted."
 
@@ -318,7 +325,7 @@ When asked to delete a loom:
 
 When asked to show all looms:
 
-1. Send `GET /looms` to list all discovered looms.
+1. Read `rig/state.json` and extract the `looms` array.
 2. Present a summary table with: ID, Knot Count.
 
 ---
@@ -438,83 +445,53 @@ no restart needed.
 
 ---
 
-## Verification Endpoints (GET Only)
+## State File Schema
 
-All configuration is file-first. Use these `GET` endpoints to verify
-state after writing or editing files.
+`rig/state.json` is the source of truth for current rig state. It is
+written atomically every 5 seconds.
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /looms` | List all discovered looms |
-| `GET /looms/{id}` | Get loom details (knots included) |
-| `GET /looms/{id}/knots` | List knot names in a loom |
-| `GET /looms/{id}/activity` | Get loom activity log |
-| `GET /looms/{id}/knots/{name}` | Get knot processing status |
-| `GET /profiles` | List all agent profiles |
-| `GET /profiles/{name}` | Get a profile by name |
-
-### Response Schemas
-
-**GET /looms** → `Array<LoomSummary>`:
-```json
-[
-  {
-    "id": {"0": "prd-review-loom"},
-    "knot_count": 2
-  }
-]
-```
-
-**GET /looms/{id}** → `Loom`:
 ```json
 {
-  "id": {"0": "prd-review-loom"},
-  "knots": [
+  "rig_path": "/absolute/path/to/rig",
+  "looms": [
     {
-      "id": {"0": "goals-review"},
-      "agent_profile_ref": "fast",
-      "prompt_template": {
-        "input_bundling": "full-file",
-        "instructions": "Review the goals section."
-      },
-      "strand_dir": "/absolute/path/to/project/prds"
+      "id": "prd-review-loom",
+      "knots": [
+        {
+          "id": "goals-review",
+          "status": "idle",
+          "last_strand_path": null,
+          "last_tie_off_path": null,
+          "last_error": null,
+          "last_event_at": null
+        }
+      ]
     }
-  ]
+  ],
+  "profiles": [
+    {
+      "name": "fast",
+      "provider": "openai",
+      "model": "gpt-4o"
+    }
+  ],
+  "updated_at": "2026-06-18T12:00:00Z"
 }
 ```
 
-**GET /looms/{id}/knots** → `Array<String>`:
-```json
-["goals-review", "non-goals-review"]
-```
+### Knot Status Values
 
-**GET /profiles** → `Array<ProfileResponse>`:
-```json
-[
-  {
-    "name": "fast",
-    "provider": "openai",
-    "model": "gpt-4o",
-    "tools": ["fs"],
-    "system_prompt": "You are a fast reviewer."
-  }
-]
-```
+| Status | Meaning |
+|--------|---------|
+| `idle` | Knot registered but not yet processing |
+| `processing` | Currently processing a strand |
+| `completed` | Processing finished successfully |
+| `failed` | Processing failed with an error |
 
-**GET /profiles/{name}** → `ProfileResponse`:
-```json
-{
-  "name": "fast",
-  "provider": "openai",
-  "model": "gpt-4o",
-  "tools": ["fs"],
-  "system_prompt": "You are a fast reviewer. Keep responses concise and direct."
-}
-```
-
-> **Note:** The API response does not include the `timeout` field.
-> To check a profile's timeout, read the profile file directly from
-> `rig/profiles/{name}.md` and inspect the YAML frontmatter.
+> **Note:** The state file includes `name`, `provider`, and `model`
+> for profiles but not `tools`, `system_prompt`, or `timeout`.
+> To check those fields, read the profile file directly from
+> `rig/profiles/{name}.md`.
 
 ---
 
@@ -522,11 +499,11 @@ state after writing or editing files.
 
 | Scenario | Action |
 |----------|--------|
-| `GET /looms/{id}` returns 404 | Loom not found. Directory may not end in `-loom`, or file watcher hasn't picked it up yet. |
-| `GET /profiles/{name}` returns 404 | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
-| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log via `GET /looms/{id}/activity`. |
-| Knot file parse errors | Knot is skipped. Check `GET /looms/{id}/activity` for `KnotParseWarning` events. |
-| Connection refused | Knot is not running. Suggest `knot-init` skill. |
+| Loom `{id}` not in `rig/state.json` | Directory may not end in `-loom`, or file watcher hasn't picked it up yet. Wait up to 5 seconds and re-check. |
+| Profile `{name}` not in `rig/state.json` | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
+| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log at `rig/tie-offs/{loom-id}/.loom-log`. |
+| Knot file parse errors | Knot is skipped. Check `rig/tie-offs/{loom-id}/.loom-log` for `KnotParseWarning` events. |
+| `rig/state.json` does not exist | Knot is not running. Suggest `knot-init` skill. |
 
 ---
 
@@ -561,9 +538,8 @@ prompt-template:
 EOF
 
 # Verify Knot has discovered the changes
-curl http://localhost:3000/looms
-curl http://localhost:3000/looms/prd-review-loom
-curl http://localhost:3000/profiles
+# Wait up to 5 seconds, then:
+cat rig/state.json | python3 -m json.tool
 
 # Delete a knot (remove its file)
 rm rig/prd-review-loom/goals-review.md
@@ -573,9 +549,6 @@ rm rig/profiles/fast.md
 
 # Delete a loom (remove the directory)
 rm -rf rig/prd-review-loom
-
-# View full API documentation
-# Open browser: http://localhost:3000/swagger-ui
 ```
 
 ---

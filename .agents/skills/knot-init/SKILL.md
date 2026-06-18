@@ -1,23 +1,21 @@
 ---
 name: knot-init
-description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running (or provides guidance to start it), and creates the rig directory structure. If no profiles exist, creates a default profile by reading available models from ~/.pi/agent/models.json. Verifies setup via GET /config/rig and GET /profiles. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
+description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `rig/state.json`, and creates the rig directory structure. If no profiles exist, creates a default profile by reading available models from ~/.pi/agent/models.json. Verifies setup by reading `rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
 license: MIT
 metadata:
   author: Knot Team
   version: "2.0.0"
-  compatibility: "Knot 0.3.0+"
-  api_spec: "http://localhost:3000/swagger-ui/openapi.json"
+  compatibility: "Knot 0.4.0+"
 ---
 
 # Knot Init Skill
 
 Initialise a Knot rig in the current working directory. This skill detects
-whether a rig already exists, verifies that the Knot HTTP service is
-running, creates the rig directory structure, and sets up a default
-agent profile if none exist.
+whether a rig already exists, verifies that Knot is running by checking
+for `rig/state.json`, creates the rig directory structure, and sets up a
+default agent profile if none exist.
 
-**Knot API base URL:** `http://localhost:3000`
-**OpenAPI spec:** `http://localhost:3000/swagger-ui/openapi.json`
+**State file:** `rig/state.json` (written every 5 seconds by Knot)
 
 ---
 
@@ -26,8 +24,7 @@ agent profile if none exist.
 ### File-First Configuration
 
 This skill writes configuration files directly to disk. Knot discovers
-these files through its file watcher — no HTTP registration is needed.
-The HTTP API is used only for verification (GET endpoints).
+these files through its file watcher — no registration is needed.
 
 ### Idempotent
 
@@ -46,8 +43,6 @@ default profile with a real provider and model.
 
 1. Knot must be compiled and available (e.g. via `cargo run` or
    installed binary)
-2. Knot HTTP service must be running on `localhost:3000` (or configured
-   port)
 
 ---
 
@@ -55,34 +50,32 @@ default profile with a real provider and model.
 
 When asked to initialise a Knot rig:
 
-1. **Check if Knot is running**: Send `GET /health` to
-   `http://localhost:3000/health`. Expected response: `200 OK` with
-   body `ok`.
+1. **Check if Knot is running**: Check if `rig/state.json` exists.
+   - If the file exists and is valid JSON, Knot is running and the rig
+     is initialised.
+   - If the file does not exist, Knot may not be running or the rig has
+     not been initialised yet.
 
 2. **If Knot is NOT running**:
-   - Report that Knot is not reachable.
+   - Check if `rig/state.json` exists:
+     - If it exists but is older than 10 seconds (check `updated_at`),
+       Knot may be slow to start. Wait and re-check.
+     - If it does not exist, report that Knot is not reachable.
    - Provide guidance: "Start Knot with `cargo run` from the Knot
      project directory, or run the Knot binary."
    - Do NOT proceed further until the user confirms Knot is running.
 
-3. **If Knot IS running**, check rig configuration:
-   - Send `GET /config/rig` to `http://localhost:3000/config/rig`.
-   - Expected response: `200 OK` with JSON body:
-     ```json
-     {
-       "rig_path": "/absolute/path/to/rig",
-       "cli_path": "pi",
-       "cli_args": []
-     }
-     ```
-   - This confirms the rig configuration is loaded (defaults or custom).
+3. **If Knot IS running**, check rig state:
+   - Read `rig/state.json`.
+   - Extract `rig_path` to confirm the rig configuration is loaded
+     (defaults or custom).
 
 4. **Ensure rig directory structure exists**:
    - Create `rig/profiles/` if it doesn't exist.
    - These directories are managed on disk — Knot auto-discovers them.
 
 5. **Check for existing profiles**:
-   - Send `GET /profiles` to `http://localhost:3000/profiles`.
+   - Read `rig/state.json` and extract the `profiles` array.
    - If profiles exist, report the available profile names and skip to
      step 7.
 
@@ -145,77 +138,50 @@ When asked to initialise a Knot rig:
      ```
 
 7. **Verify profile creation**:
-   - Send `GET /profiles` to confirm at least one profile exists.
-   - Send `GET /profiles/default` to confirm the default profile is
-     accessible (only if created in step 6).
+   - Read `rig/state.json` (wait up to 5 seconds for the state writer
+     to flush) and confirm at least one profile exists in the
+     `profiles` array.
+   - If created in step 6, confirm `default` appears in the list.
 
 8. **Check for existing looms**:
-   - Send `GET /looms` to `http://localhost:3000/looms`.
-   - If the response is an empty array `[]`, the rig has no looms yet.
-     Report: "Rig is initialised but has no looms. Use the `knot-create`
-     skill to create looms."
-   - If the response contains looms, report the existing loom IDs and
+   - Read `rig/state.json` and check the `looms` array.
+   - If the array is empty `[]`, the rig has no looms yet. Report:
+     "Rig is initialised but has no looms. Use the `knot-create` skill
+     to create looms."
+   - If the array contains looms, report the existing loom IDs and
      suggest using the `knot-inspect` skill to examine them.
 
 9. **Report success**: Summarise the rig state including:
    - Knot service status (running)
-   - Rig configuration (from `/config/rig`)
-   - Profiles available (from `/profiles`)
+   - Rig path (from `rig/state.json`)
+   - Profiles available (from `rig/state.json`)
    - Number of registered looms
    - Next steps (create looms with `knot-create` skill)
 
 ---
 
-## API Reference
+## State File Schema
 
-Before making calls, review the OpenAPI spec at:
-`http://localhost:3000/swagger-ui/openapi.json`
+`rig/state.json` contains the current snapshot of rig state:
 
-### Endpoints Used by This Skill
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Verify Knot is running |
-| `/config/rig` | GET | Read rig configuration |
-| `/looms` | GET | List registered looms |
-| `/profiles` | GET | List agent profiles |
-| `/profiles/{name}` | GET | Get a profile by name |
-
-### Expected Response Schemas
-
-**GET /health** → `200` with plain text body `ok`
-
-**GET /config/rig** → `200` with `RigConfigResponse`:
 ```json
 {
   "rig_path": "/absolute/path/to/rig",
-  "cli_path": "pi",
-  "cli_args": []
+  "looms": [],
+  "profiles": [
+    {
+      "name": "default",
+      "provider": "llama-workhorse",
+      "model": "qwen3-27b"
+    }
+  ],
+  "updated_at": "2026-06-18T12:00:00Z"
 }
 ```
 
-**GET /looms** → `200` with `Array<LoomSummary>`:
-```json
-[
-  {
-    "id": {"0": "prd-review-loom"},
-    "knot_count": 2
-  }
-]
-```
-
-**GET /profiles** → `200` with `Array<ProfileResponse>`:
-```json
-[
-  {
-    "name": "default",
-    "provider": "llama-workhorse",
-    "model": "qwen3-27b",
-    "tools": [],
-    "system_prompt": "You are a helpful AI assistant."
-  }
-]
-```
+The `updated_at` field is an ISO 8601 UTC timestamp. Use it to
+determine if the state file is stale (older than ~10 seconds means
+Knot may not be writing state).
 
 ---
 
@@ -223,11 +189,11 @@ Before making calls, review the OpenAPI spec at:
 
 | Scenario | Action |
 |----------|--------|
-| `GET /health` returns non-200 | Knot is not running. Provide start instructions. |
-| Connection refused | Knot is not running. Provide start instructions. |
-| `GET /config/rig` returns error | Rig config may be missing. Report to user. |
-| `GET /looms` returns error | Unexpected error. Report to user with details. |
-| `GET /profiles` returns empty array | No profiles exist. Create default profile. |
+| `rig/state.json` does not exist | Knot is not running or rig not initialised. Provide start instructions. |
+| `rig/state.json` is invalid JSON | State file may be corrupt or partially written. Wait a moment and re-read. |
+| `rig/state.json` `updated_at` is stale | Knot may have crashed. Provide restart instructions. |
+| `rig/state.json` `rig_path` is empty | Rig config may be missing. Report to user. |
+| `rig/state.json` `profiles` is empty | No profiles exist. Create default profile. |
 | `~/.pi/agent/models.json` not found | Use placeholder provider/model. Document in profile body. |
 
 ---
@@ -235,23 +201,20 @@ Before making calls, review the OpenAPI spec at:
 ## Quick Reference
 
 ```bash
-# Check if Knot is running
-curl http://localhost:3000/health
+# Start Knot
+cargo run
 
-# View rig configuration
-curl http://localhost:3000/config/rig
+# Check if Knot is running (state file exists and is fresh)
+cat rig/state.json | python3 -m json.tool
 
-# List profiles
-curl http://localhost:3000/profiles
+# Check when state was last updated
+cat rig/state.json | python3 -c "import sys,json; print(json.load(sys.stdin)['updated_at'])"
 
-# Get default profile
-curl http://localhost:3000/profiles/default
+# View profiles
+cat rig/state.json | python3 -c "import sys,json; [print(p['name'], p['provider'], p['model']) for p in json.load(sys.stdin)['profiles']]"
 
-# List looms
-curl http://localhost:3000/looms
-
-# View full API documentation
-# Open browser: http://localhost:3000/swagger-ui
+# View looms
+cat rig/state.json | python3 -c "import sys,json; [print(l['id'], len(l['knots']), 'knots') for l in json.load(sys.stdin)['looms']]"
 ```
 
 ---

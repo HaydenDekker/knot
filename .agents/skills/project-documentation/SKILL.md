@@ -125,7 +125,7 @@ release notes**:
 2. Group plans by **feature area** (not chronological):
    - Configuration (file-first, shared profiles, rig switching)
    - Processing (tie-off append, context management, dedup)
-   - Observability (rig-log, loom-log, HTTP endpoints, Swagger)
+   - Observability (rig-log, loom-log, state file)
    - Integration (Pi agent, skills, git versioning)
 3. For each group, summarise what was delivered (not how)
 4. Include the current version number
