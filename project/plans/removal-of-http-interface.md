@@ -61,7 +61,7 @@ Build the replacement before removing what it replaces. Define the `rig/state.js
 
 **Hex Layer:** Domain → Application → Outbound Adapter
 
-- [ ] Define `RigState` domain type (JSON-serializable):
+- [x] Define `RigState` domain type (JSON-serializable):
   ```json
   {
     "rig_path": "/path/to/rig",
@@ -90,15 +90,15 @@ Build the replacement before removing what it replaces. Define the `rig/state.js
     "updated_at": "2026-06-18T12:00:00Z"
   }
   ```
-- [ ] Create `StateWriter` use case (application layer) that:
+- [x] Create `StateWriter` use case (application layer) that:
   - Reads `LoomStore` + `AgentProfileRepository` + loom logs
   - Serialises to `RigState` JSON
   - Writes atomically to `rig/state.json` (write to `.state.json.tmp`, rename)
-- [ ] Create `StateWriterPort` trait + `FileSystemStateWriter` adapter
-- [ ] Integrate into `server.rs` as a background `tokio::task` spawned into the JoinSet, polling every 5 seconds
-- [ ] Wire into composition root (`build_app_context` / `start_event_pipeline` or new `start_state_writer`)
-- [ ] Tests: unit tests for `RigState` serialisation, atomic write correctness, error on bad permissions
-- [ ] Tests: integration test — start Knot, create a loom, verify `rig/state.json` updates within poll window
+- [x] Create `StateWriterPort` trait + `FileSystemStateWriter` adapter
+- [x] Integrate into `server.rs` as a background `tokio::task` spawned into the JoinSet, polling every 5 seconds
+- [x] Wire into composition root (`build_app_context` / `start_event_pipeline` or new `start_state_writer`)
+- [x] Tests: unit tests for `RigState` serialisation, atomic write correctness, error on bad permissions
+- [x] Tests: integration test — start Knot, create a loom, verify `rig/state.json` updates within poll window
 
 ### Phase 1: Remove HTTP Server from Source
 
