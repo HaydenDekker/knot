@@ -14,6 +14,8 @@ A `docs/` directory containing human-facing user documentation derived systemati
 
 ### Phase 0: Audit Source Material
 
+> **✅ Complete** — 2026-06-18. Audit documented in [user-documentation-audit.md](user-documentation-audit.md).
+
 Map every existing artifact to its target user doc. Identify gaps where user docs need original writing (tutorials, troubleshooting) vs. extraction (reference material from skills).
 
 Source map:
