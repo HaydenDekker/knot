@@ -168,12 +168,12 @@ Convert all remaining integration tests from HTTP verification to file-based pol
 
 Update all `.agents/skills/` files to use `rig/state.json` instead of HTTP endpoints.
 
-- [ ] **`knot-inspect/SKILL.md`** — replace all `GET /looms`, `GET /health`, etc. with "read `rig/state.json`". Update description, API reference, and workflow steps.
-- [ ] **`knot-create/SKILL.md`** — replace HTTP verification steps with "read `rig/state.json`". Update description and workflows.
-- [ ] **`knot-init/SKILL.md`** — replace "check if Knot is running via `GET /health`" with file-based detection. Update description and workflows.
-- [ ] **`project-documentation/SKILL.md`** — update any references to HTTP endpoints in doc generation instructions.
-- [ ] Remove `api_spec` frontmatter from all skill files (no more OpenAPI spec URL)
-- [ ] Verify skills still match their `USE FOR` / `DO NOT USE FOR` descriptions
+- [x] **`knot-inspect/SKILL.md`** — replace all `GET /looms`, `GET /health`, etc. with "read `rig/state.json`". Update description, API reference, and workflow steps.
+- [x] **`knot-create/SKILL.md`** — replace HTTP verification steps with "read `rig/state.json`". Update description and workflows.
+- [x] **`knot-init/SKILL.md`** — replace "check if Knot is running via `GET /health`" with file-based detection. Update description and workflows.
+- [x] **`project-documentation/SKILL.md`** — update any references to HTTP endpoints in doc generation instructions.
+- [x] Remove `api_spec` frontmatter from all skill files (no more OpenAPI spec URL)
+- [x] Verify skills still match their `USE FOR` / `DO NOT USE FOR` descriptions
 
 ### Phase 5: Domain Glossary and Final Verification
 
