@@ -8,7 +8,7 @@ Knot is at version 0.12.0 with 36+ completed plans, 7 ADRs, 3 PRDs, and 4 agent 
 
 A `docs/` directory containing human-facing user documentation derived systematically from existing project artifacts (skills, glossary, PRDs, completed plans), plus a reusable `project-documentation` skill that encodes the extraction methodology for future releases and other projects.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-18)
 
 ## Phases
 
@@ -105,10 +105,12 @@ Package the methodology into a reusable skill at `.agents/skills/project-documen
 - [x] Document the **extraction workflow** (read source → extract sections → reformat for human audience → write target)
 - [x] Include the **doc quality checklist** (links work, examples are runnable, no internal-only terminology without glossary reference, each doc has a clear audience and goal)
 
-### Phase 5: Publish Skill Globally
+### Phase 5: Publish Skill Globally ✅ Complete
 
-- [ ] Copy skill to global skills: `cp -r .agents/skills/project-documentation ~/.agents/skills/project-documentation`
-- [ ] Verify skill file is valid (frontmatter parses, no broken relative links)
+> **✅ Complete** — 2026-06-18. Skill copied to `~/.agents/skills/project-documentation/`. Frontmatter verified, no broken links.
+
+- [x] Copy skill to global skills: `cp -r .agents/skills/project-documentation ~/.agents/skills/project-documentation`
+- [x] Verify skill file is valid (frontmatter parses, no broken relative links)
 
 ## Notes
 
