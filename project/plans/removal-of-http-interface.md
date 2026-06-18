@@ -177,11 +177,11 @@ Update all `.agents/skills/` files to use `rig/state.json` instead of HTTP endpo
 
 ### Phase 5: Domain Glossary and Final Verification
 
-- [ ] Update `project/domain-glossary.md` — remove HTTP/API terms, add `rig/state.json` and `State Writer`
-- [ ] Verify: `cargo build` passes, `cargo test` passes, `cargo clippy` clean
-- [ ] Verify: `cargo run` starts, creates `rig/state.json`, updates on loom creation
-- [ ] Verify: no remaining `axum`/`utoipa`/`tower` references in codebase
-- [ ] Run integration test suite: `cargo test --test '*'`
+- [x] Update `project/domain-glossary.md` — remove HTTP/API terms, add `rig/state.json` and `State Writer`
+- [x] Verify: `cargo build` passes, `cargo test` passes, `cargo clippy` clean
+- [x] Verify: `cargo run` starts, creates `rig/state.json`, updates on loom creation
+- [x] Verify: no remaining `axum`/`utoipa`/`tower` references in codebase
+- [x] Run integration test suite: `cargo test --test '*'`
 
 ## Notes
 
