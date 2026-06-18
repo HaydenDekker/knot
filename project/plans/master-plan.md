@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ⬜ Planned | 2026-06-18 |
 | 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
 | 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
@@ -85,9 +86,15 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 ---
 
-## Plan Overviews
-
 _Overview sections for active and recently completed plans go here._
+
+### 38. Removal of HTTP Interface — Full File-First
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-18
+**Goal:** Remove the Axum HTTP server entirely and replace all state observation with `rig/state.json` written on a 5-second poll cycle.
+
+Full details in [removal-of-http-interface.md](removal-of-http-interface.md).
 
 ### 37. User Documentation and Documentation Skill
 
