@@ -30,21 +30,23 @@ pub fn make_knot_content(
     agent_profile_ref: &str,
     strand_dir: &str,
 ) -> String {
-    format!(
-        "---\n\
-         name: {name}\n\
-         agent-profile-ref: {agent_profile_ref}\n\
-         strand-dir: \"{strand_dir}\"\n\
-         prompt-template:\n\
-           input-bundling: \"full-file\"\n\
-           instructions: |\n\
-             Test knot: {name}.\n\
-         ---\n\
-         \n\
-         # {name}\n\
-         \n\
-         Test knot definition.\n"
-    )
+    [
+        "---",
+        &format!("name: {name}"),
+        &format!("agent-profile-ref: {agent_profile_ref}"),
+        &format!("strand-dir: \"{strand_dir}\""),
+        "git-versioned: false",
+        "prompt-template:",
+        "  input-bundling: \"full-file\"",
+        "  instructions: |",
+        &format!("    Test knot: {name}."),
+        "---",
+        "",
+        &format!("# {name}"),
+        "",
+        "Test knot definition.",
+        "",
+    ].join("\n")
 }
 
 /// Create a knot definition file inside a loom directory.
@@ -91,15 +93,9 @@ pub fn create_fast_profile(rig_dir: &Path) {
     });
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\n\
-         name: fast\n\
-         provider: openai\n\
-         model: gpt-4o\n\
-         profile-prompt: |\n\
-           You are a reviewer.\n\
-         ---\n\
-         \n\
-         Fast Profile\n",
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\n\
+profile-prompt: |\n  You are a reviewer.\n---\n\n\
+Fast Profile\n",
     )
     .unwrap_or_else(|e| {
         panic!("failed to write fast profile: {}", e)
@@ -127,15 +123,9 @@ pub fn create_agent_profile(
     fs::write(
         profiles_dir.join(format!("{name}.md")),
         format!(
-            "---\n\
-             name: {name}\n\
-             provider: {provider}\n\
-             model: {model}\n\
-             profile-prompt: |\n\
-               {prompt}\n\
-             ---\n\
-             \n\
-             {name} Profile\n"
+            "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n\
+profile-prompt: |\n  {prompt}\n---\n\n\
+{name} Profile\n"
         ),
     )
     .unwrap();
@@ -210,6 +200,54 @@ pub fn create_stub_pi_agent(rig_dir: &Path, response: &str) -> PathBuf {
             .unwrap();
     }
     agent_path
+}
+
+/// Create a workspace agent config that points to a stub `pi` binary.
+///
+/// Creates a stub `pi` script at `{rig_dir}/bin/pi` and writes
+/// `.workspace-agent-config.yaml` so Knot uses it as the agent CLI.
+/// The stub reads stdin (discards it) and echoes the given response.
+///
+/// This is the preferred way to test agent integration — it wires
+/// the real `SubprocessAgentRunner` with a deterministic mock.
+///
+/// # Arguments
+///
+/// * `rig_dir` - Path to the rig directory
+/// * `response` - The stdout output the stub should produce
+///
+/// # Returns
+///
+/// Path to the created stub `pi` binary.
+pub fn create_mock_pi(rig_dir: &Path, response: &str) -> PathBuf {
+    // Create bin directory and stub pi script
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         # Stub pi for Knot tests - consumes stdin, echoes response\n\
+         cat > /dev/null\n\
+         echo \"{response}\"\n\
+         exit 0\n"
+    );
+    fs::write(&pi_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+
+    // Write workspace agent config pointing to the stub
+    let config = format!(
+        "cli_path: \"{}\"\n\
+         cli_args: []\n",
+        pi_path.display()
+    );
+    fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+
+    pi_path
 }
 
 // ── Git Repository Helpers ─────────────────────────────────────────────────
@@ -717,11 +755,16 @@ pub fn create_loom_dir(
     loom_path
 }
 
-/// Create a strands directory and write a strand file.
+/// Create a strands directory in the project root and write a strand file.
+///
+/// The project root is the parent of `rig_dir`. This matches how Knot
+/// resolves `strand_dir: "./strands"` — relative to the project root,
+/// not the rig directory.
 ///
 /// # Arguments
 ///
-/// * `rig_dir` - Path to the rig directory (strands dir created at `{rig_dir}/strands`)
+/// * `rig_dir` - Path to the rig directory (strands dir created at
+///   `{rig_dir}/../strands` i.e. project root)
 /// * `strand_name` - Filename for the strand (e.g. "feature.md")
 /// * `content` - Content to write into the strand file
 ///
@@ -733,7 +776,12 @@ pub fn create_strand(
     strand_name: &str,
     content: &str,
 ) -> PathBuf {
-    let strands_dir = rig_dir.join("strands");
+    // strand_dir is resolved relative to project root (parent of rig_dir)
+    let project_root = rig_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| rig_dir.to_path_buf());
+    let strands_dir = project_root.join("strands");
     fs::create_dir_all(&strands_dir).unwrap();
     let path = strands_dir.join(strand_name);
     fs::write(&path, content).unwrap();
@@ -744,13 +792,17 @@ pub fn create_strand(
 
 /// Read all events from a loom's activity log.
 ///
-/// Reads `{rig_dir}/{loom_id}-loom/.loom-log` as JSONL and returns
+/// Reads `{rig_dir}/tie-offs/{loom_id}/.loom-log` as JSONL and returns
 /// each line as a parsed JSON value.
+///
+/// The loom-log lives under `tie-offs/` (not in the loom directory itself).
+/// The `loom_id` parameter should include the `-loom` suffix
+/// (e.g. `"review-loom"`), matching the loom ID stored in state.json.
 ///
 /// # Arguments
 ///
 /// * `rig_dir` - Path to the rig directory
-/// * `loom_id` - The loom's ID
+/// * `loom_id` - The loom's ID (including `-loom` suffix, e.g. "review-loom")
 ///
 /// # Returns
 ///
@@ -759,7 +811,7 @@ pub fn read_loom_log(
     rig_dir: &Path,
     loom_id: &str,
 ) -> Vec<Value> {
-    let log_path = rig_dir.join(format!("{loom_id}-loom/.loom-log"));
+    let log_path = rig_dir.join("tie-offs").join(loom_id).join(".loom-log");
     let content = match fs::read_to_string(&log_path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
@@ -772,15 +824,36 @@ pub fn read_loom_log(
         .collect()
 }
 
+/// Extract the event type from a loom-log JSON entry.
+///
+/// Loom-log entries are stored as JSON objects with a single key
+/// that is the event variant name (e.g. `{"KnotCompleted":{...}}`).
+/// This function extracts that variant key.
+///
+/// # Arguments
+///
+/// * `event` - Parsed JSON value from a loom-log line
+///
+/// # Returns
+///
+/// `Some("KnotCompleted")` etc., or `None` if not an object.
+pub fn loom_log_event_type(event: &Value) -> Option<&str> {
+    event.as_object().and_then(|obj| {
+        obj.keys().next().map(|k| k.as_str())
+    })
+}
+
 /// Poll until a loom-log contains an event with a specific type.
 ///
-/// Checks the `type` field of each JSONL entry.
+/// The loom-log stores events as JSON objects keyed by variant name
+/// (e.g. `{"KnotCompleted":{...}}`). This function checks the top-level
+/// key of each entry.
 ///
 /// # Arguments
 ///
 /// * `rig_dir` - Path to the rig directory
 /// * `loom_id` - The loom's ID
-/// * `event_type` - Expected event type string
+/// * `event_type` - Expected event type string (e.g. "KnotCompleted")
 ///
 /// # Panics
 ///
@@ -802,7 +875,7 @@ pub fn wait_for_loom_log_event(
 
         let events = read_loom_log(rig_dir, loom_id);
         for event in &events {
-            if let Some(ty) = event.get("type").and_then(|v| v.as_str()) {
+            if let Some(ty) = loom_log_event_type(event) {
                 if ty == event_type {
                     return;
                 }
@@ -983,7 +1056,9 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             "new feature"
         );
-        assert!(rig_dir.join("strands").is_dir());
+        // strands dir is in project root (parent of rig_dir)
+        let project_root = rig_dir.parent().unwrap();
+        assert!(project_root.join("strands").is_dir());
     }
 
     #[test]
@@ -1024,21 +1099,23 @@ mod tests {
     fn read_loom_log_parses_jsonl() {
         let tmp = tempfile::tempdir().unwrap();
         let rig_dir = tmp.path();
-        let loom_dir = rig_dir.join("test-loom");
-        fs::create_dir_all(&loom_dir).unwrap();
+        // loom-log lives at rig/tie-offs/{loom_id}/.loom-log
+        let log_dir = rig_dir.join("tie-offs/test-loom");
+        fs::create_dir_all(&log_dir).unwrap();
 
+        // Events are stored as JSON with variant name as top-level key
         fs::write(
-            loom_dir.join(".loom-log"),
-            r#"{"type":"LoomStarted","timestamp":"2026-01-01T00:00:00Z"}
-{"type":"KnotRegistered","knot":"k1"}
+            log_dir.join(".loom-log"),
+            r#"{"LoomStarted":{"loom_id":"test-loom","timestamp":"2026-01-01T00:00:00Z"}}
+{"KnotRegistered":{"loom_id":"test-loom","knot_id":"k1","timestamp":"2026-01-01T00:00:01Z"}}
 "#,
         )
         .unwrap();
 
-        let events = read_loom_log(rig_dir, "test");
+        let events = read_loom_log(rig_dir, "test-loom");
         assert_eq!(events.len(), 2);
         assert_eq!(
-            events[0].get("type").and_then(|v| v.as_str()),
+            loom_log_event_type(&events[0]),
             Some("LoomStarted")
         );
     }
