@@ -106,21 +106,21 @@ Remove the HTTP server and all its infrastructure from the binary.
 
 **Hex Layer:** Inbound Adapter (deletion), Composition Root
 
-- [ ] Remove `src/adapters/inbound/` module entirely (`router.rs`, `system.rs`, `loom.rs`, `types.rs`, `mod.rs`)
-- [ ] Remove from `src/server.rs`:
+- [x] Remove `src/adapters/inbound/` module entirely (`router.rs`, `system.rs`, `loom.rs`, `types.rs`, `mod.rs`)
+- [x] Remove from `src/server.rs`:
   - `start_server()` / `start_server_with_shutdown()`
   - `ShutdownSignal` enum
   - `bind_addr` from `AppConfig`
   - `TcpListener` bind, `axum::serve`, graceful shutdown HTTP logic
   - Keep: `build_app_context`, `start_event_pipeline`, `start_config_pipeline`, `run_startup`, `AppConfig` (minus `bind_addr`)
-- [ ] Rewrite `server.rs` lifecycle:
+- [x] Rewrite `server.rs` lifecycle:
   - No HTTP serve call — main task now just waits for Ctrl+C
   - Background tasks: event pipeline, config pipeline, state writer
   - On shutdown: drain JoinSet, write `LoomStopped` to loom-logs, exit
-- [ ] Update `src/lib.rs`: remove all HTTP re-exports (`build_app`, `AppContext`, `health`, `list_agents`, `start_server`, `start_server_with_shutdown`, `ShutdownSignal`). Re-export `start_knot` (renamed from `start_server`) and `AppConfig` (without `bind_addr`).
-- [ ] Remove from `Cargo.toml`: `axum`, `utoipa`, `utoipa-swagger-ui`, `tower` (dev-dep)
-- [ ] Update `src/main.rs` — no longer calls `start_server`, calls `start_knot` which blocks on Ctrl+C
-- [ ] Verify: `cargo build`, `cargo test`, `cargo clippy` all pass
+- [x] Update `src/lib.rs`: remove all HTTP re-exports (`build_app`, `AppContext`, `health`, `list_agents`, `start_server`, `start_server_with_shutdown`, `ShutdownSignal`). Re-export `start_knot` (renamed from `start_server`) and `AppConfig` (without `bind_addr`).
+- [x] Remove from `Cargo.toml`: `axum`, `utoipa`, `utoipa-swagger-ui`, `tower` (dev-dep)
+- [x] Update `src/main.rs` — no longer calls `start_server`, calls `start_knot` which blocks on Ctrl+C
+- [x] Verify: `cargo build`, `cargo test`, `cargo clippy` all pass
 
 ### Phase 2: Remove HTTP Tests, Rewrite Helpers
 
