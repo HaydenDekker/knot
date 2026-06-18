@@ -1,33 +1,57 @@
 # Knot
 
-Knot is an blank canvas, a software factory, an **Agentic Harness**, a swarm or workflow orchestrator — that's because it's a file-first system that run in the background along side your workspace and reacts to you.
+A file-first agent loop orchestration framework you use with your favorite agent and IDE.
 
-It's not an agent however. You bring your own agent.
+Knot's a bit different. Set sail.
 
-You use knot with your agent and an IDE.
+## Why Knot
 
-Knot helps with but not limited to,
+Knot runs in the background and works with your existing agents as an orchestration layer over the top.
 
-- Tokenomics
-- Agent Self-Improvement
+Out of the box you get:
 
-## Philosophy
+- **Version-controlled workflows** — everything is plain text, reviewed through normal git diffs. An agents turn is automatically committed.
+- **Goal-seeking agents** — knots read state, compare against a goal, and apply only what's needed (idempotent by design)
+- **Composable pipelines** — looms group related tasks, knots wire agents to file-based triggers. You can share them with friends and re-use them accross multiple projects.
+- **Token efficiency** — Sure...... it might help? We'll
+- **Local Development** - Knot enables smaller contexts by facilitating decompostion of workflows and the orchestration means you can let it run unatended for hours grounded by your specifications.
+- **Long Horizon** - You decompose and tune your workflow iteratively in knot. As it comes together it takes off.
+- **Natural Evals** - You rig is standalone, copy it, modify the profiles, rerun, assess and compare.
+- **HITL Native** - Human In The Loop grounds you agents, they can't read your mind. Create your knots with HITL strands and they'll keep coming back to your truth as and when needed.
 
-Knot keeps your AI work **file-based and version-controllable**. Everything is stored as plain text on disk, making it easy to review, share, and version.
+## Concepts
 
-## Core Concepts
+| Term | Description |
+|------|-------------|
+| **Rig** | Your project's Knot configuration — lives at `./rig/` |
+| **Loom** | A namespace for a domain of responsibility (e.g. `planning-loom`) |
+| **Knot** | A single processing task: agent + prompt + input directory |
+| **Strand** | An input file that triggers a knot when changed |
+| **Tie-off** | The append-only output log of a knot's work |
+| **Profile** | Agent configuration (model, tools, system prompt) |
 
-- **Agent Profiles** — Define who your agents are: capabilities, tools, and operating context.
-- **Prompt Templates** — Reusable, parameterised prompts that agents fill in at runtime.
-- **Your Existing Agents** — Bring your own agent configurations and integrate them into orchestrated workflows.
+Read the full [Concepts guide](https://knot.hdekker.com/concepts) for the complete mental model and processing flow.
+
+## Quick Start
+
+```bash
+git clone <repo> && cd knot
+cargo install --path .
+```
+
+Then tell your agent: *"init a knot rig"* (runs the `knot-init` skill), then *"create a loom called `<name>-loom`"* (runs `knot-create`). Create a file in the strand directory and Knot will trigger the agent automatically.
+
+See the [Getting Started guide](https://knot.hdekker.com/getting-started) for a complete walkthrough.
 
 ## Documentation
 
-- **[Getting Started](docs/getting-started.md)** — Install Knot, initialise a rig, and run your first agent
-- **[Concepts](docs/concepts.md)** — Looms, knots, strands, profiles, tie-offs, and the processing pipeline
-- **[Configuration](docs/configuration/)** — Rig structure, knot definitions, and agent profiles
-- **[Design Guide](docs/design-guide.md)** — Idempotency, naming, responsibility, and feedback loops
-- **[Workflows](docs/workflows/)** — Review and file-generation workflows with examples
-- **[API Reference](docs/api-reference.md)** — HTTP endpoints, request/response schemas, and Swagger UI
-- **[Troubleshooting](docs/troubleshooting.md)** — Common issues, symptoms, causes, and fixes
-- **[Release Notes](docs/release-notes.md)** — Feature history and version notes
+Full documentation is available at **[knot.hdekker.com](https://knot.hdekker.com)**:
+
+- [Getting Started](https://knot.hdekker.com/getting-started) — install, initialise, and run your first knot
+- [Concepts](https://knot.hdekker.com/concepts) — looms, knots, strands, profiles, and the processing pipeline
+- [Configuration](https://knot.hdekker.com/configuration) — rig structure, knot definitions, and agent profiles
+- [Design Guide](https://knot.hdekker.com/design-guide) — idempotency, naming, responsibility, and feedback loops
+- [Workflows](https://knot.hdekker.com/workflows) — review and file-generation patterns with examples
+- [API Reference](https://knot.hdekker.com/api-reference) — HTTP endpoints and schemas
+- [Troubleshooting](https://knot.hdekker.com/troubleshooting) — common issues and fixes
+- [Release Notes](https://knot.hdekker.com/release-notes) — feature history and version notes

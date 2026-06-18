@@ -1,207 +1,131 @@
 # Getting Started
 
-This guide walks you through installing Knot, initialising your first rig,
-and verifying everything works.
+## Hello Knot
+
+By the end of this guide you will have a working "Hello Knot" — a
+minimal rig that watches a directory for files, processes them through
+an agent, and writes a result. It's the simplest complete workflow so
+you can see Knot's pieces working together before building something
+real.
+
+Give the instructions below to your AI agent — it will handle the
+setup end-to-end.
 
 ## Prerequisites
 
-- **Rust toolchain** — Knot is a Rust binary. Install via
-  [rustup](https://rustup.rs/).
-- **An AI agent CLI** — Knot orchestrates external agents. It does not
-  include one. You bring your own (e.g. `pi`, `claude`, `cursor`).
+Ensure the following are available before you begin:
+
+- **A new project with git initialised** — Knot works alongside git.
+  Create a fresh project directory and run `git init` in it. This is
+  the workspace where your rig will live.
+- **An IDE with file watching and git integration** — You'll be
+  watching Knot create and update files in real time, and seeing
+  commits appear in your git viewer.
+  [VS Code](https://code.visualstudio.com/) works well — its built-in
+  file watcher and Source Control panel make it easy to follow along.
+- **Rust toolchain** — Knot is a Rust binary. Your agent should
+  install it via [rustup](https://rustup.rs/) if not already present.
+- **An AI agent CLI** — Knot orchestrates external agents. For the
+  `pi` CLI, Knot ships with built-in integration and adapts
+  out of the box. For other agent CLIs (e.g. `claude`, `cursor`),
+  your agent will need to configure its own adapter to communicate
+  with Knot's HTTP interface.
 - **An LLM provider** — Any provider supported by your agent CLI
   (OpenAI, Anthropic, local models, etc.).
 
-## Install Knot
+## Step 1: Clone Knot and Import Skills
 
-### From Source
+Have your agent clone the Knot repository, build the binary, and
+install the Knot skills so they are available for use:
 
 ```bash
 git clone <knot-repo-url>
 cd knot
-cargo build --release
-```
-
-The binary is at `target/release/knot`.
-
-### Install Globally
-
-```bash
 cargo install --path .
 ```
 
-This places `knot` on your `PATH`.
+This places the `knot` binary on your `PATH`.
 
-## Start the Server
-
-Run Knot from your project directory (the directory that will contain
-your `rig/` folder):
+Next, have your agent copy the Knot skills from the repository into
+its skill discovery path. For `pi`, copy them to `~/.agents/skills/`:
 
 ```bash
-knot
+cp -r knot/.agents/skills/knot-init     ~/.agents/skills/
+cp -r knot/.agents/skills/knot-create   ~/.agents/skills/
+cp -r knot/.agents/skills/knot-inspect  ~/.agents/skills/
 ```
 
-By default, Knot binds to `127.0.0.1:3000` and looks for a `rig/`
-directory in the current working directory.
+For other agent CLIs, your agent will need to place these skills
+wherever its framework discovers them.
 
-Verify the server is running:
+Once installed, the agent has access to the Knot skills and can
+proceed with the remaining steps using them directly.
 
-```bash
-curl http://localhost:3000/health
-# Expected: ok
-```
+## Step 2: Initialise the Rig
 
-## Initialise Your First Rig
+Ask your agent to run the `knot-init` skill. This will:
 
-A **rig** is Knot's top-level configuration container. Initialise it by
-creating the required directory structure:
+1. Start the Knot server (if not already running) and confirm it
+   is reachable via `GET /health`
+2. Read the rig configuration from `GET /config/rig`
+3. Create the `rig/profiles/` directory structure
+4. If no profiles exist, read available models from
+   `~/.pi/agent/models.json` and create a default profile at
+   `rig/profiles/default.md`
+5. Verify everything via `GET /profiles` and `GET /looms`
+6. Report the current state back to you
 
-```bash
-mkdir -p rig/profiles
-```
+The `knot-init` skill is idempotent — safe to run multiple times.
 
-Knot auto-discovers this directory on startup — no HTTP registration is
-needed.
+Watch in your IDE as the agent creates `rig/`, `rig/profiles/`, and
+the default profile file.
 
-### Create a Default Profile
-
-Profiles define which agent runs and how. Create your first profile at
-`rig/profiles/default.md`:
-
-```yaml
----
-name: default
-provider: openai
-model: gpt-4o
-system-prompt: |
-  You are a helpful AI assistant. Follow the instructions
-  provided in each task.
----
-
-# Default Profile
-
-My default agent profile.
-```
-
-Replace `provider` and `model` with values matching your agent CLI
-configuration. See [Configuration: Profiles](configuration/profiles.md)
-for all available fields.
-
-Verify the profile is discovered:
-
-```bash
-curl http://localhost:3000/profiles
-```
-
-Expected response (JSON array):
-
-```json
-[
-  {
-    "name": "default",
-    "provider": "openai",
-    "model": "gpt-4o",
-    "tools": [],
-    "system_prompt": "You are a helpful AI assistant..."
-  }
-]
-```
-
-## Create Your First Loom and Knot
+## Step 3: Create the "Hello Knot" Loom
 
 A **loom** is a directory ending in `-loom` inside `rig/`. It contains
 **knot** definition files (`.md` files with YAML frontmatter).
 
-Create a loom:
+Ask your agent to create the loom using natural language. For example:
+
+> Create a new loom called `hello-loom`. It must greet the person
+> named in the input file — write a short, friendly welcome message.
+> Put the strands in the `greeting/` folder.
+
+The agent runs the `knot-create` skill behind the scenes. When it's
+done, you should see the new `rig/hello-loom/` directory appear in
+your IDE's file tree, containing the knot definition file.
+
+**Can't see the file?** Ask your agent to run `knot-inspect` to
+debug the rig state — it will report registered looms, knots, and
+any issues.
+
+## Step 4: Run "Hello Knot"
+
+To trigger the knot, create a file in the strand directory. For
+example:
 
 ```bash
-mkdir -p rig/prd-review-loom
+mkdir -p greeting
+echo "Alice" > greeting/alice.md
 ```
 
-Create a knot definition at `rig/prd-review-loom/goals-review.md`:
+Watch for two things:
 
-```yaml
----
-name: goals-review
-agent-profile-ref: default
-strand-dir: "project/prds"
-prompt-template:
-  input-bundling: "full-file"
-  instructions: |
-    Review the goals section for clarity and measurability.
----
+1. **The tie-off file appears** — Knot's file watcher detects the
+   new strand and triggers the knot. The agent runs and writes its
+   result to `rig/tie-offs/hello-loom/hello/`. You should see this
+   file appear in your IDE, containing the agent's greeting for
+   Alice.
 
-# Goals Review Knot
+2. **A git commit appears** — The agent commits the tie-off to git.
+   Check your git viewer (Source Control panel in VS Code) — you
+   should see a new commit with the result file.
 
-Reviews PRD goals sections.
-```
+That's it. Hello Knot is working.
 
-This knot will watch the `project/prds/` directory for file changes and
-process them using the `default` profile.
-
-Verify Knot has discovered the loom:
-
-```bash
-curl http://localhost:3000/looms
-```
-
-Expected response:
-
-```json
-[
-  {
-    "id": {"0": "prd-review-loom"},
-    "knot_count": 1
-  }
-]
-```
-
-## Trigger Processing
-
-Place a file (a **strand**) in the knot's `strand-dir`. For example:
-
-```bash
-mkdir -p project/prds
-cat > project/prds/goals.md << 'EOF'
-# Goals
-
-- Improve code review turnaround time
-- Reduce production incidents
-EOF
-```
-
-Knot's file watcher detects the new file and triggers the knot. The
-agent runs, and the result (a **tie-off**) is written to
-`rig/tie-offs/prd-review-loom/goals-review/goals-review-tie-off.md`.
-
-Check the knot's processing status:
-
-```bash
-curl http://localhost:3000/looms/prd-review-loom/knots/goals-review
-```
-
-## View Activity
-
-See what happened during processing:
-
-```bash
-curl http://localhost:3000/looms/prd-review-loom/activity
-```
-
-This returns the loom's activity log — a chronological list of events
-including knot registration, processing start/completion, and any
-errors.
-
-## Explore the API
-
-Knot serves a Swagger UI with full API documentation at:
-
-```
-http://localhost:3000/swagger-ui
-```
-
-This interactive interface lets you browse all endpoints, inspect
-response schemas, and try requests directly in your browser.
+In your agent of choice, open the session history and explore how your
+input was bundled and passed to your agent and how the response was
+routed to the knots tie-off.
 
 ## Next Steps
 

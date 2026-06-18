@@ -1,9 +1,9 @@
 # Concepts
 
-Knot is a file-first agent orchestration system. It runs as a local HTTP
-service, watches directories for file changes, and triggers AI agent
-sessions in response. Everything is stored as plain text on disk, making
-it easy to review, share, and version-control.
+Knot is a file-first agent orchestration system. It watches directories for
+file changes, and triggers AI agent sessions in response. The entire workflow, 
+the rig, is stored as plain text on disk, making it easy to review, share, 
+and version-control.
 
 This page explains Knot's mental model — the hierarchy of objects and
 how they relate to each other.
