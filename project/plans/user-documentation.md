@@ -87,21 +87,23 @@ Create end-to-end tutorials from PRD scenarios — original writing guided by th
 
 - [x] **Update `README.md`** — add a "Documentation" section linking to `docs/`, keep the high-level philosophy and concepts.
 
-### Phase 4: Create `project-documentation` Skill
+### Phase 4: Create `project-documentation` Skill ✅ Complete
+
+> **✅ Complete** — 2026-06-18. Skill created at `.agents/skills/project-documentation/SKILL.md`.
 
 Package the methodology into a reusable skill at `.agents/skills/project-documentation/SKILL.md`:
 
-- [ ] Write skill frontmatter with metadata (name, description, license, version, USE FOR / DO NOT USE FOR)
-- [ ] Document the **source extraction methodology**:
+- [x] Write skill frontmatter with metadata (name, description, license, version, USE FOR / DO NOT USE FOR)
+- [x] Document the **source extraction methodology**:
   - Skills → config reference, quick reference, troubleshooting
   - Domain glossary → concepts doc
   - PRD user stories → workflow tutorials
   - Completed plans → release notes / changelog
   - Router/API code → API reference
-- [ ] Document the **target doc structure** (the directory layout from Phase 0)
-- [ ] Document the **audience split** (end-user docs vs. contributor docs)
-- [ ] Document the **extraction workflow** (read source → extract sections → reformat for human audience → write target)
-- [ ] Include the **doc quality checklist** (links work, examples are runnable, no internal-only terminology without glossary reference, each doc has a clear audience and goal)
+- [x] Document the **target doc structure** (the directory layout from Phase 0)
+- [x] Document the **audience split** (end-user docs vs. contributor docs)
+- [x] Document the **extraction workflow** (read source → extract sections → reformat for human audience → write target)
+- [x] Include the **doc quality checklist** (links work, examples are runnable, no internal-only terminology without glossary reference, each doc has a clear audience and goal)
 
 ### Phase 5: Publish Skill Globally
 
