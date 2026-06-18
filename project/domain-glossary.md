@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-14
+> **Last Updated:** 2026-06-18
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -42,7 +42,7 @@ A knot is defined in a `.md` file with YAML frontmatter. One loom can contain on
 
 ### Loom
 
-A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). A loom directory contains one or more `.md` knot definition files at its first level — Knot discovers these as the loom's knots. The loom directory is **static and derived from naming convention**; it is not user-configurable via the API.
+A directory inside the rig whose name ends with the `-loom` suffix (e.g. `rig/planning-loom/`). A loom directory contains one or more `.md` knot definition files at its first level — Knot discovers these as the loom's knots. The loom directory is **static and derived from naming convention**; it is not user-configurable.
 
 The loom's identity (`LoomId`) is derived from the directory name (the `-loom` suffix is included in the ID).
 
@@ -84,7 +84,7 @@ A file that holds a loom's activity log. Lives at `<rig>/tie-offs/<loom-id>/.loo
 
 ### Knot-state
 
-A per-knot file that records processing events and status for that knot. Contains event type, strand path, tie-off path, and any errors. All knot-level HTTP status is sourced from this file.
+A per-knot file that records processing events and status for that knot. Contains event type, strand path, tie-off path, and any errors. Knot status is readable from this file and is also included in `rig/state.json`.
 
 ---
 
@@ -101,7 +101,19 @@ An append-only JSONL file at `rig/.rig-log` that records serious operational eve
 - `TimeoutExceeded` — an agent session exceeded its deadline (from profile `timeout` or runner default). Contains loom ID, knot ID, strand path, error message, and timestamp. The tie-off file is **preserved unchanged** on timeout.
 - `QueueIdle` — all pending events have been processed and no new events arrived within the poll window (500ms). Indicates the system is quiet.
 
-The rig-log survives server restarts. Multiple consumers can watch it safely (append-only, single-line JSON entries).
+The rig-log persists across restarts. Multiple consumers can watch it safely (append-only, single-line JSON entries).
+
+---
+
+### Rig State
+
+A JSON file at `rig/state.json` that contains a complete snapshot of the rig's current state: the rig path, all discovered looms with their knots and strand counts, all available agent profiles, and a timestamp of when the state was last updated. Written atomically by the State Writer task on a 5-second poll cycle. This is the single source of truth for external consumers (skills, scripts, other tools) that need to read rig state — no HTTP client required.
+
+---
+
+### State Writer
+
+A background task that periodically polls the rig's in-memory state and writes it to `rig/state.json`. Runs on a 5-second interval. Uses atomic write (write to temp file, then rename) to prevent readers from seeing partial state. If the write fails (e.g., disk full), the error is logged but the task continues on the next cycle.
 
 ---
 
@@ -109,6 +121,7 @@ The rig-log survives server restarts. Multiple consumers can watch it safely (ap
 
 ```
 Rig (`./rig/`)
+ ├── state.json (complete state snapshot — written by State Writer every 5s)
  ├── .rig-log (operational event log — TimeoutExceeded, QueueIdle)
  ├── profiles/ (shared agent profile definitions)
  ├── tie-offs/
