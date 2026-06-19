@@ -80,10 +80,10 @@ Hex layer: **Outbound Adapters**
 
 ### Phase 4: Integration Tests and Helpers
 
-- [ ] Remove `input-bundling` from `tests/helpers.rs` `make_knot_content()`
-- [ ] Remove `input-bundling` from `tests/git_versioning.rs` fixtures
-- [ ] Remove `input-bundling` from `tests/rig_cli.rs` fixtures
-- [ ] Full integration test run
+- [x] Remove `input-bundling` from `tests/helpers.rs` `make_knot_content()`
+- [x] Remove `input-bundling` from `tests/git_versioning.rs` fixtures
+- [x] Remove `input-bundling` from `tests/rig_cli.rs` fixtures
+- [x] Full integration test run
 
 ### Phase 5: Docs, Skills, and Rig Files
 
