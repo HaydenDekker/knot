@@ -182,7 +182,6 @@ mod tests {
     fn knot_construction() {
         let id = KnotId("prd-goals-review".to_string());
         let prompt_template = PromptTemplate {
-            input_bundling: "full-file".to_string(),
             instructions: "Review the goals section.".to_string(),
         };
 
@@ -207,7 +206,6 @@ mod tests {
             id: KnotId("custom-dirs".to_string()),
             agent_profile_ref: "detailed".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("../custom-source"),
@@ -227,7 +225,6 @@ mod tests {
             id: KnotId("review".to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "Check it.".to_string(),
             },
             strand_dir: PathBuf::from("project/prds"),
@@ -311,7 +308,6 @@ mod tests {
             id: KnotId("test".to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -330,7 +326,6 @@ mod tests {
             id: KnotId("git-on".to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -346,7 +341,6 @@ mod tests {
             id: KnotId("git-off".to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -362,14 +356,13 @@ mod tests {
             id: KnotId("git-default".to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "do it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
         };
         // Build JSON without the git_versioned field
-        let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"input_bundling":"full-file","instructions":"do it"},"strand_dir":"strands"}"#;
+        let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_dir":"strands"}"#;
         let deserialized: Knot = serde_json::from_str(json_minimal).unwrap();
         assert_eq!(deserialized.id, knot_no_field.id);
         assert!(deserialized.git_versioned, "missing field should default to true");

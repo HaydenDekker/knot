@@ -639,7 +639,6 @@ mod tests {
             id: KnotId(id.to_string()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "Test instructions.".to_string(),
             },
             strand_dir: PathBuf::from("strands"),

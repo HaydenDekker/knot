@@ -130,34 +130,21 @@ impl AgentConfig {
 /// Prompt template used when executing a Knot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptTemplate {
-    /// How input is bundled: e.g. "full-file", "diff", "chunked".
-    pub input_bundling: String,
     /// The prompt instructions.
     pub instructions: String,
 }
 
 impl PromptTemplate {
-    /// Create a new `PromptTemplate` with non-empty fields.
+    /// Create a new `PromptTemplate` with non-empty instructions.
     ///
-    /// Returns `DomainError::EmptyField` for any blank field.
-    pub fn new(
-        input_bundling: String,
-        instructions: String,
-    ) -> Result<Self, DomainError> {
-        if input_bundling.trim().is_empty() {
-            return Err(DomainError::EmptyField(
-                "input_bundling".to_string(),
-            ));
-        }
+    /// Returns `DomainError::EmptyField` if instructions are blank.
+    pub fn new(instructions: String) -> Result<Self, DomainError> {
         if instructions.trim().is_empty() {
             return Err(DomainError::EmptyField(
                 "instructions".to_string(),
             ));
         }
-        Ok(Self {
-            input_bundling,
-            instructions,
-        })
+        Ok(Self { instructions })
     }
 }
 
@@ -422,34 +409,24 @@ mod tests {
 
     #[test]
     fn prompt_template_fields() {
-        // Valid fields create successfully
+        // Valid instructions create successfully
         let template = PromptTemplate::new(
-            "full-file".to_string(),
             "Review the document.".to_string(),
         );
         assert!(template.is_ok());
         let template = template.unwrap();
-        assert_eq!(template.input_bundling, "full-file");
         assert_eq!(template.instructions, "Review the document.");
 
-        // Empty input_bundling returns error
-        let err = PromptTemplate::new("".to_string(), "instructions".to_string());
-        assert!(err.is_err());
-        assert_eq!(
-            err.unwrap_err(),
-            DomainError::EmptyField("input_bundling".to_string())
-        );
-
         // Empty instructions returns error
-        let err = PromptTemplate::new("full-file".to_string(), "".to_string());
+        let err = PromptTemplate::new("".to_string());
         assert!(err.is_err());
         assert_eq!(
             err.unwrap_err(),
             DomainError::EmptyField("instructions".to_string())
         );
 
-        // Whitespace-only fields return error
-        let err = PromptTemplate::new("  ".to_string(), "  ".to_string());
+        // Whitespace-only instructions return error
+        let err = PromptTemplate::new("  ".to_string());
         assert!(err.is_err());
     }
 
@@ -495,7 +472,7 @@ mod tests {
     #[test]
     fn prompt_template_serialization() {
         let template =
-            PromptTemplate::new("full-file".to_string(), "do it".to_string()).unwrap();
+            PromptTemplate::new("do it".to_string()).unwrap();
         let json = serde_json::to_string(&template).unwrap();
         let deserialized: PromptTemplate = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, template);

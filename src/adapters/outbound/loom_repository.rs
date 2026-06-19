@@ -288,7 +288,6 @@ name: review-knot
 agent-profile-ref: fast
 strand-dir: \"../external-source\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: |
     Review the goals section of this PRD.
 ---
@@ -303,7 +302,6 @@ name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: \"../external-source\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review with custom dirs\"
 ---
 
@@ -472,7 +470,6 @@ broken: yaml: [
         assert_eq!(knot.agent_profile_ref, "fast");
 
         // Verify prompt template parsed from frontmatter.
-        assert_eq!(knot.prompt_template.input_bundling, "full-file");
         assert!(knot.prompt_template.instructions.contains("Review the goals"));
     }
 
@@ -694,7 +691,6 @@ name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: "external-source"
 prompt-template:
-  input-bundling: "full-file"
   instructions: "Review with custom dirs"
 ---
 
@@ -744,7 +740,7 @@ Body.
         // Knot A with its own source dir.
         let knot_a_content = format!(
             "---\nname: knot-a\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
-             input-bundling: \"full-file\"\n  instructions: \"Review \
+             instructions: \"Review \
              A\"\n---\n",
             source_a.display(),
         );
@@ -753,7 +749,7 @@ Body.
         // Knot B with its own source dir.
         let knot_b_content = format!(
             "---\nname: knot-b\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
-             input-bundling: \"full-file\"\n  instructions: \"Review \
+             instructions: \"Review \
              B\"\n---\n",
             source_b.display(),
         );
@@ -939,7 +935,6 @@ Body.
 name: no-strand-knot
 agent-profile-ref: fast
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review\"
 ---
 
@@ -953,7 +948,6 @@ name: no-tieoff-knot
 agent-profile-ref: fast
 strand-dir: \"../input\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review\"
 ---
 
@@ -1038,7 +1032,6 @@ agent-profile-ref: fast
 strand-dir: "strands"
 tie-off-dir: "old-output"
 prompt-template:
-  input-bundling: "full-file"
   instructions: "Review"
 ---
 

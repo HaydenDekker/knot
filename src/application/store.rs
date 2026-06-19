@@ -90,7 +90,6 @@ mod tests {
                     id: crate::domain::entities::KnotId("k1".to_string()),
                     agent_profile_ref: "default".to_string(),
                     prompt_template: PromptTemplate::new(
-                        "full-file".to_string(),
                         "check it".to_string(),
                     )
                     .unwrap(),

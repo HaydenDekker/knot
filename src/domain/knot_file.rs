@@ -89,8 +89,6 @@ struct RawFrontmatter {
 
 #[derive(Debug, Deserialize)]
 struct RawPromptTemplate {
-    #[serde(rename = "input-bundling")]
-    input_bundling: Option<String>,
     instructions: Option<String>,
 }
 
@@ -136,16 +134,12 @@ pub fn parse(
         .prompt_template
         .ok_or(KnotFileError::MissingPromptTemplate)?;
 
-    let input_bundling = raw_template
-        .input_bundling
-        .filter(|ib| !ib.trim().is_empty())
-        .ok_or(KnotFileError::MissingPromptTemplate)?;
     let instructions = raw_template
         .instructions
         .filter(|ins| !ins.trim().is_empty())
         .ok_or(KnotFileError::MissingPromptTemplate)?;
 
-    let prompt_template = PromptTemplate::new(input_bundling, instructions)
+    let prompt_template = PromptTemplate::new(instructions)
         .map_err(|_| KnotFileError::MissingPromptTemplate)?;
 
     // Parse required strand-dir
@@ -292,7 +286,6 @@ name: prd-goals-review
 agent-profile-ref: fast
 strand-dir: \"strands\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: |
     Review the goals section of this PRD. Check that:
     - Each goal is specific and measurable
@@ -313,7 +306,6 @@ This knot reviews the goals section of PRD documents.
         );
         assert_eq!(file.name, "prd-goals-review");
         assert_eq!(file.agent_profile_ref, "fast");
-        assert_eq!(file.prompt_template.input_bundling, "full-file");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
         assert_eq!(file.strand_dir, PathBuf::from("strands"));
     }
@@ -325,7 +317,6 @@ name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: \"../custom-source\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -350,7 +341,6 @@ Body.
 name: no-strand-dir-knot
 agent-profile-ref: fast
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -372,7 +362,6 @@ agent-profile-ref: fast
 strand-dir: \"../input\"
 tie-off-dir: \"../old-output\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -396,7 +385,6 @@ strand-dir: \"strands\"
 foo: bar
 baz: 42
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -424,7 +412,6 @@ name: clean-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -446,7 +433,6 @@ name: empty-strand-knot
 agent-profile-ref: fast
 strand-dir: \"  \"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -511,7 +497,6 @@ Body.
         );
         assert_eq!(file.name, "prd-goals-review");
         assert_eq!(file.agent_profile_ref, "fast");
-        assert_eq!(file.prompt_template.input_bundling, "full-file");
     }
 
     #[test]
@@ -520,7 +505,6 @@ Body.
 name: no-ref-knot
 strand-dir: "strands"
 prompt-template:
-  input-bundling: "full-file"
   instructions: "Do something"
 ---
 
@@ -542,7 +526,6 @@ name: empty-ref-knot
 agent-profile-ref: "  "
 strand-dir: "strands"
 prompt-template:
-  input-bundling: "full-file"
   instructions: "Do something"
 ---
 
@@ -562,11 +545,8 @@ Body.
         let file = KnotFile {
             name: "test".to_string(),
             agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate::new(
-                "full-file".to_string(),
-                "do it".to_string(),
-            )
-            .unwrap(),
+            prompt_template: PromptTemplate::new("do it".to_string())
+                .unwrap(),
             strand_dir: PathBuf::from("strands/test"),
             git_versioned: true,
         };
@@ -579,7 +559,7 @@ Body.
     #[test]
     fn roundtrip_generate_and_parse() {
         // generate_knot_file produces content that KnotFile::parse can read
-        let content = "---\nname: roundtrip-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Process this\"\n---\n\n# roundtrip-knot\n\nRoundtrip test.\n";
+        let content = "---\nname: roundtrip-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  instructions: \"Process this\"\n---\n\n# roundtrip-knot\n\nRoundtrip test.\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -595,7 +575,7 @@ Body.
 
     #[test]
     fn knot_file_with_git_versioned_true() {
-        let content = "---\nname: git-on-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: true\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: git-on-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: true\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -607,7 +587,7 @@ Body.
 
     #[test]
     fn knot_file_with_git_versioned_false() {
-        let content = "---\nname: git-off-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: git-off-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -619,7 +599,7 @@ Body.
 
     #[test]
     fn knot_file_without_git_versioned_defaults_true() {
-        let content = "---\nname: default-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: default-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -636,7 +616,7 @@ Body.
     fn knot_file_roundtrip_with_git_versioned() {
         // Parse a knot file with git-versioned: false, then serialize and
         // parse again to verify the value survives round-trip.
-        let content = "---\nname: roundtrip-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  input-bundling: \"full-file\"\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: roundtrip-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
         let (file, _warnings) = parse(content).unwrap();
         assert!(!file.git_versioned);
 

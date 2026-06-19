@@ -1842,7 +1842,6 @@ mod config_handler_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -2956,7 +2955,6 @@ mod phase2_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -3336,7 +3334,6 @@ mod phase3_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -3560,7 +3557,6 @@ mod phase4_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -3699,7 +3695,6 @@ mod manage_knot_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "default".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -4136,7 +4131,6 @@ mod phase3_profile_resolution_tests {
             id: KnotId(id.into()),
             agent_profile_ref: profile_name.to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check with profile".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -4622,7 +4616,6 @@ mod phase6_timeout_tests {
             id: KnotId(id.into()),
             agent_profile_ref: profile.to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -5099,7 +5092,6 @@ mod phase7_timeout_resolution_tests {
             id: KnotId(id.into()),
             agent_profile_ref: profile.to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -5510,7 +5502,6 @@ mod phase8_git_versioning_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -5765,7 +5756,6 @@ mod reload_config_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -6076,7 +6066,6 @@ mod phase9_session_title_tests {
             id: KnotId(id.into()),
             agent_profile_ref: profile.to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -6331,7 +6320,6 @@ mod phase9_session_title_tests {
             id: KnotId("reviewer".to_string()),
             agent_profile_ref: "reviewer".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "Review this file.".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
@@ -6690,7 +6678,6 @@ mod write_state_tests {
                     id: KnotId("k1".to_string()),
                     agent_profile_ref: "fast".to_string(),
                     prompt_template: crate::domain::value_objects::PromptTemplate {
-                        input_bundling: "full-file".to_string(),
                         instructions: "Review.".to_string(),
                     },
                     strand_dir: PathBuf::from("strands"),
@@ -7205,7 +7192,6 @@ mod phase2_text_check_tests {
             id: KnotId(id.into()),
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate {
-                input_bundling: "full-file".to_string(),
                 instructions: "check it".to_string(),
             },
             strand_dir: PathBuf::from("strands"),
