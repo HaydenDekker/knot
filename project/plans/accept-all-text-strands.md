@@ -56,15 +56,15 @@ Knot accepts **all text files** as strands. Binary/non-text files are silently s
 - [x] **Compile + tests pass**
 
 ### Phase 2: Text Check in ProcessStrand
-- [ ] In `ProcessStrand::execute()`, after looking up the loom/knot and before agent execution:
+- [x] In `ProcessStrand::execute()`, after looking up the loom/knot and before agent execution:
   - For `Created`/`Modified` events: call `is_text_file(&strand_path)`
   - If binary: write `LoomEvent::StrandIgnored` to loom-log, write `eprintln!` warn to stderr, return `Ok(())` (skip agent)
   - For `Deleted` events: skip text check (file is gone), process normally
-- [ ] Add `usecases.rs` unit tests using `MockLoomLogPort` for:
+- [x] Add `usecases.rs` unit tests using `MockLoomLogPort` for:
   - Binary file → StrandIgnored in loom-log, no agent execution
   - Text file → normal processing path (regression guard)
   - Deleted event → normal processing path (no text check needed)
-- [ ] **Compile + tests pass**
+- [x] **Compile + tests pass**
 
 ### Phase 3: Integration Tests
 - [ ] Add integration test in `tests/pipeline.rs` (or `tests/discovery.rs`):
