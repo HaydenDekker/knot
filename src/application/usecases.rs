@@ -804,6 +804,47 @@ impl ProcessStrand {
         // Determine tie-off path (statically derived from loom + knot)
         let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
+        // Text check: skip binary files for Created/Modified events.
+        // Deleted events skip the check (file is gone).
+        if matches!(
+            event,
+            StrandEvent::Created { .. } | StrandEvent::Modified { .. }
+        ) {
+            match crate::adapters::outbound::content_inspector::is_text_file(
+                &strand_path.0,
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!(
+                        "WARN: strand '{}' is a binary file, skipping \
+                         processing (knot={})",
+                        strand_path.0.display(),
+                        knot_id.0,
+                    );
+                    self.log_port.append(LoomEvent::StrandIgnored {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        reason: "binary file".to_string(),
+                        timestamp: format_timestamp(),
+                    })?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Cannot determine file type (e.g., race with deletion,
+                    // inaccessible file). Log warning but proceed — better
+                    // to attempt processing than silently skip.
+                    eprintln!(
+                        "WARN: cannot determine if strand '{}' is text: \
+                         {}, proceeding with processing (knot={})",
+                        strand_path.0.display(),
+                        e,
+                        knot_id.0,
+                    );
+                }
+            }
+        }
+
         // 1. Append KnotProcessing to loom-log
         self.log_port.append(LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
@@ -6987,5 +7028,483 @@ mod write_state_tests {
         assert_eq!(profiles[0]["name"], "fast");
         assert_eq!(profiles[0]["provider"], "openai");
         assert_eq!(profiles[0]["model"], "gpt-4o");
+    }
+}
+
+// ── Phase 2: Text Check Tests ───────────────────────────────────────
+
+#[cfg(test)]
+mod phase2_text_check_tests {
+    use super::*;
+    use crate::adapters::outbound::content_inspector::is_text_file;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId, TieOffStatus};
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    // ── Tracking LoomLogPort ─────────────────────────────────────────
+
+    struct TrackingLoomLogPort {
+        events: Arc<Mutex<Vec<LoomEvent>>>,
+    }
+
+    impl TrackingLoomLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl LoomLogPort for TrackingLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock AgentRunner ─────────────────────────────────────────────
+
+    struct MockAgentRunner;
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            Ok(AgentOutput {
+                stdout: "mock output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Tracking TieOffSink ──────────────────────────────────────────
+
+    struct TrackingTieOffSink {
+        appends: Arc<Mutex<Vec<TieOff>>>,
+    }
+
+    impl TrackingTieOffSink {
+        fn new() -> (Self, Arc<Mutex<Vec<TieOff>>>) {
+            let appends = Arc::new(Mutex::new(vec![]));
+            (Self { appends: appends.clone() }, appends)
+        }
+    }
+
+    impl TieOffSink for TrackingTieOffSink {
+        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.appends.lock().unwrap().push(tie_off);
+            Ok(())
+        }
+
+        fn read_content(
+            &self,
+            _path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(String::new())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    struct MockRigLogPort;
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            _event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    struct MockProfileRepository {
+        profiles: HashMap<String, AgentProfile>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self.profiles.get(name).cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self.profiles.values().cloned().collect())
+        }
+
+        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn delete(&self, _name: &str) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    fn default_profile() -> AgentProfile {
+        AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+    }
+
+    fn build_knot(id: impl Into<String>) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                input_bundling: "full-file".to_string(),
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: false,
+        }
+    }
+
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand(
+        loom: Loom,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+    ) {
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (log_port, log_events) = TrackingLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends) = TrackingTieOffSink::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]),
+        });
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            Arc::new(MockAgentRunner),
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort),
+            Arc::new(MockGitVersioningPort),
+        );
+
+        (use_case, log_events, tie_off_appends)
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    /// Binary file on Created event: loom-log receives `StrandIgnored`,
+    /// no agent execution (no KnotProcessing, no tie-off).
+    #[test]
+    fn binary_file_creates_strand_ignored_event() {
+        let dir = TempDir::new().unwrap();
+        let binary_path = dir.path().join("data.bin");
+        // Write bytes with null bytes (detected as binary)
+        std::fs::write(
+            &binary_path,
+            vec![0x00, 0x01, 0x02, 0xFF, 0xFE],
+        )
+        .unwrap();
+
+        // Verify content_inspector detects it as binary
+        assert!(
+            !is_text_file(&binary_path).unwrap(),
+            "test fixture should be binary"
+        );
+
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends) =
+            build_process_strand(loom);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(binary_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: only StrandIgnored (no KnotProcessing)
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 1, "should have exactly 1 event");
+        match &events[0] {
+            LoomEvent::StrandIgnored {
+                loom_id,
+                knot_id,
+                strand_path,
+                reason,
+                ..
+            } => {
+                assert_eq!(loom_id.0, "test-loom");
+                assert_eq!(knot_id.0, "k1");
+                assert_eq!(strand_path.0, binary_path);
+                assert_eq!(reason, "binary file");
+            }
+            other => panic!(
+                "expected StrandIgnored for binary file, got {:?}",
+                other
+            ),
+        }
+
+        // No tie-off appended
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(
+            appends.is_empty(),
+            "tie-off should not be written for ignored files"
+        );
+    }
+
+    /// Text file on Created event: normal processing path (KnotProcessing,
+    /// KnotCompleted, StrandProcessed, tie-off appended).
+    #[test]
+    fn text_file_normal_processing_path() {
+        let dir = TempDir::new().unwrap();
+        let text_path = dir.path().join("hello.txt");
+        let mut file =
+            std::fs::File::create(&text_path).unwrap();
+        writeln!(file, "Hello, world!").unwrap();
+        drop(file);
+
+        // Verify content_inspector detects it as text
+        assert!(
+            is_text_file(&text_path).unwrap(),
+            "test fixture should be text"
+        );
+
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends) =
+            build_process_strand(loom);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(text_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "should have 3 loom-log events for normal processing"
+        );
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!("expected KnotProcessing, got {:?}", other),
+        }
+        match &events[1] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!("expected KnotCompleted, got {:?}", other),
+        }
+        match &events[2] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_none(), "error should be None on success");
+            }
+            other => panic!("expected StrandProcessed, got {:?}", other),
+        }
+
+        // Tie-off IS appended
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+    }
+
+    /// Deleted event: skips text check (file is gone), processes normally.
+    /// Even with a non-existent path, the pipeline runs.
+    #[test]
+    fn deleted_event_skips_text_check() {
+        // Path that doesn't exist — text check would fail if called
+        let nonexistent = PathBuf::from("/nonexistent/path/file.txt");
+
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends) =
+            build_process_strand(loom);
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(nonexistent.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotCompleted, StrandProcessed
+        // (no StrandIgnored since Deleted skips text check)
+        let events = log_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "should have 3 loom-log events for Deleted (no text check)"
+        );
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!("expected KnotProcessing, got {:?}", other),
+        }
+
+        // No StrandIgnored in events
+        for event in &*events {
+            assert!(
+                !matches!(event, LoomEvent::StrandIgnored { .. }),
+                "Deleted event should NOT produce StrandIgnored"
+            );
+        }
+
+        // Tie-off IS appended (normal processing)
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+    }
+
+    /// Binary file on Modified event: also produces StrandIgnored.
+    #[test]
+    fn binary_file_modified_event_strand_ignored() {
+        let dir = TempDir::new().unwrap();
+        let binary_path = dir.path().join("image.png");
+        // PNG magic bytes
+        std::fs::write(
+            &binary_path,
+            vec![
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+        )
+        .unwrap();
+
+        assert!(
+            !is_text_file(&binary_path).unwrap(),
+            "test fixture should be binary"
+        );
+
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, _tie_off_appends) =
+            build_process_strand(loom);
+
+        let event = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(binary_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::StrandIgnored {
+                strand_path, reason, ..
+            } => {
+                assert_eq!(strand_path.0, binary_path);
+                assert_eq!(reason, "binary file");
+            }
+            other => panic!(
+                "expected StrandIgnored for binary file on Modified, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Empty file (0 bytes) is treated as text — normal processing.
+    #[test]
+    fn empty_file_treated_as_text() {
+        let dir = TempDir::new().unwrap();
+        let empty_path = dir.path().join("empty.txt");
+        std::fs::write(&empty_path, "").unwrap();
+
+        assert!(
+            is_text_file(&empty_path).unwrap(),
+            "empty file should be treated as text"
+        );
+
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends) =
+            build_process_strand(loom);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(empty_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3, "should process empty files normally");
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!("expected KnotProcessing, got {:?}", other),
+        }
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
     }
 }
