@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ⬜ Planned | 2026-06-20 |
+| 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
 | 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
 | 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
@@ -89,6 +89,17 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 40. Remove `input-bundling` from Prompt Template
+
+**Status:** ✅ Complete
+**Created:** 2026-06-20
+**Completed:** 2026-06-20
+**Goal:** Remove the `input-bundling` property from `PromptTemplate` — it was required in knot YAML frontmatter but had no runtime effect. Only `full-file` ever shipped and is always the behaviour.
+
+**Result:** `input_bundling` field removed from `PromptTemplate` struct, `RawPromptTemplate`, parsing logic, and all test fixtures across domain, application, outbound adapters, and integration tests. Docs, skills, and rig demo files updated to remove the property. Knot files that still contain `input-bundling` parse successfully with an unknown-property warning. 23 files changed, -96 lines net. All tests pass. Version bumped to 0.15.0.
+
+Full details in [remove-input-bundling.md](remove-input-bundling.md).
 
 ### 39. Accept All Text Files as Strands
 
