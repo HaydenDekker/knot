@@ -17,7 +17,7 @@ The `input-bundling` property on `PromptTemplate` is required in knot YAML front
 
 Knot files without `input-bundling` should parse cleanly. Knot files that still contain `input-bundling` should parse successfully with a parse warning (unknown property), maintaining the existing non-identified property detection.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-20)
 
 ## Existing Tests
 
@@ -101,9 +101,9 @@ Hex layer: **Outbound Adapters**
 
 ### Phase 6: Full Test Run and Verification
 
-- [ ] `cargo test` — all tests pass
-- [ ] `cargo clippy` — clean
-- [ ] Verify `rig/state.json` output no longer contains `input_bundling` in knot definitions
+- [x] `cargo test` — all tests pass
+- [x] `cargo clippy` — clean
+- [x] Verify `rig/state.json` output no longer contains `input_bundling` in knot definitions
 
 ## Notes
 
