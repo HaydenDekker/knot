@@ -74,9 +74,9 @@ Hex layer: **Application**
 
 Hex layer: **Outbound Adapters**
 
-- [ ] Remove `input_bundling` assertion from `loom_repository.rs` tests
-- [ ] Remove `input-bundling` from test fixtures in `event_source.rs` (or leave as unknown-property warnings — either is fine, but removing is cleaner)
-- [ ] Compile + test
+- [x] Remove `input_bundling` assertion from `loom_repository.rs` tests
+- [x] Remove `input-bundling` from test fixtures in `event_source.rs` (or leave as unknown-property warnings — either is fine, but removing is cleaner)
+- [x] Compile + test
 
 ### Phase 4: Integration Tests and Helpers
 
