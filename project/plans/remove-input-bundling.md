@@ -87,17 +87,17 @@ Hex layer: **Outbound Adapters**
 
 ### Phase 5: Docs, Skills, and Rig Files
 
-- [ ] Update `docs/configuration/knots.md` — remove `input-bundling` from table and examples
-- [ ] Update `docs/design-guide.md` — remove `input-bundling` from knot template
-- [ ] Update `docs/api-reference.md` — remove `input_bundling` from JSON example
-- [ ] Update `docs/workflows/file-generation-workflow.md` — remove from examples
-- [ ] Update `docs/workflows/review-workflow.md` — remove from examples
-- [ ] Update `.agents/skills/knot-create/SKILL.md` — remove from schema, examples, and table
-- [ ] Update `.agents/skills/knot-design/SKILL.md` — remove from examples
-- [ ] Update `demo/knot-test/review-knot.md` — remove property
-- [ ] Update `rig/new-loom/review-knot.md` — remove property
-- [ ] Update `rig/workflow-loom/review-knot.md` — remove property
-- [ ] No compile needed — documentation only
+- [x] Update `docs/configuration/knots.md` — remove `input-bundling` from table and examples
+- [x] Update `docs/design-guide.md` — remove `input-bundling` from knot template
+- [x] Update `docs/api-reference.md` — remove `input_bundling` from JSON example
+- [x] Update `docs/workflows/file-generation-workflow.md` — remove from examples
+- [x] Update `docs/workflows/review-workflow.md` — remove from examples
+- [x] Update `.agents/skills/knot-create/SKILL.md` — remove from schema, examples, and table
+- [x] Update `.agents/skills/knot-design/SKILL.md` — remove from examples
+- [x] Update `demo/knot-test/review-knot.md` — remove property
+- [x] Update `rig/new-loom/review-knot.md` — remove property
+- [x] Update `rig/workflow-loom/review-knot.md` — remove property
+- [x] No compile needed — documentation only
 
 ### Phase 6: Full Test Run and Verification
 
