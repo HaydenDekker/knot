@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ⬜ Planned | 2026-06-19 |
+| 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
 | 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
 | 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
@@ -88,6 +88,19 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 39. Accept All Text Files as Strands
+
+**Status:** ✅ Complete
+**Created:** 2026-06-19
+**Completed:** 2026-06-19
+**Goal:** Extend strand input so knots can operate on any text file (.rs, .json, .py, .txt, etc.) — not just `.md`.
+
+**Result:** `.md` extension filter removed from `NotifyEventSource`. `is_text_file()` utility in `adapters/outbound/content_inspector.rs` uses `content_inspector` crate (null-byte heuristic on first 8KB). Binary files produce `LoomEvent::StrandIgnored` in loom-log + stderr warning, then skip agent execution. Deleted events bypass text check (file is gone). 5 new unit tests in `event_source.rs`, 5 in `usecases.rs`, 2 integration tests in `pipeline.rs`. 354 tests pass. Version bumped to 0.14.0.
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [accept-all-text-strands.md](accept-all-text-strands.md).
 
 ### 38. Removal of HTTP Interface — Full File-First
 

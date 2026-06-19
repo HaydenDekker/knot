@@ -16,7 +16,13 @@ Knot is not expected to handle binary formats (images, PDFs, archives). Users st
 
 Knot accepts **all text files** as strands. Binary/non-text files are silently skipped with a warning written to both the loom-log (`LoomEvent::StrandIgnored`) and stderr (system log at warn level).
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-19)
+
+## Completion Notes
+- Version bumped to 0.14.0 (MINOR — new backwards-compatible feature)
+- Full test suite passes (354 tests, 0 failures)
+- No ADR/DPR extracted — approach is straightforward (content_inspector null-byte heuristic)
+- Key design: text check at processing time (ProcessStrand), not event source level
 
 ## Existing Tests
 
