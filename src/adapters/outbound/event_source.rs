@@ -135,6 +135,9 @@ impl InnerState {
     }
 
     /// Map events for strand directory watches.
+    ///
+    /// Accepts all files — text files are processed downstream,
+    /// binary files are filtered there.
     fn map_strand_event(
         &self,
         event: &Event,
@@ -144,11 +147,6 @@ impl InnerState {
     ) -> (Option<StrandEvent>, Option<ConfigEvent>) {
         // Only process file events (skip directories)
         if path.is_dir() {
-            return (None, None);
-        }
-
-        // Only process `.md` files
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
             return (None, None);
         }
 
@@ -980,6 +978,159 @@ mod tests {
             matches!(event, StrandEvent::Deleted { .. }),
             "Remove should map to StrandEvent::Deleted, got: {:?}", event
         );
+    }
+
+    /// Text file (`.txt`) create emits a strand event.
+    #[test]
+    fn txt_file_create_emits_strand_event() {
+        let dir = TempDir::new().unwrap();
+        let (source, mut rx, _config_rx) =
+            create_source("loom-1", "knot-1");
+
+        source.watch(dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        let file_path = dir.path().join("notes.txt");
+        fs::write(&file_path, "plain text content").unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        let event = recv_strand_event(&mut rx, Duration::from_millis(500))
+            .expect("should receive a Created event for .txt file");
+        match event {
+            StrandEvent::Created {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => {
+                assert_eq!(loom_id.0, "loom-1");
+                assert_eq!(knot_id.0, "knot-1");
+                assert_eq!(
+                    strand_path.0.file_name().unwrap(),
+                    "notes.txt"
+                );
+            }
+            other => panic!(
+                "Expected Created event for .txt, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Source code file (`.rs`) modify emits a strand event.
+    #[test]
+    fn rs_file_modify_emits_strand_event() {
+        let dir = TempDir::new().unwrap();
+        let (source, mut rx, _config_rx) =
+            create_source("loom-1", "knot-1");
+
+        let file_path = dir.path().join("lib.rs");
+        fs::write(&file_path, "fn main() {}").unwrap();
+
+        source.watch(dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        fs::write(&file_path, "fn main() { println!(\"hello\"); }")
+            .unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        let event = recv_strand_event(&mut rx, Duration::from_millis(500))
+            .expect("should receive a Modified event for .rs file");
+        match event {
+            StrandEvent::Modified {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => {
+                assert_eq!(loom_id.0, "loom-1");
+                assert_eq!(knot_id.0, "knot-1");
+                assert_eq!(
+                    strand_path.0.file_name().unwrap(),
+                    "lib.rs"
+                );
+            }
+            other => panic!(
+                "Expected Modified event for .rs, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Binary file create still emits a strand event — binary
+    /// filtering happens downstream (in the processing pipeline),
+    /// not in the event source.
+    #[test]
+    fn binary_file_create_emits_strand_event() {
+        let dir = TempDir::new().unwrap();
+        let (source, mut rx, _config_rx) =
+            create_source("loom-1", "knot-1");
+
+        source.watch(dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        let file_path = dir.path().join("data.bin");
+        fs::write(&file_path, [0u8, 1, 2, 255, 0]).unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        let event = recv_strand_event(&mut rx, Duration::from_millis(500))
+            .expect("should receive a Created event for binary file");
+        match event {
+            StrandEvent::Created {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => {
+                assert_eq!(loom_id.0, "loom-1");
+                assert_eq!(knot_id.0, "knot-1");
+                assert_eq!(
+                    strand_path.0.file_name().unwrap(),
+                    "data.bin"
+                );
+            }
+            other => panic!(
+                "Expected Created event for binary file, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Config file (`.json`) create emits a strand event.
+    #[test]
+    fn json_file_create_emits_strand_event() {
+        let dir = TempDir::new().unwrap();
+        let (source, mut rx, _config_rx) =
+            create_source("loom-1", "knot-1");
+
+        source.watch(dir.path()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        let file_path = dir.path().join("config.json");
+        fs::write(&file_path, r#"{"key": "value"}"#).unwrap();
+
+        thread::sleep(POLL_DELAY);
+
+        let event = recv_strand_event(&mut rx, Duration::from_millis(500))
+            .expect("should receive a Created event for .json file");
+        match event {
+            StrandEvent::Created {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => {
+                assert_eq!(loom_id.0, "loom-1");
+                assert_eq!(knot_id.0, "knot-1");
+                assert_eq!(
+                    strand_path.0.file_name().unwrap(),
+                    "config.json"
+                );
+            }
+            other => panic!(
+                "Expected Created event for .json, got: {:?}",
+                other
+            ),
+        }
     }
 
     // ── Config Event Tests (Phase 3: Rig/Loom Watching) ────────────────
