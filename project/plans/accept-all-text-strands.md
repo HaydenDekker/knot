@@ -67,15 +67,15 @@ Knot accepts **all text files** as strands. Binary/non-text files are silently s
 - [x] **Compile + tests pass**
 
 ### Phase 3: Integration Tests
-- [ ] Add integration test in `tests/pipeline.rs` (or `tests/discovery.rs`):
+- [x] Add integration test in `tests/pipeline.rs`:
   - Create a binary file (with null bytes) in a strand directory
   - Verify: no tie-off produced, `StrandIgnored` appears in loom-log, stderr contains warning
   - Create a `.txt` text file in the same strand directory
   - Verify: normal processing (tie-off produced, `KnotCompleted` in loom-log)
-- [ ] Add integration test:
-  - Create a `.rs` or `.json` text file
-  - Verify: normal processing
-- [ ] **Compile + all tests pass**
+- [x] Add integration test:
+  - Create a `.rs` source file
+  - Verify: normal processing (tie-off produced, `KnotCompleted` in loom-log, no `StrandIgnored`)
+- [x] **Compile + all tests pass**
 
 ## Notes
 

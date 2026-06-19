@@ -328,6 +328,191 @@ fn loom_log_contains_full_event_sequence() {
     handle.abort();
 }
 
+/// Binary files in a strand directory are silently skipped with a warning.
+///
+/// Verifies the full integration of text/binary detection:
+/// - Binary file (null bytes) → `StrandIgnored` in loom-log, no tie-off
+/// - Text file (`.txt`) in the same strand dir → normal processing
+#[test]
+fn pipeline_ignores_binary_files_and_processes_text_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+    create_mock_pi(&rig_dir, "review output");
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    // --- Binary file: should be ignored ---
+
+    // Create a binary file with null bytes in the strand directory
+    let project_root = rig_dir.parent().unwrap();
+    let strands_dir = project_root.join("strands");
+    fs::create_dir_all(&strands_dir).unwrap();
+    let binary_path = strands_dir.join("data.bin");
+    let binary_data: Vec<u8> = vec![
+        0x00, 0x01, 0x02, 0xFF, 0xFE, 0x89, 0x50, 0x4E,
+    ];
+    fs::write(&binary_path, &binary_data).unwrap();
+
+    // Wait for StrandIgnored event in loom-log
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandIgnored");
+
+    // Verify the StrandIgnored event has correct fields
+    thread::sleep(Duration::from_millis(500));
+    let events = read_loom_log(&rig_dir, "review-loom");
+    let ignored_event = events.iter().find(|e| {
+        loom_log_event_type(e)
+            .map(|t| t == "StrandIgnored")
+            .unwrap_or(false)
+    });
+    assert!(
+        ignored_event.is_some(),
+        "should have StrandIgnored event. Events: {:?}",
+        events.iter().filter_map(|e| loom_log_event_type(e)).collect::<Vec<_>>()
+    );
+    let ignored = ignored_event.unwrap();
+    if let Some(data) = ignored.as_object().and_then(|o| o.get("StrandIgnored")) {
+        if let Some(reason) = data.get("reason").and_then(|v| v.as_str()) {
+            assert!(
+                reason.contains("binary"),
+                "reason should mention binary, got: {}",
+                reason
+            );
+        } else {
+            panic!("StrandIgnored event missing reason field");
+        }
+    } else {
+        panic!("StrandIgnored event has no data object");
+    }
+
+    // Verify no KnotProcessing event was emitted for the binary file
+    // (binary files skip processing entirely)
+    let processing_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            loom_log_event_type(e)
+                .map(|t| t == "KnotProcessing")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        processing_events.is_empty(),
+        "should have no KnotProcessing events for binary file"
+    );
+
+    // --- Text file: should process normally ---
+
+    thread::sleep(Duration::from_millis(500));
+    create_strand(&rig_dir, "notes.txt", "some plain text notes");
+
+    // Wait for normal processing to complete
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
+
+    // Verify tie-off was written
+    thread::sleep(Duration::from_millis(500));
+    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
+    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    assert!(
+        tie_off_file.exists(),
+        "tie-off file should exist for text file at {}",
+        tie_off_file.display()
+    );
+
+    let tie_off_content = fs::read_to_string(&tie_off_file).unwrap();
+    assert!(
+        tie_off_content.contains("review output"),
+        "tie-off should contain agent output"
+    );
+
+    // Verify loom-log has KnotCompleted (not StrandIgnored) for the text file
+    let events = read_loom_log(&rig_dir, "review-loom");
+    let completed_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            loom_log_event_type(e)
+                .map(|t| t == "KnotCompleted")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        !completed_events.is_empty(),
+        "should have KnotCompleted for the .txt file"
+    );
+
+    handle.abort();
+}
+
+/// Non-`.md` text files (`.rs`, `.json`, etc.) are processed normally.
+///
+/// Verifies that the `.md`-only filter has been removed and arbitrary
+/// text extensions trigger full pipeline processing.
+#[test]
+fn pipeline_processes_non_md_text_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+    create_mock_pi(&rig_dir, "rust review output");
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    // Create a .rs source file as a strand
+    create_strand(
+        &rig_dir,
+        "lib.rs",
+        "fn main() { println!(\"hello\"); }",
+    );
+
+    // Wait for normal processing
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
+
+    // Verify tie-off was written
+    thread::sleep(Duration::from_millis(500));
+    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
+    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    assert!(
+        tie_off_file.exists(),
+        "tie-off file should exist for .rs file at {}",
+        tie_off_file.display()
+    );
+
+    let tie_off_content = fs::read_to_string(&tie_off_file).unwrap();
+    assert!(
+        tie_off_content.contains("rust review output"),
+        "tie-off should contain agent output for .rs file"
+    );
+
+    // Verify loom-log has KnotCompleted and NOT StrandIgnored
+    let events = read_loom_log(&rig_dir, "review-loom");
+    let types: Vec<&str> = events
+        .iter()
+        .filter_map(|e| loom_log_event_type(e))
+        .collect();
+    assert!(
+        types.contains(&"KnotCompleted"),
+        "should have KnotCompleted for .rs file. Events: {:?}",
+        types
+    );
+    assert!(
+        !types.contains(&"StrandIgnored"),
+        "should NOT have StrandIgnored for .rs file. Events: {:?}",
+        types
+    );
+
+    handle.abort();
+}
+
 /// The pipeline handles agent execution errors gracefully.
 #[test]
 fn pipeline_handles_agent_failure() {
