@@ -1203,7 +1203,6 @@ agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Review the document\"
 ---
 
@@ -1257,7 +1256,6 @@ agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Initial instructions\"
 ---
 
@@ -1286,7 +1284,6 @@ agent-profile-ref: detailed
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Updated instructions\"
 ---
 
@@ -1338,7 +1335,6 @@ agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
 prompt-template:
-  input-bundling: \"full-file\"
   instructions: \"Instructions\"
 ---
 
