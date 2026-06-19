@@ -1,6 +1,6 @@
 # Knot
 
-A file-first agent loop orchestration framework you use with your favorite agent and IDE.
+A file-first agent loop orchestration harness you use with your favorite agent and IDE.
 
 Knot's a bit different. Set sail.
 
@@ -14,7 +14,7 @@ Out of the box you get:
 - **Goal-seeking agents** — knots read state, compare against a goal, and apply only what's needed (idempotent by design)
 - **Composable pipelines** — looms group related tasks, knots wire agents to file-based triggers. You can share them with friends and re-use them accross multiple projects.
 - **Token efficiency** — Sure...... it might help? We'll
-- **Local Development** - Knot enables smaller contexts by facilitating decompostion of workflows and the orchestration means you can let it run unatended for hours grounded by your specifications.
+- **Local Development King** - Knot enables smaller contexts by facilitating decompostion of workflows and the orchestration means you can let it run unatended for hours grounded by your specifications.
 - **Long Horizon** - You decompose and tune your workflow iteratively in knot. As it comes together it takes off.
 - **Natural Evals** - You rig is standalone, copy it, modify the profiles, rerun, assess and compare.
 - **HITL Native** - Human In The Loop grounds you agents, they can't read your mind. Create your knots with HITL strands and they'll keep coming back to your truth as and when needed.
