@@ -47,13 +47,13 @@ Knot accepts **all text files** as strands. Binary/non-text files are silently s
 - [x] **Compile + tests pass**
 
 ### Phase 1: Remove `.md` Extension Filter from Event Source
-- [ ] In `event_source.rs::map_strand_event()`, remove the `.md` extension check — accept all files
-- [ ] Update existing `event_source.rs` unit tests: rename/refactor `.md`-specific tests to be extension-agnostic
-- [ ] Add new `event_source.rs` unit tests:
+- [x] In `event_source.rs::map_strand_event()`, remove the `.md` extension check — accept all files
+- [x] Update existing `event_source.rs` unit tests: rename/refactor `.md`-specific tests to be extension-agnostic
+- [x] Add new `event_source.rs` unit tests:
   - `.txt` file create → StrandEvent::Created emitted
   - `.rs` file modify → StrandEvent::Modified emitted
   - Binary file create → StrandEvent::Created emitted (filtering happens downstream)
-- [ ] **Compile + tests pass**
+- [x] **Compile + tests pass**
 
 ### Phase 2: Text Check in ProcessStrand
 - [ ] In `ProcessStrand::execute()`, after looking up the loom/knot and before agent execution:
