@@ -37,7 +37,6 @@ pub fn make_knot_content(
         &format!("strand-dir: \"{strand_dir}\""),
         "git-versioned: false",
         "prompt-template:",
-        "  input-bundling: \"full-file\"",
         "  instructions: |",
         &format!("    Test knot: {name}."),
         "---",

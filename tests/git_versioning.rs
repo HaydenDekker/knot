@@ -131,7 +131,6 @@ fn make_git_versioned_knot(
         &format!("strand-dir: \"{strand_dir}\""),
         "git-versioned: true",
         "prompt-template:",
-        "  input-bundling: \"full-file\"",
         "  instructions: |",
         &format!("    Test knot: {name}."),
         "---",
