@@ -227,7 +227,6 @@ A loom is created by making a directory (ending in `-loom`) and writing
    agent-profile-ref: fast
    strand-dir: "project/prds"
    prompt-template:
-     input-bundling: "full-file"
      instructions: |
        Review the goals section for clarity and measurability.
    ---
@@ -262,7 +261,6 @@ When asked to add a knot to an existing loom:
    agent-profile-ref: fast
    strand-dir: "project/prds"
    prompt-template:
-     input-bundling: "full-file"
      instructions: |
        Review the non-goals section.
    ---
@@ -343,7 +341,6 @@ name: prd-goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the goals section of this PRD. Check that:
     - Each goal is specific and measurable
@@ -362,7 +359,6 @@ This knot reviews the goals section of PRD documents.
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
 | `strand-dir` | **Yes** | Directory to watch for strand files. Resolved relative to the project root. |
-| `prompt-template.input-bundling` | **Yes** | How input is bundled (e.g. `full-file`) |
 | `prompt-template.instructions` | **Yes** | Task-specific instructions appended to the profile's system prompt |
 
 ### Directory Resolution
@@ -531,7 +527,6 @@ name: goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: "Review the goals section."
 ---
 # Goals Review

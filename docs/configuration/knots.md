@@ -15,7 +15,6 @@ name: goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the goals section of this PRD. Check that:
     - Each goal is specific and measurable
@@ -34,7 +33,6 @@ Reviews the goals section of PRD documents.
 | `name` | Yes | Unique knot identifier within its loom. Becomes the `KnotId`. |
 | `agent-profile-ref` | Yes | Name of the agent profile to use. Must match a profile in `rig/profiles/{name}.md`. |
 | `strand-dir` | Yes | Directory to watch for strand files. Resolved relative to the project root. |
-| `prompt-template.input-bundling` | Yes | How input is bundled. Currently supports `full-file` (entire file contents). |
 | `prompt-template.instructions` | Yes | Task-specific instructions. Appended to the profile's system prompt at processing time. |
 
 ## Directory Resolution
@@ -100,7 +98,6 @@ name: non-goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the non-goals section for clarity.
 ---

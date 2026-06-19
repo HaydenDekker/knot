@@ -47,7 +47,6 @@ name: goals-review
 agent-profile-ref: reviewer
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the goals section of this PRD. Check that:
     - Each goal is specific and measurable
@@ -66,7 +65,6 @@ name: non-goals-review
 agent-profile-ref: reviewer
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the non-goals section. Check that:
     - Scope boundaries are clearly defined

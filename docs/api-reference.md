@@ -96,7 +96,6 @@ Response:
       "id": {"0": "goals-review"},
       "agent_profile_ref": "fast",
       "prompt_template": {
-        "input_bundling": "full-file",
         "instructions": "Review the goals section."
       },
       "strand_dir": "/absolute/path/to/project/prds"

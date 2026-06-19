@@ -225,7 +225,6 @@ The loom matches the knot's output domain:
 
 ```yaml
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     You are a <role>. <Goal statement>.
 

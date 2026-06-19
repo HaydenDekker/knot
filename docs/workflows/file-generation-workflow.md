@@ -49,7 +49,6 @@ name: prd-planner
 agent-profile-ref: planner
 strand-dir: "project/prds"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Create an implementation plan from this PRD.
 

@@ -5,7 +5,6 @@ agent-config:
   provider: "openai"
   model: "gpt-4o"
 prompt-template:
-  input-bundling: "full-file"
   instructions: |
     Review the provided document. Provide a concise summary
     of its key points and any recommendations.
