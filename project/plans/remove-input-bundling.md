@@ -47,21 +47,21 @@ None — existing tests cover all the code paths that will change. The plan is t
 
 Hex layer: **Domain**
 
-- [ ] Remove `input_bundling` field from `PromptTemplate` in `src/domain/value_objects.rs`
-- [ ] Simplify `PromptTemplate::new()` to accept only `instructions: String`
-- [ ] Update domain tests: `prompt_template_fields`, `prompt_template_serialization`
-- [ ] Update `Knot` entity tests to construct `PromptTemplate` with single argument
-- [ ] Update `KnotAdded` event test fixture in `src/domain/events.rs`
-- [ ] Compile + test
+- [x] Remove `input_bundling` field from `PromptTemplate` in `src/domain/value_objects.rs`
+- [x] Simplify `PromptTemplate::new()` to accept only `instructions: String`
+- [x] Update domain tests: `prompt_template_fields`, `prompt_template_serialization`
+- [x] Update `Knot` entity tests to construct `PromptTemplate` with single argument
+- [x] Update `KnotAdded` event test fixture in `src/domain/events.rs`
+- [x] Compile + test
 
 ### Phase 1: Parsing — Remove `input-bundling` from Knot File Parser
 
 Hex layer: **Domain**
 
-- [ ] Remove `input_bundling` from `RawPromptTemplate` in `src/domain/knot_file.rs`
-- [ ] Remove `input_bundling` extraction and validation from `KnotFile::parse()`
-- [ ] Update all knot file parsing tests (fixtures no longer need `input-bundling`, but existing fixtures with `input-bundling` should still parse — it becomes an unknown property triggering a parse warning)
-- [ ] Compile + test
+- [x] Remove `input_bundling` from `RawPromptTemplate` in `src/domain/knot_file.rs`
+- [x] Remove `input_bundling` extraction and validation from `KnotFile::parse()`
+- [x] Update all knot file parsing tests (fixtures no longer need `input-bundling`, but existing fixtures with `input-bundling` should still parse — it becomes an unknown property triggering a parse warning)
+- [x] Compile + test
 
 ### Phase 2: Application — Update Use Case Tests
 
