@@ -1,3 +1,4 @@
+pub mod content_inspector;
 pub mod event_source;
 pub mod git_versioner;
 pub mod loom_log;

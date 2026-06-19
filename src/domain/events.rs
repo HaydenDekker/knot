@@ -126,6 +126,20 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// A strand file was ignored (not a text file).
+    ///
+    /// Binary or non-text files in a strand directory are silently
+    /// skipped. A warning is written to the loom-log and stderr.
+    StrandIgnored {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        /// Path to the file that was ignored.
+        strand_path: StrandPath,
+        /// Reason the file was ignored (e.g. "binary file").
+        reason: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -814,6 +828,13 @@ mod tests {
                 directory: "/project/rig/prds-loom/strands".to_string(),
                 timestamp: ts.clone(),
             },
+            LoomEvent::StrandIgnored {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                reason: "binary file".to_string(),
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -982,5 +1003,49 @@ mod tests {
             let deserialized: RigLogEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, *event, "round-trip failed for variant");
         }
+    }
+
+    /// `LoomEvent::StrandIgnored` carries `loom_id`, `knot_id`,
+    /// `strand_path`, `reason`, and `timestamp`. Verifies the variant
+    /// shape and JSON round-trip serialisation.
+    #[test]
+    fn loom_event_strand_ignored() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path =
+            StrandPath(PathBuf::from("project/prds/image.png"));
+        let reason = "binary file".to_string();
+        let ts = "2026-06-19T10:00:00Z".to_string();
+
+        let event = LoomEvent::StrandIgnored {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            reason: reason.clone(),
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::StrandIgnored {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                reason: r,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(r, &reason);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected StrandIgnored variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
     }
 }
