@@ -24,7 +24,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 >
 > - **Tie-off Directory** — Statically derived path under `rig/output/{loom-id}/{knot-name}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed).
 >
-> - **Strand** — A file in a knot's strand directory. When a strand is created, modified, or deleted, the knot that watches that directory is triggered to process it. The strand is the raw input fed into a knot.
+> - **Strand** — Any text file in a knot's strand directory. Strands can be source code (`.py`, `.rs`, `.js`), config files (`.json`, `.yaml`), plain text (`.txt`), or markdown (`.md`) — any text-based file. When a strand is created, modified, or deleted, the knot that watches that directory is triggered to process it. The strand is the raw input fed into a knot. Binary formats (images, PDFs, archives) are not expected inputs — if a binary file appears in a strand directory it is skipped and a warning is logged.
 >
 > - **Loom-log** — A file that holds a loom's activity log. Lives at `<rig>/output/<loom-id>/.loom-log` — outside the loom directory itself, keeping the rig clean of non-loom directories. Records which knots are detected and registered, and all loom and knot events for that loom. Users check this to confirm a loom is configured correctly and to trace processing history.
 >
@@ -49,6 +49,7 @@ Knot requires a mechanism to **react to file system events in a watched rig and 
 - Conflict resolution when multiple events overlap on the same file.
 - Support for non-file data sources (e.g., databases, APIs) as inputs.
 - Rig sharing as a sync/merge service — sharing is a one-way handoff of loom definitions; the recipient owns their own state.
+- Binary file processing — Knot accepts text files only (source code, config, plain text, markdown). Binary formats (images, PDFs, archives) are skipped with a warning logged to the loom-log.
 
 ## User Stories
 
@@ -148,6 +149,7 @@ The rig's portable unit is its loom definitions. Tie-offs and logs are derived s
 
 - [x] A user can start Knot with a loom configuration and **strands** in the watched source directory trigger the loom's knots on create/modify/delete.
 - [x] Strand events trigger the knot's agent, producing a **tie-off** in the configured tie-off point within a reasonable time (under 30 seconds for typical files).
+- [ ] Strands can be any text file (`.py`, `.rs`, `.js`, `.json`, `.yaml`, `.txt`, `.md`, etc.) — not limited to `.md`. Binary files are skipped with a warning logged to the loom-log and stderr.
 - [x] A **loom-log** file records loom-level activity (knots detected, loom events) and is queryable via the HTTP interface.
 - [x] Each knot maintains a **knot-state** file recording its processing events and status, queryable via the HTTP interface.
 - [x] All HTTP-exposed state is sourced from the filesystem — the HTTP interface reflects loom-log and knot-state files.

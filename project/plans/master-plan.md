@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ⬜ Planned | 2026-06-19 |
 | 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
 | 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
 | 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
