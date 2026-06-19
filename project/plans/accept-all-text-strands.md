@@ -40,11 +40,11 @@ Knot accepts **all text files** as strands. Binary/non-text files are silently s
 ## Phases
 
 ### Phase 0: Text Detection Utility and Domain Event
-- [ ] Add `content_inspector` crate to `Cargo.toml` (probes first bytes for null bytes)
-- [ ] Add `is_text_file(path: &Path) -> Result<bool, PortError>` as a pure utility in `domain/` layer (or `adapters/outbound/` since it reads files — this is an IO operation so it's an adapter concern)
-- [ ] Add `LoomEvent::StrandIgnored` variant with fields: `loom_id`, `knot_id`, `strand_path`, `reason`, `timestamp`
-- [ ] Add domain unit tests for the new `LoomEvent` variant (JSON round-trip)
-- [ ] **Compile + tests pass**
+- [x] Add `content_inspector` crate to `Cargo.toml` (probes first bytes for null bytes)
+- [x] Add `is_text_file(path: &Path) -> Result<bool, PortError>` as a pure utility in `domain/` layer (or `adapters/outbound/` since it reads files — this is an IO operation so it's an adapter concern)
+- [x] Add `LoomEvent::StrandIgnored` variant with fields: `loom_id`, `knot_id`, `strand_path`, `reason`, `timestamp`
+- [x] Add domain unit tests for the new `LoomEvent` variant (JSON round-trip)
+- [x] **Compile + tests pass**
 
 ### Phase 1: Remove `.md` Extension Filter from Event Source
 - [ ] In `event_source.rs::map_strand_event()`, remove the `.md` extension check — accept all files
