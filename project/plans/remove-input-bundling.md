@@ -67,8 +67,8 @@ Hex layer: **Domain**
 
 Hex layer: **Application**
 
-- [ ] Update all `PromptTemplate` construction in `src/application/usecases.rs` tests to single-argument form
-- [ ] Compile + test
+- [x] Update all `PromptTemplate` construction in `src/application/usecases.rs` tests to single-argument form
+- [x] Compile + test
 
 ### Phase 3: Outbound Adapters — Update Repository and Event Source Tests
 
