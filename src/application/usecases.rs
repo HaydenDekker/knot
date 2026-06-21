@@ -901,6 +901,33 @@ impl ProcessStrand {
                 PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
 
+        // For Deleted events: read existing tie-off content and extract
+        // scoped strand history (last 5 entries for this strand).
+        let is_deleted = matches!(event_type, KnotEventType::Deleted);
+        let strand_history = if is_deleted {
+            let tie_off_content = self
+                .tie_off_sink
+                .read_content(&tie_off_path)
+                .unwrap_or_default();
+            let strand_rel = strand_path.0
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let sections =
+                crate::domain::tieoff_parser::extract_last_n(
+                    &tie_off_content,
+                    &strand_rel,
+                    5,
+                );
+            if sections.is_empty() {
+                None
+            } else {
+                Some(sections)
+            }
+        } else {
+            None
+        };
+
         let mut cli_args = agent_config.build_cli_args();
         // Append --name for pi session title (matches trigger line format)
         let strand_filename = strand_path.0
@@ -913,16 +940,47 @@ impl ProcessStrand {
         );
         cli_args.push("--name".to_string());
         cli_args.push(session_title);
-        // Append strand content reference using pi's @file syntax
-        cli_args.push(
-            format!("@{}", strand_path.0.display()),
-        );
+        // Append strand content reference using pi's @file syntax.
+        // For Deleted events the file no longer exists, so skip it.
+        if !is_deleted {
+            cli_args.push(format!("@{}", strand_path.0.display()));
+        }
+
+        // Build the prompt. For Deleted events, inject a deletion notice
+        // and scoped strand history into the prompt body.
+        let mut prompt = knot.prompt_template.instructions.clone();
+        if is_deleted {
+            let deletion_notice = "This file was deleted. There may be git \
+                history to help understand the file scope if you need to \
+                rectify downstream references due to this deletion.";
+            prompt.push_str("\n\n");
+            prompt.push_str(deletion_notice);
+
+            // Append scoped strand history if available
+            if let Some(sections) = &strand_history {
+                prompt.push_str("\n\nStrand: ");
+                prompt.push_str(&strand_filename);
+                prompt.push_str("\nPrevious processing history \
+                    (last 5 entries):\n\n");
+                for section in sections {
+                    prompt.push_str(&format!(
+                        "## {} triggered by {} {}\nTimestamp: {}\n",
+                        section.knot_name, section.event_type,
+                        section.strand_path, section.timestamp,
+                    ));
+                    if !section.body.is_empty() {
+                        prompt.push_str(&section.body);
+                        prompt.push_str("\n\n");
+                    }
+                }
+            }
+        }
 
         // 3. Build execution context with event metadata
         let ctx = ExecutionContext {
             cli_path: self.rig_config.cli_path.clone(),
             cli_args,
-            prompt: knot.prompt_template.instructions.clone(),
+            prompt,
             profile_prompt: profile.profile_prompt,
             strand_path: strand_path.clone(),
             event_type: event_label.clone(),
@@ -4430,28 +4488,37 @@ mod phase6_timeout_tests {
 
     // ── Mock AgentRunner (configurable error) ────────────────────────
 
-    /// Mock agent runner that returns a configurable result.
+    /// Mock agent runner that returns a configurable result and captures
+    /// the execution context for inspection in tests.
     struct ConfigurableAgentRunner {
         result: Arc<Mutex<Result<AgentOutput, PortError>>>,
+        captured_ctx: Arc<Mutex<Option<ExecutionContext>>>,
     }
 
     impl ConfigurableAgentRunner {
         fn new(result: Result<AgentOutput, PortError>) -> Self {
             Self {
                 result: Arc::new(Mutex::new(result)),
+                captured_ctx: Arc::new(Mutex::new(None)),
             }
         }
 
         fn set_result(&self, result: Result<AgentOutput, PortError>) {
             *self.result.lock().unwrap() = result;
         }
+
+        /// Return the last captured execution context (if any).
+        fn get_captured_ctx(&self) -> Option<ExecutionContext> {
+            self.captured_ctx.lock().unwrap().clone()
+        }
     }
 
     impl AgentRunner for ConfigurableAgentRunner {
         fn execute(
             &self,
-            _ctx: ExecutionContext,
+            ctx: ExecutionContext,
         ) -> Result<AgentOutput, PortError> {
+            *self.captured_ctx.lock().unwrap() = Some(ctx);
             self.result.lock().unwrap().clone()
         }
     }
@@ -4646,13 +4713,14 @@ mod phase6_timeout_tests {
     #[allow(clippy::type_complexity)]
     fn build_process_strand(
         loom: Loom,
-        agent_runner: Arc<dyn AgentRunner>,
+        agent_runner: Arc<ConfigurableAgentRunner>,
     ) -> (
         ProcessStrand,
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<Vec<RigLogEvent>>>,
         Arc<Mutex<HashMap<String, String>>>,
+        Arc<ConfigurableAgentRunner>,
     ) {
         let store = LoomStore::new();
         store.register(loom);
@@ -4668,10 +4736,11 @@ mod phase6_timeout_tests {
             ]))),
         });
 
+        let runner_for_use_case = agent_runner.clone();
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(log_port),
-            agent_runner,
+            runner_for_use_case as Arc<dyn AgentRunner>,
             Arc::new(tie_off_sink),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -4686,6 +4755,7 @@ mod phase6_timeout_tests {
             tie_off_appends,
             rig_events,
             tie_off_content,
+            agent_runner,
         )
     }
 
@@ -4701,7 +4771,8 @@ mod phase6_timeout_tests {
         let timeout_err = PortError::Timeout("session exceeded 60s".to_string());
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
 
-        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
             build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
@@ -4774,7 +4845,8 @@ mod phase6_timeout_tests {
         let err = PortError::AgentExecutionFailed("crash".to_string());
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(err)));
 
-        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
             build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
@@ -4833,7 +4905,8 @@ mod phase6_timeout_tests {
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
-        let (use_case, log_events, tie_off_appends, rig_events, _content) =
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
             build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
@@ -4862,6 +4935,259 @@ mod phase6_timeout_tests {
         assert_eq!(appends.len(), 1);
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "agent output");
+    }
+
+    // ── Deleted Event Context Extraction Tests ───────────────────────
+
+    /// For Deleted events, `@{strand_path}` must NOT appear in CLI args
+    /// because the file no longer exists.
+    #[test]
+    fn process_strand_deleted_skips_at_file_arg() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _rig_events,
+            _content, captured) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let ctx = captured.get_captured_ctx().expect("ctx should be captured");
+        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        assert!(
+            !has_at_ref,
+            "Deleted events must NOT contain @file reference in cli_args: {:?}",
+            ctx.cli_args,
+        );
+    }
+
+    /// For Deleted events, the prompt must contain the deletion notice.
+    #[test]
+    fn process_strand_deleted_injects_deletion_notice() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _rig_events,
+            _content, captured) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let ctx = captured.get_captured_ctx().expect("ctx should be captured");
+        assert!(
+            ctx.prompt.contains("This file was deleted"),
+            "prompt should contain deletion notice: {}",
+            ctx.prompt,
+        );
+        assert!(
+            ctx.prompt
+                .contains("git history to help understand the file scope"),
+            "prompt should contain git history hint: {}",
+            ctx.prompt,
+        );
+    }
+
+    /// For Deleted events with previous tie-off entries, the prompt
+    /// must include the scoped strand history.
+    #[test]
+    fn process_strand_deleted_includes_strand_history() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, _log_events, tie_off_appends, _rig_events,
+            tie_off_content, captured) =
+            build_process_strand(loom, runner);
+
+        // Pre-populate the tie-off sink with history for strand.md
+        {
+            let mut content = tie_off_content.lock().unwrap();
+            content.insert(
+                "/rig/tie-offs/test-loom/k1/k1-tie-off.md".to_string(),
+                concat!(
+                    "## review triggered by Created strand.md\n",
+                    "Timestamp: 2026-06-05T10:00:00Z\n",
+                    "---\n",
+                    "Initial review content\n",
+                    "---\n",
+                    "## review triggered by Modified strand.md\n",
+                    "Timestamp: 2026-06-05T11:00:00Z\n",
+                    "---\n",
+                    "Updated review content",
+                )
+                .to_string(),
+            );
+        }
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let ctx = captured.get_captured_ctx().expect("ctx should be captured");
+        // Should contain deletion notice
+        assert!(
+            ctx.prompt.contains("This file was deleted"),
+            "prompt should contain deletion notice",
+        );
+        // Should contain strand history
+        assert!(
+            ctx.prompt.contains("Previous processing history"),
+            "prompt should contain history header",
+        );
+        assert!(
+            ctx.prompt.contains("## review triggered by Created strand.md"),
+            "prompt should contain first entry header",
+        );
+        assert!(
+            ctx.prompt.contains("Initial review content"),
+            "prompt should contain first entry body",
+        );
+        assert!(
+            ctx.prompt.contains("## review triggered by Modified strand.md"),
+            "prompt should contain second entry header",
+        );
+        assert!(
+            ctx.prompt.contains("Updated review content"),
+            "prompt should contain second entry body",
+        );
+
+        // Verify no @file reference
+        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        assert!(
+            !has_at_ref,
+            "Deleted events must NOT contain @file reference",
+        );
+
+        // Verify tie-off was written
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+    }
+
+    /// Regression guard: Created events must still use `@{strand_path}`
+    /// in CLI args (unchanged behaviour).
+    #[test]
+    fn process_strand_created_still_uses_at_file() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _rig_events,
+            _content, captured) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let ctx = captured.get_captured_ctx().expect("ctx should be captured");
+        let has_at_ref = ctx.cli_args.iter().any(|arg| {
+            arg.starts_with('@') && arg.contains("strand.md")
+        });
+        assert!(
+            has_at_ref,
+            "Created events MUST contain @file reference in cli_args: {:?}",
+            ctx.cli_args,
+        );
+        // Prompt should NOT contain deletion notice for Created events
+        assert!(
+            !ctx.prompt.contains("This file was deleted"),
+            "Created events must NOT contain deletion notice",
+        );
+    }
+
+    /// When no previous tie-off entries exist for the strand, only the
+    /// deletion notice is injected (no history section).
+    #[test]
+    fn process_strand_deleted_no_history_injects_notice_only() {
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _rig_events,
+            tie_off_content, captured) =
+            build_process_strand(loom, runner);
+
+        // Tie-off content is empty (no previous entries)
+        {
+            let content = tie_off_content.lock().unwrap();
+            assert!(
+                content.is_empty(),
+                "tie-off content should be empty initially"
+            );
+        }
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let ctx = captured.get_captured_ctx().expect("ctx should be captured");
+        // Should contain deletion notice
+        assert!(
+            ctx.prompt.contains("This file was deleted"),
+            "prompt should contain deletion notice",
+        );
+        // Should NOT contain history section (no previous entries)
+        assert!(
+            !ctx.prompt.contains("Previous processing history"),
+            "prompt should NOT contain history section when no entries exist",
+        );
+        // Should NOT contain @file reference
+        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        assert!(
+            !has_at_ref,
+            "Deleted events must NOT contain @file reference",
+        );
     }
 }
 
