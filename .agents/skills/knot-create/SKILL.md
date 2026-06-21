@@ -103,7 +103,7 @@ first, then create knots that reference it.
    - `provider`: AI provider (e.g. `openai`, `anthropic`, or a pi
      provider name like `llama-workhorse`)
    - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
-   - `system_prompt`: The agent's system prompt/persona
+   - `profile_prompt`: The agent's system prompt/persona
    - `tools` (optional): List of tool names (e.g. `fs`, `web`)
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
@@ -120,7 +120,7 @@ first, then create knots that reference it.
    model: gpt-4o
    tools:
      - fs
-   system-prompt: |
+   profile-prompt: |
      You are a fast reviewer. Keep responses concise and direct.
    ---
 
@@ -140,7 +140,7 @@ first, then create knots that reference it.
    tools:
      - fs
    timeout: 600
-   system-prompt: |
+   profile-prompt: |
      You are a code generation agent. Take your time to be thorough.
    ---
 
@@ -170,7 +170,7 @@ When asked to modify a profile, edit the `.md` file directly:
    is preserved automatically when editing frontmatter.
 
 3. **Verify the change**: Read `rig/state.json` and confirm the profile
-   entry is present. Note: `system_prompt` and `timeout` are not in the
+   entry is present. Note: `profile_prompt` and `timeout` are not in the
    state file — verify by re-reading the profile file.
 
 4. **Report what changed**.
@@ -400,7 +400,7 @@ provider: openai
 model: gpt-4o
 tools:
   - fs
-system-prompt: |
+profile-prompt: |
   You are a fast reviewer. Keep responses concise and direct.
 ---
 
@@ -417,7 +417,7 @@ Lightweight profile for quick reviews.
 | `provider` | **Yes** | LLM provider (e.g. `openai`, `anthropic`) |
 | `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
-| `system-prompt` | **Yes** | The agent's system prompt/persona instructions |
+| `profile-prompt` | **Yes** | The agent's system prompt/persona instructions |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
 
 ### How Profiles Are Used at Processing Time
@@ -427,14 +427,14 @@ When a strand event triggers a knot:
 1. The knot's `agent-profile-ref` is used to load the profile from
    `rig/profiles/{name}.md` (read fresh from disk each time).
 2. The profile provides: `provider`, `model`, `tools`.
-3. The profile's `system-prompt` is merged with the knot's
+3. The profile's `profile-prompt` is merged with the knot's
    `prompt-template.instructions` to form the full system prompt:
    ```
-   {profile system-prompt}
+   {profile profile-prompt}
 
    {knot instructions}
    ```
-4. This merged prompt is passed as `--system-prompt` to the agent CLI.
+4. This merged prompt is delivered via stdin to the agent runner (not via `--system-prompt`).
 
 Edits to a profile file are picked up on the next strand event —
 no restart needed.
@@ -485,7 +485,7 @@ written atomically every 5 seconds.
 | `failed` | Processing failed with an error |
 
 > **Note:** The state file includes `name`, `provider`, and `model`
-> for profiles but not `tools`, `system_prompt`, or `timeout`.
+> for profiles but not `tools`, `profile_prompt`, or `timeout`.
 > To check those fields, read the profile file directly from
 > `rig/profiles/{name}.md`.
 
@@ -513,7 +513,7 @@ cat > rig/profiles/fast.md << 'EOF'
 name: fast
 provider: openai
 model: gpt-4o
-system-prompt: |
+profile-prompt: |
   You are a fast reviewer.
 ---
 # Fast Profile
