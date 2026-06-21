@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-20
+> **Last Updated:** 2026-06-22
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ⬜ Planned | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
 | 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
@@ -89,6 +90,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 41. Tie-Off Context Extraction for Agent Processing
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-22
+**Goal:** Parse tie-off files into per-strand sections, extract the last N entries for the specific strand, and inject scoped history into the agent prompt for deletion events (replacing the `@file` reference that fails on deleted files).
+
+**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
+
+Full details in [tie-off-context-extraction.md](tie-off-context-extraction.md).
 
 ### 40. Remove `input-bundling` from Prompt Template
 
