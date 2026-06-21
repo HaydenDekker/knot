@@ -557,3 +557,332 @@ fn pipeline_handles_agent_failure() {
 
     handle.abort();
 }
+
+// ── Deletion Context Integration Tests ───────────────────────────────────
+
+/// When a strand is deleted, the agent's prompt should contain a deletion
+/// notice and the previous processing history from the tie-off file.
+#[test]
+fn delete_event_agent_receives_context() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+
+    // Mock pi captures stdin to a file so we can inspect the prompt
+    let capture_file = tmp.path().join("agent_stdin.txt");
+    create_mock_pi_capturing_stdin(&rig_dir, "review output", &capture_file);
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    // Phase 1: Create a strand and wait for processing
+    let strand_path = create_strand(&rig_dir, "feature.md", "initial content");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Wait for debounce to settle before deletion
+    thread::sleep(Duration::from_secs(1));
+
+    // Phase 2: Delete the strand and wait for delete processing
+    fs::remove_file(&strand_path).unwrap();
+
+    // Wait for the delete event to be processed.
+    // After delete, the tie-off will have grown (another section appended).
+    let tie_off_path =
+        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let first_size =
+        fs::metadata(&tie_off_path).map(|m| m.len()).unwrap_or(0);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+        if let Ok(m) = fs::metadata(&tie_off_path) {
+            if m.len() > first_size {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    thread::sleep(Duration::from_millis(500));
+
+    // Read the captured stdin from the delete-processing run
+    let prompt = fs::read_to_string(&capture_file)
+        .unwrap_or_else(|_| panic!("capture file should exist at {}",
+            capture_file.display()));
+
+    // Verify deletion notice is present
+    assert!(
+        prompt.contains("This file was deleted"),
+        "prompt should contain deletion notice:\n{}",
+        prompt
+    );
+
+    // Verify previous processing history is included
+    assert!(
+        prompt.contains("Previous processing history"),
+        "prompt should contain previous processing history:\n{}",
+        prompt
+    );
+
+    // Verify the strand path appears in the history (full path or filename)
+    assert!(
+        prompt.contains("feature.md"),
+        "prompt should reference the strand path:\n{}",
+        prompt
+    );
+
+    // Verify a trigger line from previous processing appears
+    assert!(
+        prompt.contains("triggered by Created")
+            || prompt.contains("triggered by Modified"),
+        "prompt should contain a trigger entry from previous processing:\n{}",
+        prompt
+    );
+
+    handle.abort();
+}
+
+/// When a strand is deleted, the agent should execute successfully without
+/// errors about missing files (no `@file` reference for deleted events).
+#[test]
+fn delete_event_agent_skips_missing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+
+    // Mock pi that captures both stdin and stderr to detect file errors
+    let stderr_file = tmp.path().join("agent_stderr.txt");
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         # Stub pi - consumes stdin, echoes response, captures stderr\n\
+         cat > /dev/null\n\
+         echo \"review output\"\n\
+         exit 0\n"
+    );
+    fs::write(&pi_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+    let config = format!(
+        "cli_path: \"{}\"\n\
+         cli_args: []\n",
+        pi_path.display()
+    );
+    fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    // Create and process a strand
+    let strand_path = create_strand(&rig_dir, "feature.md", "content");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Delete the strand
+    thread::sleep(Duration::from_millis(500));
+    fs::remove_file(&strand_path).unwrap();
+
+    // Wait for delete processing — look for second KnotCompleted in loom-log
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut completed_count = 0;
+    loop {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+        let events = read_loom_log(&rig_dir, "review-loom");
+        for event in &events {
+            if let Some(ty) = loom_log_event_type(&event) {
+                if ty == "KnotCompleted" {
+                    completed_count += 1;
+                }
+            }
+        }
+        if completed_count >= 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    // Should have exactly 2 KnotCompleted events (create + delete)
+    assert!(
+        completed_count >= 2,
+        "should have 2 KnotCompleted events (create + delete), got {}",
+        completed_count
+    );
+
+    // Verify no KnotFailed event appeared (would indicate file-not-found error)
+    let events = read_loom_log(&rig_dir, "review-loom");
+    let failed_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            loom_log_event_type(e)
+                .map(|t| t == "KnotFailed")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        failed_events.is_empty(),
+        "should have no KnotFailed events (agent should not error on missing file)"
+    );
+
+    // Verify the stderr capture file was never written to (no errors)
+    assert!(
+        !stderr_file.exists(),
+        "stderr capture file should not exist (no errors from agent)"
+    );
+
+    handle.abort();
+}
+
+/// When a tie-off file has many entries for multiple strands, deleting one
+/// strand should only inject the last 5 entries for that strand (not all).
+#[test]
+fn delete_event_large_tieoff_bounded_context() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+
+    // Mock pi captures stdin to a file
+    let capture_file = tmp.path().join("agent_stdin.txt");
+    create_mock_pi_capturing_stdin(&rig_dir, "review output", &capture_file);
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    // Create target strand and wait for processing + debounce settle
+    let target_strand = create_strand(&rig_dir, "target.md", "v1");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    // Create other strands to add noise entries (interleaved)
+    let _other1 = create_strand(&rig_dir, "other1.md", "noise 1");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Modify target — each modification needs debounce settle time
+    fs::write(&target_strand, "v2").unwrap();
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    let _other2 = create_strand(&rig_dir, "other2.md", "noise 2");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    fs::write(&target_strand, "v3").unwrap();
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    let _other3 = create_strand(&rig_dir, "other3.md", "noise 3");
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    fs::write(&target_strand, "v4").unwrap();
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    fs::write(&target_strand, "v5").unwrap();
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    fs::write(&target_strand, "v6").unwrap();
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    thread::sleep(Duration::from_secs(1));
+
+    // At this point target.md should have 6+ entries in the tie-off
+    // and there are 3 other strands with entries too.
+
+    // Verify tie-off has many entries
+    let tie_off_path =
+        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off_before_delete = fs::read_to_string(&tie_off_path).unwrap();
+    let target_entries_before = tie_off_before_delete
+        .matches("target.md")
+        .count();
+    assert!(
+        target_entries_before >= 6,
+        "should have at least 6 entries for target.md before delete, got {}",
+        target_entries_before
+    );
+
+    // Delete target strand
+    fs::remove_file(&target_strand).unwrap();
+
+    // Wait for delete processing (tie-off grows)
+    let first_size =
+        fs::metadata(&tie_off_path).map(|m| m.len()).unwrap_or(0);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+        if let Ok(m) = fs::metadata(&tie_off_path) {
+            if m.len() > first_size {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    thread::sleep(Duration::from_millis(500));
+
+    // Read the captured stdin from the delete-processing run
+    let prompt = fs::read_to_string(&capture_file)
+        .unwrap_or_else(|_| panic!("capture file should exist at {}",
+            capture_file.display()));
+
+    // Count how many target.md references appear in the prompt
+    let target_refs_in_prompt = prompt.matches("target.md").count();
+
+    // The prompt contains:
+    // - "Strand: target.md" (strand label) — 1 ref
+    // - up to 5 history headers with the strand path — up to 5 refs
+    // - the trigger line at the bottom with the strand path — 1 ref
+    // So at most 1 + 5 + 1 = 7 references.
+    assert!(
+        target_refs_in_prompt <= 7,
+        "prompt should contain at most 7 references to target.md \
+         (strand label + last 5 history entries + trigger line), \
+         got {}. Prompt:\n{}",
+        target_refs_in_prompt,
+        prompt
+    );
+
+    // The prompt should NOT contain other strand names
+    assert!(
+        !prompt.contains("other1.md"),
+        "prompt should NOT contain other1.md (only target strand history):\n{}",
+        prompt
+    );
+    assert!(
+        !prompt.contains("other2.md"),
+        "prompt should NOT contain other2.md:\n{}",
+        prompt
+    );
+    assert!(
+        !prompt.contains("other3.md"),
+        "prompt should NOT contain other3.md:\n{}",
+        prompt
+    );
+
+    // Verify the deletion notice is present
+    assert!(
+        prompt.contains("This file was deleted"),
+        "prompt should contain deletion notice:\n{}",
+        prompt
+    );
+
+    handle.abort();
+}

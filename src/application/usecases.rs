@@ -909,14 +909,16 @@ impl ProcessStrand {
                 .tie_off_sink
                 .read_content(&tie_off_path)
                 .unwrap_or_default();
-            let strand_rel = strand_path.0
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
+            // Use the full path — the tie-off header stores the full path
+            // (from `strand_path.0.display().to_string()`), so the parser
+            // extracts the full path. Matching on just the filename would
+            // fail when the path is absolute.
+            let strand_path_str =
+                strand_path.0.to_string_lossy().to_string();
             let sections =
                 crate::domain::tieoff_parser::extract_last_n(
                     &tie_off_content,
-                    &strand_rel,
+                    &strand_path_str,
                     5,
                 );
             if sections.is_empty() {
@@ -5027,18 +5029,22 @@ mod phase6_timeout_tests {
             tie_off_content, captured) =
             build_process_strand(loom, runner);
 
-        // Pre-populate the tie-off sink with history for strand.md
+        // Pre-populate the tie-off sink with history.
+        // The tie-off header stores the strand path as written by the sink
+        // (from `strand_path.0.display().to_string()`), which matches the
+        // event's strand_path. The extract_last_n comparison uses the full
+        // path string, so the mock must use the same path format.
         {
             let mut content = tie_off_content.lock().unwrap();
             content.insert(
                 "/rig/tie-offs/test-loom/k1/k1-tie-off.md".to_string(),
                 concat!(
-                    "## review triggered by Created strand.md\n",
+                    "## review triggered by Created input/strand.md\n",
                     "Timestamp: 2026-06-05T10:00:00Z\n",
                     "---\n",
                     "Initial review content\n",
                     "---\n",
-                    "## review triggered by Modified strand.md\n",
+                    "## review triggered by Modified input/strand.md\n",
                     "Timestamp: 2026-06-05T11:00:00Z\n",
                     "---\n",
                     "Updated review content",
@@ -5068,7 +5074,7 @@ mod phase6_timeout_tests {
             "prompt should contain history header",
         );
         assert!(
-            ctx.prompt.contains("## review triggered by Created strand.md"),
+            ctx.prompt.contains("## review triggered by Created input/strand.md"),
             "prompt should contain first entry header",
         );
         assert!(
@@ -5076,7 +5082,7 @@ mod phase6_timeout_tests {
             "prompt should contain first entry body",
         );
         assert!(
-            ctx.prompt.contains("## review triggered by Modified strand.md"),
+            ctx.prompt.contains("## review triggered by Modified input/strand.md"),
             "prompt should contain second entry header",
         );
         assert!(

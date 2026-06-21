@@ -249,6 +249,58 @@ pub fn create_mock_pi(rig_dir: &Path, response: &str) -> PathBuf {
     pi_path
 }
 
+/// Create a workspace agent config pointing to a stub `pi` binary that
+/// captures stdin to a file for inspection.
+///
+/// Creates a stub `pi` script at `{rig_dir}/bin/pi` that writes all stdin
+/// content to the given capture path before echoing the response. This
+/// allows integration tests to verify what prompt the agent received.
+///
+/// # Arguments
+///
+/// * `rig_dir` - Path to the rig directory
+/// * `response` - The stdout output the stub should produce
+/// * `capture_path` - Path where stdin will be written for inspection
+///
+/// # Returns
+///
+/// Path to the created stub `pi` binary.
+pub fn create_mock_pi_capturing_stdin(
+    rig_dir: &Path,
+    response: &str,
+    capture_path: &Path,
+) -> PathBuf {
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    // Capture stdin to file, then echo response.
+    // Multiple invocations append so each agent run's prompt is preserved.
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         # Stub pi - captures stdin to file, echoes response\n\
+         cat > \"{capture_path}\"\n\
+         echo \"{response}\"\n\
+         exit 0\n",
+        capture_path = capture_path.display(),
+    );
+    fs::write(&pi_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+
+    let config = format!(
+        "cli_path: \"{}\"\n\
+         cli_args: []\n",
+        pi_path.display()
+    );
+    fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+
+    pi_path
+}
+
 // ── Git Repository Helpers ─────────────────────────────────────────────────
 
 /// Initialize a git repository in the given directory.
