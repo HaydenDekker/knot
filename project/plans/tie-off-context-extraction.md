@@ -24,7 +24,15 @@ A bounded context extraction mechanism that:
 
 When a strand is deleted, the agent receives: a deletion notice, the strand path, and the last 5 processing entries for that strand from the tie-off file. This gives the agent enough context to reason about downstream references without context overflow.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-22)
+
+## Notes
+- Phase 0: Created `src/domain/tieoff_parser.rs` with `TieOffSection`, `parse_sections()`, `extract_last_n()` + 9 unit tests
+- Phase 1: Integrated parser into `ProcessStrand::execute()` — Deleted events get scoped history (last 5 entries), deletion notice, `@file` skipped. 5 new unit tests
+- Phase 2: 3 e2e integration tests in `tests/pipeline.rs`. Fixed path-mismatch bug discovered during testing
+- Phase 3: Already covered by Phase 1's implementation — verified with existing tests
+- Full test suite passes (366 tests, 0 failures)
+- Version bumped to 0.16.0
 
 ## Existing Tests
 
