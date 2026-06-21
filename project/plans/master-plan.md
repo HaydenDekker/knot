@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ⬜ Planned | 2026-06-22 |
+| 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
 | 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
@@ -93,9 +93,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 41. Tie-Off Context Extraction for Agent Processing
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-22
+**Completed:** 2026-06-22
 **Goal:** Parse tie-off files into per-strand sections, extract the last N entries for the specific strand, and inject scoped history into the agent prompt for deletion events (replacing the `@file` reference that fails on deleted files).
+
+**Result:** `TieOffSection` struct + `parse_sections()` / `extract_last_n()` in `src/domain/tieoff_parser.rs` (line-by-line state machine parser, no regex). `ProcessStrand::execute()` integrates parser for Deleted events — skips `@file`, injects deletion notice + last 5 per-strand entries from tie-off. Created/Modified events unchanged. 9 unit tests in domain layer, 5 unit tests in application layer, 3 integration tests in `tests/pipeline.rs`. Path-mismatch bug fixed during Phase 2. 366 tests pass. Version bumped to 0.16.0.
 
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
