@@ -170,6 +170,9 @@ pub struct RigStateProfile {
     pub provider: String,
     /// The model name to use.
     pub model: String,
+    /// Session timeout in seconds. `None` means use the runner's default (300s).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -448,6 +451,7 @@ mod tests {
                 name: "fast".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
+                timeout: None,
             }],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         };
@@ -481,6 +485,7 @@ mod tests {
                 name: "fast".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
+                timeout: None,
             }],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         };
@@ -583,11 +588,13 @@ mod tests {
                     name: "fast".to_string(),
                     provider: "openai".to_string(),
                     model: "gpt-4o".to_string(),
+                    timeout: None,
                 },
                 RigStateProfile {
                     name: "detailed".to_string(),
                     provider: "anthropic".to_string(),
                     model: "claude-sonnet".to_string(),
+                    timeout: Some(600),
                 },
             ],
             updated_at: "2026-06-18T12:00:00Z".to_string(),

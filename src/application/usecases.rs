@@ -6765,6 +6765,7 @@ impl WriteState {
                 name: p.name,
                 provider: p.provider,
                 model: p.model,
+                timeout: p.timeout,
             })
             .collect();
 

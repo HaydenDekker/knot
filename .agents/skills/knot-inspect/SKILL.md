@@ -73,7 +73,8 @@ knot) based on user requests.
     {
       "name": "fast",
       "provider": "openai",
-      "model": "gpt-4o"
+      "model": "gpt-4o",
+      "timeout": 600
     }
   ],
   "updated_at": "2026-06-18T12:00:00Z"
@@ -108,9 +109,9 @@ When asked to show rig status:
 4. **List profiles**: Extract the `profiles` array from state.
    Present a summary table:
 
-   | Profile | Provider | Model |
-   |---------|----------|-------|
-   | `fast` | `openai` | `gpt-4o` |
+   | Profile | Provider | Model | Timeout |
+   |---------|----------|---------|---------|
+   | `fast` | `openai` | `gpt-4o` | `300` |
 
 5. **If no looms**: Report "No looms are registered. Use the
    `knot-create` skill to create looms."
@@ -176,17 +177,18 @@ When asked to list or view agent profiles:
 
 1. **List all profiles**: Read `rig/state.json` and extract the
    `profiles` array.
-   Present a summary table with: Name, Provider, Model.
+   Present a summary table with: Name, Provider, Model, Timeout
+   (show "default" for null/missing values).
 
 2. **View a specific profile**: Find the profile by name in state.
    - If not found: Report "Profile `{name}` not found. Check
      `rig/state.json` to see available profiles."
-   - Show: name, provider, model.
-   - The state file does not include `timeout` or `system_prompt`.
-     If the user asks about these, read the file directly from
+   - Show: name, provider, model, timeout.
+   - The state file includes `timeout` (in seconds). A missing or
+     null value means the runner default of 300 seconds (5 minutes).
+   - The state file does not include `profile_prompt`. If the user
+     asks about it, read the file directly from
      `rig/profiles/{name}.md` and check the YAML frontmatter.
-     Timeout is in seconds; omitted means the runner default of
-     300 seconds (5 minutes) is used.
 
 ---
 

@@ -104,7 +104,7 @@ first, then create knots that reference it.
      provider name like `llama-workhorse`)
    - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
    - `profile_prompt`: The agent's system prompt/persona
-   - `tools` (optional): List of tool names (e.g. `fs`, `web`)
+   - `tools` (optional): List of pi tool names (e.g. `read`, `write`, `edit`, `bash`)
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
 
@@ -119,7 +119,10 @@ first, then create knots that reference it.
    provider: openai
    model: gpt-4o
    tools:
-     - fs
+     - read
+     - grep
+     - find
+     - ls
    profile-prompt: |
      You are a fast reviewer. Keep responses concise and direct.
    ---
@@ -138,7 +141,10 @@ first, then create knots that reference it.
    provider: openai
    model: gpt-4o
    tools:
-     - fs
+     - read
+     - write
+     - edit
+     - bash
    timeout: 600
    profile-prompt: |
      You are a code generation agent. Take your time to be thorough.
@@ -170,8 +176,9 @@ When asked to modify a profile, edit the `.md` file directly:
    is preserved automatically when editing frontmatter.
 
 3. **Verify the change**: Read `rig/state.json` and confirm the profile
-   entry is present. Note: `profile_prompt` and `timeout` are not in the
-   state file — verify by re-reading the profile file.
+   entry is present. Note: `profile_prompt` is not in the state file —
+   verify by re-reading the profile file. `timeout` is included in
+   state.
 
 4. **Report what changed**.
 
@@ -195,7 +202,8 @@ When asked to delete a profile:
 When asked to show all profiles:
 
 1. Read `rig/state.json` and extract the `profiles` array.
-2. Present a summary table with: Name, Provider, Model.
+2. Present a summary table with: Name, Provider, Model, Timeout (show
+   "default" for null/missing values).
 
 ---
 
@@ -399,7 +407,10 @@ name: fast
 provider: openai
 model: gpt-4o
 tools:
-  - fs
+  - read
+  - grep
+  - find
+  - ls
 profile-prompt: |
   You are a fast reviewer. Keep responses concise and direct.
 ---
@@ -416,7 +427,7 @@ Lightweight profile for quick reviews.
 | `name` | **Yes** | Profile identifier (becomes the filename stem) |
 | `provider` | **Yes** | LLM provider (e.g. `openai`, `anthropic`) |
 | `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
-| `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty. |
+| `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
 | `profile-prompt` | **Yes** | The agent's system prompt/persona instructions |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
 
@@ -468,7 +479,8 @@ written atomically every 5 seconds.
     {
       "name": "fast",
       "provider": "openai",
-      "model": "gpt-4o"
+      "model": "gpt-4o",
+      "timeout": 600
     }
   ],
   "updated_at": "2026-06-18T12:00:00Z"
@@ -484,8 +496,8 @@ written atomically every 5 seconds.
 | `completed` | Processing finished successfully |
 | `failed` | Processing failed with an error |
 
-> **Note:** The state file includes `name`, `provider`, and `model`
-> for profiles but not `tools`, `profile_prompt`, or `timeout`.
+> **Note:** The state file includes `name`, `provider`, `model`, and
+> `timeout` for profiles but not `tools` or `profile_prompt`.
 > To check those fields, read the profile file directly from
 > `rig/profiles/{name}.md`.
 

@@ -131,6 +131,7 @@ mod tests {
                 name: "fast".to_string(),
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
+                timeout: None,
             }],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         }
@@ -308,6 +309,7 @@ mod tests {
                         name: format!("profile-{i}"),
                         provider: "openai".to_string(),
                         model: "gpt-4o".to_string(),
+                        timeout: None,
                     }],
                     updated_at: format!("2026-06-18T00:00:0{i}Z"),
                 };
