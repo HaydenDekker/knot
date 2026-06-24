@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 43 | [Simplify Prompts — Move Prompt Text to Markdown Body](simplify-prompt-in-body.md) | ⬜ Planned | 2026-06-24 |
 | 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ✅ Complete | 2026-06-24 |
 | 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
@@ -91,6 +92,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 43. Simplify Prompts — Move Prompt Text to Markdown Body
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-24
+**Goal:** Remove `profile-prompt` and `prompt-template.instructions` from YAML frontmatter; use the markdown body as the prompt text directly.
+
+Full details in [simplify-prompt-in-body.md](simplify-prompt-in-body.md).
 
 ### 42. Strand Missing File Handling
 
