@@ -287,27 +287,18 @@ mod tests {
 name: review-knot
 agent-profile-ref: fast
 strand-dir: \"../external-source\"
-prompt-template:
-  instructions: |
-    Review the goals section of this PRD.
 ---
 
-# Review Knot
-
-This knot reviews PRD goals.
+Review the goals section of this PRD.
 ";
 
     const KNOT_WITH_DIRS_CONTENT: &str = "---
 name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: \"../external-source\"
-prompt-template:
-  instructions: \"Review with custom dirs\"
 ---
 
-# Custom Dirs Knot
-
-This knot has custom source and tie-off directories.
+Review with custom dirs
 ";
 
     /// Write a knot definition file with the given name and content.
@@ -690,11 +681,9 @@ broken: yaml: [
 name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: "external-source"
-prompt-template:
-  instructions: "Review with custom dirs"
 ---
 
-Body.
+Review with custom dirs
 "#;
         create_knot_file(&loom_dir, "custom-knot", knot_content).unwrap();
 
@@ -739,18 +728,14 @@ Body.
 
         // Knot A with its own source dir.
         let knot_a_content = format!(
-            "---\nname: knot-a\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
-             instructions: \"Review \
-             A\"\n---\n",
+            "---\nname: knot-a\nagent-profile-ref: fast\nstrand-dir: \"{}\"\n---\n\nReview A\n",
             source_a.display(),
         );
         create_knot_file(&loom_dir, "knot-a", &knot_a_content).unwrap();
 
         // Knot B with its own source dir.
         let knot_b_content = format!(
-            "---\nname: knot-b\nagent-profile-ref: fast\nstrand-dir: \"{}\"\nprompt-template:\n  \
-             instructions: \"Review \
-             B\"\n---\n",
+            "---\nname: knot-b\nagent-profile-ref: fast\nstrand-dir: \"{}\"\n---\n\nReview B\n",
             source_b.display(),
         );
         create_knot_file(&loom_dir, "knot-b", &knot_b_content).unwrap();
@@ -934,11 +919,9 @@ Body.
         let no_strand_content = "---
 name: no-strand-knot
 agent-profile-ref: fast
-prompt-template:
-  instructions: \"Review\"
 ---
 
-Body.
+Review
 ";
         create_knot_file(&loom_dir, "no-strand", no_strand_content).unwrap();
 
@@ -947,11 +930,9 @@ Body.
 name: no-tieoff-knot
 agent-profile-ref: fast
 strand-dir: \"../input\"
-prompt-template:
-  instructions: \"Review\"
 ---
 
-Body.
+Review
 ";
         create_knot_file(&loom_dir, "no-tieoff", no_tieoff_content).unwrap();
 
@@ -1031,11 +1012,9 @@ name: legacy-knot
 agent-profile-ref: fast
 strand-dir: "strands"
 tie-off-dir: "old-output"
-prompt-template:
-  instructions: "Review"
 ---
 
-Body.
+Review
 "#;
         create_knot_file(&loom_dir, "legacy", knot_with_unknown).unwrap();
 

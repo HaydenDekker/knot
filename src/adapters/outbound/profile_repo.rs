@@ -157,24 +157,21 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
 
         let path = self.profile_path(&profile.name);
 
-        // Extract existing markdown body if the file already exists.
-        let preserved_body = if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(content) => extract_body(&content),
-                Err(e) => {
-                    return Err(PortError::ProfileSaveFailed(format!(
-                        "failed to read existing profile {}: {}",
-                        path.display(),
-                        e
-                    )));
-                }
-            }
-        } else {
-            None
-        };
-
-        // Serialize the profile to YAML frontmatter.
-        let yaml = serde_yaml::to_string(&profile).map_err(|e| {
+        // Serialize to YAML frontmatter (without profile-prompt).
+        // The prompt is written in the body (new format).
+        let mut map = serde_yaml::Mapping::new();
+        map.insert("name".into(), profile.name.clone().into());
+        map.insert("provider".into(), profile.provider.clone().into());
+        map.insert("model".into(), profile.model.clone().into());
+        if !profile.tools.is_empty() {
+            map.insert("tools".into(),
+                serde_yaml::to_value(&profile.tools)
+                    .map_err(|e| PortError::ProfileSaveFailed(e.to_string()))?);
+        }
+        if let Some(t) = profile.timeout {
+            map.insert("timeout".into(), t.into());
+        }
+        let yaml = serde_yaml::to_string(&map).map_err(|e| {
             PortError::ProfileSaveFailed(format!(
                 "failed to serialize profile {}: {}",
                 profile.name,
@@ -182,25 +179,17 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
             ))
         })?;
 
-        // Build content: frontmatter + preserved body (or default heading).
-        let content = if let Some(body) = preserved_body {
-            format!("---\n{yaml}---\n\n{body}\n")
-        } else {
-            format!(
-                "---\n{yaml}---\n\n# {}\n\n{}\n",
-                profile.name, profile.profile_prompt
-            )
-        };
+        // Body contains the profile prompt (new format).
+        let content = format!("---\n{yaml}---\n\n{}\n", profile.profile_prompt);
 
         fs::write(&path, content).map_err(|e| {
             PortError::ProfileSaveFailed(format!(
                 "failed to write profile {}: {}",
-                path.display(),
+                profile.name,
                 e
             ))
         })
     }
-
     fn delete(&self, name: &str) -> Result<(), PortError> {
         let path = self.profile_path(name);
 
@@ -239,7 +228,7 @@ mod tests {
     ) {
         let content = if tools.is_empty() {
             format!(
-                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\nprofile-prompt: |\n  {profile_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
+                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n---\n\n{profile_prompt}\n"
             )
         } else {
             let tools_yaml: String = tools
@@ -248,7 +237,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\ntools:\n{tools_yaml}\nprofile-prompt: |\n  {profile_prompt}\n---\n\n# {name}\n\nProfile {name}.\n"
+                "---\nname: {name}\nprovider: {provider}\nmodel: {model}\ntools:\n{tools_yaml}\n---\n\n{profile_prompt}\n"
             )
         };
         fs::write(dir.join(format!("{name}.md")), content).unwrap();
@@ -418,7 +407,7 @@ mod tests {
         // Create a malformed profile (no name).
         fs::write(
             profiles_dir.join("bad.md"),
-            "---\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: Review.\n---\n\nBad.\n",
+            "---\nprovider: openai\nmodel: gpt-4o\n---\n\nReview.\n",
         )
         .unwrap();
 
@@ -503,16 +492,16 @@ mod tests {
     }
 
     #[test]
-    fn save_overwrite_preserves_body() {
+    fn save_overwrite_replaces_body() {
         let tmp = tempfile::tempdir().unwrap();
         let profiles_dir = tmp.path().join("profiles");
         fs::create_dir(&profiles_dir).unwrap();
 
-        // Create initial profile with custom body.
-        let repo = FileSystemAgentProfileRepository::new(profiles_dir.clone());
-
-        let initial_content = "---\nname: shared\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |\n  Original prompt.\n---\n\n# Shared Profile\n\nThis is custom documentation that should be preserved across saves.\n";
+        // Create initial profile with body as prompt (new format).
+        let initial_content = "---\nname: shared\nprovider: openai\nmodel: gpt-4o\n---\n\nOriginal prompt.\n";
         fs::write(profiles_dir.join("shared.md"), initial_content).unwrap();
+
+        let repo = FileSystemAgentProfileRepository::new(profiles_dir.clone());
 
         // Overwrite with new profile (different provider/model).
         let profile2 = AgentProfile::new(
@@ -524,16 +513,21 @@ mod tests {
         .unwrap();
         repo.save(profile2).unwrap();
 
-        // Read raw file content and verify body is preserved.
+        // Body (prompt) should be replaced with new prompt.
         let file_content = fs::read_to_string(profiles_dir.join("shared.md")).unwrap();
         assert!(
-            file_content.contains("This is custom documentation that should be preserved"),
-            "body should be preserved after overwrite"
+            file_content.contains("New prompt."),
+            "body should contain new prompt after overwrite"
+        );
+        assert!(
+            !file_content.contains("Original prompt"),
+            "old prompt should be gone after overwrite"
         );
         // Verify the data changed.
         let loaded = repo.get("shared").unwrap().unwrap();
         assert_eq!(loaded.provider, "anthropic");
         assert_eq!(loaded.model, "claude-sonnet");
+        assert_eq!(loaded.profile_prompt, "New prompt.");
     }
 
     #[test]

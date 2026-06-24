@@ -23,6 +23,9 @@ pub enum KnotFileError {
     InvalidFormat,
     /// The `agent-profile-ref` field is missing.
     MissingProfileRef,
+    /// No markdown body content after the closing `---` delimiter.
+    /// The body is required and contains the knot instructions.
+    MissingBody,
 }
 
 impl std::fmt::Display for KnotFileError {
@@ -32,7 +35,7 @@ impl std::fmt::Display for KnotFileError {
                 write!(f, "knot file is missing 'name' field")
             }
             KnotFileError::MissingPromptTemplate => {
-                write!(f, "knot file is missing 'prompt-template' section")
+                write!(f, "knot file is missing prompt instructions (must be in markdown body after frontmatter)")
             }
             KnotFileError::MissingStrandDir => {
                 write!(f, "knot file is missing 'strand-dir' field")
@@ -42,6 +45,9 @@ impl std::fmt::Display for KnotFileError {
             }
             KnotFileError::MissingProfileRef => {
                 write!(f, "knot file must have 'agent-profile-ref'")
+            }
+            KnotFileError::MissingBody => {
+                write!(f, "knot file has no body content (prompt instructions must be in the markdown body after the closing frontmatter delimiter)")
             }
         }
     }
@@ -75,8 +81,6 @@ struct RawFrontmatter {
     name: Option<String>,
     #[serde(rename = "agent-profile-ref")]
     agent_profile_ref: Option<String>,
-    #[serde(rename = "prompt-template")]
-    prompt_template: Option<RawPromptTemplate>,
     #[serde(rename = "strand-dir")]
     strand_dir: Option<String>,
     #[serde(rename = "git-versioned")]
@@ -87,17 +91,13 @@ struct RawFrontmatter {
     extra: HashMap<String, serde_yaml::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawPromptTemplate {
-    instructions: Option<String>,
-}
-
 /// Parse a knot definition file from its string content.
 ///
 /// Extracts and validates the YAML frontmatter. The body (markdown after the
-/// closing `---`) is not parsed — it is documentation only.
+/// closing `---`) contains the knot instructions.
 ///
-/// Required fields: `name`, `agent-profile-ref`, `prompt-template`, `strand-dir`.
+/// Required frontmatter fields: `name`, `agent-profile-ref`, `strand-dir`.
+/// Body (after closing `---`) must contain non-empty instruction text.
 ///
 /// Returns a tuple of `(KnotFile, Vec<String>)` where the second element
 /// contains warning messages for each unknown YAML property found in the
@@ -105,8 +105,7 @@ struct RawPromptTemplate {
 pub fn parse(
     content: &str,
 ) -> Result<(KnotFile, Vec<String>), KnotFileError> {
-    // Split on frontmatter delimiters
-    let yaml_text = extract_frontmatter(content)?;
+    let (yaml_text, body) = extract_frontmatter_and_body(content)?;
     let raw: RawFrontmatter =
         serde_yaml::from_str(&yaml_text).map_err(|_| KnotFileError::InvalidFormat)?;
 
@@ -129,15 +128,12 @@ pub fn parse(
         .filter(|r| !r.trim().is_empty())
         .ok_or(KnotFileError::MissingProfileRef)?;
 
-    // Validate prompt-template
-    let raw_template = raw
-        .prompt_template
-        .ok_or(KnotFileError::MissingPromptTemplate)?;
-
-    let instructions = raw_template
-        .instructions
-        .filter(|ins| !ins.trim().is_empty())
-        .ok_or(KnotFileError::MissingPromptTemplate)?;
+    // Body (instructions) is required — must have content after closing ---
+    let instructions = body.ok_or(KnotFileError::MissingBody)?;
+    let trimmed = instructions.trim();
+    if trimmed.is_empty() {
+        return Err(KnotFileError::MissingPromptTemplate);
+    }
 
     let prompt_template = PromptTemplate::new(instructions)
         .map_err(|_| KnotFileError::MissingPromptTemplate)?;
@@ -188,8 +184,14 @@ pub fn derive_loom_log_path(
     rig.join("tie-offs").join(loom_id).join(".loom-log")
 }
 
-/// Extract the YAML portion between the first pair of `---` delimiters.
-fn extract_frontmatter(content: &str) -> Result<String, KnotFileError> {
+/// Extract the YAML frontmatter and optional body from a markdown file.
+///
+/// Returns a tuple of `(yaml_text, body)` where `yaml_text` is the content
+/// between the opening and closing `---` delimiters, and `body` is the
+/// trimmed content after the closing `---` (or `None` if empty/absent).
+fn extract_frontmatter_and_body(
+    content: &str,
+) -> Result<(String, Option<String>), KnotFileError> {
     let trimmed = content.trim();
     if !trimmed.starts_with("---") {
         return Err(KnotFileError::InvalidFormat);
@@ -201,7 +203,17 @@ fn extract_frontmatter(content: &str) -> Result<String, KnotFileError> {
         .find("---")
         .ok_or(KnotFileError::InvalidFormat)?;
 
-    Ok(rest[..closing_pos].trim().to_string())
+    let yaml_text = rest[..closing_pos].trim().to_string();
+
+    // Extract body content after the closing `---`
+    let after_closing = rest[closing_pos + 3..].trim();
+    let body = if after_closing.is_empty() {
+        None
+    } else {
+        Some(after_closing.to_string())
+    };
+
+    Ok((yaml_text, body))
 }
 
 // ── Agent Profile Parsing ──────────────────────────────────────────────────
@@ -212,8 +224,6 @@ struct RawProfileFrontmatter {
     name: Option<String>,
     provider: Option<String>,
     model: Option<String>,
-    #[serde(rename = "profile-prompt")]
-    profile_prompt: Option<String>,
     #[serde(default)]
     tools: Option<Vec<String>>,
     #[serde(default)]
@@ -223,16 +233,17 @@ struct RawProfileFrontmatter {
 /// Parse an agent profile file from its string content.
 ///
 /// Extracts and validates the YAML frontmatter. The body (markdown after the
-/// closing `---`) is not parsed — it is documentation only.
+/// closing `---`) contains the profile prompt.
 ///
-/// Required fields: `name`, `provider`, `model`, `profile-prompt`.
-/// Optional field: `tools`.
+/// Required frontmatter fields: `name`, `provider`, `model`.
+/// Body (after closing `---`) must contain non-empty prompt text.
+/// Optional frontmatter fields: `tools`, `timeout`.
 pub fn parse_agent_profile(
     content: &str,
 ) -> Result<AgentProfile, AgentProfileError> {
     // Use shared frontmatter extraction (same logic as KnotFile::parse).
-    let yaml_text =
-        extract_frontmatter(content).map_err(|_| AgentProfileError::InvalidFormat)?;
+    let (yaml_text, body) = extract_frontmatter_and_body(content)
+        .map_err(|_| AgentProfileError::InvalidFormat)?;
     let raw: RawProfileFrontmatter = serde_yaml::from_str(&yaml_text).map_err(|_| {
         AgentProfileError::InvalidFormat
     })?;
@@ -255,10 +266,9 @@ pub fn parse_agent_profile(
         .filter(|m| !m.trim().is_empty())
         .ok_or(AgentProfileError::EmptyModel)?;
 
-    // Validate profile-prompt
-    let profile_prompt = raw
-        .profile_prompt
-        .filter(|s| !s.trim().is_empty())
+    // Body is the profile prompt — required and non-empty
+    let profile_prompt = body
+        .filter(|b| !b.trim().is_empty())
         .ok_or(AgentProfileError::MissingProfilePrompt)?;
 
     // Build profile with optional tools and timeout
@@ -285,16 +295,11 @@ mod tests {
 name: prd-goals-review
 agent-profile-ref: fast
 strand-dir: \"strands\"
-prompt-template:
-  instructions: |
-    Review the goals section of this PRD. Check that:
-    - Each goal is specific and measurable
-    - Goals align with the problem statement
 ---
 
-# PRD Goals Review Knot
-
-This knot reviews the goals section of PRD documents.
+Review the goals section of this PRD. Check that:
+- Each goal is specific and measurable
+- Goals align with the problem statement
 ";
 
     #[test]
@@ -316,11 +321,9 @@ This knot reviews the goals section of PRD documents.
 name: custom-dirs-knot
 agent-profile-ref: fast
 strand-dir: \"../custom-source\"
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let (file, warnings) = parse(content).unwrap();
@@ -340,11 +343,9 @@ Body.
         let content = "---
 name: no-strand-dir-knot
 agent-profile-ref: fast
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let result = parse(content);
@@ -361,11 +362,9 @@ name: legacy-knot
 agent-profile-ref: fast
 strand-dir: \"../input\"
 tie-off-dir: \"../old-output\"
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let (file, warnings) = parse(content).unwrap();
@@ -384,11 +383,9 @@ agent-profile-ref: fast
 strand-dir: \"strands\"
 foo: bar
 baz: 42
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let (file, warnings) = parse(content).unwrap();
@@ -411,11 +408,9 @@ Body.
 name: clean-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let (file, warnings) = parse(content).unwrap();
@@ -432,11 +427,9 @@ Body.
 name: empty-strand-knot
 agent-profile-ref: fast
 strand-dir: \"  \"
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-Body.
+Review the document
 ";
 
         let result = parse(content);
@@ -452,7 +445,7 @@ Body.
         );
         assert_eq!(
             KnotFileError::MissingPromptTemplate.to_string(),
-            "knot file is missing 'prompt-template' section"
+            "knot file is missing prompt instructions (must be in markdown body after frontmatter)"
         );
         assert_eq!(
             KnotFileError::MissingStrandDir.to_string(),
@@ -465,6 +458,10 @@ Body.
         assert_eq!(
             KnotFileError::MissingProfileRef.to_string(),
             "knot file must have 'agent-profile-ref'"
+        );
+        assert!(
+            KnotFileError::MissingBody.to_string()
+                .contains("no body content")
         );
     }
 
@@ -504,11 +501,9 @@ Body.
         let content = r#"---
 name: no-ref-knot
 strand-dir: "strands"
-prompt-template:
-  instructions: "Do something"
 ---
 
-Body.
+Do something
 "#;
 
         let result = parse(content);
@@ -525,11 +520,9 @@ Body.
 name: empty-ref-knot
 agent-profile-ref: "  "
 strand-dir: "strands"
-prompt-template:
-  instructions: "Do something"
 ---
 
-Body.
+Do something
 "#;
 
         let result = parse(content);
@@ -559,7 +552,7 @@ Body.
     #[test]
     fn roundtrip_generate_and_parse() {
         // generate_knot_file produces content that KnotFile::parse can read
-        let content = "---\nname: roundtrip-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  instructions: \"Process this\"\n---\n\n# roundtrip-knot\n\nRoundtrip test.\n";
+        let content = "---\nname: roundtrip-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\n---\n\nProcess this\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -575,7 +568,7 @@ Body.
 
     #[test]
     fn knot_file_with_git_versioned_true() {
-        let content = "---\nname: git-on-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: true\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: git-on-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: true\n---\n\nDo it\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -587,7 +580,7 @@ Body.
 
     #[test]
     fn knot_file_with_git_versioned_false() {
-        let content = "---\nname: git-off-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: git-off-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\n---\n\nDo it\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -599,7 +592,7 @@ Body.
 
     #[test]
     fn knot_file_without_git_versioned_defaults_true() {
-        let content = "---\nname: default-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: default-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\n---\n\nDo it\n";
         let (file, warnings) = parse(content).unwrap();
         assert!(
             warnings.is_empty(),
@@ -616,7 +609,7 @@ Body.
     fn knot_file_roundtrip_with_git_versioned() {
         // Parse a knot file with git-versioned: false, then serialize and
         // parse again to verify the value survives round-trip.
-        let content = "---\nname: roundtrip-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\nprompt-template:\n  instructions: \"Do it\"\n---\n\nBody.\n";
+        let content = "---\nname: roundtrip-git-knot\nagent-profile-ref: fast\nstrand-dir: \"strands\"\ngit-versioned: false\n---\n\nDo it\n";
         let (file, _warnings) = parse(content).unwrap();
         assert!(!file.git_versioned);
 
@@ -627,6 +620,63 @@ Body.
         assert!(!deserialized.git_versioned);
     }
 
+    // ── Body Extraction Tests ──────────────────────────────────────────────
+
+    #[test]
+    fn knot_missing_body_returns_error() {
+        let content = "---
+name: no-body-knot
+agent-profile-ref: fast
+strand-dir: \"strands\"
+---
+";
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::MissingBody);
+    }
+
+    #[test]
+    fn knot_whitespace_only_body_returns_error() {
+        let content = "---
+name: whitespace-body-knot
+agent-profile-ref: fast
+strand-dir: \"strands\"
+---
+
+   \n\n  
+";
+        let result = parse(content);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KnotFileError::MissingBody);
+    }
+
+    #[test]
+    fn knot_body_with_embedded_delimiter() {
+        // Body content that contains `---` should not break parsing.
+        // The first `---` after the opening `---` is the frontmatter
+        // closer; everything after it is body content.
+        let content = "---
+name: embedded-delimiter
+agent-profile-ref: fast
+strand-dir: \"strands\"
+---
+
+Review the document.
+
+---
+
+This section is also part of the instructions.
+";
+        let (file, _warnings) = parse(content).unwrap();
+        assert_eq!(file.name, "embedded-delimiter");
+        assert!(file.prompt_template.instructions.contains("Review the document"));
+        assert!(
+            file.prompt_template
+                .instructions
+                .contains("This section is also part")
+        );
+    }
+
     // ── Agent Profile Parsing Tests ──────────────────────────────────────────
 
     const VALID_PROFILE: &str = "---
@@ -635,13 +685,9 @@ provider: openai
 model: gpt-4o
 tools:
   - fs
-profile-prompt: |
-  You are a fast reviewer. Keep responses concise and direct.
 ---
 
-# Fast Profile
-
-Lightweight profile for quick reviews.
+You are a fast reviewer. Keep responses concise and direct.
 ";
 
     #[test]
@@ -663,10 +709,9 @@ Lightweight profile for quick reviews.
 name: minimal
 provider: anthropic
 model: claude-sonnet-4-20250514
-profile-prompt: Review the document.
 ---
 
-Body.
+Review the document.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.name, "minimal");
@@ -682,13 +727,11 @@ Body.
 name: detailed
 provider: openai
 model: gpt-4o
-profile-prompt: |
-  You are a detailed reviewer.
-
-  Keep responses thorough.
 ---
 
-Body.
+You are a detailed reviewer.
+
+Keep responses thorough.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert!(profile.profile_prompt.contains("detailed reviewer"));
@@ -700,10 +743,9 @@ Body.
         let content = "---
 provider: openai
 model: gpt-4o
-profile-prompt: Review.
 ---
 
-Body.
+Review.
 ";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
@@ -712,7 +754,7 @@ Body.
 
     #[test]
     fn parse_profile_empty_name() {
-        let content = "---\nname: \nprovider: openai\nmodel: gpt-4o\nprofile-prompt: Review.\n---\n\nBody.\n";
+        let content = "---\nname: \nprovider: openai\nmodel: gpt-4o\n---\n\nReview.\n";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
@@ -723,10 +765,9 @@ Body.
         let content = "---
 name: test
 model: gpt-4o
-profile-prompt: Review.
 ---
 
-Body.
+Review.
 ";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
@@ -738,10 +779,9 @@ Body.
         let content = "---
 name: test
 provider: openai
-profile-prompt: Review.
 ---
 
-Body.
+Review.
 ";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
@@ -755,8 +795,6 @@ name: test
 provider: openai
 model: gpt-4o
 ---
-
-Body.
 ";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
@@ -768,7 +806,7 @@ Body.
 
     #[test]
     fn parse_profile_empty_profile_prompt() {
-        let content = "---\nname: test\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: \n---\n\nBody.\n";
+        let content = "---\nname: test\nprovider: openai\nmodel: gpt-4o\n---\n\n   \n";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
         assert_eq!(
@@ -779,7 +817,7 @@ Body.
 
     #[test]
     fn parse_profile_whitespace_fields() {
-        let content = "---\nname:    \nprovider:    \nmodel:    \nprofile-prompt:      \n---\n\nBody.\n".to_string();
+        let content = "---\nname:    \nprovider:    \nmodel:    \n---\n\n   \n".to_string();
         let result = parse_agent_profile(&content);
         assert!(result.is_err());
         // name is checked first
@@ -811,10 +849,9 @@ name: test
   broken: yaml: [
 provider: openai
 model: gpt-4o
-profile-prompt: Review.
 ---
 
-Body.
+Review.
 ";
         let result = parse_agent_profile(content);
         assert!(result.is_err());
@@ -854,10 +891,9 @@ tools:
   - fs
   - web
   - sql
-profile-prompt: Full stack review.
 ---
 
-Body.
+Full stack review.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.tools, vec!["fs", "web", "sql"]);
@@ -870,10 +906,9 @@ name: slow-model
 provider: anthropic
 model: claude-sonnet-4-20250514
 timeout: 600
-profile-prompt: Thorough review with long timeout.
 ---
 
-Body.
+Thorough review with long timeout.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.name, "slow-model");
@@ -886,10 +921,9 @@ Body.
 name: fast
 provider: openai
 model: gpt-4o
-profile-prompt: Quick review.
 ---
 
-Body.
+Quick review.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.timeout, None);
@@ -905,10 +939,9 @@ tools:
   - fs
   - web
 timeout: 300
-profile-prompt: Full review with timeout.
 ---
 
-Body.
+Full review with timeout.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.timeout, Some(300));
