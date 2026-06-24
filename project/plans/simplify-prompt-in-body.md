@@ -159,9 +159,9 @@ These use `KnotFile::parse()` so they get the new format automatically, but thei
 
 Integration tests create real `.md` files and verify end-to-end processing. All knot file and profile file fixtures need updating.
 
-- [ ] Audit all integration test files under `tests/` for knot/profile file fixtures
-- [ ] Update fixtures: move prompt text from frontmatter to body
-- [ ] Run full integration test suite
+- [x] Audit all integration test files under `tests/` for knot/profile file fixtures
+- [x] Update fixtures: move prompt text from frontmatter to body
+- [x] Run full integration test suite
 
 ### Phase 6: Update Skills and Documentation
 
