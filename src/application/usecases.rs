@@ -4181,25 +4181,6 @@ mod phase3_profile_resolution_tests {
                 .cloned()
                 .collect())
         }
-
-        fn save(
-            &self,
-            profile: AgentProfile,
-        ) -> Result<(), PortError> {
-            self.profiles
-                .lock()
-                .unwrap()
-                .insert(profile.name.clone(), profile);
-            Ok(())
-        }
-
-        fn delete(&self, name: &str) -> Result<(), PortError> {
-            let mut map = self.profiles.lock().unwrap();
-            if map.remove(name).is_none() {
-                return Err(PortError::ProfileNotFound(name.to_string()));
-            }
-            Ok(())
-        }
     }
 
     // ── Mock GitVersioningPort ───────────────────────────────────────
@@ -4420,7 +4401,11 @@ mod phase3_profile_resolution_tests {
             "You are new.".to_string(),
         )
         .unwrap();
-        profile_repo.save(profile).unwrap();
+        profile_repo
+            .profiles
+            .lock()
+            .unwrap()
+            .insert("new-profile".to_string(), profile);
 
         // Now the same knot should resolve successfully
         let (config, profile_timeout) =
@@ -4678,25 +4663,6 @@ mod phase6_timeout_tests {
                 .values()
                 .cloned()
                 .collect())
-        }
-
-        fn save(
-            &self,
-            profile: crate::domain::value_objects::AgentProfile,
-        ) -> Result<(), PortError> {
-            self.profiles
-                .lock()
-                .unwrap()
-                .insert(profile.name.clone(), profile);
-            Ok(())
-        }
-
-        fn delete(&self, name: &str) -> Result<(), PortError> {
-            let mut map = self.profiles.lock().unwrap();
-            if map.remove(name).is_none() {
-                return Err(PortError::ProfileNotFound(name.to_string()));
-            }
-            Ok(())
         }
     }
 
@@ -5436,24 +5402,6 @@ mod phase7_timeout_resolution_tests {
                 .collect())
         }
 
-        fn save(
-            &self,
-            profile: AgentProfile,
-        ) -> Result<(), PortError> {
-            self.profiles
-                .lock()
-                .unwrap()
-                .insert(profile.name.clone(), profile);
-            Ok(())
-        }
-
-        fn delete(&self, name: &str) -> Result<(), PortError> {
-            let mut map = self.profiles.lock().unwrap();
-            if map.remove(name).is_none() {
-                return Err(PortError::ProfileNotFound(name.to_string()));
-            }
-            Ok(())
-        }
     }
 
     // ── Mock GitVersioningPort ───────────────────────────────────────
@@ -5872,13 +5820,6 @@ mod phase8_git_versioning_tests {
             Ok(self.profiles.values().cloned().collect())
         }
 
-        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn delete(&self, _name: &str) -> Result<(), PortError> {
-            Ok(())
-        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -6433,24 +6374,6 @@ mod phase9_session_title_tests {
                 .collect())
         }
 
-        fn save(
-            &self,
-            profile: AgentProfile,
-        ) -> Result<(), PortError> {
-            self.profiles
-                .lock()
-                .unwrap()
-                .insert(profile.name.clone(), profile);
-            Ok(())
-        }
-
-        fn delete(&self, name: &str) -> Result<(), PortError> {
-            let mut map = self.profiles.lock().unwrap();
-            if map.remove(name).is_none() {
-                return Err(PortError::ProfileNotFound(name.to_string()));
-            }
-            Ok(())
-        }
     }
 
     // ── Mock GitVersioningPort ───────────────────────────────────────
@@ -7061,16 +6984,6 @@ mod write_state_tests {
             Ok(self.profiles.read().unwrap().clone())
         }
 
-        fn save(
-            &self,
-            _profile: AgentProfile,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn delete(&self, _name: &str) -> Result<(), PortError> {
-            Ok(())
-        }
     }
 
     /// In-memory mock of `StateWriterPort` for WriteState tests.
@@ -7597,13 +7510,6 @@ mod phase2_text_check_tests {
             Ok(self.profiles.values().cloned().collect())
         }
 
-        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn delete(&self, _name: &str) -> Result<(), PortError> {
-            Ok(())
-        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -8086,13 +7992,6 @@ mod phase2_file_existence_tests {
             Ok(self.profiles.values().cloned().collect())
         }
 
-        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn delete(&self, _name: &str) -> Result<(), PortError> {
-            Ok(())
-        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

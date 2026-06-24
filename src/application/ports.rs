@@ -50,8 +50,6 @@ pub enum PortError {
     ProfileNotFound(String),
     /// Failed to scan the profiles directory.
     ProfileScanFailed(String),
-    /// Failed to save a profile to disk.
-    ProfileSaveFailed(String),
     /// Failed to write to the rig-log.
     RigLogWriteFailed(String),
     /// Failed to read from the rig-log.
@@ -112,9 +110,6 @@ impl std::fmt::Display for PortError {
             }
             PortError::ProfileScanFailed(msg) => {
                 write!(f, "profile scan failed: {msg}")
-            }
-            PortError::ProfileSaveFailed(msg) => {
-                write!(f, "profile save failed: {msg}")
             }
             PortError::RigLogWriteFailed(msg) => {
                 write!(f, "rig-log write failed: {msg}")
@@ -371,15 +366,6 @@ pub trait AgentProfileRepository: Send + Sync {
     /// Returns an empty vector if no profiles exist.
     fn list(&self) -> Result<Vec<AgentProfile>, PortError>;
 
-    /// Save an agent profile to disk.
-    ///
-    /// Creates the profiles directory if it does not exist.
-    fn save(&self, profile: AgentProfile) -> Result<(), PortError>;
-
-    /// Delete an agent profile by name.
-    ///
-    /// Returns `ProfileNotFound` if the profile does not exist.
-    fn delete(&self, name: &str) -> Result<(), PortError>;
 }
 
 /// Port for creating git commits to version agent work.
@@ -584,24 +570,6 @@ mod tests {
                 .collect())
         }
 
-        fn save(
-            &self,
-            profile: AgentProfile,
-        ) -> Result<(), PortError> {
-            self.profiles
-                .write()
-                .unwrap()
-                .insert(profile.name.clone(), profile);
-            Ok(())
-        }
-
-        fn delete(&self, name: &str) -> Result<(), PortError> {
-            let mut map = self.profiles.write().unwrap();
-            if map.remove(name).is_none() {
-                return Err(PortError::ProfileNotFound(name.to_string()));
-            }
-            Ok(())
-        }
     }
 
     /// In-memory mock of `GitVersioningPort`.
@@ -833,46 +801,6 @@ mod tests {
         assert!(list_result.is_ok());
         assert!(list_result.unwrap().is_empty());
 
-        // Save and retrieve
-        let profile = AgentProfile::new(
-            "test-profile".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are a test.".to_string(),
-        )
-        .unwrap();
-        let save_result = repo.save(profile.clone());
-        assert!(save_result.is_ok());
-
-        let get_result = repo.get("test-profile");
-        assert!(get_result.is_ok());
-        assert!(get_result.as_ref().unwrap().is_some());
-        assert_eq!(
-            get_result.unwrap().unwrap().name,
-            "test-profile"
-        );
-
-        // List should return the saved profile
-        let list_result = repo.list();
-        assert!(list_result.is_ok());
-        assert_eq!(list_result.unwrap().len(), 1);
-
-        // Delete the profile
-        let delete_result = repo.delete("test-profile");
-        assert!(delete_result.is_ok());
-
-        // Verify it's gone
-        let get_result = repo.get("test-profile");
-        assert!(get_result.is_ok());
-        assert!(get_result.unwrap().is_none());
-
-        // Delete non-existent profile returns error
-        let delete_result = repo.delete("nonexistent");
-        assert!(delete_result.is_err());
-        assert_eq!(
-            delete_result.unwrap_err(),
-            PortError::ProfileNotFound("nonexistent".to_string())
-        );
     }
 
     // ── Supporting Type Tests ───────────────────────────────────────────
