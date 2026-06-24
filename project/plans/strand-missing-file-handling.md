@@ -13,7 +13,13 @@ This is expected noise — the temp file was never a real strand. But currently 
 - Unknown missing files produce a new `LoomEvent::StrandSkipped` loom-log entry + console warning — the user can investigate if it's a real issue
 - Deleted events skip the check (file is expected to be gone)
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-24)
+
+## Completion Notes
+- 5 new unit tests in `phase2_file_existence_tests`, 8 tests in `temp_file` module, 2 integration tests in `pipeline.rs`
+- 12 existing tests fixed to use real temp files (regression from new existence check)
+- Full test suite: 586+ tests passing
+- Version bumped to 0.17.0
 
 ## Existing Tests
 

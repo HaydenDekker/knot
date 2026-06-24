@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ⬜ Planned | 2026-06-24 |
+| 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ✅ Complete | 2026-06-24 |
 | 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
@@ -94,9 +94,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 42. Strand Missing File Handling
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-24
+**Completed:** 2026-06-24
 **Goal:** Silently skip known temp files (e.g. `sed -i` macOS temp files) and log unknown missing files, avoiding spurious "File not found" errors in the loom-log.
+
+**Result:** `is_known_temp_file()` in `src/domain/temp_file.rs` detects sed temp files (filename: `sed` + 7 chars). `LoomEvent::StrandSkipped` variant in domain events for unknown missing files. File existence check in `ProcessStrand::execute()` after text-file check — known temp files skip silently (debug log only), unknown missing files log `StrandSkipped` + console warning. Deleted events unaffected. 5 new unit tests in `phase2_file_existence_tests`, 8 tests in `temp_file` module, 2 integration tests in `pipeline.rs`. 12 existing tests fixed for real temp files. 586+ tests pass. Version bumped to 0.17.0.
 
 Full details in [strand-missing-file-handling.md](strand-missing-file-handling.md).
 
