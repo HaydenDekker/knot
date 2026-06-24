@@ -105,11 +105,11 @@ Core parsing logic. Both parsers must work before anything else can follow.
 
 ### Phase 1: Domain — Value Object cleanup (`value_objects.rs`)
 
-- [ ] Remove `body: Option<String>` field from `AgentProfile`
-- [ ] Remove `AgentProfile::with_body()` method
-- [ ] Update `AgentProfile::new()` and `AgentProfile::with_tools()` — no body parameter
-- [ ] Update `AgentProfile` doc comments
-- [ ] Update inline tests for AgentProfile
+- [x] Remove `body: Option<String>` field from `AgentProfile`
+- [x] Remove `AgentProfile::with_body()` method
+- [x] Update `AgentProfile::new()` and `AgentProfile::with_tools()` — no body parameter
+- [x] Update `AgentProfile` doc comments
+- [x] Update inline tests for AgentProfile
 
 ### Phase 2: Outbound Adapters — Profile repository cleanup (`profile_repo.rs`, `ports.rs`)
 
