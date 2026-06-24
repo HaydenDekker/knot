@@ -34,11 +34,11 @@ This is expected noise — the temp file was never a real strand. But currently 
 
 ### Phase 0: Domain — Temp File Pattern Detection
 
-- [ ] Create `src/domain/temp_file.rs` — pure domain, zero IO
+- [x] Create `src/domain/temp_file.rs` — pure domain, zero IO
   - `fn is_known_temp_file(path: &Path) -> bool` — checks filename against known patterns
   - Initial pattern: `sed` followed by exactly 7 characters (macOS `sed -i` temp files)
   - Filename-based check (not path-based) — temp files can appear in any strand directory
-- [ ] Unit tests: known sed pattern matches, non-sed files don't match, path components ignored (only filename checked)
+- [x] Unit tests: known sed pattern matches, non-sed files don't match, path components ignored (only filename checked)
 
 ### Phase 1: Domain — StrandSkipped Event Variant
 
