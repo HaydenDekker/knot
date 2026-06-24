@@ -167,12 +167,12 @@ Integration tests create real `.md` files and verify end-to-end processing. All 
 
 Update the agent skill and all docs to reflect the new format.
 
-- [ ] Update `.agents/skills/knot-create/SKILL.md` — profile and knot file format sections
-- [ ] Update `project/domain-glossary.md` — Agent Profile and Knot definitions
-- [ ] Update `docs/configuration/profiles.md`
-- [ ] Update `docs/configuration/knots.md`
-- [ ] Update `docs/getting-started.md` (any format examples)
-- [ ] Update `docs/workflows/*.md` (any format examples)
+- [x] Update `.agents/skills/knot-create/SKILL.md` — profile and knot file format sections
+- [x] Update `project/domain-glossary.md` — Agent Profile and Knot definitions
+- [x] Update `docs/configuration/profiles.md`
+- [x] Update `docs/configuration/knots.md`
+- [x] Update `docs/getting-started.md` (any format examples)
+- [x] Update `docs/workflows/*.md` (any format examples)
 
 ### Phase 7: Create `knot-update` skill
 
