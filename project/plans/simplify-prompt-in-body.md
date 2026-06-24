@@ -152,8 +152,8 @@ These use `KnotFile::parse()` so they get the new format automatically, but thei
 
 `ProcessStrand` uses `knot.prompt_template.instructions` and `profile.profile_prompt` — these still exist as fields, just populated from a different source. No structural change needed.
 
-- [ ] Update inline test fixtures in `usecases.rs` that construct `Knot`/`AgentProfile` directly (no change needed — constructors are unchanged)
-- [ ] Update any test fixtures that create raw knot file content strings
+- [x] Update inline test fixtures in `usecases.rs` that construct `Knot`/`AgentProfile` directly (no change needed — constructors are unchanged)
+- [x] Update any test fixtures that create raw knot file content strings
 
 ### Phase 5: Integration Tests
 
