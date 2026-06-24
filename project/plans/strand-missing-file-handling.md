@@ -42,11 +42,11 @@ This is expected noise — the temp file was never a real strand. But currently 
 
 ### Phase 1: Domain — StrandSkipped Event Variant
 
-- [ ] Add `LoomEvent::StrandSkipped` variant to `src/domain/events.rs`:
+- [x] Add `LoomEvent::StrandSkipped` variant to `src/domain/events.rs`:
   - Fields: `loom_id`, `knot_id`, `strand_path`, `reason`, `timestamp`
   - Reason is `"missing file (unknown pattern)"` — distinguishes from binary ignore
-- [ ] Update `src/adapters/outbound/loom_log.rs` — `extract_loom_id()` handles new variant
-- [ ] Unit tests: serialisation round-trip, event fields, loom-log routing
+- [x] Update `src/adapters/outbound/loom_log.rs` — `extract_loom_id()` handles new variant
+- [x] Unit tests: serialisation round-trip, event fields, loom-log routing
 
 ### Phase 2: Application — File Existence Check in ProcessStrand
 
