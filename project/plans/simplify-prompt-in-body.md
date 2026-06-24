@@ -95,13 +95,13 @@ Core parsing logic. Both parsers must work before anything else can follow.
 - Create a shared `extract_frontmatter_and_body(content) -> Result<(String, Option<String>), _>` helper that returns both the YAML text and the body text after the closing `---`
 - Both parsers use this shared helper
 
-- [ ] Add `MissingBody` error variants to `KnotFileError` and `AgentProfileError`
-- [ ] Implement shared `extract_frontmatter_and_body()` helper
-- [ ] Refactor `parse()` to use body as instructions
-- [ ] Refactor `parse_agent_profile()` to use body as profile_prompt
-- [ ] Remove `RawPromptTemplate` struct
-- [ ] Remove `profile-prompt` from `RawProfileFrontmatter`
-- [ ] Update all inline test fixtures in `knot_file.rs`
+- [x] Add `MissingBody` error variants to `KnotFileError` and `AgentProfileError`
+- [x] Implement shared `extract_frontmatter_and_body()` helper
+- [x] Refactor `parse()` to use body as instructions
+- [x] Refactor `parse_agent_profile()` to use body as profile_prompt
+- [x] Remove `RawPromptTemplate` struct
+- [x] Remove `profile-prompt` from `RawProfileFrontmatter`
+- [x] Update all inline test fixtures in `knot_file.rs`
 
 ### Phase 1: Domain — Value Object cleanup (`value_objects.rs`)
 
