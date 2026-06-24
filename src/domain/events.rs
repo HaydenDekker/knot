@@ -140,6 +140,23 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// A strand file was skipped because it could not be found on disk.
+    ///
+    /// Unlike [`StrandIgnored`] (binary files), this records a file that
+    /// existed at event time but disappeared before processing — typically a
+    /// short-lived temp file from editors like `sed -i`. Known temp-file
+    /// patterns are silently dropped elsewhere; this variant logs the
+    /// remaining unknown-missing-file cases so the user can investigate.
+    StrandSkipped {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        /// Path to the file that was skipped.
+        strand_path: StrandPath,
+        /// Reason the file was skipped (e.g. "missing file (unknown pattern)").
+        reason: String,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -834,6 +851,13 @@ mod tests {
                 reason: "binary file".to_string(),
                 timestamp: ts.clone(),
             },
+            LoomEvent::StrandSkipped {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                reason: "missing file (unknown pattern)".to_string(),
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -1040,6 +1064,50 @@ mod tests {
                 assert_eq!(t, &ts);
             }
             _ => panic!("Expected StrandIgnored variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    /// `LoomEvent::StrandSkipped` carries `loom_id`, `knot_id`,
+    /// `strand_path`, `reason`, and `timestamp`. Verifies the variant
+    /// shape and JSON round-trip serialisation.
+    #[test]
+    fn loom_event_strand_skipped() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path =
+            StrandPath(PathBuf::from("project/prds/sedABC123"));
+        let reason = "missing file (unknown pattern)".to_string();
+        let ts = "2026-06-24T10:00:00Z".to_string();
+
+        let event = LoomEvent::StrandSkipped {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            reason: reason.clone(),
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::StrandSkipped {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                reason: r,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(r, &reason);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected StrandSkipped variant"),
         }
 
         // Verify serialisation round-trip

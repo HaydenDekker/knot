@@ -75,6 +75,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::StrandIgnored { loom_id, .. } => {
                 loom_id.clone()
             }
+            LoomEvent::StrandSkipped { loom_id, .. } => {
+                loom_id.clone()
+            }
         };
 
         let line = serde_json::to_string(&event)
@@ -365,5 +368,43 @@ mod tests {
         let log = FileSystemLoomLog::new(tempfile::tempdir().unwrap().path().to_path_buf());
         // Verify trait is object-safe
         let _obj: &dyn LoomLogPort = &log;
+    }
+
+    #[test]
+    fn loom_log_strand_skipped_routes_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let loom_id = LoomId("skip-loom".to_string());
+
+        let event = LoomEvent::StrandSkipped {
+            loom_id: loom_id.clone(),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("project/sedABC123")),
+            reason: "missing file (unknown pattern)".to_string(),
+            timestamp: "2026-06-24T10:00:00Z".to_string(),
+        };
+
+        // Append — should route to correct loom log
+        log.append(event.clone()).unwrap();
+
+        // Read back and verify
+        let events = log.read_all(&loom_id).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::StrandSkipped {
+                loom_id: lid,
+                strand_path,
+                reason,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(
+                    strand_path.0,
+                    PathBuf::from("project/sedABC123")
+                );
+                assert_eq!(reason, "missing file (unknown pattern)");
+            }
+            _ => panic!("Expected StrandSkipped event"),
+        }
     }
 }
