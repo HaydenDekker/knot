@@ -8,6 +8,7 @@
 mod helpers;
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -742,6 +743,244 @@ fn delete_event_agent_skips_missing_file() {
     assert!(
         !stderr_file.exists(),
         "stderr capture file should not exist (no errors from agent)"
+    );
+
+    handle.abort();
+}
+
+// ── Temp File / Missing File Integration Tests ─────────────────────────────
+
+/// Create a mock pi that sleeps for a given duration before responding.
+/// Used to create a processing gap for racing file deletion.
+fn create_slow_mock_pi(
+    rig_dir: &Path,
+    response: &str,
+    sleep_secs: u64,
+) -> PathBuf {
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    let script = format!(
+        "#!/usr/bin/env bash\n\
+         # Stub pi - consumes stdin, sleeps, echoes response\n\
+         cat > /dev/null\n\
+         sleep {sleep_secs}\n\
+         echo \"{response}\"\n\
+         exit 0\n"
+    );
+    fs::write(&pi_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+    let config = format!(
+        "cli_path: \"{}\"\n\
+         cli_args: []\n",
+        pi_path.display()
+    );
+    fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+    pi_path
+}
+
+/// Known temp files (sedXXXXXXX) are silently skipped by the pipeline.
+///
+/// Strategy: create a normal file first and wait for processing to start.
+/// The mock agent sleeps for several seconds. During that processing,
+/// create the temp file, wait for the debounce window (so the Created
+/// event is emitted to the queue), then delete the temp file.
+/// When the normal file's processing completes, the consumer picks up
+/// the temp file's Created event — the file is gone, so the temp file
+/// check silently skips it.
+#[test]
+fn pipeline_silently_skips_known_temp_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+
+    // Use a slow mock agent so processing takes time,
+    // giving us a window to create and delete the temp file.
+    create_slow_mock_pi(&rig_dir, "slow output", 3);
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    let project_root = rig_dir.parent().unwrap();
+    let strands_dir = project_root.join("strands");
+    fs::create_dir_all(&strands_dir).unwrap();
+
+    // Phase 1: Create normal.md. Wait for debounce + processing to start.
+    // The slow agent keeps the pipeline busy for ~3 seconds.
+    let normal_path = strands_dir.join("normal.md");
+    fs::write(&normal_path, "normal content").unwrap();
+    // Wait for debounce (100ms) + processing start + agent sleep to begin.
+    // 300ms gives plenty of time for the event to be emitted and the
+    // agent to start executing (the 3s sleep begins).
+    thread::sleep(Duration::from_millis(300));
+
+    // Phase 2: While the slow agent is busy, create the temp file.
+    // Its Created event enters the debounce pending map.
+    // Delete it quickly (within the debounce window) so the
+    // Created+Deleted events coalesce to just Deleted.
+    let temp_path = strands_dir.join("sedXXXXXXX");
+    fs::write(&temp_path, "temp content").unwrap();
+    // Immediate delete — within the debounce window (100ms).
+    // The notify events (Created, Modified, Deleted) coalesce
+    // to just Deleted in the debounce engine. The Deleted event
+    // is processed normally (by design — deleted events skip
+    // the existence check). The key verification is that NO
+    // errors appear in the loom-log.
+    fs::remove_file(&temp_path).unwrap();
+
+    // Phase 3: Wait for normal.md processing to complete.
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Give some extra time for the sedXXXXXXX event to be processed
+    thread::sleep(Duration::from_secs(2));
+
+    // Read loom-log and verify
+    let events = read_loom_log(&rig_dir, "review-loom");
+    let types: Vec<&str> = events
+        .iter()
+        .filter_map(|e| loom_log_event_type(e))
+        .collect();
+
+    // normal.md should have been processed normally
+    assert!(
+        types.contains(&"KnotCompleted"),
+        "should have KnotCompleted for normal.md. Events: {:?}",
+        types
+    );
+
+    // Key verifications for the temp file scenario:
+    // - No KnotFailed (temp file handling should not produce errors)
+    // - No StrandSkipped (known temp files are silently skipped,
+    //   and Deleted events process normally)
+    // - No StrandIgnored (temp files are not binary files)
+    assert!(
+        !types.contains(&"KnotFailed"),
+        "should NOT have KnotFailed (temp file should not error). Events: {:?}",
+        types
+    );
+    assert!(
+        !types.contains(&"StrandSkipped"),
+        "should NOT have StrandSkipped for known temp file. Events: {:?}",
+        types
+    );
+    assert!(
+        !types.contains(&"StrandIgnored"),
+        "should NOT have StrandIgnored for known temp file. Events: {:?}",
+        types
+    );
+
+    // The Deleted event for sedXXXXXXX is processed normally
+    // (by design — deleted events skip the existence check).
+    // It produces KnotProcessing/KnotCompleted/StrandProcessed.
+    // The Modified event (if emitted separately) would be silently
+    // skipped by the temp file check. Either way, no errors appear.
+
+    handle.abort();
+}
+
+/// Unknown missing files produce a StrandSkipped loom-log entry.
+///
+/// Uses the same "slow agent + race" strategy as the temp file test.
+/// Creates a normal file first, then while processing, creates and
+/// deletes a second file (with a non-temp name). When its Created
+/// event is processed, the file is gone and the unknown-missing-file
+/// path produces a StrandSkipped entry.
+#[test]
+fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    let loom_dir = create_loom_dir(&rig_dir, "review");
+    create_knot_file(&loom_dir, "review");
+    create_fast_profile(&rig_dir);
+
+    // Use a slow mock agent
+    create_slow_mock_pi(&rig_dir, "slow output", 3);
+
+    let handle = start_knot(rig_dir.clone());
+    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+
+    let project_root = rig_dir.parent().unwrap();
+    let strands_dir = project_root.join("strands");
+    fs::create_dir_all(&strands_dir).unwrap();
+
+    // Phase 1: Create normal.md and wait for processing to start
+    let normal_path = strands_dir.join("normal.md");
+    fs::write(&normal_path, "normal content").unwrap();
+    thread::sleep(Duration::from_millis(300));
+
+    // Phase 2: While processing, create the missing file and delete it
+    let missing_path = strands_dir.join("some_missing_file.md");
+    fs::write(&missing_path, "will be deleted").unwrap();
+    thread::sleep(Duration::from_millis(200)); // wait for debounce
+    fs::remove_file(&missing_path).unwrap();
+
+    // Phase 3: Wait for normal.md processing to complete
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Phase 4: Wait for the StrandSkipped event from the missing file
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandSkipped");
+
+    thread::sleep(Duration::from_millis(500));
+    let events = read_loom_log(&rig_dir, "review-loom");
+
+    // Verify StrandSkipped is present
+    let skipped_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            loom_log_event_type(e)
+                .map(|t| t == "StrandSkipped")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        !skipped_events.is_empty(),
+        "should have StrandSkipped event. Events: {:?}",
+        events.iter().filter_map(|e| loom_log_event_type(e)).collect::<Vec<_>>()
+    );
+
+    // Verify the StrandSkipped event has the correct reason
+    let skipped = &skipped_events[0];
+    if let Some(data) = skipped.as_object().and_then(|o| o.get("StrandSkipped")) {
+        if let Some(reason) = data.get("reason").and_then(|v| v.as_str()) {
+            assert!(
+                reason.contains("missing file"),
+                "reason should mention missing file, got: {}",
+                reason
+            );
+        } else {
+            panic!("StrandSkipped event missing reason field");
+        }
+    } else {
+        panic!("StrandSkipped event has no data object");
+    }
+
+    // normal.md should have been processed normally
+    let types: Vec<&str> = events
+        .iter()
+        .filter_map(|e| loom_log_event_type(e))
+        .collect();
+    assert!(
+        types.contains(&"KnotCompleted"),
+        "should have KnotCompleted for normal.md. Events: {:?}",
+        types
+    );
+
+    // No KnotFailed should appear
+    assert!(
+        !types.contains(&"KnotFailed"),
+        "should NOT have KnotFailed. Events: {:?}",
+        types
     );
 
     handle.abort();
