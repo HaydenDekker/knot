@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "2.0.0"
-  compatibility: "Knot 0.4.0+"
+  version: "3.0.0"
+  compatibility: "Knot 0.18.0+"
 ---
 
 # Knot Inspect Skill

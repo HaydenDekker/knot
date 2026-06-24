@@ -1,6 +1,11 @@
 ---
 name: knot-design
 description: "Design looms and knots for the Knot agent orchestration framework. Covers idempotency, naming conventions, responsibility boundaries, domain direction, loop design, and loop-breaking patterns. USE FOR: design knot, design loom, knot design, loom design, knot architecture, agent loop, feedback loop, knot naming, strand direction, knot responsibility, idempotent knot, loop-breaking, knot workflow design. DO NOT USE FOR: creating looms/knots (use knot-create), initialising a rig (use knot-init), inspecting state (use knot-inspect)."
+license: MIT
+metadata:
+  author: Knot Team
+  version: "1.0.0"
+  compatibility: "Knot 0.18.0+"
 ---
 
 # Knot Design Skill
@@ -323,20 +328,27 @@ The loom matches the knot's **output domain**:
 
 ### Step 5: Write the Instructions (Goal-Focused)
 
-```yaml
-prompt-template:
-  instructions: |
-    You are a <role>. <Goal statement>.
+Knot instructions go in the **markdown body** (after the closing `---`),
+not in frontmatter:
 
-    1. Read the strand (provided).
-    2. Inspect current state of <target domain>.
-    3. Determine if the goal is already met.
-    4. If yes, report "no changes needed" with explanation.
-    5. If no, apply minimal changes to achieve the goal.
+```markdown
+---
+name: <knot-name>
+agent-profile-ref: <profile>
+strand-dir: "<path>"
+---
 
-    ## Constraints
-    - Never overwrite work in <other domain> — only append observations.
-    - Re-running this on the same strand must produce no additional changes.
+You are a <role>. <Goal statement>.
+
+1. Read the strand (provided).
+2. Inspect current state of <target domain>.
+3. Determine if the goal is already met.
+4. If yes, report "no changes needed" with explanation.
+5. If no, apply minimal changes to achieve the goal.
+
+## Constraints
+- Never overwrite work in <other domain> — only append observations.
+- Re-running this on the same strand must produce no additional changes.
 ```
 
 ### Step 6: Check for Loops
