@@ -13,19 +13,15 @@ Product Requirement Documents (PRDs).
 
 `rig/profiles/reviewer.md`:
 
-```yaml
+```markdown
 ---
 name: reviewer
 provider: openai
 model: gpt-4o
-system-prompt: |
-  You are a thorough technical reviewer. Analyse documents
-  carefully and provide specific, actionable feedback.
 ---
 
-# Reviewer Profile
-
-Profile for detailed document reviews.
+You are a thorough technical reviewer. Analyse documents
+carefully and provide specific, actionable feedback.
 ```
 
 ### 2. Create the Loom
@@ -41,37 +37,31 @@ directory and profile.
 
 **Goals review** — `rig/prd-review-loom/goals-review.md`:
 
-```yaml
+```markdown
 ---
 name: goals-review
 agent-profile-ref: reviewer
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Review the goals section of this PRD. Check that:
-    - Each goal is specific and measurable
-    - Goals align with the problem statement
-    - Success criteria are defined
 ---
 
-# Goals Review Knot
+Review the goals section of this PRD. Check that:
+- Each goal is specific and measurable
+- Goals align with the problem statement
+- Success criteria are defined
 ```
 
 **Non-goals review** — `rig/prd-review-loom/non-goals-review.md`:
 
-```yaml
+```markdown
 ---
 name: non-goals-review
 agent-profile-ref: reviewer
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Review the non-goals section. Check that:
-    - Scope boundaries are clearly defined
-    - Exclusions are justified
 ---
 
-# Non-Goals Review Knot
+Review the non-goals section. Check that:
+- Scope boundaries are clearly defined
+- Exclusions are justified
 ```
 
 ### 4. Trigger Reviews
@@ -121,10 +111,11 @@ feedback.
 
 Good instructions:
 
-```yaml
-instructions: |
-  Review the goals section of this document.
-  Provide feedback on the current content only.
+Write these in the knot's markdown body (after the closing `---`):
+
+```
+Review the goals section of this document.
+Provide feedback on the current content only.
 ```
 
 Avoid instructions that say "add to previous feedback" or "continue

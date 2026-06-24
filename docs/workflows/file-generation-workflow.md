@@ -15,7 +15,7 @@ File generation can be a long-running task. Set a higher timeout:
 
 `rig/profiles/planner.md`:
 
-```yaml
+```markdown
 ---
 name: planner
 provider: openai
@@ -23,14 +23,10 @@ model: gpt-4o
 tools:
   - fs
 timeout: 600
-system-prompt: |
-  You are a project planning agent. Create detailed, actionable
-  implementation plans from product requirements.
 ---
 
-# Planner Profile
-
-Profile for plan generation with extended timeout and filesystem access.
+You are a project planning agent. Create detailed, actionable
+implementation plans from product requirements.
 ```
 
 ### 2. Create the Loom
@@ -43,32 +39,27 @@ mkdir -p rig/planning-loom
 
 `rig/planning-loom/prd-planner.md`:
 
-```yaml
+```markdown
 ---
 name: prd-planner
 agent-profile-ref: planner
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Create an implementation plan from this PRD.
-
-    1. Read the PRD (provided as input).
-    2. Inspect project/plans/ for existing plans related to this PRD.
-    3. If a plan already exists, update it in place to align with
-       the current PRD. If not, create a new plan file.
-    4. The plan should have phases, each with clear deliverables.
-    5. Write the plan to project/plans/<slug>.md where <slug>
-       is derived from the PRD title.
-
-    ## Constraints
-    - Never delete existing plan content without a clear reason.
-    - If the PRD and plan are already aligned, make no changes.
-    - Re-running this on the same PRD must produce no additional changes.
 ---
 
-# PRD Planner Knot
+Create an implementation plan from this PRD.
 
-Generates implementation plans from PRD documents.
+1. Read the PRD (provided as input).
+2. Inspect project/plans/ for existing plans related to this PRD.
+3. If a plan already exists, update it in place to align with
+   the current PRD. If not, create a new plan file.
+4. The plan should have phases, each with clear deliverables.
+5. Write the plan to project/plans/<slug>.md where <slug>
+   is derived from the PRD title.
+
+## Constraints
+- Never delete existing plan content without a clear reason.
+- If the PRD and plan are already aligned, make no changes.
+- Re-running this on the same PRD must produce no additional changes.
 ```
 
 ### 4. Trigger Plan Generation

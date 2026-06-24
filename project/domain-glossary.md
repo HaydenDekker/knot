@@ -21,7 +21,7 @@ The configuration that determines *which agent* runs. Contains:
 - The LLM provider to use.
 - The skills available to the agent (driving the prompt).
 - The tools available to the agent (executing the prompt).
-- The profile prompt (YAML key `profile-prompt`) — persona instructions delivered via stdin.
+- The system prompt (markdown body) — persona instructions delivered via stdin.
 - The session timeout (optional, in seconds; defaults to 300s / 5 min).
 
 Part of a **knot**.
@@ -33,10 +33,10 @@ Part of a **knot**.
 A configured artifact that brings everything together, ready for processing. Composed of three parts:
 
 1. **Agent Profile** — determines *which agent* runs.
-2. **Prompt Template** — determines *how* input files are processed.
+2. **Markdown Body** — task-specific instructions that supplement the profile's system prompt.
 3. **Directories** — the `strand_dir` (where strands to watch live, **required**). The tie-off output path is **statically derived** as `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md` — no `tie-off-dir` configuration is needed.
 
-A knot is defined in a `.md` file with YAML frontmatter. One loom can contain one or more knot files.
+A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.
 
 ---
 
@@ -136,8 +136,6 @@ Rig (`./rig/`)
             │     ├── Skills
             │     ├── Tools
             │     └── Profile Prompt
-            ├── Prompt Template
-            │     ├── Goal Description
-            │     └── Input Bundling Rules
+            └── Markdown Body (task-specific instructions)
             └── strand_dir (required — directory to watch for strands)
 ```

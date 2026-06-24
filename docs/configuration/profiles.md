@@ -15,21 +15,17 @@ identifier.
 
 `rig/profiles/reviewer.md`:
 
-```yaml
+```markdown
 ---
 name: reviewer
 provider: openai
 model: gpt-4o
 tools:
   - fs
-system-prompt: |
-  You are a thorough reviewer. Analyse documents carefully and
-  provide constructive feedback.
 ---
 
-# Reviewer Profile
-
-Profile for detailed document reviews.
+You are a thorough reviewer. Analyse documents carefully and
+provide constructive feedback.
 ```
 
 ## Frontmatter Fields
@@ -39,15 +35,21 @@ Profile for detailed document reviews.
 | `name` | Yes | Profile identifier. Must match the filename stem (e.g. `reviewer.md` → `name: reviewer`). |
 | `provider` | Yes | LLM provider name (e.g. `openai`, `anthropic`, or a pi provider like `llama-workhorse`). |
 | `model` | Yes | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `qwen3-27b`). |
-| `system-prompt` | Yes | The agent's system prompt — persona instructions delivered at every session. |
 | `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty list. |
 | `timeout` | No | Session timeout in seconds. Defaults to 300 (5 minutes). Set higher for long-running tasks. |
+
+### Markdown Body
+
+The text after the closing `---` is the agent's system prompt
+(persona instructions). This is the primary content of the profile.
+
+The body must not be empty or contain only whitespace.
 
 ### Timeout Example
 
 For long-running tasks like code generation across many files:
 
-```yaml
+```markdown
 ---
 name: coder
 provider: openai
@@ -55,13 +57,9 @@ model: gpt-4o
 tools:
   - fs
 timeout: 600
-system-prompt: |
-  You are a code generation agent. Take your time to be thorough.
 ---
 
-# Coder Profile
-
-Extended timeout for code generation tasks.
+You are a code generation agent. Take your time to be thorough.
 ```
 
 When a session exceeds its timeout, a `TimeoutExceeded` event is
@@ -75,13 +73,13 @@ When a strand event triggers a knot:
 1. The knot's `agent-profile-ref` field is used to load the profile from
    `rig/profiles/{name}.md` — **read fresh from disk each time**.
 2. The profile provides: `provider`, `model`, and `tools`.
-3. The profile's `system-prompt` is merged with the knot's
-   `prompt-template.instructions` to form the full system prompt:
+3. The profile's markdown body is merged with the knot's markdown
+   body to form the full system prompt:
 
    ```
-   {profile system-prompt}
+   {profile body}
 
-   {knot prompt-template.instructions}
+   {knot body}
    ```
 
 4. This merged prompt is passed to the agent CLI.
@@ -114,13 +112,9 @@ cat > rig/profiles/fast.md << 'EOF'
 name: fast
 provider: openai
 model: gpt-4o
-system-prompt: |
-  You are a fast reviewer. Keep responses concise and direct.
 ---
 
-# Fast Profile
-
-Lightweight profile for quick reviews.
+You are a fast reviewer. Keep responses concise and direct.
 EOF
 ```
 

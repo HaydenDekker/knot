@@ -82,12 +82,14 @@ Rig (`./rig/`, top-level container)
   (e.g. `prd-review-loom`). Knot discovers these automatically.
 - A **knot** is a `.md` file with YAML frontmatter inside a loom
   directory. It references a shared **agent profile** via
-  `agent-profile-ref` and defines task-specific direction via
-  `prompt-template.instructions`. Each knot watches its own
-  `strand-dir` for input files (strands).
+  `agent-profile-ref`. The markdown body (after the closing `---`)
+  contains the knot's task-specific instructions. Each knot watches
+  its own `strand-dir` for input files (strands).
 - An **agent profile** is a `.md` file with YAML frontmatter stored in
-  `rig/profiles/{name}.md`. Multiple knots can reference the same
-  profile.
+  `rig/profiles/{name}.md`. The frontmatter holds structural metadata
+  (name, provider, model, tools, timeout) and the markdown body contains
+  the agent's system prompt (persona instructions). Multiple knots can
+  reference the same profile.
 
 ---
 
@@ -103,7 +105,8 @@ first, then create knots that reference it.
    - `provider`: AI provider (e.g. `openai`, `anthropic`, or a pi
      provider name like `llama-workhorse`)
    - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
-   - `profile_prompt`: The agent's system prompt/persona
+   - System prompt: The agent's persona instructions (goes in the
+     markdown body after the closing `---`)
    - `tools` (optional): List of pi tool names (e.g. `read`, `write`, `edit`, `bash`)
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
@@ -123,13 +126,9 @@ first, then create knots that reference it.
      - grep
      - find
      - ls
-   profile-prompt: |
-     You are a fast reviewer. Keep responses concise and direct.
    ---
 
-   # Fast Profile
-
-   Lightweight profile for quick reviews.
+   You are a fast reviewer. Keep responses concise and direct.
    ```
 
    For long-running tasks (e.g. code generation across many files),
@@ -146,13 +145,9 @@ first, then create knots that reference it.
      - edit
      - bash
    timeout: 600
-   profile-prompt: |
-     You are a code generation agent. Take your time to be thorough.
    ---
 
-   # Coder Profile
-
-   Profile for long-running code tasks with extended timeout.
+   You are a code generation agent. Take your time to be thorough.
    ```
    - Ensure the `rig/profiles/` directory exists (create it if needed).
    - The `name` in frontmatter should match the filename stem.
@@ -172,13 +167,13 @@ When asked to modify a profile, edit the `.md` file directly:
    exist.
 
 2. **Edit the file** at `rig/profiles/{name}.md` with updated
-   frontmatter values. The markdown body (after the closing `---`)
-   is preserved automatically when editing frontmatter.
+   values. Edit frontmatter for structural metadata (name, provider,
+   model, tools, timeout) and the markdown body for the system prompt.
 
 3. **Verify the change**: Read `rig/state.json` and confirm the profile
-   entry is present. Note: `profile_prompt` is not in the state file —
-   verify by re-reading the profile file. `timeout` is included in
-   state.
+   entry is present. Note: the system prompt (body) is not in the state
+   file — verify by re-reading the profile file. `timeout` is included
+   in state.
 
 4. **Report what changed**.
 
@@ -234,14 +229,9 @@ A loom is created by making a directory (ending in `-loom`) and writing
    name: goals-review
    agent-profile-ref: fast
    strand-dir: "project/prds"
-   prompt-template:
-     instructions: |
-       Review the goals section for clarity and measurability.
    ---
 
-   # Goals Review Knot
-
-   This knot reviews the goals section of PRD documents.
+   Review the goals section for clarity and measurability.
    ```
    Write this to `rig/prd-review-loom/goals-review.md`.
 
@@ -268,12 +258,9 @@ When asked to add a knot to an existing loom:
    name: non-goals-review
    agent-profile-ref: fast
    strand-dir: "project/prds"
-   prompt-template:
-     instructions: |
-       Review the non-goals section.
    ---
 
-   # Non-Goals Review Knot
+   Review the non-goals section.
    ```
 
 4. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
@@ -348,16 +335,11 @@ Knots are `.md` files with YAML frontmatter inside a loom directory
 name: prd-goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Review the goals section of this PRD. Check that:
-    - Each goal is specific and measurable
-    - Goals align with the problem statement
 ---
 
-# PRD Goals Review Knot
-
-This knot reviews the goals section of PRD documents.
+Review the goals section of this PRD. Check that:
+- Each goal is specific and measurable
+- Goals align with the problem statement
 ```
 
 ### Frontmatter Fields
@@ -367,7 +349,15 @@ This knot reviews the goals section of PRD documents.
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
 | `strand-dir` | **Yes** | Directory to watch for strand files. Resolved relative to the project root. |
-| `prompt-template.instructions` | **Yes** | Task-specific instructions appended to the profile's system prompt |
+
+### Markdown Body
+
+The text after the closing `---` is the knot's task-specific
+instructions. This content is appended to the profile's system prompt
+at processing time to form the full prompt sent to the agent.
+
+The body must not be empty or contain only whitespace — the parser
+will reject such files with a `KnotParseWarning`.
 
 ### Directory Resolution
 
@@ -411,13 +401,9 @@ tools:
   - grep
   - find
   - ls
-profile-prompt: |
-  You are a fast reviewer. Keep responses concise and direct.
 ---
 
-# Fast Profile
-
-Lightweight profile for quick reviews.
+You are a fast reviewer. Keep responses concise and direct.
 ```
 
 ### Profile Frontmatter Fields
@@ -428,8 +414,15 @@ Lightweight profile for quick reviews.
 | `provider` | **Yes** | LLM provider (e.g. `openai`, `anthropic`) |
 | `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
-| `profile-prompt` | **Yes** | The agent's system prompt/persona instructions |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
+
+### Profile Markdown Body
+
+The text after the closing `---` is the agent's system prompt
+(persona instructions). This is the primary content of the profile.
+
+The body must not be empty or contain only whitespace — the parser
+will reject such files.
 
 ### How Profiles Are Used at Processing Time
 
@@ -438,12 +431,12 @@ When a strand event triggers a knot:
 1. The knot's `agent-profile-ref` is used to load the profile from
    `rig/profiles/{name}.md` (read fresh from disk each time).
 2. The profile provides: `provider`, `model`, `tools`.
-3. The profile's `profile-prompt` is merged with the knot's
-   `prompt-template.instructions` to form the full system prompt:
+3. The profile's markdown body is merged with the knot's markdown
+   body to form the full system prompt:
    ```
-   {profile profile-prompt}
+   {profile body}
 
-   {knot instructions}
+   {knot body}
    ```
 4. This merged prompt is delivered via stdin to the agent runner (not via `--system-prompt`).
 
@@ -497,7 +490,7 @@ written atomically every 5 seconds.
 | `failed` | Processing failed with an error |
 
 > **Note:** The state file includes `name`, `provider`, `model`, and
-> `timeout` for profiles but not `tools` or `profile_prompt`.
+> `timeout` for profiles but not `tools` or the system prompt (body).
 > To check those fields, read the profile file directly from
 > `rig/profiles/{name}.md`.
 
@@ -525,10 +518,9 @@ cat > rig/profiles/fast.md << 'EOF'
 name: fast
 provider: openai
 model: gpt-4o
-profile-prompt: |
-  You are a fast reviewer.
 ---
-# Fast Profile
+
+You are a fast reviewer.
 EOF
 
 # Create a loom with a knot (write files directly)
@@ -538,10 +530,9 @@ cat > rig/prd-review-loom/goals-review.md << 'EOF'
 name: goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
-prompt-template:
-  instructions: "Review the goals section."
 ---
-# Goals Review
+
+Review the goals section.
 EOF
 
 # Verify Knot has discovered the changes

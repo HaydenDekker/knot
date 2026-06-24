@@ -9,21 +9,16 @@ Knots are `.md` files with YAML frontmatter inside a loom directory
 
 ## File Format
 
-```yaml
+```markdown
 ---
 name: goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Review the goals section of this PRD. Check that:
-    - Each goal is specific and measurable
-    - Goals align with the problem statement
 ---
 
-# Goals Review Knot
-
-Reviews the goals section of PRD documents.
+Review the goals section of this PRD. Check that:
+- Each goal is specific and measurable
+- Goals align with the problem statement
 ```
 
 ## Frontmatter Fields
@@ -33,7 +28,15 @@ Reviews the goals section of PRD documents.
 | `name` | Yes | Unique knot identifier within its loom. Becomes the `KnotId`. |
 | `agent-profile-ref` | Yes | Name of the agent profile to use. Must match a profile in `rig/profiles/{name}.md`. |
 | `strand-dir` | Yes | Directory to watch for strand files. Resolved relative to the project root. |
-| `prompt-template.instructions` | Yes | Task-specific instructions. Appended to the profile's system prompt at processing time. |
+
+## Markdown Body
+
+The text after the closing `---` is the knot's task-specific
+instructions. This content is appended to the profile's system prompt
+at processing time to form the full prompt sent to the agent.
+
+The body must not be empty or contain only whitespace — the parser
+will reject such files.
 
 ## Directory Resolution
 
@@ -97,12 +100,9 @@ cat > rig/prd-review-loom/non-goals-review.md << 'EOF'
 name: non-goals-review
 agent-profile-ref: fast
 strand-dir: "project/prds"
-prompt-template:
-  instructions: |
-    Review the non-goals section for clarity.
 ---
 
-# Non-Goals Review Knot
+Review the non-goals section for clarity.
 EOF
 ```
 
