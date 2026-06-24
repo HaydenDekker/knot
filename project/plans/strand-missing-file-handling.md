@@ -50,13 +50,13 @@ This is expected noise — the temp file was never a real strand. But currently 
 
 ### Phase 2: Application — File Existence Check in ProcessStrand
 
-- [ ] In `ProcessStrand::execute()`, add file existence check **after** text-file check but **before** agent invocation (before step 5)
-- [ ] Only applies to `Created` and `Modified` events (`Deleted` already expects file to be gone)
-- [ ] If file doesn't exist:
+- [x] In `ProcessStrand::execute()`, add file existence check **after** text-file check but **before** agent invocation (before step 5)
+- [x] Only applies to `Created` and `Modified` events (`Deleted` already expects file to be gone)
+- [x] If file doesn't exist:
   - Check `temp_file::is_known_temp_file(&strand_path)`
   - **Known temp file**: skip silently (debug-level console log only). No loom-log entry, no agent invocation, return `Ok(())`
   - **Unknown missing file**: log `LoomEvent::StrandSkipped` to loom-log + `eprintln!` console warning. No agent invocation, no tie-off write, return `Ok(())`
-- [ ] Unit tests with `MockAgentRunner` (never called) and `MockLoomLogPort`:
+- [x] Unit tests with `MockAgentRunner` (never called) and `MockLoomLogPort`:
   - Known temp file: no log events, no agent call, returns Ok
   - Unknown missing file: StrandSkipped in loom-log, no agent call, returns Ok
   - Existing file: passes through to normal processing path (regression guard)
