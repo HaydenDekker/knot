@@ -206,8 +206,8 @@ After creating the skill, publish it globally:
 cp -r .agents/skills/knot-update ~/.agents/skills/knot-update
 ```
 
-- [ ] Create `.agents/skills/knot-update/SKILL.md` with format and first changelog entry
-- [ ] Publish skill globally (`cp -r` to `~/.agents/skills/`)
+- [x] Create `.agents/skills/knot-update/SKILL.md` with format and first changelog entry
+- [x] Publish skill globally (`cp -r` to `~/.agents/skills/`)
 
 ### Phase 8: Demo Rig Files and Version
 
