@@ -806,14 +806,16 @@ impl ProcessStrand {
 
         // Text check: skip binary files for Created/Modified events.
         // Deleted events skip the check (file is gone).
-        if matches!(
+        // When text check errors, we check if the file is simply missing
+        // (temp file race) before deciding to proceed or skip.
+        let _text_check_confirmed = matches!(
             event,
             StrandEvent::Created { .. } | StrandEvent::Modified { .. }
-        ) {
+        ) && {
             match crate::adapters::outbound::content_inspector::is_text_file(
                 &strand_path.0,
             ) {
-                Ok(true) => {}
+                Ok(true) => true,
                 Ok(false) => {
                     eprintln!(
                         "WARN: strand '{}' is a binary file, skipping \
@@ -830,20 +832,58 @@ impl ProcessStrand {
                     })?;
                     return Ok(());
                 }
-                Err(e) => {
-                    // Cannot determine file type (e.g., race with deletion,
-                    // inaccessible file). Log warning but proceed — better
-                    // to attempt processing than silently skip.
+                Err(_e) => {
+                    // Cannot read file — check if it's simply missing
+                    // (temp file race with sed -i or similar).
+                    if !strand_path.0.exists() {
+                        if crate::domain::temp_file::is_known_temp_file(
+                            &strand_path.0,
+                        ) {
+                            // Known temp file pattern (e.g. sedXXXXXXX)
+                            // — skip silently. No loom-log entry,
+                            // no agent invocation.
+                            logging::log_strand_event(
+                                &format!(
+                                    "{} skipped known temp file (knot={})",
+                                    strand_kind, knot_id.0,
+                                ),
+                                &strand_path.0,
+                            );
+                            return Ok(());
+                        }
+
+                        // Unknown missing file — log StrandSkipped so
+                        // the user can investigate if it's a real issue.
+                        eprintln!(
+                            "WARN: strand '{}' not found on disk (unknown \
+                             pattern), skipping processing (knot={})",
+                            strand_path.0.display(),
+                            knot_id.0,
+                        );
+                        self.log_port.append(LoomEvent::StrandSkipped {
+                            loom_id: loom_id.clone(),
+                            knot_id: knot_id.clone(),
+                            strand_path: strand_path.clone(),
+                            reason: "missing file (unknown pattern)"
+                                .to_string(),
+                            timestamp: format_timestamp(),
+                        })?;
+                        return Ok(());
+                    }
+
+                    // File exists but can't be read (permission error etc).
+                    // Log warning but proceed — better to attempt processing
+                    // than silently skip.
                     eprintln!(
-                        "WARN: cannot determine if strand '{}' is text: \
-                         {}, proceeding with processing (knot={})",
+                        "WARN: cannot determine if strand '{}' is text, \
+                         proceeding with processing (knot={})",
                         strand_path.0.display(),
-                        e,
                         knot_id.0,
                     );
+                    false
                 }
             }
-        }
+        };
 
         // 1. Append KnotProcessing to loom-log
         self.log_port.append(LoomEvent::KnotProcessing {
@@ -4455,6 +4495,7 @@ mod phase6_timeout_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -4769,6 +4810,10 @@ mod phase6_timeout_tests {
     /// - tie-off is NOT appended (preserved unchanged)
     #[test]
     fn process_strand_timeout_skip_tieoff_write_rig_log() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
         let timeout_err = PortError::Timeout("session exceeded 60s".to_string());
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
@@ -4780,7 +4825,7 @@ mod phase6_timeout_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -4843,6 +4888,10 @@ mod phase6_timeout_tests {
     /// - tie-off IS appended with error content (existing behaviour preserved)
     #[test]
     fn process_strand_non_timeout_error_writes_tieoff() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
         let err = PortError::AgentExecutionFailed("crash".to_string());
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(err)));
@@ -4854,7 +4903,7 @@ mod phase6_timeout_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -4899,6 +4948,10 @@ mod phase6_timeout_tests {
     /// - tie-off IS appended with agent output
     #[test]
     fn process_strand_success_no_rig_log() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
         let output = Ok(AgentOutput {
             stdout: "agent output".to_string(),
@@ -4914,7 +4967,7 @@ mod phase6_timeout_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5106,6 +5159,10 @@ mod phase6_timeout_tests {
     /// in CLI args (unchanged behaviour).
     #[test]
     fn process_strand_created_still_uses_at_file() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
         let output = Ok(AgentOutput {
             stdout: "ok".to_string(),
@@ -5121,7 +5178,7 @@ mod phase6_timeout_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5209,6 +5266,7 @@ mod phase7_timeout_resolution_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tempfile::TempDir;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -5527,6 +5585,10 @@ mod phase7_timeout_resolution_tests {
     /// passes `ExecutionContext.timeout = Some(Duration::from_secs(60))`.
     #[test]
     fn process_strand_execute_passes_profile_timeout_to_context() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let profile = AgentProfile::new(
             "timed".to_string(),
             "openai".to_string(),
@@ -5564,7 +5626,7 @@ mod phase7_timeout_resolution_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5584,6 +5646,10 @@ mod phase7_timeout_resolution_tests {
     /// passes `ExecutionContext.timeout = None` (falls back to runner default).
     #[test]
     fn process_strand_execute_passes_none_timeout_to_context() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let profile = AgentProfile::new(
             "default".to_string(),
             "openai".to_string(),
@@ -5621,7 +5687,7 @@ mod phase7_timeout_resolution_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5649,6 +5715,7 @@ mod phase8_git_versioning_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -5881,6 +5948,10 @@ mod phase8_git_versioning_tests {
     /// event type, and tie-off content.
     #[test]
     fn process_strand_calls_git_port_on_success() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom =
             build_loom("test-loom", vec![build_knot("k1", true)]);
 
@@ -5890,7 +5961,7 @@ mod phase8_git_versioning_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5902,7 +5973,7 @@ mod phase8_git_versioning_tests {
         let (loom_id, knot_id, strand, et, content) = &commits[0];
         assert_eq!(loom_id.0, "test-loom");
         assert_eq!(knot_id.0, "k1");
-        assert_eq!(strand, "input/strand.md");
+        assert!(strand.ends_with("strand.md"));
         assert_eq!(et, "Created");
         assert_eq!(content, "agent output");
     }
@@ -5911,6 +5982,10 @@ mod phase8_git_versioning_tests {
     /// even on successful processing.
     #[test]
     fn process_strand_skips_git_when_disabled() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom =
             build_loom("test-loom", vec![build_knot("k1", false)]);
 
@@ -5920,7 +5995,7 @@ mod phase8_git_versioning_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -5938,6 +6013,10 @@ mod phase8_git_versioning_tests {
     /// (strand is marked completed, error is only logged as warning).
     #[test]
     fn process_strand_continues_on_git_error() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let loom =
             build_loom("test-loom", vec![build_knot("k1", true)]);
 
@@ -5951,7 +6030,7 @@ mod phase8_git_versioning_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("k1".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/strand.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         // execute() should succeed despite git error
@@ -6228,6 +6307,7 @@ mod phase9_session_title_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -6434,6 +6514,10 @@ mod phase9_session_title_tests {
     /// Title format: `{knot-id} triggered by {event-type} on {strand-filename}`.
     #[test]
     fn process_strand_cli_args_contain_name_flag() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("004-manifest-resources.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
@@ -6461,7 +6545,7 @@ mod phase9_session_title_tests {
         let event = StrandEvent::Modified {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("plan-architect".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/004-manifest-resources.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         let result = use_case.execute(event);
@@ -6486,6 +6570,10 @@ mod phase9_session_title_tests {
     /// Title format matches trigger line for Created events.
     #[test]
     fn process_strand_title_format_created_event() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("new-file.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
@@ -6513,7 +6601,7 @@ mod phase9_session_title_tests {
         let event = StrandEvent::Created {
             loom_id: LoomId("review-loom".to_string()),
             knot_id: KnotId("reviewer".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/new-file.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         use_case.execute(event).unwrap();
@@ -6575,6 +6663,12 @@ mod phase9_session_title_tests {
     /// ensuring each session gets a unique title.
     #[test]
     fn process_strand_title_unique_per_strand() {
+        let dir = TempDir::new().unwrap();
+        let file_a = dir.path().join("file-a.md");
+        let file_b = dir.path().join("file-b.md");
+        std::fs::write(&file_a, "content a").unwrap();
+        std::fs::write(&file_b, "content b").unwrap();
+
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
@@ -6603,7 +6697,7 @@ mod phase9_session_title_tests {
         let event1 = StrandEvent::Modified {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("reviewer".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/file-a.md")),
+            strand_path: StrandPath(file_a.clone()),
         };
         use_case.execute(event1).unwrap();
 
@@ -6611,7 +6705,7 @@ mod phase9_session_title_tests {
         let event2 = StrandEvent::Modified {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("reviewer".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/file-b.md")),
+            strand_path: StrandPath(file_b.clone()),
         };
         use_case.execute(event2).unwrap();
 
@@ -6633,6 +6727,10 @@ mod phase9_session_title_tests {
     /// is delivered via stdin and is NOT affected by the `--name` flag.
     #[test]
     fn process_strand_prompt_content_unchanged_by_name_flag() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("doc.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
         let profile = AgentProfile::new(
             "reviewer".to_string(),
             "openai".to_string(),
@@ -6677,7 +6775,7 @@ mod phase9_session_title_tests {
         let event = StrandEvent::Modified {
             loom_id: LoomId("test-loom".to_string()),
             knot_id: KnotId("reviewer".to_string()),
-            strand_path: StrandPath(PathBuf::from("input/doc.md")),
+            strand_path: StrandPath(strand_path.clone()),
         };
 
         use_case.execute(event).unwrap();
@@ -7823,6 +7921,516 @@ mod phase2_text_check_tests {
             other => panic!("expected KnotProcessing, got {:?}", other),
         }
 
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+    }
+}
+
+// ── Phase 2: File Existence Check Tests ───────────────────────────────────
+
+#[cfg(test)]
+mod phase2_file_existence_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{Knot, KnotId};
+    use crate::domain::temp_file::is_known_temp_file;
+    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    // ── Tracking LoomLogPort ─────────────────────────────────────────
+
+    struct TrackingLoomLogPort {
+        events: Arc<Mutex<Vec<LoomEvent>>>,
+    }
+
+    impl TrackingLoomLogPort {
+        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
+            let events = Arc::new(Mutex::new(vec![]));
+            (Self { events: events.clone() }, events)
+        }
+    }
+
+    impl LoomLogPort for TrackingLoomLogPort {
+        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+            _loom_id: &LoomId,
+        ) -> Result<Vec<LoomEvent>, PortError> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    // ── Mock AgentRunner (tracks if execute was called) ──────────────
+
+    struct MockAgentRunner {
+        called: Arc<Mutex<bool>>,
+    }
+
+    impl MockAgentRunner {
+        fn new() -> (Self, Arc<Mutex<bool>>) {
+            let called = Arc::new(Mutex::new(false));
+            (
+                Self { called: called.clone() },
+                called,
+            )
+        }
+    }
+
+    impl AgentRunner for MockAgentRunner {
+        fn execute(
+            &self,
+            _ctx: ExecutionContext,
+        ) -> Result<AgentOutput, PortError> {
+            *self.called.lock().unwrap() = true;
+            Ok(AgentOutput {
+                stdout: "mock output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    // ── Tracking TieOffSink ──────────────────────────────────────────
+
+    struct TrackingTieOffSink {
+        appends: Arc<Mutex<Vec<TieOff>>>,
+    }
+
+    impl TrackingTieOffSink {
+        fn new() -> (Self, Arc<Mutex<Vec<TieOff>>>) {
+            let appends = Arc::new(Mutex::new(vec![]));
+            (Self { appends: appends.clone() }, appends)
+        }
+    }
+
+    impl TieOffSink for TrackingTieOffSink {
+        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+            self.appends.lock().unwrap().push(tie_off);
+            Ok(())
+        }
+
+        fn read_content(
+            &self,
+            _path: &TieOffPath,
+        ) -> Result<String, PortError> {
+            Ok(String::new())
+        }
+    }
+
+    // ── Mock RigLogPort ──────────────────────────────────────────────
+
+    struct MockRigLogPort;
+
+    impl RigLogPort for MockRigLogPort {
+        fn append(
+            &self,
+            _event: crate::domain::events::RigLogEvent,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn read_all(
+            &self,
+        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock GitVersioningPort ───────────────────────────────────────
+
+    struct MockGitVersioningPort;
+
+    impl GitVersioningPort for MockGitVersioningPort {
+        fn commit(
+            &self,
+            _loom_id: &LoomId,
+            _knot_id: &KnotId,
+            _strand_path: &StrandPath,
+            _event_type: &str,
+            _tie_off_content: &str,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Mock AgentProfileRepository ──────────────────────────────────
+
+    struct MockProfileRepository {
+        profiles: HashMap<String, AgentProfile>,
+    }
+
+    impl AgentProfileRepository for MockProfileRepository {
+        fn get(
+            &self,
+            name: &str,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(self.profiles.get(name).cloned())
+        }
+
+        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(self.profiles.values().cloned().collect())
+        }
+
+        fn save(&self, _profile: AgentProfile) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        fn delete(&self, _name: &str) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    fn default_profile() -> AgentProfile {
+        AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+    }
+
+    fn build_knot(id: impl Into<String>) -> Knot {
+        Knot {
+            id: KnotId(id.into()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "check it".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: false,
+        }
+    }
+
+    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
+        Loom {
+            id: LoomId(id.into()),
+            knots,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand(
+        loom: Loom,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<bool>>,
+    ) {
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (log_port, log_events) = TrackingLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends) = TrackingTieOffSink::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]),
+        });
+
+        let called = agent_runner.called.clone();
+
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            agent_runner as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockRigLogPort),
+            Arc::new(MockGitVersioningPort),
+        );
+
+        (use_case, log_events, tie_off_appends, called)
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    /// Known temp file (sedXXXXXXX pattern) on Created event:
+    /// - No loom-log entries (not even StrandSkipped)
+    /// - Agent runner is NOT called
+    /// - No tie-off written
+    /// - Returns Ok(())
+    #[test]
+    fn known_temp_file_skipped_silently_on_created() {
+        let dir = TempDir::new().unwrap();
+        // Create a file with sed temp name, then delete it
+        let temp_path = dir.path().join("sedXXXXXXX");
+        std::fs::write(&temp_path, "temp content").unwrap();
+        std::fs::remove_file(&temp_path).unwrap();
+
+        assert!(
+            !temp_path.exists(),
+            "temp file should be deleted before test"
+        );
+        assert!(
+            is_known_temp_file(&temp_path),
+            "should be recognised as known temp file"
+        );
+
+        let (runner, called) = MockAgentRunner::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends, _) =
+            build_process_strand(loom, Arc::new(runner));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(temp_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+
+        // Should succeed silently
+        assert!(result.is_ok());
+
+        // No loom-log entries
+        let events = log_events.lock().unwrap();
+        assert!(
+            events.is_empty(),
+            "known temp file should produce no loom-log entries"
+        );
+
+        // Agent runner NOT called
+        let was_called = called.lock().unwrap();
+        assert!(
+            !*was_called,
+            "agent runner should NOT be called for known temp files"
+        );
+
+        // No tie-off written
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(
+            appends.is_empty(),
+            "no tie-off should be written for known temp files"
+        );
+    }
+
+    /// Known temp file on Modified event: same silent skip behaviour.
+    #[test]
+    fn known_temp_file_skipped_silently_on_modified() {
+        let dir = TempDir::new().unwrap();
+        let temp_path = dir.path().join("sedAbCdEfG");
+        std::fs::write(&temp_path, "temp").unwrap();
+        std::fs::remove_file(&temp_path).unwrap();
+
+        let (runner, called) = MockAgentRunner::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends, _) =
+            build_process_strand(loom, Arc::new(runner));
+
+        let event = StrandEvent::Modified {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(temp_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // No loom-log entries
+        let events = log_events.lock().unwrap();
+        assert!(events.is_empty());
+
+        // Agent runner NOT called
+        let was_called = called.lock().unwrap();
+        assert!(!*was_called);
+
+        // No tie-off written
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(appends.is_empty());
+    }
+
+    /// Unknown missing file on Created event:
+    /// - Loom-log receives StrandSkipped
+    /// - Agent runner is NOT called
+    /// - No tie-off written
+    /// - Returns Ok(())
+    #[test]
+    fn unknown_missing_file_logs_strand_skipped() {
+        let dir = TempDir::new().unwrap();
+        let missing_path = dir.path().join("does_not_exist.md");
+        // Don't create the file — it genuinely doesn't exist
+        assert!(
+            !missing_path.exists(),
+            "file should not exist"
+        );
+        assert!(
+            !is_known_temp_file(&missing_path),
+            "should not be a known temp file"
+        );
+
+        let (runner, called) = MockAgentRunner::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends, _) =
+            build_process_strand(loom, Arc::new(runner));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(missing_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+
+        // Should succeed (missing files are handled gracefully)
+        assert!(result.is_ok());
+
+        // Loom-log: exactly one StrandSkipped event
+        let events = log_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "should have exactly one loom-log event"
+        );
+        match &events[0] {
+            LoomEvent::StrandSkipped {
+                strand_path, reason, ..
+            } => {
+                assert_eq!(strand_path.0, missing_path);
+                assert_eq!(reason, "missing file (unknown pattern)");
+            }
+            other => panic!(
+                "expected StrandSkipped for missing file, got {:?}",
+                other
+            ),
+        }
+
+        // Agent runner NOT called
+        let was_called = called.lock().unwrap();
+        assert!(
+            !*was_called,
+            "agent runner should NOT be called for missing files"
+        );
+
+        // No tie-off written
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(
+            appends.is_empty(),
+            "no tie-off should be written for missing files"
+        );
+    }
+
+    /// Existing file on Created event: passes through to normal
+    /// processing (regression guard — existence check must not
+    /// interfere with normal operation).
+    #[test]
+    fn existing_file_passes_through_to_processing() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("real_file.md");
+        std::fs::write(&file_path, "real content").unwrap();
+        assert!(file_path.exists());
+
+        let (runner, called) = MockAgentRunner::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends, _) =
+            build_process_strand(loom, Arc::new(runner));
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(file_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "should process existing file normally"
+        );
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!(
+                "expected KnotProcessing for existing file, got {:?}",
+                other
+            ),
+        }
+
+        // Agent runner IS called
+        let was_called = called.lock().unwrap();
+        assert!(
+            *was_called,
+            "agent runner should be called for existing files"
+        );
+
+        // Tie-off IS written
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+    }
+
+    /// Deleted events skip the existence check (file is expected to
+    /// be gone). Regression guard — must not interfere with deleted
+    /// event processing.
+    #[test]
+    fn deleted_events_skip_existence_check() {
+        let dir = TempDir::new().unwrap();
+        let deleted_path = dir.path().join("was_here.md");
+        // Don't create the file — it's deleted
+        assert!(!deleted_path.exists());
+
+        let (runner, called) = MockAgentRunner::new();
+        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let (use_case, log_events, tie_off_appends, _) =
+            build_process_strand(loom, Arc::new(runner));
+
+        let event = StrandEvent::Deleted {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(deleted_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "should process deleted events normally"
+        );
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!(
+                "expected KnotProcessing for deleted event, got {:?}",
+                other
+            ),
+        }
+
+        // Agent runner IS called (deleted events invoke the agent
+        // with deletion notice in prompt)
+        let was_called = called.lock().unwrap();
+        assert!(
+            *was_called,
+            "agent runner should be called for deleted events"
+        );
+
+        // Tie-off IS written
         let appends = tie_off_appends.lock().unwrap();
         assert_eq!(appends.len(), 1, "tie-off should be appended");
     }
