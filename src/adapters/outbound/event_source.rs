@@ -1202,11 +1202,9 @@ name: new-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
-prompt-template:
-  instructions: \"Review the document\"
 ---
 
-# New Knot
+Review the document
 ";
         let knot_path = loom_dir.path().join("new-knot.md");
         fs::write(&knot_path, knot_content).unwrap();
@@ -1255,11 +1253,9 @@ name: existing-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
-prompt-template:
-  instructions: \"Initial instructions\"
 ---
 
-# Existing Knot
+Initial instructions
 ";
         let knot_path = loom_dir.path().join("existing-knot.md");
         fs::write(&knot_path, knot_content).unwrap();
@@ -1283,11 +1279,9 @@ name: existing-knot
 agent-profile-ref: detailed
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
-prompt-template:
-  instructions: \"Updated instructions\"
 ---
 
-# Existing Knot (Updated)
+Updated instructions
 ";
         fs::write(&knot_path, updated_content).unwrap();
 
@@ -1334,11 +1328,9 @@ name: to-delete
 agent-profile-ref: fast
 strand-dir: \"strands\"
 tie-off-dir: \"tie-offs\"
-prompt-template:
-  instructions: \"Instructions\"
 ---
 
-# To Delete
+Instructions
 ";
         let knot_path = loom_dir.path().join("to-delete.md");
         fs::write(&knot_path, knot_content).unwrap();
