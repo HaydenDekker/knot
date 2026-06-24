@@ -13,7 +13,7 @@ This is expected noise — the temp file was never a real strand. But currently 
 - Unknown missing files produce a new `LoomEvent::StrandSkipped` loom-log entry + console warning — the user can investigate if it's a real issue
 - Deleted events skip the check (file is expected to be gone)
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -64,11 +64,11 @@ This is expected noise — the temp file was never a real strand. But currently 
 
 ### Phase 3: Integration Test
 
-- [ ] Add test in `tests/pipeline.rs` (or new integration test file):
+- [x] Add test in `tests/pipeline.rs` (or new integration test file):
   - Create a temp file with `sedXXXXXXX` name in strand directory
   - Immediately delete it (simulating `sed -i` rename)
   - Verify: no agent invocation, no loom-log error entries, no tie-off written
-- [ ] Add test for unknown missing file:
+- [x] Add test for unknown missing file:
   - Trigger event for a file that doesn't exist and doesn't match temp patterns
   - Verify: `StrandSkipped` in loom-log, no agent invocation
 
