@@ -130,14 +130,9 @@ fn make_git_versioned_knot(
         &format!("agent-profile-ref: {agent_profile_ref}"),
         &format!("strand-dir: \"{strand_dir}\""),
         "git-versioned: true",
-        "prompt-template:",
-        "  instructions: |",
-        &format!("    Test knot: {name}."),
         "---",
         "",
-        &format!("# {name}"),
-        "",
-        "Test knot definition.",
+        &format!("Test knot: {name}."),
         "",
     ].join("\n")
 }

@@ -36,14 +36,9 @@ pub fn make_knot_content(
         &format!("agent-profile-ref: {agent_profile_ref}"),
         &format!("strand-dir: \"{strand_dir}\""),
         "git-versioned: false",
-        "prompt-template:",
-        "  instructions: |",
-        &format!("    Test knot: {name}."),
         "---",
         "",
-        &format!("# {name}"),
-        "",
-        "Test knot definition.",
+        &format!("Test knot: {name}."),
         "",
     ].join("\n")
 }
@@ -92,9 +87,8 @@ pub fn create_fast_profile(rig_dir: &Path) {
     });
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\n\
-profile-prompt: |\n  You are a reviewer.\n---\n\n\
-Fast Profile\n",
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\n---\n\n\
+You are a reviewer.\n",
     )
     .unwrap_or_else(|e| {
         panic!("failed to write fast profile: {}", e)
@@ -122,9 +116,8 @@ pub fn create_agent_profile(
     fs::write(
         profiles_dir.join(format!("{name}.md")),
         format!(
-            "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n\
-profile-prompt: |\n  {prompt}\n---\n\n\
-{name} Profile\n"
+            "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n---\n\n\
+{prompt}\n"
         ),
     )
     .unwrap();
@@ -948,8 +941,8 @@ mod tests {
         assert!(content.contains("name: review"));
         assert!(content.contains("agent-profile-ref: fast"));
         assert!(content.contains("strand-dir: \"./strands\""));
-        assert!(content.contains("prompt-template:"));
-        assert!(content.ends_with("Test knot definition.\n"));
+        assert!(!content.contains("prompt-template:"), "should not have prompt-template in frontmatter");
+        assert!(content.contains("Test knot: review."));
     }
 
     #[test]

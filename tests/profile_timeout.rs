@@ -31,11 +31,9 @@ fn profile_timeout_is_respected() {
         "provider: openai",
         "model: gpt-4o",
         "timeout: 1",
-        "profile-prompt: |",
-        "  You are a reviewer.",
         "---",
         "",
-        "Fast Profile",
+        "You are a reviewer.",
         "",
     ].join("\n");
     fs::write(profiles_dir.join("fast.md"), profile_content).unwrap();

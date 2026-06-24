@@ -28,7 +28,7 @@ fn binary_path() -> String {
 /// Helper: write a knot definition file inside a loom directory.
 fn write_knot(loom_dir: &std::path::Path, name: &str) {
     let content = format!(
-        "---\nname: {}\nagent-profile-ref: fast\nstrand-dir: \"./strands\"\nprompt-template:\n  instructions: |\n    Test knot.\n---\n\n# {}\n\nTest knot definition.\n",
+        "---\nname: {}\nagent-profile-ref: fast\nstrand-dir: \"./strands\"\n---\n\nTest knot: {}.\n",
         name, name
     );
     fs::write(loom_dir.join(format!("{}.md", name)), content).unwrap();
@@ -40,7 +40,7 @@ fn write_fast_profile(rig_dir: &std::path::Path) {
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
         profiles_dir.join("fast.md"),
-        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nprofile-prompt: |\n  You are a reviewer.\n---\n\nFast Profile\n",
+        "---\nname: fast\nprovider: openai\nmodel: gpt-4o\n---\n\nYou are a reviewer.\n",
     )
     .unwrap();
 }
