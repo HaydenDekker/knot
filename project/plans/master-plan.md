@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-22
+> **Last Updated:** 2026-06-24
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ⬜ Planned | 2026-06-24 |
 | 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
@@ -90,6 +91,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 42. Strand Missing File Handling
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-24
+**Goal:** Silently skip known temp files (e.g. `sed -i` macOS temp files) and log unknown missing files, avoiding spurious "File not found" errors in the loom-log.
+
+Full details in [strand-missing-file-handling.md](strand-missing-file-handling.md).
 
 ### 41. Tie-Off Context Extraction for Agent Processing
 
