@@ -182,9 +182,13 @@ impl RigAgentConfig {
 
 /// Shared agent configuration that multiple knots can reference.
 ///
-/// Stored as a `.md` file in `profiles/{name}.md` with YAML frontmatter.
-/// Knots reference it by `agent-profile-ref: {name}` and may override
-/// individual fields (model, tools) inline.
+/// Stored as a `.md` file in `profiles/{name}.md`. The file uses YAML
+/// frontmatter for structural metadata (`name`, `provider`, `model`,
+/// `tools`, `timeout`) and the markdown body (text after the closing
+/// `---`) for the profile prompt (`profile_prompt`).
+///
+/// Knots reference profiles by `agent-profile-ref: {name}` and may
+/// override individual fields (model, tools) inline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfile {
     /// Profile name (becomes the filename: `profiles/{name}.md`).
@@ -197,16 +201,14 @@ pub struct AgentProfile {
     #[serde(default)]
     pub tools: Vec<String>,
     /// The profile-level prompt segment given to the agent.
+    ///
+    /// In profile files this is stored as the markdown body after the
+    /// closing `---` frontmatter delimiter (not in YAML frontmatter).
     #[serde(rename = "profile-prompt")]
     pub profile_prompt: String,
     /// Session timeout in seconds. `None` means use the runner's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
-    /// Optional markdown body content from the profile file (after closing
-    /// `---` frontmatter delimiter). Not serialized to YAML frontmatter —
-    /// read from disk by the filesystem repository.
-    #[serde(skip_deserializing, default)]
-    pub body: Option<String>,
 }
 
 impl AgentProfile {
@@ -248,7 +250,6 @@ impl AgentProfile {
             tools: Vec::new(),
             profile_prompt,
             timeout: None,
-            body: None,
         })
     }
 
@@ -279,17 +280,7 @@ impl AgentProfile {
             tools,
             profile_prompt,
             timeout: None,
-            body: None,
         })
-    }
-
-    /// Add markdown body content to an existing profile.
-    ///
-    /// Used by the filesystem repository when reading profile files that
-    /// contain markdown body after the closing frontmatter delimiter.
-    pub fn with_body(mut self, body: Option<String>) -> Self {
-        self.body = body;
-        self
     }
 
     /// Set the session timeout in seconds.

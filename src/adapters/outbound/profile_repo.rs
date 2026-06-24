@@ -14,19 +14,6 @@ use crate::application::ports::{
 use crate::domain::knot_file::parse_agent_profile;
 use crate::domain::value_objects::AgentProfile;
 
-/// Extract the markdown body after the closing `---` delimiter in a
-/// profile file. Returns `None` if the file has no body content.
-fn extract_body(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let rest = &trimmed[3..];
-    let closing_pos = rest.find("---")?;
-    let after = rest[closing_pos + 3..].trim();
-    (!after.is_empty()).then(|| after.to_string())
-}
-
 /// Filesystem-backed implementation of `AgentProfileRepository`.
 ///
 /// Profiles are stored in `{rig}/profiles/` with file naming
@@ -92,8 +79,7 @@ impl AgentProfileRepository for FileSystemAgentProfileRepository {
                 e
             ))
         })?;
-        let body = extract_body(&content);
-        Ok(Some(profile.with_body(body)))
+        Ok(Some(profile))
     }
 
     fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
