@@ -143,10 +143,10 @@ Core parsing logic. Both parsers must work before anything else can follow.
 
 These use `KnotFile::parse()` so they get the new format automatically, but their **test fixtures** need updating.
 
-- [ ] Update test fixtures in `loom_repository.rs` (remove `prompt-template.instructions` from frontmatter, move to body)
-- [ ] Update test fixtures in `event_source.rs` (same pattern)
-- [ ] Verify `event_source.rs` knot reload logic works (uses `KnotFile::parse()` directly)
-- [ ] Verify `loom_repository.rs` scanning works (uses `KnotFile::parse()` directly)
+- [x] Update test fixtures in `loom_repository.rs` (remove `prompt-template.instructions` from frontmatter, move to body)
+- [x] Update test fixtures in `event_source.rs` (same pattern)
+- [x] Verify `event_source.rs` knot reload logic works (uses `KnotFile::parse()` directly)
+- [x] Verify `loom_repository.rs` scanning works (uses `KnotFile::parse()` directly)
 
 ### Phase 4: Application Layer — Use cases
 
