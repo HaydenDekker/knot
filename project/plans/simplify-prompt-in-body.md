@@ -48,7 +48,7 @@ Review the goals section of this PRD. Check that:
 - Goals align with the problem statement
 ```
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
 
 ## Existing Tests
 
@@ -211,11 +211,11 @@ cp -r .agents/skills/knot-update ~/.agents/skills/knot-update
 
 ### Phase 8: Demo Rig Files and Version
 
-- [ ] Update `rig/workflow-loom/review-knot.md`
-- [ ] Update `rig/new-loom/review-knot.md`
-- [ ] Bump `Cargo.toml` version (SemVer MINOR — breaking change to file format)
-- [ ] Run full test suite, verify clippy clean
-- [ ] Update `docs/release-notes.md` with format change note
+- [x] Update `rig/workflow-loom/review-knot.md`
+- [x] Update `rig/new-loom/review-knot.md`
+- [x] Bump `Cargo.toml` version (SemVer MINOR — breaking change to file format)
+- [x] Run full test suite, verify clippy clean
+- [x] Update `docs/release-notes.md` with format change note
 
 ## Notes
 
