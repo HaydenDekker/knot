@@ -128,16 +128,16 @@ Core parsing logic. Both parsers must work before anything else can follow.
 - **`get()` simplifies**: remove `.with_body()` call (body field is gone from AgentProfile)
 - Keep `list()` and `get()` — these are used in production (StateWriter, ProcessStrand)
 
-- [ ] Remove `save()` and `delete()` from `AgentProfileRepository` trait
-- [ ] Remove `PortError::ProfileSaveFailed` variant
-- [ ] Remove `MockAgentProfileRepository::save`/`delete`
-- [ ] Remove `FileSystemAgentProfileRepository::save`, `::delete`, `::ensure_dir`, `::profile_path`
-- [ ] Update `get()` to remove `.with_body()` call
-- [ ] Remove `extract_body()` helper
-- [ ] Remove/update save and delete test cases from `profile_repo.rs`
-- [ ] Update port contract tests in `ports.rs`
-- [ ] Update usecase test fixtures that call `save` on mock profile repo
-- [ ] Fix `create_profile_file()` test helper to not include `profile-prompt` in frontmatter
+- [x] Remove `save()` and `delete()` from `AgentProfileRepository` trait
+- [x] Remove `PortError::ProfileSaveFailed` variant
+- [x] Remove `MockAgentProfileRepository::save`/`delete`
+- [x] Remove `FileSystemAgentProfileRepository::save`, `::delete`, `::ensure_dir`, `::profile_path`
+- [x] Update `get()` to remove `.with_body()` call
+- [x] Remove `extract_body()` helper
+- [x] Remove/update save and delete test cases from `profile_repo.rs`
+- [x] Update port contract tests in `ports.rs`
+- [x] Update usecase test fixtures that call `save` on mock profile repo
+- [x] Fix `create_profile_file()` test helper to not include `profile-prompt` in frontmatter
 
 ### Phase 3: Outbound Adapters — Loom repository + Event source
 
