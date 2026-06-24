@@ -1,5 +1,49 @@
 # Release Notes
 
+## v0.18.0
+
+### Breaking Change — Prompt text moved to markdown body
+
+Profile and knot files no longer embed prompt text in YAML frontmatter. The plain text after the `---` separator is now the prompt content.
+
+**Before (profiles):**
+```
+---
+name: fast
+profile-prompt: |
+  You are a fast reviewer.
+---
+```
+
+**After (profiles):**
+```
+---
+name: fast
+---
+
+You are a fast reviewer.
+```
+
+**Before (knots):**
+```
+---
+name: review-knot
+prompt-template:
+  instructions: "Review docs"
+---
+```
+
+**After (knots):**
+```
+---
+name: review-knot
+---
+
+Review docs
+```
+
+Frontmatter retains only structural metadata (name, provider, model, tools, timeout for profiles; name, agent-profile-ref, strand-dir, git-versioned for knots).
+
 ## v0.12.0
 
 Current version. Knot is a local agent orchestration service that
