@@ -39,7 +39,7 @@ fn shutdown_writes_loom_stopped() {
     handle.abort();
 
     // Wait for thread to finish
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(50));
 
     // Verify loom-log exists and has LoomStarted (process ran correctly)
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -67,7 +67,7 @@ fn shutdown_drains_pipeline_before_loom_stopped() {
 
     // Shutdown
     handle.abort();
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(50));
 
     // Verify processing completed (StrandProcessed / KnotCompleted in log)
     let events = read_loom_log(&rig_dir, "review-loom");

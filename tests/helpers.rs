@@ -572,7 +572,7 @@ pub fn wait_for_state_field(
             }
         }
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -670,7 +670,7 @@ pub fn wait_for_loom_in_state(
             }
         }
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -750,7 +750,7 @@ pub fn wait_for_knot_status_in_state(
             }
         }
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -784,7 +784,7 @@ pub fn wait_for_state_file(rig_dir: &Path) -> Value {
         match read_state_file(rig_dir) {
             Ok(state) => return state,
             Err(_) => {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(50));
             }
         }
     }
@@ -964,7 +964,7 @@ pub fn wait_for_loom_log_event(
             }
         }
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

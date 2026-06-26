@@ -109,7 +109,6 @@ fn agent_execution_append_mode_tie_offs() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Second strand
-    thread::sleep(Duration::from_millis(500));
     create_strand(&rig_dir, "feature2.md", "feature 2");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
@@ -238,7 +237,6 @@ fn agent_handles_deleted_strand() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Delete strand
-    thread::sleep(Duration::from_millis(500));
     fs::remove_file(&strand_path).unwrap();
 
     // Wait for the delete to be processed
@@ -291,7 +289,6 @@ fn strand_processed_no_error_on_success() {
     create_strand(&rig_dir, "feature.md", "content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    thread::sleep(Duration::from_millis(500));
     let events = read_loom_log(&rig_dir, "review-loom");
 
     // Find StrandProcessed events
@@ -383,7 +380,6 @@ fn agent_handles_multiple_looms_independently() {
 
     // Create strands for both looms
     create_strand(&rig_dir, "feature.md", "feature");
-    thread::sleep(Duration::from_millis(200));
 
     // Both should complete
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");

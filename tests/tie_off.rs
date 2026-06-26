@@ -70,7 +70,7 @@ fn tie_off_append_mode_history() {
         .map(|m| m.len())
         .unwrap_or(0);
     for _ in 0..60 {
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(50));
         if let Ok(m) = fs::metadata(&tie_off_path) {
             if m.len() > first_size {
                 break;

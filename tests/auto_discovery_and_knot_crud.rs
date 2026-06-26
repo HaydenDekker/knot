@@ -25,7 +25,6 @@ fn auto_discover_new_loom() {
     assert!(state.get("looms").and_then(|v| v.as_array()).unwrap().is_empty());
 
     // Create a new loom directory
-    thread::sleep(Duration::from_millis(500));
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
@@ -50,7 +49,6 @@ fn auto_discover_new_knot() {
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Add a second knot
-    thread::sleep(Duration::from_millis(500));
     create_knot_file(&loom_dir, "summary");
 
     // Wait for the second knot to be discovered
@@ -75,7 +73,6 @@ fn auto_detect_knot_deletion() {
     wait_for_loom_in_state(&rig_dir, "review-loom", 2);
 
     // Delete one knot file
-    thread::sleep(Duration::from_millis(500));
     fs::remove_file(loom_dir.join("summary.md")).unwrap();
 
     // Wait for deletion to be detected
@@ -87,7 +84,7 @@ fn auto_detect_knot_deletion() {
         let state = match read_state_file(&rig_dir) {
             Ok(s) => s,
             Err(_) => {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(50));
                 continue;
             }
         };
@@ -105,7 +102,7 @@ fn auto_detect_knot_deletion() {
         if knot_count <= 1 {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     handle.abort();
@@ -126,7 +123,6 @@ fn auto_detect_loom_deletion() {
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Delete the loom directory
-    thread::sleep(Duration::from_millis(500));
     fs::remove_dir_all(&loom_dir).unwrap();
 
     // Wait for deletion to be detected
@@ -138,7 +134,7 @@ fn auto_detect_loom_deletion() {
         let state = match read_state_file(&rig_dir) {
             Ok(s) => s,
             Err(_) => {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(50));
                 continue;
             }
         };
@@ -146,7 +142,7 @@ fn auto_detect_loom_deletion() {
         if looms.is_empty() {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     handle.abort();
@@ -167,7 +163,6 @@ fn auto_detect_knot_modification() {
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Modify the knot file
-    thread::sleep(Duration::from_millis(500));
     let modified_content = make_knot_content("review", "fast", "./strands");
     fs::write(loom_dir.join("review.md"), &modified_content).unwrap();
 
@@ -186,7 +181,7 @@ fn auto_detect_knot_modification() {
         if types.contains(&"KnotRegistered") && types.len() >= 2 {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     handle.abort();
@@ -205,13 +200,11 @@ fn auto_discover_multiple_looms_sequentially() {
     assert!(state.get("looms").and_then(|v| v.as_array()).unwrap().is_empty());
 
     // Create first loom
-    thread::sleep(Duration::from_millis(500));
     let loom1 = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom1, "review");
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Create second loom
-    thread::sleep(Duration::from_millis(500));
     let loom2 = create_loom_dir(&rig_dir, "planning");
     create_knot_file(&loom2, "plan");
     wait_for_loom_in_state(&rig_dir, "planning-loom", 1);
@@ -236,7 +229,6 @@ fn loom_log_records_discovery_events() {
     let _ = wait_for_state_file(&rig_dir);
 
     // Create loom
-    thread::sleep(Duration::from_millis(500));
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
@@ -266,7 +258,6 @@ fn auto_discover_rapid_loom_creations() {
     let _ = wait_for_state_file(&rig_dir);
 
     // Rapidly create 3 looms
-    thread::sleep(Duration::from_millis(500));
     for i in 0..3 {
         let loom_dir = create_loom_dir(&rig_dir, &format!("loom{}", i));
         create_knot_file(&loom_dir, "knot");
@@ -304,7 +295,6 @@ fn auto_discovery_is_idempotent() {
     assert_eq!(looms.len(), 1);
 
     // Modify the knot file (triggers re-scan)
-    thread::sleep(Duration::from_millis(500));
     fs::write(
         loom_dir.join("review.md"),
         make_knot_content("review", "fast", "./strands"),
@@ -312,7 +302,7 @@ fn auto_discovery_is_idempotent() {
     .unwrap();
 
     // After re-scan, should still be exactly 1 loom
-    thread::sleep(Duration::from_millis(2000));
+    thread::sleep(Duration::from_millis(200));
     let state = read_state_file(&rig_dir).unwrap();
     let looms = state.get("looms").and_then(|v| v.as_array()).unwrap();
     assert_eq!(

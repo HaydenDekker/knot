@@ -38,7 +38,7 @@ fn git_commit_created_after_processing() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Wait for git commit to complete
-    thread::sleep(Duration::from_millis(1000));
+    thread::sleep(Duration::from_millis(200));
 
     let final_commits = count_commits(project_root);
     assert!(
@@ -71,7 +71,7 @@ fn no_git_commit_when_not_versioned() {
     create_strand(&rig_dir, "feature.md", "content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    thread::sleep(Duration::from_millis(1000));
+    thread::sleep(Duration::from_millis(200));
 
     let final_commits = count_commits(project_root);
     assert_eq!(

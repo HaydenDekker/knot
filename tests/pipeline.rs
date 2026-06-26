@@ -43,9 +43,8 @@ fn pipeline_processes_strand_create() {
     // Verify loom-log has KnotCompleted event
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
-    // Verify tie-off was written
+    // Verify tie-off was written (status already confirmed, file should be ready)
     let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
-    thread::sleep(Duration::from_millis(500));
     let tie_off_file = tie_off_dir.join("review-tie-off.md");
     assert!(
         tie_off_file.exists(),
@@ -83,7 +82,6 @@ fn pipeline_reprocesses_on_strand_modify() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Modify the strand — triggers reprocessing
-    thread::sleep(Duration::from_millis(500));
     fs::write(&strand_path, "v2 modified").unwrap();
 
     // Wait for KnotCompleted again (reprocessing)
@@ -104,7 +102,7 @@ fn pipeline_reprocesses_on_strand_modify() {
         if completed_count >= 2 {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     assert!(
@@ -136,7 +134,6 @@ fn pipeline_handles_strand_delete() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Delete the strand
-    thread::sleep(Duration::from_millis(500));
     fs::remove_file(&strand_path).unwrap();
 
     // Wait for StrandProcessed event (the delete triggers processing too)
@@ -157,7 +154,7 @@ fn pipeline_handles_strand_delete() {
         if found_processed {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     assert!(found_processed, "should have StrandProcessed event after delete");
@@ -192,8 +189,10 @@ fn pipeline_debounces_rapid_strand_changes() {
     // Wait for processing to complete
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
+    // Wait for StrandProcessed to confirm processing finished
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+
     // Count KnotProcessing events — should be limited by debounce
-    thread::sleep(Duration::from_millis(1000));
     let events = read_loom_log(&rig_dir, "review-loom");
     let processing_count = events
         .iter()
@@ -291,7 +290,6 @@ fn loom_log_contains_full_event_sequence() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Read loom-log and verify event sequence
-    thread::sleep(Duration::from_millis(500));
     let events = read_loom_log(&rig_dir, "review-loom");
     let types: Vec<&str> = events
         .iter()
@@ -364,7 +362,6 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
     wait_for_loom_log_event(&rig_dir, "review-loom", "StrandIgnored");
 
     // Verify the StrandIgnored event has correct fields
-    thread::sleep(Duration::from_millis(500));
     let events = read_loom_log(&rig_dir, "review-loom");
     let ignored_event = events.iter().find(|e| {
         loom_log_event_type(e)
@@ -408,7 +405,9 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
 
     // --- Text file: should process normally ---
 
-    thread::sleep(Duration::from_millis(500));
+    // Wait briefly for binary file processing to finish
+    // (binary files produce StrandIgnored, not StrandProcessed)
+    thread::sleep(Duration::from_millis(100));
     create_strand(&rig_dir, "notes.txt", "some plain text notes");
 
     // Wait for normal processing to complete
@@ -416,7 +415,6 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
     // Verify tie-off was written
-    thread::sleep(Duration::from_millis(500));
     let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
     let tie_off_file = tie_off_dir.join("review-tie-off.md");
     assert!(
@@ -479,7 +477,6 @@ fn pipeline_processes_non_md_text_files() {
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
     // Verify tie-off was written
-    thread::sleep(Duration::from_millis(500));
     let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
     let tie_off_file = tie_off_dir.join("review-tie-off.md");
     assert!(
@@ -583,9 +580,7 @@ fn delete_event_agent_receives_context() {
     // Phase 1: Create a strand and wait for processing
     let strand_path = create_strand(&rig_dir, "feature.md", "initial content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-
-    // Wait for debounce to settle before deletion
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
 
     // Phase 2: Delete the strand and wait for delete processing
     fs::remove_file(&strand_path).unwrap();
@@ -606,9 +601,8 @@ fn delete_event_agent_receives_context() {
                 break;
             }
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
-    thread::sleep(Duration::from_millis(500));
 
     // Read the captured stdin from the delete-processing run
     let prompt = fs::read_to_string(&capture_file)
@@ -693,7 +687,6 @@ fn delete_event_agent_skips_missing_file() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Delete the strand
-    thread::sleep(Duration::from_millis(500));
     fs::remove_file(&strand_path).unwrap();
 
     // Wait for delete processing — look for second KnotCompleted in loom-log
@@ -714,7 +707,7 @@ fn delete_event_agent_skips_missing_file() {
         if completed_count >= 2 {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     // Should have exactly 2 KnotCompleted events (create + delete)
@@ -818,10 +811,10 @@ fn pipeline_silently_skips_known_temp_file() {
     // The slow agent keeps the pipeline busy for ~3 seconds.
     let normal_path = strands_dir.join("normal.md");
     fs::write(&normal_path, "normal content").unwrap();
-    // Wait for debounce (100ms) + processing start + agent sleep to begin.
-    // 300ms gives plenty of time for the event to be emitted and the
+    // Wait for debounce (20ms) + processing start + agent sleep to begin.
+    // 100ms gives plenty of time for the event to be emitted and the
     // agent to start executing (the 3s sleep begins).
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(100));
 
     // Phase 2: While the slow agent is busy, create the temp file.
     // Its Created event enters the debounce pending map.
@@ -829,7 +822,7 @@ fn pipeline_silently_skips_known_temp_file() {
     // Created+Deleted events coalesce to just Deleted.
     let temp_path = strands_dir.join("sedXXXXXXX");
     fs::write(&temp_path, "temp content").unwrap();
-    // Immediate delete — within the debounce window (100ms).
+    // Immediate delete — within the debounce window (20ms).
     // The notify events (Created, Modified, Deleted) coalesce
     // to just Deleted in the debounce engine. The Deleted event
     // is processed normally (by design — deleted events skip
@@ -840,8 +833,8 @@ fn pipeline_silently_skips_known_temp_file() {
     // Phase 3: Wait for normal.md processing to complete.
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    // Give some extra time for the sedXXXXXXX event to be processed
-    thread::sleep(Duration::from_secs(2));
+    // Wait for any remaining events to be processed
+    thread::sleep(Duration::from_millis(200));
 
     // Read loom-log and verify
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -917,12 +910,12 @@ fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
     // Phase 1: Create normal.md and wait for processing to start
     let normal_path = strands_dir.join("normal.md");
     fs::write(&normal_path, "normal content").unwrap();
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(100));
 
     // Phase 2: While processing, create the missing file and delete it
     let missing_path = strands_dir.join("some_missing_file.md");
     fs::write(&missing_path, "will be deleted").unwrap();
-    thread::sleep(Duration::from_millis(200)); // wait for debounce
+    thread::sleep(Duration::from_millis(50)); // wait for debounce
     fs::remove_file(&missing_path).unwrap();
 
     // Phase 3: Wait for normal.md processing to complete
@@ -931,7 +924,6 @@ fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
     // Phase 4: Wait for the StrandSkipped event from the missing file
     wait_for_loom_log_event(&rig_dir, "review-loom", "StrandSkipped");
 
-    thread::sleep(Duration::from_millis(500));
     let events = read_loom_log(&rig_dir, "review-loom");
 
     // Verify StrandSkipped is present
@@ -1005,41 +997,51 @@ fn delete_event_large_tieoff_bounded_context() {
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
-    // Create target strand and wait for processing + debounce settle
+    // Create target strand and wait for processing to complete
     let target_strand = create_strand(&rig_dir, "target.md", "v1");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
 
     // Create other strands to add noise entries (interleaved)
     let _other1 = create_strand(&rig_dir, "other1.md", "noise 1");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
 
-    // Modify target — each modification needs debounce settle time
+    // Modify target — add explicit delay between writes to ensure
+    // separate tie-off entries (debounce window is 20ms, but tie-off
+    // write is async so we need extra time for the previous entry)
     fs::write(&target_strand, "v2").unwrap();
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+    thread::sleep(Duration::from_millis(100));
 
     let _other2 = create_strand(&rig_dir, "other2.md", "noise 2");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
 
     fs::write(&target_strand, "v3").unwrap();
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+    thread::sleep(Duration::from_millis(100));
 
     let _other3 = create_strand(&rig_dir, "other3.md", "noise 3");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
 
     fs::write(&target_strand, "v4").unwrap();
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+    thread::sleep(Duration::from_millis(100));
 
     fs::write(&target_strand, "v5").unwrap();
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+    thread::sleep(Duration::from_millis(100));
 
     fs::write(&target_strand, "v6").unwrap();
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
-    thread::sleep(Duration::from_secs(1));
+    wait_for_loom_log_event(&rig_dir, "review-loom", "StrandProcessed");
+    thread::sleep(Duration::from_millis(100));
 
     // At this point target.md should have 6+ entries in the tie-off
     // and there are 3 other strands with entries too.
@@ -1073,9 +1075,8 @@ fn delete_event_large_tieoff_bounded_context() {
                 break;
             }
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
-    thread::sleep(Duration::from_millis(500));
 
     // Read the captured stdin from the delete-processing run
     let prompt = fs::read_to_string(&capture_file)
@@ -1223,7 +1224,7 @@ Knot B instructions.";
         if knot_a_completions >= 1 && knot_b_completions >= 1 {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     assert!(
@@ -1274,7 +1275,7 @@ Knot A instructions — updated strand_dir.";
             }
         }
         if !knot_a_updated {
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -1313,7 +1314,7 @@ Knot A instructions — updated strand_dir.";
         if knot_b_second_completion {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     assert!(

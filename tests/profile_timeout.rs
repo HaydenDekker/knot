@@ -73,7 +73,7 @@ fn profile_timeout_is_respected() {
         let state = match read_state_file(&rig_dir) {
             Ok(s) => s,
             Err(_) => {
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(50));
                 continue;
             }
         };
@@ -90,7 +90,7 @@ fn profile_timeout_is_respected() {
                 break;
             }
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50));
     }
 
     handle.abort();
