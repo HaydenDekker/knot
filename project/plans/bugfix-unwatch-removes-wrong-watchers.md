@@ -16,7 +16,7 @@ This is too broad — `watched_dirs` can hold multiple entries for the same path
 
 `unwatch()` only removes the entry matching the specific `(path, WatchType)` pair. The `notify::unwatch()` call (which stops the underlying file system watch) only fires when the **last** watcher entry for a path is removed, so the remaining knot watchers continue receiving events.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-06-26)
 
 ## Existing Tests
 
@@ -35,51 +35,59 @@ This is too broad — `watched_dirs` can hold multiple entries for the same path
 
 ## Phases
 
-### Phase 0: Failing Test — Multi-Knot Shared Strand Directory
+### Phase 0: Failing Test — Multi-Knot Shared Strand Directory ✅
 
-- [ ] Add unit test to `event_source.rs` `mod tests`: two knots (same loom, different knot IDs) registered with the same `strand_dir`. Call `unwatch_with_type(path, Strand(loom, knot-a))`. Verify: knot-a entry removed from `watched_dirs`, knot-b entry still present, `notify::unwatch()` NOT called (since knot-b still watches the path).
-- [ ] Test uses the `NotifyEventSource` directly with `register_watch` + `watch` + the new `unwatch_with_type` method
-- [ ] Also add a test: after removing the **last** watcher for a path, `notify::unwatch()` IS called
+- [x] Add unit test to `event_source.rs` `mod tests`: two knots (same loom, different knot IDs) registered with the same `strand_dir`. Call `unwatch_with_type(path, Strand(loom, knot-a))`. Verify: knot-a entry removed from `watched_dirs`, knot-b entry still present, `notify::unwatch()` NOT called (since knot-b still watches the path).
+- [x] Test uses the `NotifyEventSource` directly with `register_watch` + `watch` + the new `unwatch_with_type` method
+- [x] Also add a test: after removing the **last** watcher for a path, `notify::unwatch()` IS called
 
-### Phase 1: Add `unwatch_with_type` to `EventSource` Trait
+### Phase 1: Add `unwatch_with_type` to `EventSource` Trait ✅
 
-- [ ] Add `fn unwatch_with_type(&self, path: &Path, watch_type: WatchType) -> Result<(), PortError>` to the `EventSource` trait in `ports.rs`
-- [ ] Default implementation: delegates to `unwatch(path)` for backward compatibility with mock implementations in tests
-- [ ] Update the mock `EventSource` in `ports.rs` tests (if any)
-- [ ] Compile check
+- [x] Add `fn unwatch_with_type(&self, path: &Path, watch_type: WatchType) -> Result<(), PortError>` to the `EventSource` trait in `ports.rs`
+- [x] Default implementation: delegates to `unwatch(path)` for backward compatibility with mock implementations in tests
+- [x] Update the mock `EventSource` in `ports.rs` tests (if any) — default impl is sufficient
+- [x] Compile check — all 376 tests pass, 1 expected failure (Phase 0 bug reproduction)
 
-### Phase 2: Implement `unwatch_with_type` in `NotifyEventSource`
+### Phase 1: Add `unwatch_with_type` to `EventSource` Trait ✅
 
-- [ ] Implement `unwatch_with_type` in `NotifyEventSource`:
+- [x] Add `fn unwatch_with_type(&self, path: &Path, watch_type: WatchType) -> Result<(), PortError>` to the `EventSource` trait in `ports.rs`
+- [x] Default implementation: delegates to `unwatch(path)` for backward compatibility with mock implementations in tests
+- [x] Update the mock `EventSource` in `ports.rs` tests (if any) — default impl is sufficient
+- [x] Compile check — all 376 tests pass
+
+### Phase 2: Implement `unwatch_with_type` in `NotifyEventSource` ✅
+
+- [x] Implement `unwatch_with_type` in `NotifyEventSource`:
   - Canonicalise path
   - Remove only the entry matching `(canonical_path, watch_type)` using `watch_types_equal` (same pattern as `register_watch`)
   - Check if any other entries remain for this path
   - Only call `notify::unwatch()` if no other entries remain
   - Log the unwatch event
-- [ ] Verify Phase 0 tests pass
-- [ ] Compile check + clippy clean
+- [x] Verify Phase 0 tests pass — 2 new tests, both green
+- [x] Compile check + clippy clean — 378 tests pass, 0 failures
 
-### Phase 3: Update Callers in `usecases.rs`
+### Phase 3: Update Callers in `usecases.rs` ✅
 
-- [ ] `handle_knot_modified` (line ~1549): change `self.event_source.unwatch(&old_strand_dir)` to `self.event_source.unwatch_with_type(&old_strand_dir, WatchType::Strand(loom_id.clone(), knot_id.clone()))`
-- [ ] `handle_knot_deleted` (line ~1650): same — pass `WatchType::Strand(loom_id, knot_id)` so only the deleted knot's entry is removed
-- [ ] `UnregisterLoom` (line ~436): can keep calling `unwatch()` since all knots in the loom are being removed, OR change to `unwatch_with_type` for consistency. Leave as-is since the existing behaviour (removing all entries) is correct when the entire loom is being unregistered.
-- [ ] Run all existing tests — verify no regressions (existing tests use mock `EventSource` which delegates to `unwatch`)
-- [ ] Compile check + clippy clean
+- [x] `handle_knot_modified` (line ~1549): changed to `self.event_source.unwatch_with_type(&old_strand_dir, WatchType::Strand(loom_id.clone(), knot_id.clone()))`
+- [x] `handle_knot_deleted` (line ~1650): changed to `self.event_source.unwatch_with_type(&strand_dir, WatchType::Strand(loom_id.clone(), knot_id.clone()))`
+- [x] `UnregisterLoom` (line ~436): kept as `unwatch()` — all knots in the loom are being removed so removing all entries is correct
+- [x] Run all existing tests — verify no regressions — 378 tests pass, 0 failures
+- [x] Compile check + clippy clean — no new warnings
 
-### Phase 4: Integration Test — Multi-Knot Shared Directory
+### Phase 4: Integration Test — Multi-Knot Shared Directory ✅
 
-- [ ] Add integration test in `tests/pipeline.rs` (or a new test file if appropriate): two knots sharing a strand directory. Modify one knot's strand_dir. Verify: the other knot still processes strand events from the shared directory.
-- [ ] This is the end-to-end verification of the bug fix
-- [ ] Run full test suite — all tests pass
+- [x] Add integration test in `tests/pipeline.rs`: two knots sharing a strand directory. Modify one knot's strand_dir. Verify: the other knot still processes strand events from the shared directory.
+- [x] This is the end-to-end verification of the bug fix
+- [x] Run full test suite — 631 tests pass, 0 failures
+- [x] Fixed loom-log parsing in test: events are externally tagged (`{"KnotCompleted": {...}}`), so `event.get("knot_id")` returns `None`. Added `loom_log_event_inner()` helper to unwrap the variant key before accessing nested fields.
 
 ## Hexagonal Layers
 
 | Layer | File | Change |
 |-------|------|--------|
-| Port | `src/application/ports.rs` | New `unwatch_with_type` trait method |
-| Use Case | `src/application/usecases.rs` | Call `unwatch_with_type` in `handle_knot_modified`, `handle_knot_deleted` |
-| Outbound Adapter | `src/adapters/outbound/event_source.rs` | Implement `unwatch_with_type` — targeted entry removal + conditional notify unwatch |
+| Port | `src/application/ports.rs` | New `unwatch_with_type` trait method ✅ |
+| Use Case | `src/application/usecases.rs` | Changed to `unwatch_with_type` in `handle_knot_modified`, `handle_knot_deleted` ✅ |
+| Outbound Adapter | `src/adapters/outbound/event_source.rs` | Implemented `unwatch_with_type` — targeted entry removal + conditional notify unwatch ✅ |
 | Domain | None | No domain changes needed |
 
 ## Notes
