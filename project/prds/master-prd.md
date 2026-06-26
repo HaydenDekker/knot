@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-06-09
+> **Last Updated:** 2026-06-26
 
 ## How to Add a PRD
 
@@ -19,6 +19,7 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [Demand Control — Concurrency, Throughput and Service Tuning](prd-demand-control.md) | 🔵 Open | 2026-06-26 |
 | [System Reliability — Messaging Control, Replay and Rollback](prd-system-reliability.md) | 🔵 Open | 2026-06-09 |
 | [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | ✅ Complete | 2026-06-04 |
 | [AI-Driven File Generation from Loom Events](prd-ai-driven-file-generation.md) | ✅ Complete | 2026-06-03 |
@@ -26,6 +27,14 @@ To add it to this index:
 ---
 
 ## PRD Summaries
+
+### Demand Control — Concurrency, Throughput and Service Tuning
+
+**Status:** 🔵 Open
+**Created:** 2026-06-26
+**Summary:** Max parallel agent invocations, invocation performance visibility (recent N durations), token usage capture, and global rig configuration to tune outgoing demand on external AI services.
+
+Full details in [prd-demand-control.md](prd-demand-control.md).
 
 ### System Reliability — Messaging Control, Replay and Rollback
 
