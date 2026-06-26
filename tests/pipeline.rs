@@ -1125,3 +1125,201 @@ fn delete_event_large_tieoff_bounded_context() {
 
     handle.abort();
 }
+
+/// Two knots sharing the same strand directory: modifying one knot's
+/// strand_dir should NOT remove the other knot's watch on the shared
+/// directory. This is the end-to-end integration test for the bug fix
+/// where `unwatch()` was removing all entries for a path instead of
+/// just the matching (path, WatchType) pair.
+///
+/// Steps:
+/// 1. Create a loom with two knots (knot-a, knot-b) sharing `shared-strands`.
+/// 2. Start Knot and wait for both knots to register.
+/// 3. Create a strand file — both knots should process it.
+/// 4. Modify knot-a's strand_dir to `new-strands`.
+/// 5. Create another strand file in `shared-strands` — knot-b should
+///    still process it, proving knot-a's unwatch didn't wipe knot-b's watch.
+#[test]
+fn multi_knot_shared_directory_unwatch_does_not_remove_other_watch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rig_dir = tmp.path().join("rig");
+    let project_root = tmp.path();
+    fs::create_dir_all(&rig_dir).unwrap();
+
+    // Create the shared strand directory
+    let shared_strands = project_root.join("shared-strands");
+    fs::create_dir_all(&shared_strands).unwrap();
+
+    // Create a new strand directory for knot-a after modification
+    let new_strands = project_root.join("new-strands");
+    fs::create_dir_all(&new_strands).unwrap();
+
+    // Create the loom directory
+    let loom_dir = rig_dir.join("review-loom");
+    fs::create_dir_all(&loom_dir).unwrap();
+
+    // Create knot-a with shared-strands
+    let knot_a_content = "---
+name: knot-a
+agent-profile-ref: fast
+strand-dir: \"shared-strands\"
+git-versioned: false
+---
+
+Knot A instructions.";
+    fs::write(loom_dir.join("knot-a.md"), knot_a_content).unwrap();
+
+    // Create knot-b with the SAME shared-strands
+    let knot_b_content = "---
+name: knot-b
+agent-profile-ref: fast
+strand-dir: \"shared-strands\"
+git-versioned: false
+---
+
+Knot B instructions.";
+    fs::write(loom_dir.join("knot-b.md"), knot_b_content).unwrap();
+
+    // Create the fast profile and mock pi binary
+    create_fast_profile(&rig_dir);
+    create_mock_pi(&rig_dir, "mock tie-off output");
+
+    // Start Knot in background
+    let handle = start_knot(rig_dir.clone());
+
+    // Wait for the loom to be discovered with 2 knots
+    wait_for_loom_in_state(&rig_dir, "review-loom", 2);
+
+    // Create a strand file in the shared directory
+    let strand_path_1 = shared_strands.join("strand1.md");
+    fs::write(&strand_path_1, "strand content 1").unwrap();
+
+    // Wait for both knots to complete processing (each should produce KnotCompleted)
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut knot_a_completions = 0;
+    let mut knot_b_completions = 0;
+    loop {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+        let events = read_loom_log(&rig_dir, "review-loom");
+        for event in &events {
+            let event_type = loom_log_event_type(event);
+            if event_type == Some("KnotCompleted") {
+                // Determine which knot completed by checking knot_id
+                // Loog entries are externally tagged: {"KnotCompleted": {...}}
+                // so we must unwrap the variant key first.
+                if let Some(inner) = loom_log_event_inner(event) {
+                    if let Some(knot_id) = inner.get("knot_id").and_then(|k| k.as_str()) {
+                        if knot_id == "knot-a" {
+                            knot_a_completions += 1;
+                        } else if knot_id == "knot-b" {
+                            knot_b_completions += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if knot_a_completions >= 1 && knot_b_completions >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    assert!(
+        knot_a_completions >= 1,
+        "knot-a should have completed processing strand1, got {} completions",
+        knot_a_completions
+    );
+    assert!(
+        knot_b_completions >= 1,
+        "knot-b should have completed processing strand1, got {} completions",
+        knot_b_completions
+    );
+
+    // Now modify knot-a's strand_dir to a new directory
+    // This triggers handle_knot_modified which calls unwatch(old_strand_dir)
+    let modified_knot_a_content = "---
+name: knot-a
+agent-profile-ref: fast
+strand-dir: \"new-strands\"
+git-versioned: false
+---
+
+Knot A instructions — updated strand_dir.";
+    fs::write(loom_dir.join("knot-a.md"), modified_knot_a_content).unwrap();
+
+    // Wait for knot-a's strand_dir to be updated in state.json
+    let deadline2 = std::time::Instant::now() + Duration::from_secs(30);
+    let mut knot_a_updated = false;
+    while !knot_a_updated && std::time::Instant::now() < deadline2 {
+        if let Ok(state) = read_state_file(&rig_dir) {
+            if let Some(looms) = state.get("looms").and_then(|l| l.as_array()) {
+                for loom in looms {
+                    if let Some(looms_knots) = loom.get("knots").and_then(|k| k.as_array()) {
+                        for knot in looms_knots {
+                            if let Some(name) = knot.get("id").and_then(|n| n.as_str()) {
+                                if name == "knot-a" {
+                                    if let Some(strand_dir) = knot.get("strand_dir").and_then(|s| s.as_str()) {
+                                        if strand_dir.contains("new-strands") {
+                                            knot_a_updated = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !knot_a_updated {
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    // Create another strand file in the ORIGINAL shared directory.
+    // knot-b should STILL process it, because knot-a's unwatch should
+    // have only removed knot-a's entry, not knot-b's.
+    let strand_path_2 = shared_strands.join("strand2.md");
+    fs::write(&strand_path_2, "strand content 2").unwrap();
+
+    // Wait for knot-b to process strand2 (knot-a should NOT process it
+    // since it now watches new-strands, not shared-strands)
+    let deadline3 = std::time::Instant::now() + Duration::from_secs(60);
+    let mut knot_b_second_completion = false;
+    loop {
+        if std::time::Instant::now() > deadline3 {
+            break;
+        }
+        let events = read_loom_log(&rig_dir, "review-loom");
+        for event in &events {
+            let event_type = loom_log_event_type(event);
+            if event_type == Some("KnotCompleted") {
+                // Loog entries are externally tagged: {"KnotCompleted": {...}}
+                // so we must unwrap the variant key first.
+                if let Some(inner) = loom_log_event_inner(event) {
+                    if let Some(knot_id) = inner.get("knot_id").and_then(|k| k.as_str()) {
+                        if let Some(strand_path) = inner.get("strand_path").and_then(|s| s.as_str()) {
+                            if knot_id == "knot-b" && strand_path.contains("strand2") {
+                                knot_b_second_completion = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if knot_b_second_completion {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    assert!(
+        knot_b_second_completion,
+        "knot-b should still process strand2 from shared-strands after knot-a's strand_dir changed. This verifies the bug fix: unwatch() only removes the matching (path, WatchType) pair, not all entries for a path."
+    );
+
+    handle.abort();
+}

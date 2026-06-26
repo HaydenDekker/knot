@@ -262,8 +262,22 @@ pub fn start_event_pipeline(
     // for debounced events and `None` as a shutdown sentinel after
     // flushing pending entries. ProcessStrand reads from the queue
     // directly using pop() + notified().await, breaking on `None`.
-    let debounce_rx =
-        application::debounce::DebounceEngine::spawn_with_receiver(event_rx, join_set);
+    // Read test debounce timing from env vars (set by test helpers),
+    // falling back to production defaults.
+    let debounce_window = std::env::var("KNOT_TEST_DEBOUNCE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(application::debounce::DEFAULT_DEBOUNCE_WINDOW);
+    let check_interval = std::env::var("KNOT_TEST_CHECK_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
+
+    let debounce_rx = application::debounce::DebounceEngine::spawn_with_receiver_with_window(
+        event_rx, join_set, debounce_window, check_interval,
+    );
 
     // ProcessStrand loop: read debounced events and process them.
     let store = ctx.store.clone();

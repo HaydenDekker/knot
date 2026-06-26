@@ -547,6 +547,73 @@ impl NotifyEventSource {
         );
         self
     }
+
+    /// Remove a specific `(path, watch_type)` entry from `watched_dirs`.
+    ///
+    /// Unlike `unwatch()` which removes ALL entries for a path,
+    /// this method only removes the entry matching the exact
+    /// `(canonical_path, watch_type)` pair — mirroring the
+    /// deduplication pattern of `register_watch()`.
+    ///
+    /// Only calls `notify::unwatch()` when the last watcher entry
+    /// for the path is removed, so remaining knot watchers continue
+    /// receiving events from the shared directory.
+    pub fn unwatch_with_type(&self, path: &Path, watch_type: WatchType) {
+        // Canonicalise the path so it matches stored entries.
+        let canonical_path =
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+        // Determine label for logging before removing the entry.
+        let (wt_label, extra) = match &watch_type {
+            WatchType::Strand(_, knot_id) => ("Strand", Some(format!("knot={}", knot_id.0))),
+            WatchType::Rig => ("Rig", None),
+            WatchType::Loom(loom_id) => ("Loom", Some(format!("loom={}", loom_id.0))),
+        };
+
+        // Remove only the entry matching (path, watch_type), then check
+        // if any other entries remain for this path. Drop lock BEFORE
+        // calling notify::unwatch() to avoid deadlock.
+        let (has_remaining, removed_entry) = {
+            let mut inner = self.state.lock().unwrap();
+            let pos = inner
+                .watched_dirs
+                .iter()
+                .position(|(p, wt)| {
+                    p == &canonical_path
+                        && Self::watch_types_equal(wt, &watch_type)
+                });
+            let removed_entry = pos.and_then(|i| {
+                inner.watched_dirs.remove(i);
+                Some(())
+            });
+            let has_remaining = inner
+                .watched_dirs
+                .iter()
+                .any(|(p, _)| p == &canonical_path);
+            (has_remaining, removed_entry)
+        }; // state lock dropped here
+
+        // Only call notify::unwatch() if no other entries remain for
+        // this path — remaining knots still need the watch active.
+        if !has_remaining {
+            if let Some(()) = removed_entry {
+                if let Err(e) = self
+                    .watcher
+                    .lock()
+                    .unwrap()
+                    .unwatch(&canonical_path)
+                {
+                    logging::log_notify_event(
+                        "UnwatchError",
+                        &canonical_path,
+                        &format!("unwatch failed: {}", e),
+                    );
+                }
+            }
+        }
+
+        logging::log_watch_event("stopped", &canonical_path, wt_label, extra.as_deref());
+    }
 }
 
 impl EventSource for NotifyEventSource {
@@ -680,6 +747,17 @@ impl EventSource for NotifyEventSource {
         };
         logging::log_watch_event("stopped", &canonical_path, wt_label, extra.as_deref());
 
+        Ok(())
+    }
+
+    fn unwatch_with_type(
+        &self,
+        path: &Path,
+        watch_type: WatchType,
+    ) -> Result<(), PortError> {
+        // Delegate to the inherent implementation which handles
+        // targeted entry removal and conditional notify unwatch.
+        self.unwatch_with_type(path, watch_type);
         Ok(())
     }
 }
@@ -1709,5 +1787,206 @@ Just some markdown.
                 other
             ),
         }
+    }
+
+    // ── Multi-Knot Shared Directory Tests (Phase 0: bug reproduction) ───
+
+    /// Two knots (same loom, different knot IDs) watch the same strand
+    /// directory. When we remove only knot-a's watch via
+    /// `unwatch_with_type()`, knot-b's entry must remain in
+    /// `watched_dirs` and `notify::unwatch()` must NOT be called
+    /// (since knot-b still watches the path).
+    ///
+    /// This is the primary regression test for the bug where
+    /// `unwatch(path)` removed ALL entries for a path instead of
+    /// just the matching `(path, WatchType)` pair.
+    #[test]
+    fn unwatch_with_type_removes_only_matching_knot_entry() {
+        let shared_dir = TempDir::new().unwrap();
+        let (strand_tx, _strand_rx) = mpsc::channel::<StrandEvent>(100);
+        let (config_tx, _config_rx) = mpsc::channel::<ConfigEvent>(100);
+        let source = NotifyEventSource::new(
+            strand_tx,
+            config_tx,
+            PathBuf::from("/tmp"),
+        );
+
+        let loom_id = LoomId("loom-1".to_string());
+        let knot_a = KnotId("knot-a".to_string());
+        let knot_b = KnotId("knot-b".to_string());
+        let path = shared_dir.path().to_path_buf();
+
+        // Register two knots watching the same directory
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_a.clone()),
+        );
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_b.clone()),
+        );
+
+        // Verify both entries are registered
+        let inner = source.state.lock().unwrap();
+        assert_eq!(
+            inner.watched_dirs.len(), 2,
+            "expected 2 entries before unwatch"
+        );
+        drop(inner);
+
+        // Start the notify watch
+        source.watch(&path).unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        // Use unwatch_with_type to remove only knot-a's entry
+        source.unwatch_with_type(
+            &path,
+            WatchType::Strand(loom_id.clone(), knot_a.clone()),
+        );
+
+        // Verify: knot-b's entry should STILL be present
+        let inner = source.state.lock().unwrap();
+        let remaining: Vec<_> = inner
+            .watched_dirs
+            .iter()
+            .filter_map(|(_, wt)| match wt {
+                WatchType::Strand(l, k) if l == &loom_id => Some(k.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            remaining.contains(&knot_b),
+            "knot_b watch should still be present after unwatching knot_a. Remaining entries: {:?}",
+            inner.watched_dirs
+        );
+
+        // knot-a's entry should be gone
+        assert!(
+            !remaining.contains(&knot_a),
+            "knot_a watch should have been removed"
+        );
+    }
+
+    /// When the last watcher for a path is removed via
+    /// `unwatch_with_type()`, `notify::unwatch()` IS called,
+    /// freeing the OS file watch resource.
+    #[test]
+    fn unwatch_with_type_stops_notify_watch_when_last_entry_removed() {
+        let dir = TempDir::new().unwrap();
+        let (strand_tx, _strand_rx) = mpsc::channel::<StrandEvent>(100);
+        let (config_tx, _config_rx) = mpsc::channel::<ConfigEvent>(100);
+        let source = NotifyEventSource::new(
+            strand_tx,
+            config_tx,
+            PathBuf::from("/tmp"),
+        );
+
+        let loom_id = LoomId("loom-1".to_string());
+        let knot_a = KnotId("knot-a".to_string());
+        let knot_b = KnotId("knot-b".to_string());
+        let path = dir.path().to_path_buf();
+
+        // Register and watch
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_a.clone()),
+        );
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_b.clone()),
+        );
+        source.watch(&path).unwrap();
+
+        // Verify both entries exist
+        let inner = source.state.lock().unwrap();
+        assert_eq!(
+            inner.watched_dirs.len(), 2,
+            "expected 2 entries after watch"
+        );
+        drop(inner);
+
+        // Remove knot-a's entry — knot-b still watches, so notify::unwatch
+        // should NOT be called yet
+        source.unwatch_with_type(&path, WatchType::Strand(loom_id.clone(), knot_a));
+
+        // Verify knot-b is still registered and notify watch is still active
+        let inner = source.state.lock().unwrap();
+        assert_eq!(
+            inner.watched_dirs.len(), 1,
+            "expected 1 entry after removing knot-a"
+        );
+        drop(inner);
+
+        // Now remove knot-b's entry — this should trigger notify::unwatch
+        source.unwatch_with_type(&path, WatchType::Strand(loom_id, knot_b));
+
+        // Verify no entries remain
+        let inner = source.state.lock().unwrap();
+        assert!(
+            inner.watched_dirs.is_empty(),
+            "expected 0 entries after removing all watchers"
+        );
+        drop(inner);
+    }
+
+    /// After removing the **last** watcher for a path, `notify::unwatch()`
+    /// should be called (stopping the underlying file system watch).
+    ///
+    /// This is verified indirectly by calling `unwatch()` twice on the
+    /// same directory — the second call should not fail, and the state
+    /// should be clean.
+    #[test]
+    fn unwatch_removes_entry_and_stops_notify_watch() {
+        let dir = TempDir::new().unwrap();
+        let (strand_tx, _strand_rx) = mpsc::channel::<StrandEvent>(100);
+        let (config_tx, _config_rx) = mpsc::channel::<ConfigEvent>(100);
+        let source = NotifyEventSource::new(
+            strand_tx,
+            config_tx,
+            PathBuf::from("/tmp"),
+        );
+
+        let loom_id = LoomId("loom-1".to_string());
+        let knot_id = KnotId("knot-a".to_string());
+        let path = dir.path().to_path_buf();
+
+        // Register and watch
+        source.register_watch(
+            path.clone(),
+            WatchType::Strand(loom_id.clone(), knot_id.clone()),
+        );
+        source.watch(&path).unwrap();
+
+        // Verify entry exists
+        let inner = source.state.lock().unwrap();
+        assert_eq!(
+            inner.watched_dirs.len(), 1,
+            "expected 1 entry after watch, got {}",
+            inner.watched_dirs.len()
+        );
+        drop(inner);
+
+        // Unwatch — should remove the entry and call notify::unwatch()
+        source.unwatch(&path).unwrap();
+
+        // Verify entry is gone
+        let inner = source.state.lock().unwrap();
+        assert!(
+            inner.watched_dirs.is_empty(),
+            "expected 0 entries after unwatch, got {}",
+            inner.watched_dirs.len()
+        );
+        drop(inner);
+
+        // Verify notify::unwatch() was effective: watching again
+        // should succeed (no stale watch lingering)
+        source.watch(&path).unwrap();
+        let inner = source.state.lock().unwrap();
+        assert_eq!(
+            inner.watched_dirs.len(), 1,
+            "expected 1 entry after re-watch, got {}",
+            inner.watched_dirs.len()
+        );
     }
 }

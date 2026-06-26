@@ -412,11 +412,23 @@ impl Drop for KnotHandle {
     }
 }
 
+/// Fast debounce timing for integration tests.
+///
+/// Reduces the 100ms debounce window and 5ms check interval to
+/// 20ms / 2ms, cutting per-event wait time from ~105ms to ~22ms.
+/// With multiple events per test, this saves several seconds.
+const TEST_DEBOUNCE_MS: u64 = 20;
+const TEST_CHECK_MS: u64 = 2;
+
 /// Start Knot in a background thread.
 ///
 /// Spawns `knot::start_knot(config)` in its own `tokio::runtime::Runtime`
 /// on a dedicated OS thread. Returns a `KnotHandle` that signals the
 /// thread to shut down on drop.
+///
+/// Sets `KNOT_TEST_DEBOUNCE_MS` and `KNOT_TEST_CHECK_MS` env vars
+/// so the debounce engine runs with fast (20ms/2ms) timing instead
+/// of the production defaults (100ms/5ms).
 ///
 /// This allows integration tests to verify file-based state (reading
 /// `rig/state.json`) without needing an HTTP server.
@@ -429,6 +441,14 @@ impl Drop for KnotHandle {
 ///
 /// A `KnotHandle` for cleanup.
 pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
+    // Set fast debounce timing — env vars are process-global and
+    // read by the server at debounce engine startup. Only affects
+    // this test binary (integration test), not unit tests.
+    unsafe {
+        std::env::set_var("KNOT_TEST_DEBOUNCE_MS", TEST_DEBOUNCE_MS.to_string());
+        std::env::set_var("KNOT_TEST_CHECK_MS", TEST_CHECK_MS.to_string());
+    }
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let thread = thread::spawn(move || {
@@ -885,6 +905,24 @@ pub fn loom_log_event_type(event: &Value) -> Option<&str> {
     event.as_object().and_then(|obj| {
         obj.keys().next().map(|k| k.as_str())
     })
+}
+
+/// Extract the inner object from a loom-log JSON entry.
+///
+/// Loom-log entries are stored as externally tagged JSON with a single
+/// key that is the event variant name (e.g. `{"KnotCompleted":{...}}`).
+/// This returns the inner object containing the actual fields
+/// (`knot_id`, `strand_path`, etc.).
+///
+/// # Arguments
+///
+/// * `event` - Parsed JSON value from a loom-log line
+///
+/// # Returns
+///
+/// `Some(&Value)` of the inner object, or `None` if not an object.
+pub fn loom_log_event_inner<'a>(event: &'a Value) -> Option<&'a Value> {
+    event.as_object().and_then(|obj| obj.values().next())
 }
 
 /// Poll until a loom-log contains an event with a specific type.

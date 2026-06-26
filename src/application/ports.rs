@@ -278,6 +278,24 @@ pub trait EventSource: Send + Sync {
     /// Stop watching a directory.
     fn unwatch(&self, path: &Path) -> Result<(), PortError>;
 
+    /// Stop watching a specific watch type for a directory.
+    ///
+    /// Removes only the entry matching `(path, watch_type)`, leaving
+    /// other watch types for the same path intact. This is the
+    /// targeted version of `unwatch()` — use it when multiple knots
+    /// may share the same directory.
+    ///
+    /// Default implementation: delegates to `unwatch(path)` for
+    /// backward compatibility with mock implementations and existing
+    /// adapters that do not need targeted unwatching.
+    fn unwatch_with_type(
+        &self,
+        path: &Path,
+        _watch_type: crate::adapters::outbound::event_source::WatchType,
+    ) -> Result<(), PortError> {
+        self.unwatch(path)
+    }
+
     /// Associate loom and knot IDs with a source directory.
     ///
     /// Call this before `watch()` so emitted events carry the correct
@@ -409,6 +427,7 @@ pub trait StateWriterPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::outbound::event_source::WatchType;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -734,6 +753,18 @@ mod tests {
         let path = Path::new("/tmp/watched");
         assert!(source.watch(path).is_ok());
         assert!(source.unwatch(path).is_ok());
+
+        // Verify unwatch_with_type compiles and is callable (default impl)
+        assert!(
+            source.unwatch_with_type(
+                path,
+                WatchType::Strand(
+                    crate::domain::entities::LoomId("test".into()),
+                    crate::domain::entities::KnotId("test".into()),
+                ),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

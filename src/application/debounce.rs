@@ -16,10 +16,10 @@ use crate::domain::events::StrandEvent;
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 
 /// Default debounce window: 100 ms per file.
-const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
+pub const DEFAULT_DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 
-/// How often the engine checks for expired entries.
-const CHECK_INTERVAL: Duration = Duration::from_millis(5);
+/// Default check interval: 5 ms.
+pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_millis(5);
 
 // ── StrandEventKind ────────────────────────────────────────────────────────
 
@@ -209,7 +209,8 @@ impl QueueReceiver {
 pub struct DebounceEngine;
 
 impl DebounceEngine {
-    /// Start the debounce engine as a background tokio task.
+    /// Start the debounce engine as a background tokio task with
+    /// default (production) timing.
     ///
     /// Creates its own input channel. Returns:
     /// - `Sender<StrandEvent>` — feed raw events into the engine
@@ -220,16 +221,38 @@ impl DebounceEngine {
         QueueReceiver,
         JoinHandle<()>,
     ) {
+        Self::start_with_window(DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL)
+    }
+
+    /// Start the debounce engine with explicit timing parameters.
+    ///
+    /// Use this for tests that need a different debounce window
+    /// (e.g. 20 ms for fast CI feedback) while keeping the same
+    /// API as `start()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `window` — debounce window per file
+    /// * `check_interval` — how often to check for expired entries
+    pub fn start_with_window(
+        window: Duration,
+        check_interval: Duration,
+    ) -> (
+        mpsc::Sender<StrandEvent>,
+        QueueReceiver,
+        JoinHandle<()>,
+    ) {
         let (input_tx, input_rx) = mpsc::channel::<StrandEvent>(100);
         let queue = Arc::new(InspectQueue::new());
         let receiver = QueueReceiver::new(Arc::clone(&queue));
 
-        let handle = tokio::spawn(Self::run(input_rx, queue));
+        let handle = tokio::spawn(Self::run(input_rx, queue, window, check_interval));
 
         (input_tx, receiver, handle)
     }
 
-    /// Start the debounce engine using an external input channel.
+    /// Start the debounce engine using an external input channel
+    /// with default (production) timing.
     ///
     /// The provided `input_rx` is the receiver from the channel that
     /// `NotifyEventSource` sends raw events into. The debounce engine
@@ -242,15 +265,28 @@ impl DebounceEngine {
     pub fn start_with_receiver(
         input_rx: mpsc::Receiver<StrandEvent>,
     ) -> (QueueReceiver, JoinHandle<()>) {
+        Self::start_with_receiver_with_window(
+            input_rx, DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL,
+        )
+    }
+
+    /// Start the debounce engine using an external input channel with
+    /// explicit timing parameters.
+    pub fn start_with_receiver_with_window(
+        input_rx: mpsc::Receiver<StrandEvent>,
+        window: Duration,
+        check_interval: Duration,
+    ) -> (QueueReceiver, JoinHandle<()>) {
         let queue = Arc::new(InspectQueue::new());
         let receiver = QueueReceiver::new(Arc::clone(&queue));
 
-        let handle = tokio::spawn(Self::run(input_rx, queue));
+        let handle = tokio::spawn(Self::run(input_rx, queue, window, check_interval));
 
         (receiver, handle)
     }
 
-    /// Start the debounce engine, spawning into a `JoinSet`.
+    /// Start the debounce engine, spawning into a `JoinSet` with
+    /// default (production) timing.
     ///
     /// This variant ties the debounce task's lifetime to the caller's
     /// `JoinSet`, so it is aborted when the set is dropped or aborted.
@@ -265,8 +301,21 @@ impl DebounceEngine {
         input_rx: mpsc::Receiver<StrandEvent>,
         join_set: &mut tokio::task::JoinSet<()>,
     ) -> Arc<InspectQueue<Option<StrandEvent>>> {
+        Self::spawn_with_receiver_with_window(
+            input_rx, join_set, DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL,
+        )
+    }
+
+    /// Start the debounce engine, spawning into a `JoinSet` with
+    /// explicit timing parameters.
+    pub fn spawn_with_receiver_with_window(
+        input_rx: mpsc::Receiver<StrandEvent>,
+        join_set: &mut tokio::task::JoinSet<()>,
+        window: Duration,
+        check_interval: Duration,
+    ) -> Arc<InspectQueue<Option<StrandEvent>>> {
         let queue = Arc::new(InspectQueue::new());
-        join_set.spawn(Self::run(input_rx, Arc::clone(&queue)));
+        join_set.spawn(Self::run(input_rx, Arc::clone(&queue), window, check_interval));
         queue
     }
 
@@ -279,6 +328,8 @@ impl DebounceEngine {
     async fn run(
         mut input_rx: mpsc::Receiver<StrandEvent>,
         queue: Arc<InspectQueue<Option<StrandEvent>>>,
+        window: Duration,
+        check_interval: Duration,
     ) {
         // Maps (strand_path, loom_id, knot_id) → (last event, deadline).
         // The composite key ensures events for the same file but different
@@ -288,8 +339,7 @@ impl DebounceEngine {
         let mut pending: HashMap<EventKey, (StrandEvent, tokio::time::Instant)> =
             HashMap::new();
 
-        let window = DEBOUNCE_WINDOW;
-        let mut check = tokio::time::interval(CHECK_INTERVAL);
+        let mut check = tokio::time::interval(check_interval);
 
         loop {
             tokio::select! {

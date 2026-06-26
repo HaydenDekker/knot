@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::outbound::event_source::WatchType;
 use crate::adapters::logging;
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, ExecutionContext, EventSource,
@@ -1546,14 +1547,17 @@ impl ConfigEventHandler {
 
                 // If strand_dir changed, stop old watcher and start new one
                 if old_strand_dir != new_strand_dir {
-                    self.event_source.unwatch(&old_strand_dir)
-                        .map_err(|e| {
-                            PortError::EventUnwatchFailed(format!(
-                                "failed to unwatch '{}': {}",
-                                old_strand_dir.display(),
-                                e
-                            ))
-                        })?;
+                    self.event_source.unwatch_with_type(
+                        &old_strand_dir,
+                        WatchType::Strand(loom_id.clone(), knot_id.clone()),
+                    )
+                    .map_err(|e| {
+                        PortError::EventUnwatchFailed(format!(
+                            "failed to unwatch '{}': {}",
+                            old_strand_dir.display(),
+                            e
+                        ))
+                    })?;
 
                     self.ensure_strand_dir_and_watch(
                         loom_id,
@@ -1647,14 +1651,17 @@ impl ConfigEventHandler {
         self.store.register(updated_loom);
 
         // Stop watcher for the knot's strand directory
-        self.event_source.unwatch(&strand_dir)
-            .map_err(|e| {
-                PortError::EventUnwatchFailed(format!(
-                    "failed to unwatch '{}': {}",
-                    strand_dir.display(),
-                    e
-                ))
-            })?;
+        self.event_source.unwatch_with_type(
+            &strand_dir,
+            WatchType::Strand(loom_id.clone(), knot_id.clone()),
+        )
+        .map_err(|e| {
+            PortError::EventUnwatchFailed(format!(
+                "failed to unwatch '{}': {}",
+                strand_dir.display(),
+                e
+            ))
+        })?;
 
         // Log KnotDeregistered
         self.log_port.append(LoomEvent::KnotDeregistered {
