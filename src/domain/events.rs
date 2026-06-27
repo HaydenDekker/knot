@@ -157,6 +157,20 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// A failed agent invocation was resumed using the same Pi session.
+    ///
+    /// Recorded when a resumable error (timeout, mid-stream failure) is
+    /// detected and Knot retries the invocation with `--session-id <id>`
+    /// to continue the Pi session from where it left off.
+    SessionResumed {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        attempt: u32,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -858,6 +872,14 @@ mod tests {
                 reason: "missing file (unknown pattern)".to_string(),
                 timestamp: ts.clone(),
             },
+            LoomEvent::SessionResumed {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                session_id: "sess-abc123".to_string(),
+                attempt: 2,
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -1108,6 +1130,54 @@ mod tests {
                 assert_eq!(t, &ts);
             }
             _ => panic!("Expected StrandSkipped variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    /// `LoomEvent::SessionResumed` carries `loom_id`, `knot_id`,
+    /// `strand_path`, `session_id`, `attempt`, and `timestamp`.
+    /// Verifies the variant shape and JSON round-trip serialisation.
+    #[test]
+    fn session_resumed_event_serialisation() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path =
+            StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let session_id = "sess-resume-42".to_string();
+        let attempt: u32 = 3;
+        let ts = "2026-06-28T14:00:00Z".to_string();
+
+        let event = LoomEvent::SessionResumed {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            session_id: session_id.clone(),
+            attempt,
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::SessionResumed {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                session_id: sid,
+                attempt: a,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(sid, &session_id);
+                assert_eq!(*a, attempt);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected SessionResumed variant"),
         }
 
         // Verify serialisation round-trip

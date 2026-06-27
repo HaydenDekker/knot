@@ -156,6 +156,21 @@ impl PortError {
     }
 }
 
+/// Determine if a failed invocation should trigger a session-resume retry.
+///
+/// Returns `true` only when both conditions are met:
+/// 1. A `session_id` was captured from the agent invocation.
+/// 2. The error is resumable (`Timeout` or `AgentExecutionFailed`).
+///
+/// If either condition is not met (no session ID, or a fatal error like
+/// `CommandNotFound`), the invocation is not retryable via session resume.
+pub fn is_session_resumable(
+    session_id: &Option<String>,
+    error: &PortError,
+) -> bool {
+    session_id.is_some() && error.is_resumable()
+}
+
 // ── Supporting Types ──────────────────────────────────────────────────────
 
 /// Status of a knot's processing lifecycle.
@@ -1252,5 +1267,44 @@ mod tests {
         };
         // Display shows the message, ignores session_id
         assert_eq!(err.to_string(), "timeout: exceeded 60s");
+    }
+
+    // ── is_session_resumable Tests ──────────────────────────────────
+
+    #[test]
+    fn is_session_resumable_with_session_and_timeout() {
+        let session_id = Some("sess-abc".to_string());
+        let err = PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: Some("sess-abc".to_string()),
+        };
+        assert!(is_session_resumable(&session_id, &err));
+    }
+
+    #[test]
+    fn is_session_resumable_with_session_and_execution_failed() {
+        let session_id = Some("sess-def".to_string());
+        let err = PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: Some("sess-def".to_string()),
+        };
+        assert!(is_session_resumable(&session_id, &err));
+    }
+
+    #[test]
+    fn is_session_resumable_without_session() {
+        let session_id = None;
+        let err = PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: None,
+        };
+        assert!(!is_session_resumable(&session_id, &err));
+    }
+
+    #[test]
+    fn is_session_resumable_command_not_found() {
+        let session_id = Some("sess-ghi".to_string());
+        let err = PortError::CommandNotFound("pi not found".to_string());
+        assert!(!is_session_resumable(&session_id, &err));
     }
 }
