@@ -41,8 +41,11 @@ When `agent_adapter: pi-stdio` (default), behaviour is unchanged — `metadata` 
 ## Implementation Status: ✅ Complete
 
 **Completed:** 2026-06-27
+**Version:** 0.19.0 (MINOR — new feature, backwards compatible)
 
 **Bugfix:** 2026-06-27 — `run_startup()` now auto-creates `.workspace-agent-config.yaml` on rig creation (default + named rigs) with `agent-adapter: pi-stdio` and a comment listing available adapters.
+
+**Result:** 6 phases complete. `AgentInvocationMetadata` + `TokenUsage` structs in domain, `session_id` on `PortError::Timeout`/`AgentExecutionFailed`, `AgentAdapter` enum (`PiStdio`/`PiJson`) replacing `cli_path`/`cli_args` in `RigAgentConfig`. `PiJsonAgentRunner` parses JSON-L line-by-line, extracting session ID + token usage. `SubprocessAgentRunner` renamed to `PiStdioAgentRunner`. Adapter selection in composition root. 3 new integration tests + 12 new unit tests + 2 startup tests. Domain glossary updated. 612+ tests pass, clippy clean. ADR-009 documents the decision.
 
 ## Existing Tests
 

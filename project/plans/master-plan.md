@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-27 |
-| 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ⬜ Planned | 2026-06-27 |
+| 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
 | 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ⬜ Planned | 2026-06-24 |
 | 43 | [Simplify Prompts — Move Prompt Text to Markdown Body](simplify-prompt-in-body.md) | ✅ Complete | 2026-06-24 |
@@ -109,9 +109,12 @@ Full details in [session-resume-on-invocation-failure.md](session-resume-on-invo
 
 ### 46. JSON-based Agent Adapter
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-27
+**Completed:** 2026-06-27
 **Goal:** Add a JSON-L subprocess adapter that captures session IDs and token usage from Pi invocations. Rig config selects adapter via `agent_adapter` enum (`pi-stdio` or `pi-json`) — no `cli_path`/`cli_args` in config.
+
+**Result:** `AgentInvocationMetadata` + `TokenUsage` structs in ports, `session_id` on `PortError::Timeout`/`AgentExecutionFailed`. `AgentAdapter` enum replaces `cli_path`/`cli_args` in `RigAgentConfig`. `PiJsonAgentRunner` parses JSON-L line-by-line for session ID + token usage. `SubprocessAgentRunner` renamed to `PiStdioAgentRunner`. `run_startup()` auto-creates `.workspace-agent-config.yaml` on first boot. 3 integration tests + 14 unit tests. 612+ tests pass. Version bumped to 0.19.0.
 
 **ADR:** [ADR-009: Agent-Specific Adapters](../adrs/adr-009-agent-specific-adapters.md)
 
