@@ -38,7 +38,9 @@ When `agent_adapter: pi-json` is configured:
 
 When `agent_adapter: pi-stdio` (default), behaviour is unchanged — `metadata` is `None`.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete
+
+**Completed:** 2026-06-27
 
 ## Existing Tests
 
@@ -342,7 +344,7 @@ Work in `src/server.rs` (composition root), `src/adapters/mod.rs`, and `src/appl
 
 ### Phase 5: Domain Glossary
 
-- [ ] Update `project/domain-glossary.md`:
+- [x] Update `project/domain-glossary.md`:
   - `Invocation mode` — how Knot communicates with the agent CLI (`stdio` for plain text, `json` for JSON-L with metadata)
   - `Agent invocation metadata` — session ID and token usage captured from Pi's JSON-L output
 
