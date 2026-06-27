@@ -49,7 +49,7 @@ When a resumable invocation failure occurs and a session ID was captured, Knot a
 
 ## Phases
 
-### [ ] Phase 0: Domain — SessionResumed Event, Resume Helper
+### Phase 0: Domain — SessionResumed Event, Resume Helper
 
 Work in domain layer: `src/domain/events.rs`. Application layer: `src/application/ports.rs`.
 
@@ -90,7 +90,7 @@ Work in domain layer: `src/domain/events.rs`. Application layer: `src/applicatio
 **Existing tests to update:**
 - `LoomEvent` match exhaustiveness — add `SessionResumed` arm
 
-### [ ] Phase 1: Application — Session Resume Module
+### Phase 1: Application — Session Resume Module
 
 New file: **`src/application/session_resume.rs`**. Registered in `src/application/mod.rs`.
 
@@ -146,7 +146,7 @@ Same test set as before, but exercised against `execute_with_resume()` directly 
 - `successful_retry_transparent()` — loom-log shows SessionResumed + no KnotFailed
 - `first_attempt_succeeds_no_retry()` — mock returns `[Ok]` → Ok immediately, no SessionResumed
 
-### [ ] Phase 2: Application — Wire Into ProcessStrand
+### Phase 2: Application — Wire Into ProcessStrand
 
 Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 
@@ -175,7 +175,7 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 - `process_strand_no_retry_stdio()` — stdio adapter (no session_id) → single attempt, immediate fail
 - Regression: all existing ProcessStrand tests still pass
 
-### [ ] Phase 3: Integration Tests and Verification
+### Phase 3: Integration Tests and Verification
 
 - [ ] Integration test: `test_session_resume_success()` — real `pi` binary, knot with profile timeout 120s, simulate first-invocation failure (e.g., very short timeout that Pi doesn't complete within), verify resume attempt with `--session-id` + "please continue" in prompt, check loom-log for `SessionResumed` + `KnotCompleted`
 - [ ] Integration test: `test_session_resume_exhausted()` — both attempts timeout within budget → `KnotFailed` in loom-log, `TimeoutExceeded` in rig-log
@@ -186,7 +186,7 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 - [ ] Regression: all existing tests pass (especially timeout tests in `profile_timeout.rs`, pipeline tests in `pipeline.rs`)
 - [ ] `cargo clippy` clean
 
-### [ ] Phase 4: Domain Glossary
+### Phase 4: Domain Glossary
 
 - [ ] Update `project/domain-glossary.md`:
   - `Session resume` — automatic retry using `--session-id` to continue a Pi session after invocation failure, up to 10 retries or until the profile timeout budget is exhausted
