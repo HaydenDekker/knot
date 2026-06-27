@@ -42,6 +42,8 @@ When `agent_adapter: pi-stdio` (default), behaviour is unchanged — `metadata` 
 
 **Completed:** 2026-06-27
 
+**Bugfix:** 2026-06-27 — `run_startup()` now auto-creates `.workspace-agent-config.yaml` on rig creation (default + named rigs) with `agent-adapter: pi-stdio` and a comment listing available adapters.
+
 ## Existing Tests
 
 | Test Class | What it covers | Status |

@@ -418,6 +418,24 @@ pub fn run_startup(
         e
     })?;
 
+    // Auto-create agent config file if missing so the rig has an explicit
+    // config rather than relying on implicit defaults.
+    let config_path = rig_dir.join(".workspace-agent-config.yaml");
+    if !config_path.exists() {
+        let config = r#"# Rig-level agent configuration.
+#
+# agent-adapter: which adapter to use for Pi invocations.
+#   pi-stdio — plain text stdout (default, current behaviour)
+#   pi-json  — JSON-L stream with session ID + token usage capture
+#
+agent-adapter: pi-stdio
+"#;
+        std::fs::write(&config_path, config).map_err(|e| {
+            eprintln!("WARNING: failed to write {}: {e}", config_path.display());
+            e
+        })?;
+    }
+
     let discover = application::usecases::DiscoverLooms::new(
         Arc::clone(&ctx.loom_repo),
         Arc::clone(&ctx.loom_log_port),
@@ -696,6 +714,59 @@ mod composition_tests {
             ctx.agent_runner.runner_type(),
             "pi-stdio",
             "expected PiStdioAgentRunner for agent_adapter: pi-stdio",
+        );
+    }
+
+    /// `run_startup()` creates `.workspace-agent-config.yaml` if missing.
+    #[test]
+    fn test_startup_creates_config_file() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+
+        // Rig dir does not exist yet — run_startup creates it
+        assert!(!rig_dir.exists());
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+
+        // Rig directory created
+        assert!(rig_dir.is_dir());
+
+        // Config file created with default adapter
+        let config_path = rig_dir.join(".workspace-agent-config.yaml");
+        assert!(config_path.exists(), "config file should be created");
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains("agent-adapter: pi-stdio"),
+            "config should default to pi-stdio"
+        );
+        assert!(
+            content.contains("pi-json"),
+            "config should document pi-json as available adapter"
+        );
+    }
+
+    /// `run_startup()` does NOT overwrite existing config file.
+    #[test]
+    fn test_startup_preserves_existing_config() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+
+        // Pre-existing config selecting pi-json
+        let config_path = rig_dir.join(".workspace-agent-config.yaml");
+        fs::write(&config_path, "agent-adapter: pi-json\n").unwrap();
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+
+        // Config file should still be pi-json, not overwritten
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains("agent-adapter: pi-json"),
+            "existing config should be preserved"
         );
     }
 }
