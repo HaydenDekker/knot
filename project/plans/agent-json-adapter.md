@@ -333,12 +333,12 @@ Work in `src/server.rs` (composition root), `src/adapters/mod.rs`, and `src/appl
 
 ### Phase 4: Integration Tests and Verification
 
-- [ ] Integration test: `test_json_invocation_full_pipeline()` — start Knot with `agent_adapter: pi-json`, trigger strand event with real `pi` binary, verify tie-off contains response text AND metadata was captured (verify via loom-log or state)
-- [ ] Integration test: `test_stdio_invocation_full_pipeline()` — start Knot with `agent_adapter: pi-stdio` (default), verify existing behaviour unchanged (regression)
-- [ ] Integration test: `test_json_invocation_timeout_captures_session_id()` — short timeout, verify session_id captured even on failure (check via loom-log or error path)
-- [ ] Regression: all existing pipeline tests still pass (especially `tests/pipeline.rs`, `tests/profile_timeout.rs`)
-- [ ] Run `cargo clippy`, fix warnings
-- [ ] Run full test suite, verify all tests pass
+- [x] Integration test: `test_json_invocation_full_pipeline()` — start Knot with `agent_adapter: pi-json`, trigger strand event with real `pi` binary, verify tie-off contains response text AND metadata was captured (verify via loom-log or state)
+- [x] Integration test: `test_stdio_invocation_full_pipeline()` — start Knot with `agent_adapter: pi-stdio` (default), verify existing behaviour unchanged (regression)
+- [x] Integration test: `test_json_invocation_timeout_captures_session_id()` — short timeout, verify session_id captured even on failure (check via loom-log or error path)
+- [x] Regression: all existing pipeline tests still pass (especially `tests/pipeline.rs`, `tests/profile_timeout.rs`)
+- [x] Run `cargo clippy`, fix warnings
+- [x] Run full test suite, verify all tests pass
 
 ### Phase 5: Domain Glossary
 

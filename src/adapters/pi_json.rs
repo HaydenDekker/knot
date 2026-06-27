@@ -297,7 +297,47 @@ impl AgentRunner for PiJsonAgentRunner {
         drop(stdin);
 
         // Wait for the child and capture output.
-        let output = child.wait_with_output().map_err(|e| {
+        // Use a thread + timeout so we don't block forever if
+        // `wait_with_output()` hangs (e.g. orphaned child processes
+        // preventing pipe close).
+        let wait_handle = std::thread::Builder::new()
+            .name("json-wait".to_string())
+            .spawn(move || child.wait_with_output())
+            .map_err(|e| {
+                PortError::AgentExecutionFailed {
+                    message: format!("failed to spawn wait thread: {e}"),
+                    session_id: None,
+                }
+            })?;
+
+        // Wait up to 2x the effective timeout for the child to exit.
+        // The timeout thread kills the child after effective_timeout,
+        // so 2x gives it time to clean up.
+        let wait_deadline = effective_timeout.saturating_mul(2)
+            .max(Duration::from_secs(5));
+        let start_wait = std::time::Instant::now();
+        let mut output = None;
+        loop {
+            if wait_handle.is_finished() {
+                output = Some(wait_handle.join().expect("wait thread panicked"));
+                break;
+            }
+            if start_wait.elapsed() > wait_deadline {
+                // Child didn't exit in time — force kill again and wait.
+                let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
+                // Give it a moment, then try joining anyway.
+                std::thread::sleep(Duration::from_millis(500));
+                output = Some(
+                    wait_handle
+                        .join()
+                        .expect("wait thread panicked"),
+                );
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let output = output.unwrap().map_err(|e| {
             PortError::AgentExecutionFailed {
                 message: format!(
                     "failed to wait for '{}': {}",
