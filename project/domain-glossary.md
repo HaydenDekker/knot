@@ -48,6 +48,28 @@ The loom's identity (`LoomId`) is derived from the directory name (the `-loom` s
 
 ---
 
+### Agent Invocation Metadata
+
+Structured data captured from a Pi agent session when invoked in `json` mode. Contains:
+
+- **Session ID** — the unique identifier for the Pi conversation session, extracted from the `session` JSON-L event.
+- **Token usage** — breakdown of tokens consumed during the session (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`), extracted from the `agent_end` JSON-L event.
+
+Only available when the rig config sets `agent-adapter: pi-json`. With `pi-stdio` (the default), metadata is not captured and is `None`. Stored in the optional `AgentInvocationMetadata` field on `AgentOutput`.
+
+---
+
+### Invocation Mode
+
+How Knot communicates with the agent CLI. Two modes are supported, selected by the `agent-adapter` field in rig config:
+
+- **`stdio`** (default) — Knot invokes Pi with `--print` mode. Output is plain text on stdout; the only data captured is the response string and exit code. Session IDs and token usage are lost.
+- **`json`** — Knot invokes Pi with `--mode json`. Output is JSON-L (newline-delimited JSON). A `PiJsonAgentRunner` adapter parses the stream to extract the session ID, token usage, and response text.
+
+The mode is agent-specific — each adapter hardcodes its own binary path and CLI flags. No generic CLI wrapper is used (see ADR-009).
+
+---
+
 ### Strand Directory
 
 The directory that a knot watches for strand file events. Configured per-knot as `strand_dir` in the knot's YAML frontmatter. This is the directory where raw input files (**strands**) live.
