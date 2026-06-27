@@ -27,12 +27,17 @@ pub fn is_known_temp_file(path: &Path) -> bool {
     is_sed_temp_file(filename)
 }
 
-/// Check if a filename matches the macOS `sed -i` temp file pattern.
+/// Check if a filename matches a `sed -i` temp file pattern.
 ///
 /// macOS `sed -i` creates a temporary file named `sed` followed by 7
-/// random characters (e.g. `sedAbCdEfG`), then renames it to the target.
+/// random characters (e.g. `sedAbCdEfG`, total 10 chars), then renames
+/// it to the target.
+///
+/// Linux `sed -i` creates a temporary file named `sed` followed by 6
+/// random characters (e.g. `seduKS5GS`, total 9 chars).
 fn is_sed_temp_file(filename: &str) -> bool {
-    filename.len() == 10 && filename.starts_with("sed")
+    (filename.len() == 9 || filename.len() == 10)
+        && filename.starts_with("sed")
 }
 
 #[cfg(test)]
@@ -40,11 +45,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sed_temp_file_with_exact_7_chars_matches() {
+    fn sed_temp_file_with_7_chars_matches_macos() {
+        // macOS `sed -i` uses 7 random chars (10 total)
         assert!(is_known_temp_file(Path::new("/project/src/sedXXXXXXX")));
         assert!(is_known_temp_file(Path::new("/project/src/sedAbCdEfG")));
         assert!(is_known_temp_file(Path::new("/project/src/sed1234567")));
         assert!(is_known_temp_file(Path::new("/project/src/sed_abcde1")));
+    }
+
+    #[test]
+    fn sed_temp_file_with_6_chars_matches_linux() {
+        // Linux `sed -i` uses 6 random chars (9 total)
+        assert!(is_known_temp_file(Path::new("/project/src/seduKS5GS")));
+        assert!(is_known_temp_file(Path::new("/project/src/sedXXXXXX")));
+        assert!(is_known_temp_file(Path::new("/project/src/sedAbCdEf")));
     }
 
     #[test]
@@ -69,11 +83,9 @@ mod tests {
         assert!(!is_known_temp_file(Path::new("sedXXXX")));
         // sed with 5 chars (8 total) — too short
         assert!(!is_known_temp_file(Path::new("sedXXXXX")));
-        // sed with 6 chars (9 total) — too short
-        assert!(!is_known_temp_file(Path::new("sedXXXXXX")));
-        // sed with 8 chars (11 total) — too long
+        // sed with 7 chars (11 total) — too long (not a valid pattern)
         assert!(!is_known_temp_file(Path::new("sedXXXXXXXX")));
-        // sed with 9 chars (12 total) — too long
+        // sed with 8 chars (12 total) — too long
         assert!(!is_known_temp_file(Path::new("sedXXXXXXXXX")));
     }
 

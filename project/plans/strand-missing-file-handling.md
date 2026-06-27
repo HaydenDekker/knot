@@ -78,6 +78,18 @@ This is expected noise — the temp file was never a real strand. But currently 
   - Trigger event for a file that doesn't exist and doesn't match temp patterns
   - Verify: `StrandSkipped` in loom-log, no agent invocation
 
+## Bugfixes
+
+### 2026-06-27: Linux `sed -i` Temp Files Not Detected
+
+**Symptom:** Knot logs `WARN: strand 'seduKS5GS' not found on disk (unknown pattern), skipping processing` and writes a `StrandSkipped` event to the loom-log, when a Linux `sed -i` edit triggers the event.
+
+**Root cause:** `is_sed_temp_file()` only matched filenames of exactly 10 characters (`sed` + 7 chars), which is the macOS `sed -i` pattern. Linux `sed -i` creates temp files with `sed` + 6 chars (9 total), e.g. `seduKS5GS`. The file was correctly identified as missing but fell through to the "unknown pattern" path instead of being silently skipped.
+
+**Fix:** Changed `is_sed_temp_file()` in `src/domain/temp_file.rs` to accept both 9-char (Linux, `sed` + 6 random) and 10-char (macOS, `sed` + 7 random) filenames. Updated tests to cover both patterns.
+
+**Impact:** Linux `sed -i` temp files are now silently skipped (no loom-log entry, no console warning), matching macOS behavior.
+
 ## Notes
 
 ### Why not rig-log?
