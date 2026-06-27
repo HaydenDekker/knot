@@ -1097,7 +1097,7 @@ impl ProcessStrand {
 
                 // On timeout: skip tie-off write, write to rig-log instead.
                 // On other errors: preserve existing behaviour (write to tie-off).
-                if matches!(err, PortError::Timeout(_)) {
+                if matches!(err, PortError::Timeout { .. }) {
                     // Timeout: do NOT write error to tie-off (preserve unchanged).
                     // Write TimeoutExceeded to rig-log.
                     let _ = self.rig_log.append(
@@ -4088,6 +4088,7 @@ mod phase3_profile_resolution_tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -4788,7 +4789,10 @@ mod phase6_timeout_tests {
         std::fs::write(&strand_path, "test content").unwrap();
 
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
-        let timeout_err = PortError::Timeout("session exceeded 60s".to_string());
+        let timeout_err = PortError::Timeout {
+            message: "session exceeded 60s".to_string(),
+            session_id: None,
+        };
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
 
         let (use_case, log_events, tie_off_appends, rig_events,
@@ -4866,7 +4870,10 @@ mod phase6_timeout_tests {
         std::fs::write(&strand_path, "test content").unwrap();
 
         let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
-        let err = PortError::AgentExecutionFailed("crash".to_string());
+        let err = PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: None,
+        };
         let runner = Arc::new(ConfigurableAgentRunner::new(Err(err)));
 
         let (use_case, log_events, tie_off_appends, rig_events,
@@ -4930,6 +4937,7 @@ mod phase6_timeout_tests {
             stdout: "agent output".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -4976,6 +4984,7 @@ mod phase6_timeout_tests {
             stdout: "ok".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -5009,6 +5018,7 @@ mod phase6_timeout_tests {
             stdout: "ok".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -5048,6 +5058,7 @@ mod phase6_timeout_tests {
             stdout: "ok".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -5141,6 +5152,7 @@ mod phase6_timeout_tests {
             stdout: "ok".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -5182,6 +5194,7 @@ mod phase6_timeout_tests {
             stdout: "ok".to_string(),
             stderr: String::new(),
             exit_code: 0,
+            metadata: None,
         });
         let runner = Arc::new(ConfigurableAgentRunner::new(output));
 
@@ -5290,6 +5303,7 @@ mod phase7_timeout_resolution_tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -5308,6 +5322,7 @@ mod phase7_timeout_resolution_tests {
                 stdout: "mock".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -5763,6 +5778,7 @@ mod phase8_git_versioning_tests {
                 stdout: "agent output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -6306,6 +6322,7 @@ mod phase9_session_title_tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -7428,6 +7445,7 @@ mod phase2_text_check_tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -7910,6 +7928,7 @@ mod phase2_file_existence_tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }

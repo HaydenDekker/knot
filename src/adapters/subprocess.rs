@@ -94,10 +94,13 @@ impl AgentRunner for SubprocessAgentRunner {
                 )));
             }
             Err(e) => {
-                return Err(PortError::AgentExecutionFailed(format!(
-                    "failed to spawn '{}': {}",
-                    ctx.cli_path, e
-                )));
+                return Err(PortError::AgentExecutionFailed {
+                    message: format!(
+                        "failed to spawn '{}': {}",
+                        ctx.cli_path, e
+                    ),
+                    session_id: None,
+                });
             }
         };
 
@@ -131,9 +134,10 @@ impl AgentRunner for SubprocessAgentRunner {
                 );
             })
             .map_err(|e| {
-                PortError::AgentExecutionFailed(format!(
-                    "failed to spawn timeout thread: {e}"
-                ))
+                PortError::AgentExecutionFailed {
+                    message: format!("failed to spawn timeout thread: {e}"),
+                    session_id: None,
+                }
             })?;
 
         // Write the prompt to the child's stdin.
@@ -147,19 +151,23 @@ impl AgentRunner for SubprocessAgentRunner {
         stdin
             .write_all(prompt_with_context.as_bytes())
             .map_err(|e| {
-                PortError::AgentExecutionFailed(format!(
-                    "failed to write prompt to stdin: {e}"
-                ))
+                PortError::AgentExecutionFailed {
+                    message: format!("failed to write prompt to stdin: {e}"),
+                    session_id: None,
+                }
             })?;
         // Drop stdin to close the pipe (signals EOF to the child).
         drop(stdin);
 
         // Wait for the child and capture output.
         let output = child.wait_with_output().map_err(|e| {
-            PortError::AgentExecutionFailed(format!(
-                "failed to wait for '{}': {}",
-                ctx.cli_path, e
-            ))
+            PortError::AgentExecutionFailed {
+                message: format!(
+                    "failed to wait for '{}': {}",
+                    ctx.cli_path, e
+                ),
+                session_id: None,
+            }
         })?;
 
         // Mark cancelled so the background timeout thread suppresses its
@@ -169,10 +177,13 @@ impl AgentRunner for SubprocessAgentRunner {
         // If status code is None, the process was killed by a signal
         // (SIGKILL from our timeout thread).
         if output.status.code().is_none() {
-            return Err(PortError::Timeout(format!(
-                "'{}' exceeded timeout of {:?} (strand: {})",
-                ctx.cli_path, effective_timeout, strand_desc
-            )));
+            return Err(PortError::Timeout {
+                message: format!(
+                    "'{}' exceeded timeout of {:?} (strand: {})",
+                    ctx.cli_path, effective_timeout, strand_desc
+                ),
+                session_id: None,
+            });
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -180,18 +191,22 @@ impl AgentRunner for SubprocessAgentRunner {
         let exit_code = output.status.code().unwrap_or(-1);
 
         if exit_code != 0 {
-            return Err(PortError::AgentExecutionFailed(format!(
-                "'{}' exited with code {}: {}",
-                ctx.cli_path,
-                exit_code,
-                if stderr.is_empty() { stdout } else { stderr }
-            )));
+            return Err(PortError::AgentExecutionFailed {
+                message: format!(
+                    "'{}' exited with code {}: {}",
+                    ctx.cli_path,
+                    exit_code,
+                    if stderr.is_empty() { stdout } else { stderr }
+                ),
+                session_id: None,
+            });
         }
 
         Ok(AgentOutput {
             stdout,
             stderr,
             exit_code,
+            metadata: None,
         })
     }
 }
@@ -283,7 +298,7 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PortError::AgentExecutionFailed(_)),
+            matches!(err, PortError::AgentExecutionFailed { .. }),
             "expected AgentExecutionFailed, got {err:?}"
         );
         assert!(err.to_string().contains("exited with code 1"));
@@ -300,7 +315,7 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PortError::Timeout(_)),
+            matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got {err:?}"
         );
     }
@@ -418,7 +433,7 @@ mod tests {
         assert!(result.is_err(), "should error for timeout");
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PortError::Timeout(_)),
+            matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got {err:?}"
         );
         // Should complete well under 120s (the runner default)
@@ -451,7 +466,7 @@ mod tests {
         assert!(result.is_err(), "should error for timeout");
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PortError::Timeout(_)),
+            matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got {err:?}"
         );
         // Should timeout at runner's 50ms default, not hang
@@ -499,7 +514,7 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PortError::Timeout(_)),
+            matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got {err:?}"
         );
     }

@@ -39,11 +39,17 @@ pub enum PortError {
     /// Failed to unwatch a path for file events.
     EventUnwatchFailed(String),
     /// Agent execution failed.
-    AgentExecutionFailed(String),
+    AgentExecutionFailed {
+        message: String,
+        session_id: Option<String>,
+    },
     /// The agent CLI binary was not found.
     CommandNotFound(String),
     /// Agent execution exceeded the configured timeout.
-    Timeout(String),
+    Timeout {
+        message: String,
+        session_id: Option<String>,
+    },
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
     /// An agent profile was not found.
@@ -93,14 +99,14 @@ impl std::fmt::Display for PortError {
             PortError::EventUnwatchFailed(msg) => {
                 write!(f, "event unwatch failed: {msg}")
             }
-            PortError::AgentExecutionFailed(msg) => {
-                write!(f, "agent execution failed: {msg}")
+            PortError::AgentExecutionFailed { message, .. } => {
+                write!(f, "agent execution failed: {message}")
             }
             PortError::CommandNotFound(msg) => {
                 write!(f, "command not found: {msg}")
             }
-            PortError::Timeout(msg) => {
-                write!(f, "timeout: {msg}")
+            PortError::Timeout { message, .. } => {
+                write!(f, "timeout: {message}")
             }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
@@ -128,6 +134,27 @@ impl std::fmt::Display for PortError {
 }
 
 impl std::error::Error for PortError {}
+
+impl PortError {
+    /// Extract session_id from errors that carry one.
+    pub fn session_id(&self) -> Option<&String> {
+        match self {
+            PortError::Timeout { session_id, .. }
+            | PortError::AgentExecutionFailed { session_id, .. }
+                => session_id.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Classify error as resumable (session can be retried) or fatal.
+    pub fn is_resumable(&self) -> bool {
+        matches!(
+            self,
+            PortError::Timeout { .. }
+                | PortError::AgentExecutionFailed { .. }
+        )
+    }
+}
 
 // ── Supporting Types ──────────────────────────────────────────────────────
 
@@ -208,8 +235,32 @@ pub struct ExecutionContext {
     pub timeout: Option<Duration>,
 }
 
+/// Token usage reported by the agent LLM provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// Input tokens (system prompt + user messages).
+    pub input: u64,
+    /// Output tokens (agent response).
+    pub output: u64,
+    /// Tokens read from cache.
+    pub cache_read: u64,
+    /// Tokens written to cache.
+    pub cache_write: u64,
+    /// Total tokens consumed.
+    pub total: u64,
+}
+
+/// Metadata captured from an agent invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInvocationMetadata {
+    /// Session ID from the agent CLI (for session resume).
+    pub session_id: Option<String>,
+    /// Token usage from the LLM provider.
+    pub token_usage: Option<TokenUsage>,
+}
+
 /// Output captured from agent execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentOutput {
     /// Standard output from the agent.
     pub stdout: String,
@@ -217,6 +268,12 @@ pub struct AgentOutput {
     pub stderr: String,
     /// Exit code from the agent process.
     pub exit_code: i32,
+    /// Invocation metadata (session ID, token usage).
+    ///
+    /// `None` when using the stdio adapter or when metadata could
+    /// not be extracted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<AgentInvocationMetadata>,
 }
 
 // ── Port Traits ────────────────────────────────────────────────────────────
@@ -510,6 +567,7 @@ mod tests {
                 stdout: "mock output".to_string(),
                 stderr: String::new(),
                 exit_code: 0,
+                metadata: None,
             })
         }
     }
@@ -949,11 +1007,13 @@ mod tests {
             stdout: "done".to_string(),
             stderr: "warning: slow".to_string(),
             exit_code: 0,
+            metadata: None,
         };
 
         assert_eq!(output.exit_code, 0);
         assert!(!output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
+        assert!(output.metadata.is_none());
     }
 
     #[test]
@@ -968,7 +1028,10 @@ mod tests {
         let err = PortError::KnotStatusDeriveFailed("log empty".to_string());
         assert_eq!(err.to_string(), "knot status derive failed: log empty");
 
-        let err = PortError::AgentExecutionFailed("crash".to_string());
+        let err = PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: None,
+        };
         assert_eq!(err.to_string(), "agent execution failed: crash");
 
         let err = PortError::TieOffWriteFailed("disk full".to_string());
@@ -1013,5 +1076,139 @@ mod tests {
             KnotEventType::Modified
         ));
         assert!(matches!(KnotEventType::Deleted, KnotEventType::Deleted));
+    }
+
+    // ── AgentInvocationMetadata / TokenUsage Tests ──────────────────
+
+    #[test]
+    fn test_agent_output_with_metadata() {
+        let metadata = AgentInvocationMetadata {
+            session_id: Some("sess-abc123".to_string()),
+            token_usage: Some(TokenUsage {
+                input: 100,
+                output: 50,
+                cache_read: 10,
+                cache_write: 5,
+                total: 165,
+            }),
+        };
+        let output = AgentOutput {
+            stdout: "response".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(metadata),
+        };
+
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("session_id"));
+        assert!(json.contains("sess-abc123"));
+        assert!(json.contains("input"));
+
+        let restored: AgentOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.stdout, output.stdout);
+        assert_eq!(restored.metadata, output.metadata);
+    }
+
+    #[test]
+    fn test_agent_output_without_metadata() {
+        let output = AgentOutput {
+            stdout: "response".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        };
+
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(!json.contains("metadata"));
+
+        // Round-trip: deserialise JSON without metadata field
+        let restored: AgentOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.stdout, "response");
+        assert!(restored.metadata.is_none());
+
+        // Also verify deserialising JSON that explicitly omits metadata
+        let json_no_meta = r#"{"stdout":"response","stderr":"","exit_code":0}"#;
+        let restored2: AgentOutput = serde_json::from_str(json_no_meta).unwrap();
+        assert!(restored2.metadata.is_none());
+    }
+
+    #[test]
+    fn test_token_usage_fields() {
+        let json = r#"{"input":200,"output":150,"cache_read":30,"cache_write":10,"total":390}"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+
+        assert_eq!(usage.input, 200);
+        assert_eq!(usage.output, 150);
+        assert_eq!(usage.cache_read, 30);
+        assert_eq!(usage.cache_write, 10);
+        assert_eq!(usage.total, 390);
+    }
+
+    // ── PortError session_id Tests ──────────────────────────────────
+
+    #[test]
+    fn test_port_error_session_id_timeout() {
+        let err = PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: Some("sess-xyz".to_string()),
+        };
+        assert_eq!(
+            err.session_id().map(|s| s.as_str()),
+            Some("sess-xyz")
+        );
+    }
+
+    #[test]
+    fn test_port_error_session_id_execution_failed() {
+        let err = PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: Some("sess-abc".to_string()),
+        };
+        assert_eq!(
+            err.session_id().map(|s| s.as_str()),
+            Some("sess-abc")
+        );
+    }
+
+    #[test]
+    fn test_port_error_session_id_command_not_found() {
+        let err = PortError::CommandNotFound("pi not found".to_string());
+        assert!(err.session_id().is_none());
+    }
+
+    // ── PortError is_resumable Tests ────────────────────────────────
+
+    #[test]
+    fn test_port_error_is_resumable_timeout() {
+        let err = PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: None,
+        };
+        assert!(err.is_resumable());
+    }
+
+    #[test]
+    fn test_port_error_is_resumable_execution_failed() {
+        let err = PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: None,
+        };
+        assert!(err.is_resumable());
+    }
+
+    #[test]
+    fn test_port_error_is_resumable_command_not_found() {
+        let err = PortError::CommandNotFound("not found".to_string());
+        assert!(!err.is_resumable());
+    }
+
+    #[test]
+    fn test_port_error_display_timeout_with_session() {
+        let err = PortError::Timeout {
+            message: "exceeded 60s".to_string(),
+            session_id: Some("sess-123".to_string()),
+        };
+        // Display shows the message, ignores session_id
+        assert_eq!(err.to_string(), "timeout: exceeded 60s");
     }
 }
