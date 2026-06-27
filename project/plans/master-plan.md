@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-25
+> **Last Updated:** 2026-06-27
 
 ## How to Add a Plan
 
@@ -46,6 +46,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-27 |
+| 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ⬜ Planned | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
 | 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ⬜ Planned | 2026-06-24 |
 | 43 | [Simplify Prompts — Move Prompt Text to Markdown Body](simplify-prompt-in-body.md) | ✅ Complete | 2026-06-24 |
@@ -94,6 +96,28 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 47. Session Resume on Invocation Failure
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-27
+**Goal:** Automatically resume Pi sessions from where they left off after invocation failure (timeout, network error) using `--session-id`, up to a configurable retry limit per knot.
+
+**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
+
+Full details in [session-resume-on-invocation-failure.md](session-resume-on-invocation-failure.md).
+
+### 46. JSON-based Agent Adapter
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-27
+**Goal:** Add a JSON-L subprocess adapter that captures session IDs and token usage from Pi invocations. Rig config selects adapter via `agent_adapter` enum (`pi-stdio` or `pi-json`) — no `cli_path`/`cli_args` in config.
+
+**ADR:** [ADR-009: Agent-Specific Adapters](../adrs/adr-009-agent-specific-adapters.md)
+
+**PRD:** [Demand Control — Concurrency, Throughput and Service Tuning](../prds/prd-demand-control.md)
+
+Full details in [agent-json-adapter.md](agent-json-adapter.md).
 
 ### 43. Simplify Prompts — Move Prompt Text to Markdown Body
 

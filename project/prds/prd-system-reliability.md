@@ -18,6 +18,7 @@ Knot needs **operational safety controls** so the user can protect their provide
 - [x] Failed strands are reported via the rig-log; the user reprocesses by touching the strand file, triggering the normal file-watcher pipeline (no programmatic replay in the app) — *Plan 28*
 - [x] Users can set a per-agent-profile session timeout so that a hung or excessively slow agent session is terminated automatically — *Plan 28*
 - [x] Each successful knot run creates a git commit with structured message and tie-off body; opt-out per-knot via `git-versioned: false`; gracefully skips if not a git repo — *Plan 27*
+- [ ] When an agent invocation fails mid-stream, Knot resumes the Pi session from where it left off (up to a retry limit) before falling back to a fresh session — so partial work is not lost
 - [ ] Users can roll back their tie-off output to an earlier point in time, discarding later processing events
 - [ ] Users are alerted when a knot-to-knot (k2k) recursive feedback loop is detected, whether self-recursive or cross-knot
 - [ ] Users can set a maximum iteration limit for k2k feedback loops so that refinement cycles terminate automatically if agents do not converge
@@ -86,6 +87,38 @@ The user (or an external agent monitoring the rig-log) decides what to do with f
 1. Given a strand processing failed (e.g. timeout), when I `touch` the strand file, then Knot detects the file modification event and reprocesses the strand through the normal file-watcher pipeline using the current knot configuration
 2. Given I have modified a knot's agent profile before reprocessing (e.g. switched to a backup provider), when I `touch` the strand file, then the reprocessing uses the updated configuration
 3. Given I reprocess a strand by touching the file, when I check the loom-log, then the new processing event is recorded as a normal `Modified` event — indistinguishable from any other strand modification
+
+### Story 5a: Session Resume on Invocation Failure
+
+As a user, when an agent invocation fails partway through (network error, provider timeout mid-stream, subprocess killed), I want Knot to automatically resume the Pi session from where it left off — up to a configurable retry limit — so that partial work is not lost and the provider does not re-process the full context from scratch.
+
+This is distinct from Story 5 (Event Replay). Event replay is **user-triggered** (touch the file) and always starts a **fresh session**. Session resume is **automatic**, happens **before** the strand is marked as failed, and continues the **same Pi session** using `--session-id` so the provider sees a continuation of the conversation.
+
+Knot captures the Pi session ID from the JSON-L output stream (first line: `{"type":"session","id":"..."}`). On retry, Knot re-invokes Pi with `--session-id <id>` — Pi appends the turn to the existing session file. If the session resumes successfully, the strand completes normally. If it fails again, Knot retries up to the configured limit, then marks the strand as failed and falls back to the normal failure path (rig-log entry, user can `touch` to restart fresh).
+
+**Resumable failures** — Knot attempts session resume for these:
+- Agent session timeout (Knot killed the subprocess via timeout)
+- Provider returned an error response (non-429, non-auth errors visible in Pi's exit code or output)
+- Subprocess killed unexpectedly (signal, crash) but session ID was captured
+
+**Fatal failures** — Knot does **not** attempt session resume for these (strand is marked as failed immediately):
+- Configuration error (missing profile, invalid args, missing CLI binary)
+- Provider returned a 429 rate limit — these are handled by rate limiting (Story 2), not resume
+- Session ID was never captured (e.g. Pi failed to start, output was empty) — no session to resume
+- Retry limit exhausted — strand is marked as failed, falls through to normal failure path
+
+**Scenarios:**
+
+1. Given an agent invocation fails partway through due to a provider network error, when the session ID was captured, then Knot automatically resumes the session using `--session-id` and the agent continues from where it left off
+2. Given an agent session times out and the session ID was captured, when Knot retries with `--session-id`, then Pi resumes the conversation and the agent can complete the response
+3. Given session resume succeeds on retry, when I check the loom-log, then the strand shows a single successful `KnotCompleted` entry — the retry is an implementation detail, not a separate event
+4. Given session resume fails again, when Knot retries up to the configured `max_retries` limit, then after exhausting retries the strand is marked as failed and a `TimeoutExceeded` / `KnotFailed` entry is written to the loom-log and rig-log
+5. Given the retry limit is exhausted, when I `touch` the strand file to reprocess, then a fresh Pi session is started (the old session is abandoned) — this falls back to the normal Event Replay path (Story 5)
+6. Given a configuration error (e.g. missing CLI binary), when the invocation fails, then Knot does **not** attempt session resume — the strand is marked as failed immediately
+7. Given I have not configured `max_retries`, when an invocation fails, then Knot uses a default (e.g. 1 retry — one resume attempt before giving up)
+8. Given session resume is attempted, when I check the loom-log, then I see a `SessionResumed` entry indicating a retry with the original session ID, so I can trace the retry chain
+9. Given an invocation fails and the session ID was never captured (Pi failed before outputting the session line), when Knot processes the failure, then it marks the strand as failed immediately — no session to resume
+10. Given `max_retries` is set to 0 on a knot, when an invocation fails, then Knot does not attempt session resume — strand is marked as failed immediately (resume is disabled for that knot)
 
 ### Story 6: Rig-Log Notification
 
@@ -174,6 +207,9 @@ As a user, I want each knot run to produce a git commit in my project, so that I
 - [x] A rig-log file exists at the rig root and receives `TimeoutExceeded` entries when agent sessions time out, and `QueueIdle` entries when the event pipeline has no pending events — *Plan 28*
 - [x] The rig-log is append-only and persistent — entries survive server restarts — *Plan 28*
 - [x] Successful processing, loom/knot registration, and config errors do **not** appear in the rig-log — *Plan 28*
+- [ ] On invocation failure (timeout, network error), Knot captures the Pi session ID and attempts to resume the session via `--session-id` up to `max_retries` times before marking the strand as failed
+- [ ] Successful session resume is transparent — the strand shows a single `KnotCompleted` entry; failed retries produce `SessionResumed` entries in the loom-log for traceability
+- [ ] `max_retries` is configurable per knot (default: 1); setting it to 0 disables session resume entirely
 - [x] A user can reprocess a failed strand by touching the strand file, and the reprocessing fires through the normal file-watcher pipeline — *Plan 28 (file-watcher pipeline exists, rig-log surfaces failures)*
 - [x] On timeout, the tie-off file is preserved unchanged — no error content is appended — *Plan 28*
 - [x] A user can configure `timeout` (per agent profile) and hung sessions are terminated with a `TimeoutExceeded` error — *Plan 28*
@@ -197,8 +233,12 @@ As a user, I want each knot run to produce a git commit in my project, so that I
 - **Configuration constraint:** New limits (`max_concurrent`, `rate_limit`, `max_tokens`, `max_k2k_iterations`) are optional — Knot operates without them if not configured (backwards compatible).
 - **Technical constraint:** Feedback loop detection requires Knot to track the event propagation graph — which knot's output wrote to which other knot's input directory — and detect cycles in that graph at runtime. Self-recursive loops (strand_dir overlaps tie_off_dir) can be detected statically at knot registration time.
 - **Technical constraint:** Agent session timeout requires the subprocess runner to track session start time and be capable of killing the child process on timeout. The current `SubprocessAgentRunner` waits for completion with no interrupt path.
+- **Technical constraint:** Session resume requires the Pi session ID to be captured from the JSON-L output stream before the session completes. The session ID appears in the first JSON line (`{"type":"session","id":"..."}`), so it must be parsed from stdout early — before the failure occurs. This requires Knot to use `--mode json` and parse the JSON-L stream (see Demand Control PRD, Pi Integration section).
+- **Design decision:** Session resume is limited to failures where the Pi process started and output began (session ID captured). If Pi fails to start (missing binary, config error), there is no session to resume — the strand fails immediately. This avoids Knot retrying against a fundamentally broken configuration.
 - **Design decision:** On timeout, Knot writes error details to the loom-log and rig-log — **not** to the tie-off file. The tie-off is the agent's output and should contain only agent-produced content. Operational errors belong in logs where the user can observe and react. This keeps the tie-off clean for downstream consumers and allows the user to retry by simply touching the strand file.
 - **Design decision:** Knot does **not** provide programmatic replay. The app's role is to surface failures (rig-log, loom-log) and provide the reprocessing mechanism (file-watcher pipeline). The user — human or external agent — monitors the rig-log and decides how to react: touch files to retry, switch profiles, or defer. This keeps the app focused on event processing and pushes replay policy to the user.
+
+**Design decision:** Session resume (Story 5a) is an automatic best-effort recovery, not programmatic replay. When a strand invocation fails mid-stream, Knot attempts to resume the same Pi session (`--session-id`) up to `max_retries` times before giving up. This preserves partial work and avoids re-sending the full context. Once retries are exhausted, the strand is marked as failed and the user can `touch` the file for a fresh session — the normal Event Replay path (Story 5). Resume is transparent on success (single `KnotCompleted` entry); on failure, `SessionResumed` entries are logged for traceability.
 - **Design decision:** The rig-log records only high-signal events (timeout, queue idle) and excludes noisy events (completion, registration, config errors). Completion is too frequent to be useful. Config errors occur when the user is actively changing the system and can check the loom-log directly. The rig-log is the user's window into "something needs attention" without requiring polling or HTTP calls.
 - **Design decision:** Strand event issues (temp files from `sed -i`, missing files, binary files) are logged to the loom-log and console — **not** the rig-log. Known temp files are silently skipped with no log entry. Unknown missing files produce a `StrandSkipped` loom-log entry plus console warning. Binary files produce a `StrandIgnored` loom-log entry. These are strand-level operational details, not rig-level alerts. The user checks the loom-log if concerned about repeated skips.
 - **Technical constraint:** Git versioning requires the project root (parent of `rig/`) to be a git repository. The adapter must detect this and skip gracefully if it is not. The `git2` crate or a subprocess call to `git` can be used — subprocess avoids adding a C library dependency.
