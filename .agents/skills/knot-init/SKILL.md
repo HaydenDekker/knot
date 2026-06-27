@@ -74,12 +74,31 @@ When asked to initialise a Knot rig:
    - Create `rig/profiles/` if it doesn't exist.
    - These directories are managed on disk — Knot auto-discovers them.
 
-5. **Check for existing profiles**:
+5. **Agent adapter configuration** (`rig/.workspace-agent-config.yaml`):
+   - Knot auto-creates this file on first startup if it doesn't exist.
+   - It controls how Knot invokes the Pi agent. Default content:
+     ```yaml
+     # Rig-level agent configuration.
+     #
+     # agent-adapter: which adapter to use for Pi invocations.
+     #   pi-stdio — plain text stdout (default, current behaviour)
+     #   pi-json  — JSON-L stream with session ID + token usage capture
+     #
+     agent-adapter: pi-stdio
+     ```
+   - `pi-stdio` — plain text output, current behaviour. No metadata
+     capture (session ID, token usage).
+   - `pi-json` — JSON-L output, captures session ID and token usage.
+     Required for session resume and invocation visibility features.
+   - To switch: edit `rig/.workspace-agent-config.yaml`, change
+     `agent-adapter` to `pi-json`, restart Knot.
+
+6. **Check for existing profiles**:
    - Read `rig/state.json` and extract the `profiles` array.
    - If profiles exist, report the available profile names and skip to
-     step 7.
+     step 8.
 
-6. **Create default profile** (only when no profiles exist):
+7. **Create default profile** (only when no profiles exist):
    - Read available models from `~/.pi/agent/models.json` to determine
      a provider and model for the default profile.
    - The models.json file has this structure:
@@ -137,13 +156,13 @@ When asked to initialise a Knot rig:
      configure a real provider and model.
      ```
 
-7. **Verify profile creation**:
+8. **Verify profile creation**:
    - Read `rig/state.json` (wait up to 5 seconds for the state writer
      to flush) and confirm at least one profile exists in the
      `profiles` array.
    - If created in step 6, confirm `default` appears in the list.
 
-8. **Check for existing looms**:
+9. **Check for existing looms**:
    - Read `rig/state.json` and check the `looms` array.
    - If the array is empty `[]`, the rig has no looms yet. Report:
      "Rig is initialised but has no looms. Use the `knot-create` skill
@@ -151,7 +170,7 @@ When asked to initialise a Knot rig:
    - If the array contains looms, report the existing loom IDs and
      suggest using the `knot-inspect` skill to examine them.
 
-9. **Report success**: Summarise the rig state including:
+10. **Report success**: Summarise the rig state including:
    - Knot service status (running)
    - Rig path (from `rig/state.json`)
    - Profiles available (from `rig/state.json`)
