@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-27
+> **Last Updated:** 2026-06-28
 
 ## How to Add a Plan
 
@@ -49,7 +49,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-27 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
-| 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ⬜ Planned | 2026-06-24 |
+| 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ✅ Complete | 2026-06-24 |
 | 43 | [Simplify Prompts — Move Prompt Text to Markdown Body](simplify-prompt-in-body.md) | ✅ Complete | 2026-06-24 |
 | 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ✅ Complete | 2026-06-24 |
 | 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
@@ -106,6 +106,17 @@ _Overview sections for active and recently completed plans go here._
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
 Full details in [session-resume-on-invocation-failure.md](session-resume-on-invocation-failure.md).
+
+### 44. Fix `unwatch()` Removing Watchers for Other Knots
+
+**Status:** ✅ Complete
+**Created:** 2026-06-24
+**Completed:** 2026-06-26
+**Goal:** Fix `unwatch()` removing all watcher entries for a path when only a single knot's entry should be removed — breaking shared strand directory scenarios where multiple knots watch the same directory.
+
+**Result:** `unwatch_with_type()` method added to `EventSource` trait with default impl delegating to `unwatch()` for backward compat. `NotifyEventSource::unwatch_with_type()` removes only the matching `(path, WatchType)` pair using `watch_types_equal`, calls `notify::unwatch()` only when no other entries remain for the path. Callers in `handle_knot_modified` and `handle_knot_deleted` changed to use `unwatch_with_type`. 2 new unit tests in `event_source.rs` + 1 new integration test (`multi_knot_shared_directory_unwatch_does_not_remove_other_watch`). Version bumped to 0.18.1.
+
+Full details in [bugfix-unwatch-removes-wrong-watchers.md](bugfix-unwatch-removes-wrong-watchers.md).
 
 ### 46. JSON-based Agent Adapter
 
