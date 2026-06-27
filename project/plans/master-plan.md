@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-27 |
+| 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
 | 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ✅ Complete | 2026-06-24 |
@@ -100,8 +100,8 @@ _Overview sections for active and recently completed plans go here._
 ### 47. Session Resume on Invocation Failure
 
 **Status:** ⬜ Planned
-**Created:** 2026-06-27
-**Goal:** Automatically resume Pi sessions from where they left off after invocation failure (timeout, network error) using `--session-id`, up to a configurable retry limit per knot.
+**Created:** 2026-06-28
+**Goal:** Automatically resume Pi sessions from where they left off after invocation failure (timeout, network error) using `--session-id`, up to 10 retries or until the profile's overall timeout budget is exhausted. Appends "please continue" to the session on retry. 10-second delay between retries for network recovery.
 
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
