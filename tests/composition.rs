@@ -19,8 +19,7 @@ fn app_config_with_rig_dir_uses_custom_path() {
     let config = AppConfig::with_rig_dir(custom.clone());
 
     assert_eq!(config.rig_dir, custom);
-    assert_eq!(config.rig_config.cli_path, "pi");
-    assert!(config.rig_config.cli_args.is_empty());
+    assert_eq!(config.rig_config.agent_adapter, knot::AgentAdapter::PiStdio);
 }
 
 /// Verify `AppConfig::with_rig_dir()` works with relative paths.
@@ -72,8 +71,7 @@ fn build_app_context_wires_layers() {
     let _runner: &dyn AgentRunner = &*ctx.agent_runner;
 
     // Workspace config is loaded with defaults
-    assert_eq!(ctx.rig_config.cli_path, "pi");
-    assert!(ctx.rig_config.cli_args.is_empty());
+    assert_eq!(ctx.rig_config.agent_adapter, knot::AgentAdapter::PiStdio);
 
     // Both event senders are present; receivers are returned for wiring
     let _ = _strand_rx;

@@ -231,13 +231,18 @@ pub fn create_mock_pi(rig_dir: &Path, response: &str) -> PathBuf {
             .unwrap();
     }
 
-    // Write workspace agent config pointing to the stub
-    let config = format!(
-        "cli_path: \"{}\"\n\
-         cli_args: []\n",
-        pi_path.display()
-    );
+    // Write workspace agent config — adapter hardcodes binary path,
+    // so config only selects adapter. Stub is found via PATH.
+    let config = "agent-adapter: pi-stdio\n";
     fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+
+    // Prepend bin dir to PATH so the stub is discoverable as "pi".
+    // Unsafe: set_var is unsafe due to global mutable state,
+    // but this is a single-threaded test context.
+    unsafe {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), existing));
+    }
 
     pi_path
 }
@@ -284,12 +289,13 @@ pub fn create_mock_pi_capturing_stdin(
             .unwrap();
     }
 
-    let config = format!(
-        "cli_path: \"{}\"\n\
-         cli_args: []\n",
-        pi_path.display()
-    );
+    let config = "agent-adapter: pi-stdio\n";
     fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+
+    unsafe {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), existing));
+    }
 
     pi_path
 }

@@ -10,7 +10,7 @@ pub use server::AppContext;
 // Re-export subprocess runner
 pub use adapters::subprocess::SubprocessAgentRunner;
 pub use domain::entities::Loom;
-pub use domain::value_objects::RigAgentConfig;
+pub use domain::value_objects::{AgentAdapter, RigAgentConfig};
 
 // Re-export server lifecycle from composition root
 pub use server::{

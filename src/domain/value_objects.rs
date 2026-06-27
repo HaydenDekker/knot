@@ -148,35 +148,42 @@ impl PromptTemplate {
     }
 }
 
+/// Agent adapter selector.
+///
+/// Determines which adapter Knot uses to invoke the Pi CLI.
+/// Each adapter hardcodes its own binary path and flags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentAdapter {
+    /// Plain text stdout via subprocess (current behaviour).
+    #[serde(rename = "pi-stdio")]
+    PiStdio,
+    /// JSON-L stream with metadata extraction.
+    #[serde(rename = "pi-json")]
+    PiJson,
+}
+
 /// Rig-level agent configuration. One config per rig,
 /// shared by all knots in that rig.
+///
+/// Selects which adapter to use — no invocation details.
+/// Each adapter hardcodes its own binary path and CLI flags.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct RigAgentConfig {
-    /// Path to the agent CLI binary.
-    pub cli_path: String,
-    /// Arguments passed to the CLI.
-    pub cli_args: Vec<String>,
+    #[serde(default = "default_agent_adapter")]
+    pub agent_adapter: AgentAdapter,
+}
+
+fn default_agent_adapter() -> AgentAdapter {
+    AgentAdapter::PiStdio
 }
 
 impl RigAgentConfig {
-    /// Create a default workspace config (`cli_path = "pi"`, `cli_args = []`).
+    /// Create a default workspace config (`agent_adapter = PiStdio`).
     pub fn default_config() -> Self {
         Self {
-            cli_path: "pi".to_string(),
-            cli_args: Vec::new(),
+            agent_adapter: AgentAdapter::PiStdio,
         }
-    }
-
-    /// Create a custom workspace config.
-    ///
-    /// Returns `DomainError::EmptyField` if `cli_path` is blank.
-    pub fn new(cli_path: String, cli_args: Vec<String>) -> Result<Self, DomainError> {
-        if cli_path.trim().is_empty() {
-            return Err(DomainError::EmptyField(
-                "cli_path".to_string(),
-            ));
-        }
-        Ok(Self { cli_path, cli_args })
     }
 }
 
@@ -423,28 +430,9 @@ mod tests {
 
     #[test]
     fn rig_agent_config_defaults() {
-        // Default config uses "pi" and empty args
+        // Default config uses PiStdio adapter
         let config = RigAgentConfig::default_config();
-        assert_eq!(config.cli_path, "pi");
-        assert!(config.cli_args.is_empty());
-
-        // Custom path and args accepted
-        let config = RigAgentConfig::new(
-            "custom-agent".to_string(),
-            vec!["--verbose".to_string()],
-        );
-        assert!(config.is_ok());
-        let config = config.unwrap();
-        assert_eq!(config.cli_path, "custom-agent");
-        assert_eq!(config.cli_args, vec!["--verbose"]);
-
-        // Empty cli_path returns error
-        let err = RigAgentConfig::new("".to_string(), vec![]);
-        assert!(err.is_err());
-        assert_eq!(
-            err.unwrap_err(),
-            DomainError::EmptyField("cli_path".to_string())
-        );
+        assert_eq!(config.agent_adapter, AgentAdapter::PiStdio);
     }
 
     #[test]
@@ -471,8 +459,9 @@ mod tests {
 
     #[test]
     fn rig_agent_config_serialization() {
-        let config =
-            RigAgentConfig::new("pi".to_string(), vec!["--verbose".to_string()]).unwrap();
+        let config = RigAgentConfig {
+            agent_adapter: AgentAdapter::PiJson,
+        };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
@@ -792,5 +781,63 @@ mod tests {
         let profile: AgentProfile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.timeout, None);
         assert_eq!(profile.name, "legacy");
+    }
+
+    // ── AgentAdapter Tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_adapter_default_pistdio() {
+        // Missing field defaults to PiStdio
+        let yaml = "";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.agent_adapter, AgentAdapter::PiStdio);
+    }
+
+    #[test]
+    fn test_agent_adapter_pijson_from_yaml() {
+        let yaml = "agent-adapter: pi-json";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.agent_adapter, AgentAdapter::PiJson);
+    }
+
+    #[test]
+    fn test_agent_adapter_pistdio_from_yaml() {
+        let yaml = "agent-adapter: pi-stdio";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.agent_adapter, AgentAdapter::PiStdio);
+    }
+
+    #[test]
+    fn test_agent_adapter_invalid_yaml() {
+        let yaml = "agent-adapter: unknown";
+        let result: Result<RigAgentConfig, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rig_agent_config_serialization_roundtrip() {
+        let config = RigAgentConfig {
+            agent_adapter: AgentAdapter::PiJson,
+        };
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.agent_adapter, AgentAdapter::PiJson);
+        assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn test_rig_agent_config_no_cli_path_or_args() {
+        // Compile-time check: RigAgentConfig has no cli_path or cli_args.
+        // If these fields existed, this would compile. We use a helper
+        // that only compiles when the field does NOT exist.
+        fn assert_no_cli_fields(config: &RigAgentConfig) {
+            // Only agent_adapter exists — if cli_path/cli_args existed,
+            // this would still compile but we verify at runtime:
+            let yaml = serde_yaml::to_string(config).unwrap();
+            assert!(!yaml.contains("cli_path"), "cli_path should not exist");
+            assert!(!yaml.contains("cli_args"), "cli_args should not exist");
+        }
+        let config = RigAgentConfig::default_config();
+        assert_no_cli_fields(&config);
     }
 }

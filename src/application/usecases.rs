@@ -1021,7 +1021,7 @@ impl ProcessStrand {
 
         // 3. Build execution context with event metadata
         let ctx = ExecutionContext {
-            cli_path: self.rig_config.cli_path.clone(),
+            cli_path: "pi".to_string(),
             cli_args,
             prompt,
             profile_prompt: profile.profile_prompt,

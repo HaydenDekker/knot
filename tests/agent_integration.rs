@@ -144,12 +144,12 @@ fn agent_failure_records_error_in_state() {
         fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
             .unwrap();
     }
-    let config = format!(
-        "cli_path: \"{}\"\n\
-         cli_args: []\n",
-        pi_path.display()
-    );
+    let config = "agent-adapter: pi-stdio\n";
     fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+    unsafe {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), existing));
+    }
 
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
@@ -201,12 +201,12 @@ fn agent_failure_records_loom_log_entry() {
         fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
             .unwrap();
     }
-    let config = format!(
-        "cli_path: \"{}\"\n\
-         cli_args: []\n",
-        pi_path.display()
-    );
+    let config = "agent-adapter: pi-stdio\n";
     fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
+    unsafe {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), existing));
+    }
 
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
