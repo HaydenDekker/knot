@@ -4,14 +4,15 @@
 //! (startup, event pipeline, graceful shutdown).
 
 use crate::adapters::outbound::FileSystemStateWriter;
-use crate::adapters::subprocess::SubprocessAgentRunner;
+use crate::adapters::pi_json::PiJsonAgentRunner;
+use crate::adapters::pi_stdio::PiStdioAgentRunner;
 use crate::application;
 use crate::application::ports::{GitVersioningPort, StateWriterPort};
 use crate::domain;
 use crate::domain::entities::Loom;
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
-use crate::domain::value_objects::RigAgentConfig;
+use crate::domain::value_objects::{AgentAdapter, RigAgentConfig};
 
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
@@ -171,9 +172,14 @@ pub fn build_app_context(
             config.rig_dir.clone(),
         ));
     let agent_runner: Arc<dyn application::ports::AgentRunner> =
-        Arc::new(
-            SubprocessAgentRunner::with_timeout(config.agent_timeout),
-        );
+        match rig_config.agent_adapter {
+            AgentAdapter::PiJson => Arc::new(
+                PiJsonAgentRunner::with_timeout(config.agent_timeout),
+            ),
+            AgentAdapter::PiStdio => Arc::new(
+                PiStdioAgentRunner::with_timeout(config.agent_timeout),
+            ),
+        };
     let profile_repo: Arc<dyn application::ports::AgentProfileRepository> =
         Arc::new(
             crate::adapters::outbound::FileSystemAgentProfileRepository::new(
@@ -622,4 +628,74 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+// ── Composition Tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    use crate::application::ports::AgentRunner;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// With `agent_adapter: pi-json`, composition wires `PiJsonAgentRunner`.
+    #[test]
+    fn test_composition_uses_json_runner() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+
+        // Write rig config selecting pi-json adapter
+        let config_path = rig_dir.join(".workspace-agent-config.yaml");
+        fs::write(&config_path, "agent-adapter: pi-json\n").unwrap();
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+
+        assert_eq!(
+            ctx.agent_runner.runner_type(),
+            "pi-json",
+            "expected PiJsonAgentRunner for agent_adapter: pi-json",
+        );
+    }
+
+    /// With `agent_adapter: pi-stdio` or default, composition wires
+    /// `PiStdioAgentRunner`.
+    #[test]
+    fn test_composition_uses_stdio_runner() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+
+        // No config file — defaults to pi-stdio
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+
+        assert_eq!(
+            ctx.agent_runner.runner_type(),
+            "pi-stdio",
+            "expected PiStdioAgentRunner for default adapter",
+        );
+    }
+
+    /// Explicit `agent_adapter: pi-stdio` also wires `PiStdioAgentRunner`.
+    #[test]
+    fn test_composition_uses_stdio_runner_explicit() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+
+        let config_path = rig_dir.join(".workspace-agent-config.yaml");
+        fs::write(&config_path, "agent-adapter: pi-stdio\n").unwrap();
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+
+        assert_eq!(
+            ctx.agent_runner.runner_type(),
+            "pi-stdio",
+            "expected PiStdioAgentRunner for agent_adapter: pi-stdio",
+        );
+    }
 }

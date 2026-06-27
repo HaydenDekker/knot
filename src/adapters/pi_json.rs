@@ -1,5 +1,5 @@
-//! JSON subprocess agent runner — invokes an agent CLI with `--mode json`
-//! and parses the JSON-L output stream.
+//! JSON agent runner — invokes the Pi CLI with `--mode json` and parses
+//! the JSON-L output stream.
 //!
 //! Reads stdout line-by-line as newline-delimited JSON, extracting:
 //! - Session ID from the first `session` event
@@ -18,19 +18,21 @@ use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, ExecutionContext,
     PortError, TokenUsage,
 };
+use crate::domain::entities::StrandPath;
+use crate::domain::value_objects::AgentConfig;
 
-/// JSON-L subprocess implementation of [`AgentRunner`].
+/// JSON-L implementation of [`AgentRunner`].
 ///
 /// Appends `--mode json` to CLI arguments, spawns the child process,
 /// and parses stdout as newline-delimited JSON events.
 #[derive(Debug, Clone)]
-pub struct JsonSubprocessAgentRunner {
+pub struct PiJsonAgentRunner {
     /// Maximum duration the agent may run before being killed.
     /// Defaults to 120 seconds.
     timeout: Duration,
 }
 
-impl Default for JsonSubprocessAgentRunner {
+impl Default for PiJsonAgentRunner {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
@@ -38,7 +40,7 @@ impl Default for JsonSubprocessAgentRunner {
     }
 }
 
-impl JsonSubprocessAgentRunner {
+impl PiJsonAgentRunner {
     /// Create a new runner with the default 120-second timeout.
     pub fn new() -> Self {
         Self::default()
@@ -216,7 +218,7 @@ impl JsonSubprocessAgentRunner {
     }
 }
 
-impl AgentRunner for JsonSubprocessAgentRunner {
+impl AgentRunner for PiJsonAgentRunner {
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
         let cli_args = Self::build_json_cli_args(&ctx.cli_args);
 
@@ -259,7 +261,7 @@ impl AgentRunner for JsonSubprocessAgentRunner {
 
         // Spawn a background thread that kills the child on timeout.
         let _timeout_thread = std::thread::Builder::new()
-            .name("json-subprocess-timeout".to_string())
+            .name("json-timeout".to_string())
             .spawn(move || {
                 std::thread::sleep(effective_timeout);
                 if cancelled_for_thread.load(Ordering::Relaxed) {
@@ -387,6 +389,54 @@ impl AgentRunner for JsonSubprocessAgentRunner {
             })
         }
     }
+
+    fn execute_with_config(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+    ) -> Result<AgentOutput, PortError> {
+        let mut cli_args = agent_config.build_cli_args();
+        // Append --name for pi session title
+        let strand_filename = strand_path.0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot_name.as_deref().unwrap_or("unknown"),
+            event_type,
+            strand_filename,
+        );
+        cli_args.push("--name".to_string());
+        cli_args.push(session_title);
+        // Append strand content reference using pi's @file syntax.
+        // Only for Created/Modified events (file exists on disk).
+        if let Some(ref file_path) = strand_file_ref {
+            cli_args.push(format!("@{}", file_path.0.display()));
+        }
+
+        let ctx = ExecutionContext {
+            cli_path: "pi".to_string(),
+            cli_args,
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        self.execute(ctx)
+    }
+
+    fn runner_type(&self) -> &str {
+        "pi-json"
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -433,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_parses_session_id() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let ctx = jsonl_context("abc-123", "hello");
 
         let result = runner.execute(ctx);
@@ -454,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_parses_token_usage() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let script = r#"echo '{"type":"session","id":"sess-1"}'; echo '{"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}'"#;
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
@@ -484,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_parses_response_text() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let ctx = jsonl_context("sess-x", "the response text");
 
         let result = runner.execute(ctx);
@@ -501,7 +551,7 @@ mod tests {
     #[test]
     fn test_json_runner_timeout_captures_session_id() {
         let runner =
-            JsonSubprocessAgentRunner::with_timeout(Duration::from_millis(100));
+            PiJsonAgentRunner::with_timeout(Duration::from_millis(100));
         // Emit session line then sleep (will be killed)
         let script =
             r#"echo '{"type":"session","id":"timeout-sess"}'; sleep 30"#;
@@ -535,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_nonzero_exit_captures_session_id() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         // Emit session line then exit with code 1
         let script =
             r#"echo '{"type":"session","id":"fail-sess"}'; exit 1"#;
@@ -569,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_command_not_found() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let ctx = make_context("/nonexistent/json-runner", &[]);
 
         let result = runner.execute(ctx);
@@ -588,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_malformed_json_fallback() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let script = r#"echo 'not json at all'; echo 'garbled output'"#;
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
@@ -620,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_empty_output() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "cat >/dev/null".to_string()],
@@ -651,7 +701,7 @@ mod tests {
 
     #[test]
     fn test_json_runner_adds_mode_json_flag() {
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         // `cat >/dev/null` consumes stdin; positional args $0 and $1
         // are the `--mode json` flags appended by the adapter.
         let ctx = ExecutionContext {
@@ -689,7 +739,7 @@ mod tests {
     #[test]
     fn test_json_runner_parses_message_end_response() {
         // Verify response text is extracted from message_end events
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let script = r#"echo '{"type":"session","id":"msg-sess"}'; echo '{"type":"message_end","role":"assistant","content":"response from message_end"}'"#;
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
@@ -718,7 +768,7 @@ mod tests {
     #[test]
     fn test_json_runner_prompt_passthrough() {
         // Verify the prompt is sent via stdin (like SubprocessAgentRunner)
-        let runner = JsonSubprocessAgentRunner::new();
+        let runner = PiJsonAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "cat".to_string()],
@@ -746,7 +796,7 @@ mod tests {
     #[test]
     fn test_json_runner_context_timeout_override() {
         let runner =
-            JsonSubprocessAgentRunner::with_timeout(Duration::from_secs(120));
+            PiJsonAgentRunner::with_timeout(Duration::from_secs(120));
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "exec sleep 30".to_string()],

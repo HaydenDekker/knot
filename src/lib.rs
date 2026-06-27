@@ -7,8 +7,9 @@ pub mod domain;
 // Re-export application context
 pub use server::AppContext;
 
-// Re-export subprocess runner
-pub use adapters::subprocess::SubprocessAgentRunner;
+// Re-export agent runners
+pub use adapters::pi_json::PiJsonAgentRunner;
+pub use adapters::pi_stdio::PiStdioAgentRunner;
 pub use domain::entities::Loom;
 pub use domain::value_objects::{AgentAdapter, RigAgentConfig};
 

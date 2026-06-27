@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::adapters::logging;
 use crate::application::ports::{
-    AgentProfileRepository, AgentRunner, ExecutionContext, EventSource,
+    AgentProfileRepository, AgentRunner, EventSource,
     GitVersioningPort, KnotEventType, LoomLogPort, LoomRepository,
     ProcessingStatus, PortError, RigLogPort, StateWriterPort, TieOffSink,
 };
@@ -971,23 +971,11 @@ impl ProcessStrand {
             None
         };
 
-        let mut cli_args = agent_config.build_cli_args();
-        // Append --name for pi session title (matches trigger line format)
+        // Strand filename — used in prompt for Deleted events.
         let strand_filename = strand_path.0
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
-        let session_title = format!(
-            "{} triggered by {} on {}",
-            knot.id.0, event_label, strand_filename,
-        );
-        cli_args.push("--name".to_string());
-        cli_args.push(session_title);
-        // Append strand content reference using pi's @file syntax.
-        // For Deleted events the file no longer exists, so skip it.
-        if !is_deleted {
-            cli_args.push(format!("@{}", strand_path.0.display()));
-        }
 
         // Build the prompt. For Deleted events, inject a deletion notice
         // and scoped strand history into the prompt body.
@@ -1019,20 +1007,23 @@ impl ProcessStrand {
             }
         }
 
-        // 3. Build execution context with event metadata
-        let ctx = ExecutionContext {
-            cli_path: "pi".to_string(),
-            cli_args,
-            prompt,
-            profile_prompt: profile.profile_prompt,
-            strand_path: strand_path.clone(),
-            event_type: event_label.clone(),
-            knot_name: Some(knot.id.0.clone()),
-            timeout: profile_timeout,
+        // 3. Execute agent — adapter builds its own CLI args from config.
+        // strand_file_ref is None for Deleted events (file no longer exists).
+        let strand_file_ref = if is_deleted {
+            None
+        } else {
+            Some(strand_path.clone())
         };
-
-        // 5. Execute agent and handle result
-        let result = self.agent_runner.execute(ctx);
+        let result = self.agent_runner.execute_with_config(
+            &agent_config,
+            strand_path.clone(),
+            strand_file_ref,
+            prompt,
+            profile.profile_prompt,
+            event_label.clone(),
+            Some(knot.id.0.clone()),
+            profile_timeout,
+        );
 
         match result {
             Ok(output) => {
@@ -4045,7 +4036,7 @@ mod manage_knot_tests {
 #[cfg(test)]
 mod phase3_profile_resolution_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -4481,7 +4472,7 @@ mod phase3_profile_resolution_tests {
 #[cfg(test)]
 mod phase6_timeout_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId, TieOffStatus};
     use crate::domain::events::RigLogEvent;
     use crate::domain::value_objects::PromptTemplate;
@@ -4556,6 +4547,46 @@ mod phase6_timeout_tests {
         ) -> Result<AgentOutput, PortError> {
             *self.captured_ctx.lock().unwrap() = Some(ctx);
             self.result.lock().unwrap().clone()
+        }
+
+        fn execute_with_config(
+            &self,
+            agent_config: &AgentConfig,
+            strand_path: StrandPath,
+            strand_file_ref: Option<StrandPath>,
+            prompt: String,
+            profile_prompt: String,
+            event_type: String,
+            knot_name: Option<String>,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<AgentOutput, PortError> {
+            let mut cli_args = agent_config.build_cli_args();
+            let strand_filename = strand_path.0
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let session_title = format!(
+                "{} triggered by {} on {}",
+                knot_name.as_deref().unwrap_or("unknown"),
+                event_type,
+                strand_filename,
+            );
+            cli_args.push("--name".to_string());
+            cli_args.push(session_title);
+            if let Some(ref file_path) = strand_file_ref {
+                cli_args.push(format!("@{}", file_path.0.display()));
+            }
+            let ctx = ExecutionContext {
+                cli_path: "pi".to_string(),
+                cli_args,
+                prompt,
+                profile_prompt,
+                strand_path,
+                event_type,
+                knot_name,
+                timeout,
+            };
+            self.execute(ctx)
         }
     }
 
@@ -5245,7 +5276,7 @@ mod phase6_timeout_tests {
 #[cfg(test)]
 mod phase7_timeout_resolution_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -5305,6 +5336,46 @@ mod phase7_timeout_resolution_tests {
                 exit_code: 0,
                 metadata: None,
             })
+        }
+
+        fn execute_with_config(
+            &self,
+            agent_config: &AgentConfig,
+            strand_path: StrandPath,
+            strand_file_ref: Option<StrandPath>,
+            prompt: String,
+            profile_prompt: String,
+            event_type: String,
+            knot_name: Option<String>,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<AgentOutput, PortError> {
+            let mut cli_args = agent_config.build_cli_args();
+            let strand_filename = strand_path.0
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let session_title = format!(
+                "{} triggered by {} on {}",
+                knot_name.as_deref().unwrap_or("unknown"),
+                event_type,
+                strand_filename,
+            );
+            cli_args.push("--name".to_string());
+            cli_args.push(session_title);
+            if let Some(ref file_path) = strand_file_ref {
+                cli_args.push(format!("@{}", file_path.0.display()));
+            }
+            let ctx = ExecutionContext {
+                cli_path: "pi".to_string(),
+                cli_args,
+                prompt,
+                profile_prompt,
+                strand_path,
+                event_type,
+                knot_name,
+                timeout,
+            };
+            self.execute(ctx)
         }
     }
 
@@ -5679,7 +5750,7 @@ mod phase7_timeout_resolution_tests {
 #[cfg(test)]
 mod phase8_git_versioning_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -6265,7 +6336,7 @@ mod reload_config_tests {
 #[cfg(test)]
 mod phase9_session_title_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -6324,6 +6395,46 @@ mod phase9_session_title_tests {
                 exit_code: 0,
                 metadata: None,
             })
+        }
+
+        fn execute_with_config(
+            &self,
+            agent_config: &AgentConfig,
+            strand_path: StrandPath,
+            strand_file_ref: Option<StrandPath>,
+            prompt: String,
+            profile_prompt: String,
+            event_type: String,
+            knot_name: Option<String>,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<AgentOutput, PortError> {
+            let mut cli_args = agent_config.build_cli_args();
+            let strand_filename = strand_path.0
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let session_title = format!(
+                "{} triggered by {} on {}",
+                knot_name.as_deref().unwrap_or("unknown"),
+                event_type,
+                strand_filename,
+            );
+            cli_args.push("--name".to_string());
+            cli_args.push(session_title);
+            if let Some(ref file_path) = strand_file_ref {
+                cli_args.push(format!("@{}", file_path.0.display()));
+            }
+            let ctx = ExecutionContext {
+                cli_path: "pi".to_string(),
+                cli_args,
+                prompt,
+                profile_prompt,
+                strand_path,
+                event_type,
+                knot_name,
+                timeout,
+            };
+            self.execute(ctx)
         }
     }
 
@@ -7392,7 +7503,7 @@ mod write_state_tests {
 mod phase2_text_check_tests {
     use super::*;
     use crate::adapters::outbound::content_inspector::is_text_file;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId, TieOffStatus};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -7862,7 +7973,7 @@ mod phase2_text_check_tests {
 #[cfg(test)]
 mod phase2_file_existence_tests {
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::temp_file::is_known_temp_file;
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};

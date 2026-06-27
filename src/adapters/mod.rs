@@ -1,4 +1,4 @@
-pub mod json_subprocess;
 pub mod logging;
 pub mod outbound;
-pub mod subprocess;
+pub mod pi_json;
+pub mod pi_stdio;

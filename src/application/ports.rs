@@ -11,7 +11,7 @@ use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, RigState, StrandPath, TieOff, TieOffPath,
 };
 use crate::domain::events::{LoomEvent, RigLogEvent};
-use crate::domain::value_objects::AgentProfile;
+use crate::domain::value_objects::{AgentConfig, AgentProfile};
 
 // ── Error Types ────────────────────────────────────────────────────────────
 
@@ -392,6 +392,48 @@ pub trait AgentRunner: Send + Sync {
     /// If the agent exceeds the deadline, it is killed and
     /// `PortError::Timeout` is returned.
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError>;
+
+    /// Execute the agent using an `AgentConfig` to build CLI arguments.
+    ///
+    /// Each adapter hardcodes its own binary path and flags. The adapter
+    /// builds CLI args from `agent_config` internally, so the caller
+    /// (ProcessStrand) does not construct `cli_path`/`cli_args`.
+    ///
+    /// `strand_file_ref` is `Some(path)` for Created/Modified events
+    /// (appended as `@{path}`) and `None` for Deleted events (file gone).
+    ///
+    /// Default implementation delegates to `execute()` with a synthetic
+    /// context — mock runners override `execute()` only.
+    fn execute_with_config(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+    ) -> Result<AgentOutput, PortError> {
+        let ctx = ExecutionContext {
+            cli_path: String::new(),
+            cli_args: Vec::new(),
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        let _ = (agent_config, strand_file_ref); // unused by default impl
+        self.execute(ctx)
+    }
+
+    /// Return a human-readable name for this runner implementation.
+    /// Used by composition tests to verify the correct adapter is wired.
+    fn runner_type(&self) -> &str {
+        "unknown"
+    }
 }
 
 /// Port for writing tie-off content to disk.

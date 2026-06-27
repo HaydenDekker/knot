@@ -1,4 +1,8 @@
-//! Subprocess agent runner — invokes an agent CLI via a child process.
+//! Stdio agent runner — invokes the Pi CLI via a child process in
+//! plain-text (stdio) mode.
+//!
+//! This is the default adapter. It captures stdout/stderr as raw text
+//! and returns the stdout as the agent response.
 
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,19 +12,21 @@ use std::time::Duration;
 use crate::application::ports::{
     AgentOutput, AgentRunner, ExecutionContext, PortError,
 };
+use crate::domain::entities::StrandPath;
+use crate::domain::value_objects::AgentConfig;
 
-/// Subprocess-backed implementation of [`AgentRunner`].
+/// Stdio-backed implementation of [`AgentRunner`].
 ///
-/// Spawns the agent CLI as a child process, captures stdout and stderr,
-/// and enforces a configurable timeout.
+/// Spawns the Pi CLI as a child process in plain-text mode, captures
+/// stdout and stderr, and enforces a configurable timeout.
 #[derive(Debug, Clone)]
-pub struct SubprocessAgentRunner {
+pub struct PiStdioAgentRunner {
     /// Maximum duration the agent may run before being killed.
     /// Defaults to 120 seconds.
     timeout: Duration,
 }
 
-impl Default for SubprocessAgentRunner {
+impl Default for PiStdioAgentRunner {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
@@ -28,7 +34,7 @@ impl Default for SubprocessAgentRunner {
     }
 }
 
-impl SubprocessAgentRunner {
+impl PiStdioAgentRunner {
     /// Create a new runner with the default 120-second timeout.
     pub fn new() -> Self {
         Self::default()
@@ -75,7 +81,7 @@ impl SubprocessAgentRunner {
     }
 }
 
-impl AgentRunner for SubprocessAgentRunner {
+impl AgentRunner for PiStdioAgentRunner {
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
         // Spawn the child process.
         let child = std::process::Command::new(&ctx.cli_path)
@@ -118,7 +124,7 @@ impl AgentRunner for SubprocessAgentRunner {
 
         // Spawn a background thread that kills the child on timeout.
         let _timeout_thread = std::thread::Builder::new()
-            .name("subprocess-timeout".to_string())
+            .name("stdio-timeout".to_string())
             .spawn(move || {
                 std::thread::sleep(effective_timeout);
                 // If the child already exited, skip the kill + warning.
@@ -209,6 +215,54 @@ impl AgentRunner for SubprocessAgentRunner {
             metadata: None,
         })
     }
+
+    fn execute_with_config(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+    ) -> Result<AgentOutput, PortError> {
+        let mut cli_args = agent_config.build_cli_args();
+        // Append --name for pi session title
+        let strand_filename = strand_path.0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot_name.as_deref().unwrap_or("unknown"),
+            event_type,
+            strand_filename,
+        );
+        cli_args.push("--name".to_string());
+        cli_args.push(session_title);
+        // Append strand content reference using pi's @file syntax.
+        // Only for Created/Modified events (file exists on disk).
+        if let Some(ref file_path) = strand_file_ref {
+            cli_args.push(format!("@{}", file_path.0.display()));
+        }
+
+        let ctx = ExecutionContext {
+            cli_path: "pi".to_string(),
+            cli_args,
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        self.execute(ctx)
+    }
+
+    fn runner_type(&self) -> &str {
+        "pi-stdio"
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -233,7 +287,7 @@ mod tests {
 
     #[test]
     fn execute_successful_command() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = make_context("sh", &["-c", "echo hello"]);
 
         let result = runner.execute(ctx);
@@ -246,7 +300,7 @@ mod tests {
 
     #[test]
     fn execute_captures_stdout() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = make_context("echo", &["test"]);
 
         let result = runner.execute(ctx);
@@ -258,7 +312,7 @@ mod tests {
 
     #[test]
     fn execute_captures_stderr() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         // `cat >/dev/null` consumes stdin so the process stays alive for
         // the write, then we emit to stderr.
         let ctx = make_context("sh", &["-c", "cat >/dev/null; echo err >&2"]);
@@ -273,7 +327,7 @@ mod tests {
 
     #[test]
     fn execute_command_not_found() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = make_context("/nonexistent/path/does/not/exist", &[]);
 
         let result = runner.execute(ctx);
@@ -288,7 +342,7 @@ mod tests {
 
     #[test]
     fn execute_nonzero_exit_error() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         // `cat >/dev/null` consumes stdin so the process stays alive for
         // the write, then exits with code 1.
         let ctx = make_context("sh", &["-c", "cat >/dev/null; exit 1"]);
@@ -307,7 +361,7 @@ mod tests {
     #[test]
     fn execute_timeout() {
         let runner =
-            SubprocessAgentRunner::with_timeout(Duration::from_millis(100));
+            PiStdioAgentRunner::with_timeout(Duration::from_millis(100));
         let ctx = make_context("sleep", &["30"]);
 
         let result = runner.execute(ctx);
@@ -320,11 +374,11 @@ mod tests {
         );
     }
 
-    /// Verify that `SubprocessAgentRunner` writes the full prompt chain
+    /// Verify that `PiStdioAgentRunner` writes the full prompt chain
     /// (profile_prompt + prompt + trigger line) to the child process's stdin.
     #[test]
     fn runner_passes_prompt_via_stdin() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec!["-c".to_string(), "cat".to_string()],
@@ -347,7 +401,7 @@ mod tests {
     /// using `cat /dev/stdin` (alternative way to read stdin).
     #[test]
     fn runner_passes_strand_via_at_syntax() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "cat".to_string(),
             cli_args: vec![],
@@ -369,11 +423,11 @@ mod tests {
         );
     }
 
-    /// Verify that `SubprocessAgentRunner` includes profile prompt,
+    /// Verify that `PiStdioAgentRunner` includes profile prompt,
     /// knot instructions, and trigger line in the correct order.
     #[test]
     fn runner_passes_event_metadata() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "cat".to_string(),
             cli_args: vec![],
@@ -414,7 +468,7 @@ mod tests {
     #[test]
     fn execute_context_timeout_override() {
         let runner =
-            SubprocessAgentRunner::with_timeout(Duration::from_secs(120));
+            PiStdioAgentRunner::with_timeout(Duration::from_secs(120));
         let ctx = ExecutionContext {
             cli_path: "sleep".to_string(),
             cli_args: vec!["30".to_string()],
@@ -447,7 +501,7 @@ mod tests {
     #[test]
     fn execute_context_timeout_fallback_to_runner_default() {
         let runner =
-            SubprocessAgentRunner::with_timeout(Duration::from_millis(50));
+            PiStdioAgentRunner::with_timeout(Duration::from_millis(50));
         let ctx = ExecutionContext {
             cli_path: "sleep".to_string(),
             cli_args: vec!["30".to_string()],
@@ -481,7 +535,7 @@ mod tests {
     #[test]
     fn execute_context_timeout_larger_than_default() {
         let runner =
-            SubprocessAgentRunner::with_timeout(Duration::from_millis(50));
+            PiStdioAgentRunner::with_timeout(Duration::from_millis(50));
         // Context allows 3s — enough for `sh -c 'cat >/dev/null; echo ok'`
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
@@ -506,7 +560,7 @@ mod tests {
     #[test]
     fn execute_timeout_regression_no_context_override() {
         let runner =
-            SubprocessAgentRunner::with_timeout(Duration::from_millis(100));
+            PiStdioAgentRunner::with_timeout(Duration::from_millis(100));
         let ctx = make_context("sleep", &["30"]);
 
         let result = runner.execute(ctx);
@@ -523,7 +577,7 @@ mod tests {
     /// Uses `sh -c` to echo the args so we can inspect them in stdout.
     #[test]
     fn runner_passes_name_flag_through_cli_args() {
-        let runner = SubprocessAgentRunner::new();
+        let runner = PiStdioAgentRunner::new();
         let ctx = ExecutionContext {
             cli_path: "sh".to_string(),
             cli_args: vec![
