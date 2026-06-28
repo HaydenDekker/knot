@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use crate::application::ports::{
-    is_session_resumable, AgentOutput, AgentRunner, ExecutionContext,
+    AgentOutput, AgentRunner, ExecutionContext,
     LoomLogPort, PortError,
 };
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
@@ -54,7 +54,7 @@ pub fn execute_with_resume(
     profile_prompt: String,
     event_type: String,
     knot_name: Option<String>,
-    profile_timeout: Duration,
+    profile_timeout: Option<Duration>,
 ) -> Result<AgentOutput, PortError> {
     // Allow test code to override the delay via env var.
     let retry_delay = std::env::var("KNOT_RETRY_DELAY_MS")
@@ -97,7 +97,7 @@ fn execute_with_resume_internal(
     profile_prompt: String,
     event_type: String,
     knot_name: Option<String>,
-    profile_timeout: Duration,
+    profile_timeout: Option<Duration>,
     retry_delay: Duration,
 ) -> Result<AgentOutput, PortError> {
     let start = Instant::now();
@@ -147,39 +147,44 @@ fn execute_with_resume_internal(
 
     // --- Retry loop ---
     for attempt in 1..=MAX_RETRIES {
-        let elapsed = start.elapsed();
-        let remaining = profile_timeout.saturating_sub(elapsed);
+        // Check overall timeout budget (only when profile has a timeout)
+        if let Some(timeout_budget) = profile_timeout {
+            let elapsed = start.elapsed();
+            let remaining = timeout_budget.saturating_sub(elapsed);
 
-        // Bail if insufficient time remains
-        if remaining.as_secs() < MIN_REMAINING_SECS {
-            return Err(PortError::Timeout {
-                message: format!(
-                    "overall timeout budget exhausted after {} attempt(s) \
-                     ({}s used of {}s budget)",
-                    attempt,
-                    elapsed.as_secs(),
-                    profile_timeout.as_secs(),
-                ),
-                session_id: session_id.clone(),
-            });
+            // Bail if insufficient time remains
+            if remaining.as_secs() < MIN_REMAINING_SECS {
+                return Err(PortError::Timeout {
+                    message: format!(
+                        "overall timeout budget exhausted after {} attempt(s) \
+                         ({}s used of {}s budget)",
+                        attempt,
+                        elapsed.as_secs(),
+                        timeout_budget.as_secs(),
+                    ),
+                    session_id: session_id.clone(),
+                });
+            }
         }
 
         // Delay between retries to allow transient errors to recover
         std::thread::sleep(retry_delay);
 
         // Re-check budget after the delay
-        let elapsed = start.elapsed();
-        if elapsed >= profile_timeout {
-            return Err(PortError::Timeout {
-                message: format!(
-                    "overall timeout budget exhausted after {} attempt(s) \
-                     ({}s used of {}s budget)",
-                    attempt,
-                    elapsed.as_secs(),
-                    profile_timeout.as_secs(),
-                ),
-                session_id: session_id.clone(),
-            });
+        if let Some(timeout_budget) = profile_timeout {
+            let elapsed = start.elapsed();
+            if elapsed >= timeout_budget {
+                return Err(PortError::Timeout {
+                    message: format!(
+                        "overall timeout budget exhausted after {} attempt(s) \
+                         ({}s used of {}s budget)",
+                        attempt,
+                        elapsed.as_secs(),
+                        timeout_budget.as_secs(),
+                    ),
+                    session_id: session_id.clone(),
+                });
+            }
         }
 
         // Update session_id from the error (in case it changed)
@@ -201,7 +206,7 @@ fn execute_with_resume_internal(
         })?;
 
         // Build context with remaining time and execute
-        let remaining = profile_timeout.saturating_sub(start.elapsed());
+        let timeout = profile_timeout.as_ref().map(|t| t.saturating_sub(start.elapsed()));
         let ctx = build_retry_context(
             cli_args.clone(),
             prompt.clone(),
@@ -209,7 +214,7 @@ fn execute_with_resume_internal(
             profile_prompt.clone(),
             event_type.clone(),
             knot_name.clone(),
-            remaining,
+            timeout,
             start,
         );
 
@@ -234,18 +239,20 @@ fn execute_with_resume_internal(
                     return Err(e);
                 }
 
-                let remaining = profile_timeout.saturating_sub(start.elapsed());
-                if remaining.as_secs() < MIN_REMAINING_SECS {
-                    return Err(PortError::Timeout {
-                        message: format!(
-                            "overall timeout budget exhausted after {} \
-                             attempt(s) ({}s used of {}s budget)",
-                            attempt,
-                            start.elapsed().as_secs(),
-                            profile_timeout.as_secs(),
-                        ),
-                        session_id: session_id.clone(),
-                    });
+                if let Some(timeout_budget) = profile_timeout {
+                    let remaining = timeout_budget.saturating_sub(start.elapsed());
+                    if remaining.as_secs() < MIN_REMAINING_SECS {
+                        return Err(PortError::Timeout {
+                            message: format!(
+                                "overall timeout budget exhausted after {} \
+                                 attempt(s) ({}s used of {}s budget)",
+                                attempt,
+                                start.elapsed().as_secs(),
+                                timeout_budget.as_secs(),
+                            ),
+                            session_id: session_id.clone(),
+                        });
+                    }
                 }
 
                 first_error = e;
@@ -256,9 +263,11 @@ fn execute_with_resume_internal(
     // Exhausted all retries
     Err(PortError::Timeout {
         message: format!(
-            "session resume exhausted {} retries (overall timeout: {}s)",
+            "session resume exhausted {} retries{}",
             MAX_RETRIES,
-            profile_timeout.as_secs(),
+            profile_timeout
+                .map(|t| format!(" (overall timeout: {}s)", t.as_secs()))
+                .unwrap_or_default(),
         ),
         session_id: session_id.clone(),
     })
@@ -274,7 +283,7 @@ fn build_retry_context(
     profile_prompt: String,
     event_type: String,
     knot_name: Option<String>,
-    remaining: Duration,
+    timeout: Option<Duration>,
     _start: Instant,
 ) -> ExecutionContext {
     ExecutionContext {
@@ -285,7 +294,7 @@ fn build_retry_context(
         strand_path,
         event_type,
         knot_name,
-        timeout: Some(remaining),
+        timeout,
     }
 }
 
@@ -461,7 +470,7 @@ mod tests {
             "You are a reviewer.".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
-            Duration::from_secs(timeout_secs),
+            Some(Duration::from_secs(timeout_secs)),
             Duration::from_millis(0),
         )
     }
@@ -553,7 +562,7 @@ mod tests {
             "You are a reviewer.".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
-            Duration::from_secs(4), // budget < MIN_REMAINING_SECS (5)
+            Some(Duration::from_secs(4)), // budget < MIN_REMAINING_SECS (5)
             Duration::from_millis(0),
         );
 
@@ -599,7 +608,7 @@ mod tests {
             "You are a reviewer.".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
-            Duration::from_secs(3),
+            Some(Duration::from_secs(3)),
             Duration::from_millis(0),
         );
 
@@ -738,7 +747,7 @@ mod tests {
             "You are a reviewer.".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
-            Duration::from_secs(120),
+            Some(Duration::from_secs(120)),
             Duration::from_millis(100),
         );
 
@@ -774,7 +783,7 @@ mod tests {
             "You are a reviewer.".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
-            Duration::from_secs(120),
+            Some(Duration::from_secs(120)),
             Duration::from_millis(0),
         );
 

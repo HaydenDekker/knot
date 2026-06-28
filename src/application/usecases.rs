@@ -15,6 +15,7 @@ use crate::application::ports::{
     GitVersioningPort, KnotEventType, LoomLogPort, LoomRepository,
     ProcessingStatus, PortError, RigLogPort, StateWriterPort, TieOffSink,
 };
+use crate::application::session_resume;
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, RigState, RigStateKnot, RigStateLoom,
@@ -1007,18 +1008,41 @@ impl ProcessStrand {
             }
         }
 
-        // 3. Execute agent — adapter builds its own CLI args from config.
-        // strand_file_ref is None for Deleted events (file no longer exists).
+        // 3. Execute agent with session-resume retry logic.
+        // Build CLI args here (same as execute_with_config default impl)
+        // so session_resume can append --session-id on retry.
         let strand_file_ref = if is_deleted {
             None
         } else {
             Some(strand_path.clone())
         };
-        let result = self.agent_runner.execute_with_config(
-            &agent_config,
-            strand_path.clone(),
-            strand_file_ref,
+        let strand_filename = strand_path.0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot.id.0,
+            event_label,
+            strand_filename,
+        );
+        let mut cli_args = agent_config.build_cli_args();
+        cli_args.push("--name".to_string());
+        cli_args.push(session_title);
+        if let Some(ref file_path) = strand_file_ref {
+            cli_args.push(format!("@{}", file_path.0.display()));
+        }
+        let mut session_id: Option<String> = None;
+        let result = session_resume::execute_with_resume(
+            &*self.agent_runner,
+            &*self.log_port,
+            &loom_id,
+            &knot_id,
+            &strand_path,
+            &mut session_id,
+            cli_args,
             prompt,
+            strand_file_ref,
             profile.profile_prompt,
             event_label.clone(),
             Some(knot.id.0.clone()),
@@ -4517,16 +4541,44 @@ mod phase6_timeout_tests {
 
     /// Mock agent runner that returns a configurable result and captures
     /// the execution context for inspection in tests.
+    ///
+    /// Supports two modes:
+    /// - Single result (via `new()`) — returns the same result for every call.
+    /// - Sequence (via `new_sequence()`) — pops results from a queue for each
+    ///   call, useful for testing session-resume retry behaviour.
     struct ConfigurableAgentRunner {
         result: Arc<Mutex<Result<AgentOutput, PortError>>>,
-        captured_ctx: Arc<Mutex<Option<ExecutionContext>>>,
+        /// Sequence of results to return (popped front-to-back).
+        /// When `Some`, takes priority over `result`.
+        sequence: Arc<Mutex<Option<std::collections::VecDeque<
+            Result<AgentOutput, PortError>,
+        >>>>,
+        captured_ctx: Arc<Mutex<Vec<ExecutionContext>>>,
     }
 
     impl ConfigurableAgentRunner {
         fn new(result: Result<AgentOutput, PortError>) -> Self {
             Self {
                 result: Arc::new(Mutex::new(result)),
-                captured_ctx: Arc::new(Mutex::new(None)),
+                sequence: Arc::new(Mutex::new(None)),
+                captured_ctx: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn new_sequence(
+            results: Vec<Result<AgentOutput, PortError>>,
+        ) -> Self {
+            Self {
+                result: Arc::new(Mutex::new(Ok(AgentOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    metadata: None,
+                }))),
+                sequence: Arc::new(Mutex::new(Some(
+                    results.into_iter().collect(),
+                ))),
+                captured_ctx: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -4536,6 +4588,15 @@ mod phase6_timeout_tests {
 
         /// Return the last captured execution context (if any).
         fn get_captured_ctx(&self) -> Option<ExecutionContext> {
+            self.captured_ctx
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+        }
+
+        /// Return all captured execution contexts in order.
+        fn get_captured_contexts(&self) -> Vec<ExecutionContext> {
             self.captured_ctx.lock().unwrap().clone()
         }
     }
@@ -4545,7 +4606,14 @@ mod phase6_timeout_tests {
             &self,
             ctx: ExecutionContext,
         ) -> Result<AgentOutput, PortError> {
-            *self.captured_ctx.lock().unwrap() = Some(ctx);
+            self.captured_ctx.lock().unwrap().push(ctx);
+
+            // Check sequence first, then fall back to single result
+            if let Some(ref mut seq) = *self.sequence.lock().unwrap() {
+                if let Some(result) = seq.pop_front() {
+                    return result;
+                }
+            }
             self.result.lock().unwrap().clone()
         }
 
@@ -5268,6 +5336,199 @@ mod phase6_timeout_tests {
             !has_at_ref,
             "Deleted events must NOT contain @file reference",
         );
+    }
+
+    // ── Session Resume Integration Tests ─────────────────────────────
+
+    /// ProcessStrand with mock runner that fails then succeeds:
+    /// session-resume retry triggers, strand completes normally.
+    /// Loom-log shows SessionResumed + KnotCompleted, no KnotFailed.
+    #[test]
+    fn process_strand_retry_transparent_success() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let timeout_err = PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: Some("sess-abc".to_string()),
+        };
+        let success_output = Ok(AgentOutput {
+            stdout: "success after retry".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(ConfigurableAgentRunner::new_sequence(vec![
+            Err(timeout_err),
+            success_output,
+        ]));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, SessionResumed, KnotCompleted,
+        // StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 4, "should have 4 loom-log events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("expected SessionResumed, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!("expected KnotCompleted, got {other:?}"),
+        }
+        // No KnotFailed in the log
+        assert!(
+            !events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+            "should NOT have KnotFailed after successful retry"
+        );
+
+        // Rig-log: empty (success, not a timeout)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should be empty on successful retry"
+        );
+
+        // Tie-off: appended with success content
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1);
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(appends[0].content, "success after retry");
+    }
+
+    /// ProcessStrand with mock runner that always fails:
+    /// session-resume exhausts retries, strand marked failed.
+    /// Loom-log shows multiple SessionResumed + KnotFailed.
+    /// Rig-log shows TimeoutExceeded.
+    #[test]
+    fn process_strand_retry_exhausted_fails() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        // Enough failures for initial + 10 retries
+        let responses: Vec<Result<AgentOutput, PortError>> = (0..20)
+            .map(|_| {
+                Err(PortError::Timeout {
+                    message: "timed out".to_string(),
+                    session_id: Some("sess-abc".to_string()),
+                })
+            })
+            .collect();
+        let runner = Arc::new(ConfigurableAgentRunner::new_sequence(responses));
+
+        let (use_case, log_events, _tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok()); // execute() always returns Ok
+
+        // Loom-log: KnotProcessing, 10x SessionResumed, KnotFailed,
+        // StrandProcessed
+        let events = log_events.lock().unwrap();
+        // Count SessionResumed events
+        let session_resumed_count = events.iter().filter(|e| {
+            matches!(e, LoomEvent::SessionResumed { .. })
+        }).count();
+        assert_eq!(
+            session_resumed_count,
+            10,
+            "should have 10 SessionResumed events (MAX_RETRIES)"
+        );
+        // KnotFailed present
+        assert!(
+            events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+            "should have KnotFailed after exhausted retries"
+        );
+
+        // Rig-log: TimeoutExceeded
+        let rig = rig_events.lock().unwrap();
+        assert_eq!(rig.len(), 1);
+        match &rig[0] {
+            RigLogEvent::TimeoutExceeded { .. } => {}
+            other => panic!("expected TimeoutExceeded, got {other:?}"),
+        }
+    }
+
+    /// ProcessStrand with stdio-style error (no session_id):
+    /// session-resume does NOT retry, strand fails immediately.
+    #[test]
+    fn process_strand_no_retry_stdio() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        // Timeout with no session_id — simulates stdio adapter failure
+        let timeout_err = PortError::Timeout {
+            message: "timed out (no session)".to_string(),
+            session_id: None,
+        };
+        let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
+
+        let (use_case, log_events, _tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotFailed, StrandProcessed
+        // (NO SessionResumed since no session_id)
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3);
+        assert!(
+            !events.iter().any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "should NOT have SessionResumed without session_id"
+        );
+        match &events[1] {
+            LoomEvent::KnotFailed { error, .. } => {
+                assert!(error.contains("no session"));
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+
+        // Rig-log: TimeoutExceeded
+        let rig = rig_events.lock().unwrap();
+        assert_eq!(rig.len(), 1);
+        match &rig[0] {
+            RigLogEvent::TimeoutExceeded { .. } => {}
+            other => panic!("expected TimeoutExceeded, got {other:?}"),
+        }
     }
 }
 
