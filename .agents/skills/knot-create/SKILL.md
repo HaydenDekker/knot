@@ -4,7 +4,7 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.0.0"
+  version: "5.0.0"
   compatibility: "Knot 0.18.0+"
 ---
 
@@ -71,7 +71,9 @@ Rig (`./rig/`, top-level container)
  │     └── {loom-id}/
  │           ├── .loom-log   ← activity log
  │           └── {knot-name}/
- │                 └── {knot-name}-tie-off.md
+ │                 ├── {knot-name}-tie-off.md  ← append-only log
+ │                 └── {event-type}/           ← tie-off events
+ │                       └── {event}.md        ← static event strand
  └── {name}-loom/            ← loom directory (must end in `-loom`)
       ├── {knot-name}.md     ← knot definition files
       └── ...
@@ -90,6 +92,10 @@ Rig (`./rig/`, top-level container)
   (name, provider, model, tools, timeout) and the markdown body contains
   the agent's system prompt (persona instructions). Multiple knots can
   reference the same profile.
+- **Tie-off events** are typed subdirectories inside a knot's tie-off
+  directory (e.g. `reviews/`, `findings/`). They carry static event
+  files that other knots can consume via `strand-dir`. Event directories
+  are created when the knot is created.
 
 ---
 
@@ -222,7 +228,19 @@ A loom is created by making a directory (ending in `-loom`) and writing
 
 4. **Create the loom directory** at `rig/{id}/` (e.g. `rig/prd-review-loom/`).
 
-5. **Write knot definition files** inside the loom directory.
+5. **Determine tie-off events** for each knot. Ask the user:
+   "What events does this knot emit for other agents to consume?
+   (e.g. `reviews`, `findings`, `plans`) — or none if it only
+   writes to its tie-off log."
+   For each event type, create a typed subdirectory in the knot's
+   tie-off directory:
+   ```bash
+   mkdir -p rig/tie-offs/{loom-id}/{knot-name}/{event-type}
+   ```
+   These directories are part of the knot's output contract. Consumer
+   knots will reference them in their `strand-dir`.
+
+6. **Write knot definition files** inside the loom directory.
    For a single knot named `goals-review`:
    ```markdown
    ---
@@ -235,7 +253,7 @@ A loom is created by making a directory (ending in `-loom`) and writing
    ```
    Write this to `rig/prd-review-loom/goals-review.md`.
 
-6. **Verify registration**: Read `rig/state.json` (wait up to 5 seconds
+7. **Verify registration**: Read `rig/state.json` (wait up to 5 seconds
    for the state writer to flush) and confirm the loom and its knots
    appear in the `looms` array.
 
@@ -251,7 +269,14 @@ When asked to add a knot to an existing loom:
 2. **Verify the profile exists**: Read `rig/state.json` and check the
    `profiles` array for the knot's `agent_profile_ref`.
 
-3. **Write the knot file** as `{knot-name}.md` inside the loom
+3. **Determine tie-off events**. Ask the user:
+   "What events does this knot emit?" For each event type, create
+   the typed subdirectory:
+   ```bash
+   mkdir -p rig/tie-offs/{loom-id}/{knot-name}/{event-type}
+   ```
+
+4. **Write the knot file** as `{knot-name}.md` inside the loom
    directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
    ```markdown
    ---
@@ -263,7 +288,7 @@ When asked to add a knot to an existing loom:
    Review the non-goals section.
    ```
 
-4. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+5. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
    the new knot appears in the loom's `knots` array.
 
 5. **Report success**: "Knot `non-goals-review` added to loom
@@ -366,21 +391,62 @@ will reject such files with a `KnotParseWarning`.
 - Absolute paths are used as-is.
 - Tie-off paths are statically derived:
   `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`
-- Example project layout:
-  ```
-  project_root/              ← strand-dir resolves from here
-  ├── project/prds/          ← strand-dir: "project/prds"
-  └── rig/                   ← rig directory
-      ├── profiles/          ← shared agent profiles
-      │   └── fast.md
-      ├── tie-offs/          ← static tie-off directory
-      │   └── prd-review-loom/
-      │       ├── .loom-log
-      │       └── prd-goals-review/
-      │           └── prd-goals-review-tie-off.md
-      └── prd-review-loom/   ← loom directory
-          └── prd-goals-review.md
-  ```
+
+### Tie-Off Events — Static Agent-to-Agent Communication
+
+Knots that produce outputs for other knots to consume create **typed
+subdirectories** in their tie-off directory. These are called **tie-off
+events** — the static routing mechanism for agent-to-agent communication
+(before intent-based routing ships in Plan 45).
+
+**Convention:**
+
+- Event subdirectory names are **lowercase plural** (e.g. `reviews`,
+  `findings`, `plans`)
+- Event file names follow `<identifier>-<description>.md` (e.g.
+  `016-quality-review.md`)
+- The subdirectory is part of the knot's output contract — created at
+  knot creation time
+
+**Layout:**
+
+```
+rig/tie-offs/<loom-id>/<knot-name>/
+├── <knot-name>-tie-off.md    ← append-only log (always present)
+├── <event-type>/              ← typed event subdirectory
+│   └── <event-file>.md        ← static event strand for consumers
+└── <another-event-type>/      ← another event type (if needed)
+```
+
+**Consumer side:** A consuming knot points its `strand-dir` at the
+event subdirectory:
+
+```
+yaml
+strand-dir: "../../tie-offs/review-loom/implementation-review/reviews"
+```
+
+This subscribes only to the `reviews` event type. Multiple consumers
+can strand from the same event subdirectory.
+
+### Example Project Layout
+
+```
+project_root/              ← strand-dir resolves from here
+├── project/prds/          ← strand-dir: "project/prds"
+└── rig/                   ← rig directory
+    ├── profiles/          ← shared agent profiles
+    │   └── fast.md
+    ├── tie-offs/          ← static tie-off directory
+    │   └── prd-review-loom/
+    │       ├── .loom-log
+    │       └── prd-goals-review/
+    │           ├── prd-goals-review-tie-off.md
+    │           └── findings/        ← event type: review findings
+    │               └── 001-goal-issue.md
+    └── prd-review-loom/   ← loom directory
+        └── prd-goals-review.md
+```
 
 ---
 
@@ -534,6 +600,10 @@ strand-dir: "project/prds"
 
 Review the goals section.
 EOF
+
+# Create event subdirectories for the knot's output
+# (other knots can strand from these directories)
+mkdir -p rig/tie-offs/prd-review-loom/goals-review/findings
 
 # Verify Knot has discovered the changes
 # Wait up to 5 seconds, then:

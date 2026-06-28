@@ -130,7 +130,35 @@ A file in a knot's strand directory. When a strand is created, modified, or dele
 
 ### Tie-off Directory
 
-Statically derived path under `rig/tie-offs/{loom-id}/{knot-name}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed). Each knot writes a single `{knot-name}-tie-off.md` file that appends all processing events; the event metadata in each section identifies which strand was processed.
+Statically derived path under `rig/tie-offs/{loom-id}/{knot-name}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed). Each knot writes a single `{knot-name}-tie-off.md` file that appends all processing events; the event metadata in each section identifies which strand was processed. The directory may also contain **typed subdirectories** for tie-off events (see below).
+
+---
+
+### Tie-Off Events
+
+Typed subdirectories inside a knot's tie-off directory that carry static event files for agent-to-agent communication. The subdirectory name declares the event type.
+
+A producing knot writes event files into its own tie-off event subdirectory. A consuming knot points its `strand-dir` at that subdirectory to subscribe. This is the **static routing** pattern — the current mechanism for a2a communication before intent-based routing ships.
+
+**Layout:**
+
+```
+rig/tie-offs/<loom-id>/<knot-name>/
+├── <knot-name>-tie-off.md    ← append-only log (always present)
+├── <event-type>/              ← typed event subdirectory
+│   └── <event-file>.md        ← static event strand for consumers
+└── <another-event-type>/      ← another event type (if needed)
+```
+
+**Convention:**
+
+- Event subdirectory names are lowercase plural (e.g. `reviews`, `findings`, `plans`)
+- Event file names follow the pattern `<plan-number>-<description>.md` or `<identifier>-<description>.md`
+- The subdirectory is created when the knot is created — it is part of the knot's output contract
+- Consumer knots reference the full path in their `strand-dir`:
+  `../../tie-offs/<loom-id>/<knot-name>/<event-type>`
+
+**Why tie-off directories?** The PRDs define a clean separation: rig directories hold workflow definitions; tie-off directories hold derived state. Placing events in tie-off directories keeps the rig directory pure (only loom definitions) and places events in the correct output namespace.
 
 ---
 
@@ -186,7 +214,9 @@ Rig (`./rig/`)
  │     └── <loom-id>/
  │           ├── .loom-log (activity log)
  │           └── <knot-name>/
- │                 └── <knot-name>-tie-off.md (tie-off output, appended per event)
+ │                 ├── <knot-name>-tie-off.md (tie-off output, appended per event)
+ │                 └── <event-type>/ (typed event subdirectory — static a2a comms)
+ │                       └── <event-file>.md (static event strand for consumers)
  └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
       └── Knot definition files (first-level `.md` files)
             ├── Agent Profile
