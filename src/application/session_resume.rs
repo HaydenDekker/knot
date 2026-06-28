@@ -27,6 +27,15 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 /// than starting an attempt that is almost certain to time out.
 const MIN_REMAINING_SECS: u64 = 5;
 
+/// Maximum duration for a single agent invocation attempt.
+///
+/// When the profile's timeout is larger than this value, the first attempt
+/// is capped at this duration. This ensures the overall timeout budget is
+/// not fully consumed by the first attempt, leaving room for retries.
+/// When the profile's timeout is smaller, the profile timeout is used as-is
+/// (no artificial inflation).
+const MAX_ATTEMPT_TIMEOUT_SECS: u64 = 30;
+
 /// Timestamp helper for loom-log events.
 fn format_timestamp() -> String {
     crate::adapters::logging::format_timestamp()
@@ -103,6 +112,11 @@ fn execute_with_resume_internal(
     let start = Instant::now();
 
     // --- First attempt (no session ID) ---
+    // Cap the first attempt's timeout so the overall budget is not fully
+    // consumed by a single attempt, leaving room for retries.
+    let first_timeout = profile_timeout.as_ref().map(|t| {
+        (*t).min(Duration::from_secs(MAX_ATTEMPT_TIMEOUT_SECS))
+    });
     let ctx = build_retry_context(
         cli_args.clone(),
         prompt.clone(),
@@ -110,7 +124,7 @@ fn execute_with_resume_internal(
         profile_prompt.clone(),
         event_type.clone(),
         knot_name.clone(),
-        profile_timeout,
+        first_timeout,
         start,
     );
 
@@ -287,7 +301,7 @@ fn build_retry_context(
     _start: Instant,
 ) -> ExecutionContext {
     ExecutionContext {
-        cli_path: String::new(),
+        cli_path: "pi".to_string(),
         cli_args,
         prompt,
         profile_prompt,

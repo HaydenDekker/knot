@@ -5937,10 +5937,12 @@ mod phase7_timeout_resolution_tests {
         // Verify the ExecutionContext received the profile's timeout
         let contexts = captured_contexts.lock().unwrap();
         assert_eq!(contexts.len(), 1, "should have called execute once");
+        // Timeout is capped at MAX_ATTEMPT_TIMEOUT_SECS (30s) so retries
+        // have room in the overall budget.
         assert_eq!(
             contexts[0].timeout,
-            Some(Duration::from_secs(60)),
-            "ExecutionContext.timeout should be profile's timeout"
+            Some(Duration::from_secs(30)),
+            "ExecutionContext.timeout should be capped at MAX_ATTEMPT_TIMEOUT_SECS"
         );
     }
 
