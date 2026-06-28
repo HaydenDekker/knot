@@ -19,6 +19,8 @@ When a resumable invocation failure occurs and a session ID was captured, Knot a
 ## Implementation Status: ✅ Complete
 
 **Completed:** 2026-06-28 on branch `refactor/session-resume-on-invocation-failure`
+**Merged to main:** 2026-06-28
+**Version bumped:** 0.19.0 → 0.20.0 (MINOR — new feature, backwards compatible)
 
 **Depends on:** Plan 46 (agent-json-adapter.md) — provides `AgentInvocationMetadata`, `PortError::is_resumable()`, `JsonSubprocessAgentRunner`.
 
@@ -208,3 +210,9 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 - **Hard cap: 10 retries:** The retry loop runs at most 11 times total (initial + 10 retries). After 10 retries, strand fails regardless of remaining time.
 - **The session ID is captured from the FIRST JSON-L line**, before any generation happens. This means even if the process is killed immediately, the session ID is available for retry. This is the key insight that makes session resume feasible.
 - **On timeout, the PiJsonAgentRunner reads the stdout it captured before killing the process.** The first line (`{"type":"session","id":"..."}`) is already in the buffer. The adapter extracts it and includes it in the error.
+
+### Completion Notes
+
+- **432 unit tests pass**, clippy clean
+- **No per-attempt timeout cap** — first attempt uses full profile timeout budget. Retries only happen when invocation fails *before* budget exhaustion (transient network error, provider crash mid-stream). If the first attempt actually hits the full timeout, no retry is warranted — budget is genuinely exhausted.
+- **23 new tests** across 5 files: domain events (5), session_resume module (13), ProcessStrand integration (3), integration test file `tests/session_resume.rs` (7)

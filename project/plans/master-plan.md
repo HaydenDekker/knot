@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ⬜ Planned | 2026-06-28 |
+| 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
 | 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ✅ Complete | 2026-06-24 |
@@ -99,9 +99,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 47. Session Resume on Invocation Failure
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-06-28
+**Completed:** 2026-06-28
 **Goal:** Automatically resume Pi sessions from where they left off after invocation failure (timeout, network error) using `--session-id`, up to 10 retries or until the profile's overall timeout budget is exhausted. Appends "please continue" to the session on retry. 10-second delay between retries for network recovery.
+
+**Result:** `SessionResumed` variant on `LoomEvent` + `is_session_resumable()` helper in ports. `session_resume.rs` module with `execute_with_resume()` retry loop (MAX_RETRIES=10, RETRY_DELAY=10s, MIN_REMAINING=5s). Wired into `ProcessStrand::execute()` — retry is transparent to the outer flow (tie-off write, git commit, KnotCompleted log all proceed normally). 23 new tests: 5 unit (Phase 0) + 13 unit (session_resume module) + 3 ProcessStrand integration + 2 integration test file (7 tests). 432 unit tests pass, clippy clean. Version bumped to 0.20.0.
 
 **PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
 
