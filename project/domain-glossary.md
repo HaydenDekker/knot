@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-18
+> **Last Updated:** 2026-06-28
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -11,6 +11,18 @@ Living glossary of domain terms for Knot. Terms are added when they emerge from 
 ### Rig
 
 The top-level container — an aggregation of one or more looms. A **rig** is the ship's complete interconnected system of ropes, lines, and running rigging; the place where looms live and knots are defined.
+
+---
+
+### Please Continue
+
+Prompt suffix appended to the Pi session on retry, telling the agent to resume where it left off. When Knot retries a failed invocation using `--session-id`, it appends a short "please continue" message so the provider picks up from the partial output instead of restarting. This is only sent on retry attempts — the initial invocation sends the full prompt normally.
+
+---
+
+### Retry Delay
+
+A 10-second pause between retry attempts during session resume. Allows transient network errors or provider-side slowdowns time to recover before Knot re-enters the same Pi session. Applied between each retry up to the hard cap of 10 attempts.
 
 ---
 
@@ -59,6 +71,24 @@ Only available when the rig config sets `agent-adapter: pi-json`. With `pi-stdio
 
 ---
 
+### Overall Timeout Budget
+
+The profile's timeout value governs the total wall-clock time across all retry attempts, not per-attempt. When session resume is active, the timeout countdown does not reset on each retry — instead, Knot calculates remaining time before each attempt. If the budget is exhausted during the retry loop, the strand is marked failed and normal failure handling (loom-log, rig-log) takes over.
+
+---
+
+### Session Resume
+
+Automatic retry mechanism activated when an agent invocation fails with a resumable error and a session ID was captured (requires `json` invocation mode). Knot retries the same invocation using `--session-id <id>` to continue the Pi session from where it stopped. A "please continue" prompt is appended so the agent resumes partial work. Retries are limited to 10 attempts or until the profile's overall timeout budget is exhausted, whichever comes first. A 10-second delay between retries allows transient errors to recover. On successful resume the strand completes normally (transparent to the user); on exhausted retries or budget expiry the strand is marked failed.
+
+---
+
+### SessionResumed
+
+A loom-log event recorded for each session resume attempt. Contains the retry number, session ID, and remaining timeout budget at the time of the attempt. Allows tracing how many retries occurred and whether the overall timeout budget was the limiting factor.
+
+---
+
 ### Invocation Mode
 
 How Knot communicates with the agent CLI. Two modes are supported, selected by the `agent-adapter` field in rig config:
@@ -67,6 +97,12 @@ How Knot communicates with the agent CLI. Two modes are supported, selected by t
 - **`json`** — Knot invokes Pi with `--mode json`. Output is JSON-L (newline-delimited JSON). A `PiJsonAgentRunner` adapter parses the stream to extract the session ID, token usage, and response text.
 
 The mode is agent-specific — each adapter hardcodes its own binary path and CLI flags. No generic CLI wrapper is used (see ADR-009).
+
+---
+
+### Retry
+
+An individual attempt within the session resume loop. The first invocation is not counted as a retry — retries begin on the second attempt onward. Each retry re-enters the same Pi session using `--session-id`, appends a "please continue" prompt, and checks the overall timeout budget before proceeding. Up to 10 retries are allowed.
 
 ---
 
