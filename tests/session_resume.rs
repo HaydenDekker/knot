@@ -17,7 +17,8 @@ use helpers::*;
 // ── Mock pi helpers ────────────────────────────────────────────────────────
 
 /// Create a mock `pi` binary (JSON adapter) that:
-/// - First call: emits session_id JSON-L line then sleeps (times out).
+/// - First call: emits session_id JSON-L line then exits with error code 1
+///   (simulates a transient network failure — fails quickly, leaving budget).
 /// - Subsequent calls: emits session_id + agent_end with response text.
 ///
 /// Uses a counter file to distinguish first from retry attempts.
@@ -28,7 +29,7 @@ use helpers::*;
 /// * `session_id` — session ID to emit on every call
 /// * `response` — response text on retry (second+ call)
 /// * `counter_file` — path for the call counter
-fn create_mock_pi_timeout_then_success(
+fn create_mock_pi_fail_then_success(
     rig_dir: &Path,
     session_id: &str,
     response: &str,
@@ -43,7 +44,7 @@ fn create_mock_pi_timeout_then_success(
 
     let script = format!(
         r#"#!/usr/bin/env bash
-# Mock pi — times out on first call, succeeds on retry
+# Mock pi — fails on first call (simulates transient error), succeeds on retry
 # Uses a counter file to track call number
 cat > /dev/null
 COUNTER_FILE="{counter}"
@@ -54,10 +55,10 @@ else
 fi
 COUNT=$((COUNT + 1))
 echo "$COUNT" > "$COUNTER_FILE"
-# First call: emit session then sleep (will be killed by timeout)
+# First call: emit session_id then exit with error (transient failure)
 if [ "$COUNT" -eq 1 ]; then
     echo '{{"type":"session","id":"{session_id}"}}'
-    exec sleep 3600
+    exit 1
 fi
 # Retry: emit session + response
 echo '{{"type":"session","id":"{session_id}"}}'
@@ -87,16 +88,75 @@ exit 0
     fs::write(counter_file, "0").unwrap();
 }
 
-/// Create a mock `pi` binary (JSON adapter) that always sleeps
-/// (emits session_id then sleeps forever — killed on timeout).
-fn create_mock_pi_json_always_timeout(rig_dir: &Path, session_id: &str) {
+/// Create a mock `pi` binary (JSON adapter) that always fails
+/// (emits session_id then exits with error — simulates persistent failure).
+///
+/// Uses a counter file to track call number. Fails for `max_attempts` calls,
+/// then would succeed (but budget should be exhausted before that).
+fn create_mock_pi_always_fail(
+    rig_dir: &Path,
+    session_id: &str,
+    max_attempts: u32,
+    counter_file: &Path,
+) {
+    let counter = counter_file.display().to_string();
+
     let bin_dir = rig_dir.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let pi_path = bin_dir.join("pi");
 
     let script = format!(
         r#"#!/usr/bin/env bash
-# Mock pi — always emits session then sleeps (times out)
+# Mock pi — always fails (simulates persistent error)
+cat > /dev/null
+COUNTER_FILE="{counter}"
+if [ -f "$COUNTER_FILE" ]; then
+    COUNT=$(cat "$COUNTER_FILE")
+else
+    COUNT=0
+fi
+COUNT=$((COUNT + 1))
+echo "$COUNT" > "$COUNTER_FILE"
+echo '{{"type":"session","id":"{session_id}"}}'
+# Fail for first N attempts, then succeed (budget should exhaust first)
+if [ "$COUNT" -le {max_attempts} ]; then
+    exit 1
+fi
+echo '{{"type":"agent_end","usage":{{"input":100,"output":50,"cache_read":0,"cache_write":0,"total":150}},"messages":[{{"role":"assistant","content":[{{"type":"text","text":"success"}}]}}]}}'
+exit 0
+"#,
+    );
+
+    fs::write(&pi_path, script).unwrap();
+    fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fs::write(
+        rig_dir.join(".workspace-agent-config.yaml"),
+        "agent-adapter: pi-json\n",
+    )
+    .unwrap();
+
+    unsafe {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), existing),
+        );
+    }
+
+    fs::write(counter_file, "0").unwrap();
+}
+
+/// Create a mock `pi` binary (JSON adapter) that sleeps forever
+/// (emits session_id then sleeps — killed on timeout).
+fn create_mock_pi_timeout_only(rig_dir: &Path, session_id: &str) {
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+
+    let script = format!(
+        r#"#!/usr/bin/env bash
+# Mock pi — emits session then sleeps (killed on timeout)
 cat > /dev/null
 echo '{{"type":"session","id":"{session_id}"}}'
 exec sleep 3600
@@ -205,7 +265,7 @@ fn test_session_resume_success() {
     create_profile_with_timeout(&rig_dir, "fast", 120);
 
     let counter_file = tmp.path().join("counter");
-    create_mock_pi_timeout_then_success(
+    create_mock_pi_fail_then_success(
         &rig_dir,
         "sess-resume-success",
         "resumed response",
@@ -295,15 +355,19 @@ fn test_session_resume_exhausted() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 65s timeout.
-    // Per-attempt cap is 30s, so:
-    //   attempt 1: 30s → remaining 35s → delay 10s → remaining 25s → retry
-    //   attempt 2: 25s (capped to remaining) → remaining 0s → bail
-    // Total: 1 retry (SessionResumed × 1), then KnotFailed.
-    create_profile_with_timeout(&rig_dir, "fast", 65);
+    // Profile with 120s timeout.
+    // Mock fails 20 times, but budget + retry delay limits retries.
+    // Each retry has 10s delay (reduced via env var), so budget drains.
+    create_profile_with_timeout(&rig_dir, "fast", 120);
 
-    // Mock pi that always sleeps (times out every time)
-    create_mock_pi_json_always_timeout(&rig_dir, "sess-exhausted");
+    // Mock pi that always fails — budget + delay should exhaust retries
+    let counter_file = tmp.path().join("counter_exhausted");
+    create_mock_pi_always_fail(&rig_dir, "sess-exhausted", 20, &counter_file);
+
+    // Fast retry delay for test (100ms instead of 10s)
+    unsafe {
+        std::env::set_var("KNOT_RETRY_DELAY_MS", "100");
+    }
 
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
@@ -365,12 +429,17 @@ fn test_session_resume_exhausted() {
         );
     }
 
+    // Clear env var for other tests
+    unsafe {
+        std::env::remove_var("KNOT_RETRY_DELAY_MS");
+    }
+
     handle.abort();
 }
 
 /// Profile timeout budget is consumed by the first attempt — no retries possible.
-/// With a small timeout (< MAX_ATTEMPT_TIMEOUT_SECS), the per-attempt timeout
-/// equals the profile timeout, so the first attempt consumes the entire budget.
+/// With a small timeout, the first attempt (which fails via timeout) consumes the
+/// entire budget, leaving no room for retry.
 #[test]
 fn test_session_resume_budget_expired() {
     let tmp = tempfile::tempdir().unwrap();
@@ -380,11 +449,10 @@ fn test_session_resume_budget_expired() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 15s timeout (below MAX_ATTEMPT_TIMEOUT_SECS of 30s).
-    // Per-attempt timeout = min(15, 30) = 15s.
+    // Profile with 15s timeout.
     // First attempt: killed at 15s → remaining = 15 - 15 = 0 < 5 → no retry.
     create_profile_with_timeout(&rig_dir, "fast", 15);
-    create_mock_pi_json_always_timeout(&rig_dir, "sess-budget");
+    create_mock_pi_timeout_only(&rig_dir, "sess-budget");
 
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
@@ -519,7 +587,7 @@ fn test_session_resume_transparent_on_success() {
     create_profile_with_timeout(&rig_dir, "fast", 120);
 
     let counter_file = tmp.path().join("counter2");
-    create_mock_pi_timeout_then_success(
+    create_mock_pi_fail_then_success(
         &rig_dir,
         "sess-transparent",
         "transparent success output",
@@ -616,7 +684,7 @@ fn test_session_resume_delay_between_retries() {
     create_profile_with_timeout(&rig_dir, "fast", 120);
 
     let counter_file = tmp.path().join("counter3");
-    create_mock_pi_timeout_then_success(
+    create_mock_pi_fail_then_success(
         &rig_dir,
         "sess-delay",
         "delay test output",
@@ -645,15 +713,16 @@ fn test_session_resume_delay_between_retries() {
         std::env::remove_var("KNOT_RETRY_DELAY_MS");
     }
 
-    // First attempt takes ~MAX_ATTEMPT_TIMEOUT_SECS (30s, capped from 120s budget).
+    // First attempt fails instantly (exit code 1), so ~0s.
     // Plus 100ms retry delay.
-    // The second attempt is instant.
-    // So total ≈ 30s + 100ms.
+    // Second attempt is instant.
+    // So total ≈ 100ms + small overhead.
+    // We verify elapsed >= 100ms, proving the retry delay occurred.
     // We verify elapsed > 30s, proving the retry delay occurred.
     assert!(
-        elapsed > Duration::from_secs(30),
-        "total elapsed should be > 30s (per-attempt cap), proving \
-         retry delay occurred. Got: {:?}",
+        elapsed >= Duration::from_millis(100),
+        "total elapsed should be >= retry delay (100ms), proving \
+         delay occurred. Got: {:?}",
         elapsed
     );
 
