@@ -81,6 +81,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::SessionResumed { loom_id, .. } => {
                 loom_id.clone()
             }
+            LoomEvent::KnotEmptyResponse { loom_id, .. } => {
+                loom_id.clone()
+            }
         };
 
         let line = serde_json::to_string(&event)
@@ -408,6 +411,44 @@ mod tests {
                 assert_eq!(reason, "missing file (unknown pattern)");
             }
             _ => panic!("Expected StrandSkipped event"),
+        }
+    }
+
+    #[test]
+    fn loom_log_knot_empty_response_routes_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let loom_id = LoomId("empty-loom".to_string());
+
+        let event = LoomEvent::KnotEmptyResponse {
+            loom_id: loom_id.clone(),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
+            attempt: 2,
+            timestamp: "2026-06-28T15:00:00Z".to_string(),
+        };
+
+        // Append — should route to correct loom log
+        log.append(event.clone()).unwrap();
+
+        // Read back and verify
+        let events = log.read_all(&loom_id).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotEmptyResponse {
+                loom_id: lid,
+                strand_path,
+                attempt,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(
+                    strand_path.0,
+                    PathBuf::from("project/prds/my-prd.md")
+                );
+                assert_eq!(*attempt, 2);
+            }
+            _ => panic!("Expected KnotEmptyResponse event"),
         }
     }
 }

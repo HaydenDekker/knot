@@ -606,7 +606,8 @@ impl GetKnotStatus {
             LoomEvent::KnotRegistered { knot_id: kid, .. }
             | LoomEvent::KnotProcessing { knot_id: kid, .. }
             | LoomEvent::KnotCompleted { knot_id: kid, .. }
-            | LoomEvent::KnotFailed { knot_id: kid, .. } => kid == knot_id,
+            | LoomEvent::KnotFailed { knot_id: kid, .. }
+            | LoomEvent::KnotEmptyResponse { knot_id: kid, .. } => kid == knot_id,
             _ => false,
         })
     }
@@ -655,6 +656,14 @@ impl GetKnotStatus {
                 last_strand_path: Some(strand_path.clone()),
                 last_tie_off_path: None,
                 last_error: Some(error.clone()),
+            },
+            LoomEvent::KnotEmptyResponse { strand_path, .. } => KnotStatus {
+                knot_id: knot_id.clone(),
+                loom_id: loom_id.clone(),
+                status: ProcessingStatus::Failed,
+                last_strand_path: Some(strand_path.clone()),
+                last_tie_off_path: None,
+                last_error: Some("agent returned empty response".to_string()),
             },
             // Fallback for non-knot-specific events
             _ => KnotStatus {

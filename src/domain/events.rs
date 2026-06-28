@@ -171,6 +171,22 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// The agent completed within its timeout but produced no response.
+    ///
+    /// Recorded each time an invocation returns exit-code 0 with empty
+    /// stdout — the agent session ended early (e.g. provider returned
+    /// immediately) without generating any output. Logged per-attempt
+    /// so the user can see repeated empty responses during retries.
+    KnotEmptyResponse {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// Number of the attempt that produced the empty response
+        /// (1 = first attempt, 2 = first retry, etc.).
+        attempt: u32,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -880,6 +896,13 @@ mod tests {
                 attempt: 2,
                 timestamp: ts.clone(),
             },
+            LoomEvent::KnotEmptyResponse {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                attempt: 3,
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -1178,6 +1201,50 @@ mod tests {
                 assert_eq!(t, &ts);
             }
             _ => panic!("Expected SessionResumed variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    /// `LoomEvent::KnotEmptyResponse` carries `loom_id`, `knot_id`,
+    /// `strand_path`, `attempt`, and `timestamp`. Verifies the variant
+    /// shape and JSON round-trip serialisation.
+    #[test]
+    fn loom_event_knot_empty_response() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path =
+            StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let attempt: u32 = 2;
+        let ts = "2026-06-28T15:00:00Z".to_string();
+
+        let event = LoomEvent::KnotEmptyResponse {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            attempt,
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotEmptyResponse {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                attempt: a,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(*a, attempt);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected KnotEmptyResponse variant"),
         }
 
         // Verify serialisation round-trip

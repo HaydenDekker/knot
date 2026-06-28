@@ -117,6 +117,20 @@ fn execute_with_resume_internal(
     let result = agent_runner.execute(ctx);
 
     if let Ok(output) = &result {
+        // Check for empty response — log and treat as resumable
+        if output.stdout.trim().is_empty() {
+            let _ = loom_log.append(LoomEvent::KnotEmptyResponse {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                attempt: 1,
+                timestamp: format_timestamp(),
+            });
+            return Err(PortError::Timeout {
+                message: "agent returned empty response".to_string(),
+                session_id: session_id.clone(),
+            });
+        }
         // Capture session_id from successful output metadata
         if let Some(ref metadata) = output.metadata {
             if let Some(ref sid) = metadata.session_id {
@@ -220,6 +234,27 @@ fn execute_with_resume_internal(
 
         match agent_runner.execute(ctx) {
             Ok(output) => {
+                if output.stdout.trim().is_empty() {
+                    // Log empty response to loom-log (attempt = loop_attempt + 1
+                    // since attempt 1 was the initial call outside the loop)
+                    let _ = loom_log.append(LoomEvent::KnotEmptyResponse {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        attempt: attempt + 1,
+                        timestamp: format_timestamp(),
+                    });
+                    // Treat as resumable error — continue retry loop
+                    let error = PortError::Timeout {
+                        message: "agent returned empty response".to_string(),
+                        session_id: session_id.clone(),
+                    };
+                    if let Some(sid) = error.session_id() {
+                        *session_id = Some(sid.clone());
+                    }
+                    first_error = error;
+                    continue;
+                }
                 // Update session_id from successful output metadata
                 if let Some(ref metadata) = output.metadata {
                     if let Some(ref sid) = metadata.session_id {
@@ -825,5 +860,82 @@ mod tests {
             log.events().is_empty(),
             "Expected no loom-log events for immediate success"
         );
+    }
+
+    #[test]
+    fn empty_response_first_attempt_logs_knot_empty_response() {
+        let runner = TestAgentRunner::new(vec![Ok(ok_output(""))]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+
+        // Returns error (treated as resumable, but no session_id → returns)
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::Timeout { message, .. } => {
+                assert!(
+                    message.contains("empty response"),
+                    "Expected empty response message, got: {}",
+                    message
+                );
+            }
+            _ => panic!("Expected Timeout error"),
+        }
+
+        // KnotEmptyResponse logged with attempt 1
+        let events = log.events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            _ => panic!("Expected KnotEmptyResponse"),
+        }
+    }
+
+    #[test]
+    fn empty_response_retry_logs_knot_empty_response() {
+        // First attempt: timeout (triggers retry setup)
+        // Second attempt: empty response → logged with attempt 2
+        // Third attempt: success
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("")),
+            Ok(ok_output("success after empty")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().stdout, "success after empty");
+
+        // SessionResumed (retry 1) + KnotEmptyResponse (attempt 2)
+        // + SessionResumed (retry 2) — but wait, empty response sets
+        // first_error and continues the loop, then next iteration
+        // does SessionResumed + execute → success
+        let events = log.events();
+        assert_eq!(events.len(), 3);
+
+        // Event 1: SessionResumed for retry 1
+        match &events[0] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            _ => panic!("Expected SessionResumed, got {:?}", events[0]),
+        }
+        // Event 2: KnotEmptyResponse for attempt 2 (retry 1's result)
+        match &events[1] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 2);
+            }
+            _ => panic!("Expected KnotEmptyResponse, got {:?}", events[1]),
+        }
+        // Event 3: SessionResumed for retry 2
+        match &events[2] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 2);
+            }
+            _ => panic!("Expected SessionResumed, got {:?}", events[2]),
+        }
     }
 }
