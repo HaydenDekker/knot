@@ -5,6 +5,7 @@
 
 mod all;
 mod loom;
+pub mod query;
 #[cfg(test)]
 mod test_fixtures;
 pub mod types;
@@ -12,18 +13,18 @@ pub mod types;
 // ── Re-export all public types for backward compatibility ────
 
 pub use all::ConfigEventHandler;
-pub use all::GetKnotStatus;
-pub use all::GetLoom;
-pub use all::GetLoomActivity;
 pub use all::KnotAction;
-pub use all::ListLooms;
 pub use all::ManageKnot;
 pub use all::ProcessStrand;
+pub use loom::DiscoverLooms;
 pub use loom::ReloadConfig;
 pub use loom::RegisterLoom;
 pub use loom::UnregisterLoom;
 pub use all::WriteState;
-pub use loom::DiscoverLooms;
+pub use query::GetKnotStatus;
+pub use query::GetLoom;
+pub use query::GetLoomActivity;
+pub use query::ListLooms;
 
 // ── Re-export shared types ──────────────────────────────────────────────
 
