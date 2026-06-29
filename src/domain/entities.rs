@@ -220,6 +220,49 @@ pub trait StrandFileChecker: Send + Sync {
     fn is_text_file(&self, path: &std::path::Path) -> Result<bool, std::io::Error>;
 }
 
+impl Knot {
+    /// Build a prompt for a **Deleted** strand event.
+    ///
+    /// Starts with the knot's instructions, then appends a deletion
+    /// notice and (when available) scoped strand history from previous
+    /// tie-off sections.
+    pub fn deleted_prompt(
+        &self,
+        filename: &str,
+        sections: &[crate::domain::tieoff_parser::TieOffSection],
+    ) -> String {
+        let mut prompt = self.prompt_template.instructions.clone();
+
+        prompt.push_str(
+            "\n\nThis file was deleted. There may be git \
+             history to help understand the file scope if you need to \
+             rectify downstream references due to this deletion.",
+        );
+
+        if !sections.is_empty() {
+            prompt.push_str("\n\nStrand: ");
+            prompt.push_str(filename);
+            prompt.push_str(
+                "\nPrevious processing history \
+                 (last 5 entries):\n\n",
+            );
+            for section in sections {
+                prompt.push_str(&format!(
+                    "## {} triggered by {} {}\nTimestamp: {}\n",
+                    section.knot_name, section.event_type,
+                    section.strand_path, section.timestamp,
+                ));
+                if !section.body.is_empty() {
+                    prompt.push_str(&section.body);
+                    prompt.push_str("\n\n");
+                }
+            }
+        }
+
+        prompt
+    }
+}
+
 impl StrandPath {
     /// Determine whether this strand file should be processed.
     ///
@@ -826,5 +869,118 @@ mod tests {
             message: "read failed".to_string(),
         };
         assert_eq!(err.to_string(), "strand check failed: read failed");
+    }
+
+    // ── Knot::deleted_prompt Tests ────────────────────────────────
+
+    use crate::domain::tieoff_parser::TieOffSection;
+
+    fn make_knot(instructions: &str) -> Knot {
+        Knot {
+            id: KnotId("test-knot".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: instructions.to_string(),
+            },
+            strand_dir: std::path::PathBuf::from("strands"),
+            git_versioned: true,
+        }
+    }
+
+    #[test]
+    fn deleted_prompt_contains_instructions_and_notice() {
+        let knot = make_knot("Review all docs.");
+        let prompt = knot.deleted_prompt("file.md", &[]);
+
+        assert!(
+            prompt.starts_with("Review all docs."),
+            "prompt should start with instructions: {}", prompt
+        );
+        assert!(
+            prompt.contains("This file was deleted"),
+            "prompt should contain deletion notice: {}", prompt
+        );
+        assert!(
+            prompt
+                .contains("git history to help understand the file scope"),
+            "prompt should contain git history hint: {}", prompt
+        );
+        // No history section when sections is empty
+        assert!(
+            !prompt.contains("Previous processing history"),
+            "prompt should NOT contain history when no sections: {}", prompt
+        );
+    }
+
+    #[test]
+    fn deleted_prompt_includes_strand_history() {
+        let knot = make_knot("Review all docs.");
+        let sections = vec![
+            TieOffSection {
+                knot_name: "review".to_string(),
+                event_type: "Created".to_string(),
+                strand_path: "input/file.md".to_string(),
+                timestamp: "2026-06-05T10:00:00Z".to_string(),
+                body: "Initial review content".to_string(),
+            },
+            TieOffSection {
+                knot_name: "review".to_string(),
+                event_type: "Modified".to_string(),
+                strand_path: "input/file.md".to_string(),
+                timestamp: "2026-06-05T11:00:00Z".to_string(),
+                body: "Updated review content".to_string(),
+            },
+        ];
+
+        let prompt = knot.deleted_prompt("file.md", &sections);
+
+        assert!(prompt.starts_with("Review all docs."));
+        assert!(prompt.contains("This file was deleted"));
+        assert!(
+            prompt.contains("Strand: file.md"),
+            "prompt should contain strand name: {}", prompt
+        );
+        assert!(
+            prompt.contains("Previous processing history"),
+            "prompt should contain history header: {}", prompt
+        );
+        assert!(
+            prompt.contains("## review triggered by Created input/file.md"),
+            "prompt should contain first entry header: {}", prompt
+        );
+        assert!(
+            prompt.contains("Initial review content"),
+            "prompt should contain first entry body: {}", prompt
+        );
+        assert!(
+            prompt.contains("## review triggered by Modified input/file.md"),
+            "prompt should contain second entry header: {}", prompt
+        );
+        assert!(
+            prompt.contains("Updated review content"),
+            "prompt should contain second entry body: {}", prompt
+        );
+    }
+
+    #[test]
+    fn deleted_prompt_handles_empty_body_sections() {
+        let knot = make_knot("Check it.");
+        let sections = vec![TieOffSection {
+            knot_name: "review".to_string(),
+            event_type: "Created".to_string(),
+            strand_path: "file.md".to_string(),
+            timestamp: "2026-06-01T00:00:00Z".to_string(),
+            body: String::new(), // empty body
+        }];
+
+        let prompt = knot.deleted_prompt("file.md", &sections);
+
+        assert!(prompt.contains("## review triggered by Created file.md"));
+        assert!(prompt.contains("Timestamp: 2026-06-01T00:00:00Z"));
+        // Empty body should not add extra blank lines
+        assert!(
+            prompt.contains("Previous processing history"),
+            "prompt should contain history header when sections exist, even with empty body"
+        );
     }
 }

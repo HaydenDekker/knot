@@ -319,35 +319,17 @@ impl ProcessStrand {
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        // Build the prompt. For Deleted events, inject a deletion notice
-        // and scoped strand history into the prompt body.
-        let mut prompt = knot.prompt_template.instructions.clone();
-        if is_deleted {
-            let deletion_notice = "This file was deleted. There may be git \
-                history to help understand the file scope if you need to \
-                rectify downstream references due to this deletion.";
-            prompt.push_str("\n\n");
-            prompt.push_str(deletion_notice);
-
-            // Append scoped strand history if available
-            if let Some(sections) = &strand_history {
-                prompt.push_str("\n\nStrand: ");
-                prompt.push_str(&strand_filename);
-                prompt.push_str("\nPrevious processing history \
-                    (last 5 entries):\n\n");
-                for section in sections {
-                    prompt.push_str(&format!(
-                        "## {} triggered by {} {}\nTimestamp: {}\n",
-                        section.knot_name, section.event_type,
-                        section.strand_path, section.timestamp,
-                    ));
-                    if !section.body.is_empty() {
-                        prompt.push_str(&section.body);
-                        prompt.push_str("\n\n");
-                    }
-                }
-            }
-        }
+        // Build the prompt. For Deleted events, use domain method
+        // Knot::deleted_prompt() which composes the deletion notice
+        // and scoped strand history.
+        let prompt = if is_deleted {
+            let sections = strand_history
+                .as_deref()
+                .unwrap_or_default();
+            knot.deleted_prompt(&strand_filename, sections)
+        } else {
+            knot.prompt_template.instructions.clone()
+        };
 
         // 3. Execute agent with session-resume retry logic.
         // Build CLI args here (same as execute_with_config default impl)

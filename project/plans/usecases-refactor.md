@@ -226,18 +226,18 @@ No new tests needed — this is a structural refactor. All existing tests must c
 
 **Note:** The `StrandFileChecker` trait was placed in `src/domain/entities.rs` (not `ports.rs`) because the domain method `StrandPath::should_process()` calls it directly. Keeping it in the domain layer avoids a circular dependency (application/ports → domain → application/ports).
 
-### Phase 7: Extract `Knot::deleted_prompt()` into domain layer
+### Phase 7: Extract `Knot::deleted_prompt()` into domain layer ✅ DONE
 
 **Problem:** `ProcessStrand::execute()` contains ~70 lines that build a special prompt for Deleted events: reads tie-off history, extracts last N entries, and composes a prompt with deletion notice + scoped history. This is **Knot business logic** — how a Knot represents its own deletion context.
 
 **Target:** Move into `impl Knot` as `pub fn deleted_prompt(&self, filename: &str, sections: &[TieOffSection]) -> String`.
 
 **Changes:**
-- [ ] Add `impl Knot` method `deleted_prompt(filename: &str, sections: &[TieOffSection]) -> String` in `src/domain/entities.rs`
+- [x] Add `impl Knot` method `deleted_prompt(filename: &str, sections: &[TieOffSection]) -> String` in `src/domain/entities.rs`
   - Takes the deletion notice string as a const or parameter
   - Formats the scoped strand history using `TieOffSection` fields
   - Returns composed prompt string
-- [ ] In `ProcessStrand::execute()`: replace the 70-line prompt-building block with:
+- [x] In `ProcessStrand::execute()`: replace the 70-line prompt-building block with:
   ```rust
   let prompt = if is_deleted {
       knot.deleted_prompt(&strand_filename, &sections)
@@ -245,8 +245,9 @@ No new tests needed — this is a structural refactor. All existing tests must c
       knot.prompt_template.instructions.clone()
   };
   ```
-- [ ] Move the existing deleted-event prompt tests from `process_strand.rs` (in `phase6_timeout_tests` or wherever they live) to `src/domain/entities.rs` tests
-- [ ] **Verify:** `cargo test` — all tests pass. Domain tests verify prompt composition without any port mocks.
+- [x] Added 3 domain tests in `entities.rs` covering prompt composition: notice-only, with history, and empty-body sections
+- [x] **Verify:** `cargo test` — all 451 tests pass (448 existing + 3 new). Domain tests verify prompt composition without any port mocks.
+- [x] **Verify:** `cargo clippy` — no new warnings
 
 ### Phase 8: Extract `TieOffOutcome` derivation into domain layer
 
