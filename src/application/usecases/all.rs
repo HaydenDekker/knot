@@ -1768,182 +1768,11 @@ mod config_handler_tests {
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
-    // ── Tracking EventSource Mock ──────────────────────────────────────
-
-    /// A mock `EventSource` that records all `watch()` and `unwatch()` calls.
-    struct TrackingEventSource {
-        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
-        unwatch_calls: Arc<Mutex<Vec<PathBuf>>>,
-        set_ids_calls: Arc<Mutex<Vec<(PathBuf, LoomId, KnotId)>>>,
-    }
-
-    impl TrackingEventSource {
-        #[allow(clippy::type_complexity)]
-        fn new(
-        ) -> (
-            Self,
-            Arc<Mutex<Vec<PathBuf>>>,
-            Arc<Mutex<Vec<PathBuf>>>,
-            Arc<Mutex<Vec<(PathBuf, LoomId, KnotId)>>>,
-        ) {
-            let watch_calls = Arc::new(Mutex::new(vec![]));
-            let unwatch_calls = Arc::new(Mutex::new(vec![]));
-            let set_ids_calls = Arc::new(Mutex::new(vec![]));
-            let source = Self {
-                watch_calls: watch_calls.clone(),
-                unwatch_calls: unwatch_calls.clone(),
-                set_ids_calls: set_ids_calls.clone(),
-            };
-            (source, watch_calls, unwatch_calls, set_ids_calls)
-        }
-    }
-
-    impl EventSource for TrackingEventSource {
-        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.watch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn unwatch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.unwatch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn set_loom_ids(
-            &self,
-            source_dir: &Path,
-            loom_id: &LoomId,
-            knot_id: &KnotId,
-        ) {
-            self.set_ids_calls
-                .lock()
-                .unwrap()
-                .push((
-                    source_dir.to_path_buf(),
-                    loom_id.clone(),
-                    knot_id.clone(),
-                ));
-        }
-    }
-
-    // ── Mock LoomLogPort ───────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort {
-        events: Arc<Mutex<Vec<LoomEvent>>>,
-    }
-
-    impl MockLoomLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            let port = Self {
-                events: events.clone(),
-            };
-            (port, events)
-        }
-    }
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock LoomRepository ────────────────────────────────────────────
-
-    struct MockLoomRepository {
-        scan_looms: Arc<Mutex<Vec<Loom>>>,
-        scan_warnings: Arc<Mutex<Vec<String>>>,
-        scan_knots: Arc<Mutex<Vec<Knot>>>,
-    }
-
-    impl LoomRepository for MockLoomRepository {
-        fn scan(
-            &self,
-            _rig: &std::path::Path,
-        ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
-            Ok((
-                self.scan_looms.lock().unwrap().clone(),
-                self.scan_warnings.lock().unwrap().clone(),
-            ))
-        }
-
-        fn scan_knot_files(
-            &self,
-            _loom_dir: &std::path::Path,
-        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
-            Ok((
-                self.scan_knots.lock().unwrap().clone(),
-                self.scan_warnings.lock().unwrap().clone(),
-            ))
-        }
-
-        fn get(
-            &self,
-            _id: &LoomId,
-        ) -> Result<Option<Loom>, PortError> {
-            Ok(None)
-        }
-
-        fn list(&self) -> Result<Vec<Loom>, PortError> {
-            Ok(vec![])
-        }
-
-        fn save(&self, _loom: Loom) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    /// Build a knot with the given ID and strand_dir.
-    fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
-    /// Build a knot with custom strand_dir.
-    fn build_knot_with_strand_dir(
-        id: impl Into<String>,
-        strand_dir: PathBuf,
-    ) -> Knot {
-        let mut knot = build_knot(id);
-        knot.strand_dir = strand_dir;
-        knot
-    }
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_knot, build_knot_with_strand_dir, build_loom,
+        MockLoomLogPort, MockLoomRepository, TrackingEventSource,
+    };
 
     // ── Tests ──────────────────────────────────────────────────────────
 
@@ -2966,89 +2795,11 @@ mod phase2_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    // ── Tracking EventSource Mock ──────────────────────────────────────
-
-    /// A mock `EventSource` that records all `watch()` calls.
-    struct TrackingEventSource {
-        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
-    }
-
-    impl TrackingEventSource {
-        fn new(
-        ) -> (Self, Arc<Mutex<Vec<PathBuf>>>) {
-            let watch_calls = Arc::new(Mutex::new(vec![]));
-            let source = Self {
-                watch_calls: watch_calls.clone(),
-            };
-            (source, watch_calls)
-        }
-    }
-
-    impl EventSource for TrackingEventSource {
-        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.watch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn unwatch(&self, _path: &std::path::Path) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Mock LoomLogPort ───────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
-
-    /// Build a knot with the given ID.
-    fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
-    /// Build a knot with custom strand_dir.
-    fn build_knot_with_strand_dir(
-        id: impl Into<String>,
-        strand_dir: PathBuf,
-    ) -> Knot {
-        let mut knot = build_knot(id);
-        knot.strand_dir = strand_dir;
-        knot
-    }
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_knot, build_knot_with_strand_dir, build_loom,
+        MockLoomLogPort, TrackingEventSource,
+    };
 
     // ── RegisterLoom Watcher Tests ─────────────────────────────────────
 
@@ -3065,12 +2816,12 @@ mod phase2_tests {
         );
         let loom_id = loom.id.clone();
 
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let store = LoomStore::new();
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3098,12 +2849,12 @@ mod phase2_tests {
         let loom = build_loom("empty-loom", vec![]);
         let loom_id = loom.id.clone();
 
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let store = LoomStore::new();
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3126,13 +2877,13 @@ mod phase2_tests {
         let loom1 = build_loom("dup", vec![build_knot("k1")]);
         let loom2 = build_loom("dup", vec![build_knot("k2")]);
 
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let store = LoomStore::new();
 
         // Register first loom
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             Arc::clone(&es),
         );
@@ -3145,10 +2896,10 @@ mod phase2_tests {
         }
 
         // Duplicate registration — should succeed (idempotent)
-        let (event_source2, watch_calls2) = TrackingEventSource::new();
+        let (event_source2, watch_calls2, _, _) = TrackingEventSource::new();
         let es2: Arc<dyn EventSource> = Arc::new(event_source2);
         let use_case = RegisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es2,
         );
@@ -3232,11 +2983,11 @@ mod phase2_tests {
             scan_error: Arc::new(Mutex::new(None)),
         });
         let store = LoomStore::new();
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
 
         let handler = ConfigEventHandler::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             Arc::new(event_source),
             rig_path.clone(),
@@ -3284,11 +3035,11 @@ mod phase2_tests {
             ))),
         });
         let store = LoomStore::new();
-        let (event_source, _watch_calls) = TrackingEventSource::new();
+        let (event_source, _watch_calls, _, _) = TrackingEventSource::new();
 
         let handler = ConfigEventHandler::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             Arc::new(event_source),
             PathBuf::from("/workspace/rig"),
@@ -3333,91 +3084,10 @@ mod phase3_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    // ── Tracking EventSource Mock ──────────────────────────────────────
-
-    /// A mock `EventSource` that records all `watch()` and `unwatch()` calls.
-    struct TrackingEventSource {
-        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
-        unwatch_calls: Arc<Mutex<Vec<PathBuf>>>,
-    }
-
-    impl TrackingEventSource {
-        #[allow(clippy::type_complexity)]
-        fn new(
-        ) -> (
-            Self,
-            Arc<Mutex<Vec<PathBuf>>>,
-            Arc<Mutex<Vec<PathBuf>>>,
-        ) {
-            let watch_calls = Arc::new(Mutex::new(vec![]));
-            let unwatch_calls = Arc::new(Mutex::new(vec![]));
-            let source = Self {
-                watch_calls: watch_calls.clone(),
-                unwatch_calls: unwatch_calls.clone(),
-            };
-            (source, watch_calls, unwatch_calls)
-        }
-    }
-
-    impl EventSource for TrackingEventSource {
-        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.watch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn unwatch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.unwatch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-    }
-
-    // ── Mock LoomLogPort ───────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
-
-    /// Build a knot with the given ID.
-        fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
+    };
 
     // ── UnregisterLoom Watcher Tests ───────────────────────────────────
 
@@ -3434,7 +3104,7 @@ mod phase3_tests {
         );
         let loom_id = loom.id.clone();
 
-        let (event_source, _watch_calls, unwatch_calls) =
+        let (event_source, _watch_calls, unwatch_calls, _) =
             TrackingEventSource::new();
         let store = LoomStore::new();
 
@@ -3443,7 +3113,7 @@ mod phase3_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3471,7 +3141,7 @@ mod phase3_tests {
         let loom = build_loom("empty-unwatch-loom", vec![]);
         let loom_id = loom.id.clone();
 
-        let (event_source, _watch_calls, unwatch_calls) =
+        let (event_source, _watch_calls, unwatch_calls, _) =
             TrackingEventSource::new();
         let store = LoomStore::new();
 
@@ -3480,7 +3150,7 @@ mod phase3_tests {
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3499,13 +3169,13 @@ mod phase3_tests {
     /// `unwatch()`.
     #[test]
     fn unregister_loom_not_found_no_unwatch() {
-        let (event_source, _watch_calls, unwatch_calls) =
+        let (event_source, _watch_calls, unwatch_calls, _) =
             TrackingEventSource::new();
         let store = LoomStore::new();
 
         let es: Arc<dyn EventSource> = Arc::new(event_source);
         let use_case = UnregisterLoom::new(
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3537,58 +3207,12 @@ mod phase4_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    // ── Tracking EventSource Mock ──────────────────────────────────────
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
+    };
 
-    /// A mock `EventSource` that records all `watch()` calls.
-    struct TrackingEventSource {
-        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
-    }
-
-    impl TrackingEventSource {
-        fn new(
-        ) -> (Self, Arc<Mutex<Vec<PathBuf>>>) {
-            let watch_calls = Arc::new(Mutex::new(vec![]));
-            let source = Self {
-                watch_calls: watch_calls.clone(),
-            };
-            (source, watch_calls)
-        }
-    }
-
-    impl EventSource for TrackingEventSource {
-        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.watch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn unwatch(&self, _path: &std::path::Path) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Mock LoomLogPort ───────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock LoomRepository ────────────────────────────────────────────
+    // ── Mock LoomRepository (simplified for DiscoverLooms tests) ──────
 
     struct MockLoomRepository {
         scan_looms: Vec<Loom>,
@@ -3619,29 +3243,6 @@ mod phase4_tests {
         }
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
-
-    /// Build a knot with the given ID.
-        fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
     // ── DiscoverLooms Runtime Tests ────────────────────────────────────
 
     /// `DiscoverLooms` use case given looms where one ID already in store
@@ -3664,12 +3265,12 @@ mod phase4_tests {
                 new_loom2.clone(),
             ],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3711,12 +3312,12 @@ mod phase4_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: vec![loom1.clone(), loom2.clone()],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3741,12 +3342,12 @@ mod phase4_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: vec![],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = DiscoverLooms::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
         );
@@ -3767,7 +3368,9 @@ mod manage_knot_tests {
     use crate::domain::value_objects::PromptTemplate;
     use std::path::PathBuf;
 
-    /// Build a knot with the given ID.
+    use super::super::test_fixtures::build_loom;
+
+    /// Build a knot with the given ID (uses "default" profile).
     fn build_knot(id: impl Into<String>) -> Knot {
         Knot {
             id: KnotId(id.into()),
@@ -3777,14 +3380,6 @@ mod manage_knot_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-        }
-    }
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
         }
     }
 
@@ -4023,29 +3618,13 @@ mod phase3_profile_resolution_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    // ── Mock LoomLogPort ─────────────────────────────────────────────
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_loom, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort, MockTieOffSink,
+    };
 
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock AgentRunner ─────────────────────────────────────────────
+    // ── Mock AgentRunner (simplified, no context capture) ──────────────
 
     #[derive(Default)]
     struct MockAgentRunner;
@@ -4064,122 +3643,6 @@ mod phase3_profile_resolution_tests {
         }
     }
 
-    // ── Mock TieOffSink ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockTieOffSink {
-        content: std::sync::RwLock<HashMap<String, String>>,
-    }
-
-    impl TieOffSink for MockTieOffSink {
-        fn write(
-            &self,
-            tie_off: TieOff,
-        ) -> Result<(), PortError> {
-            self.content
-                .write()
-                .unwrap()
-                .insert(tie_off.path.0.display().to_string(), tie_off.content);
-            Ok(())
-        }
-
-        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.write(tie_off)
-        }
-
-        fn read_content(
-            &self,
-            path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(self
-                .content
-                .read()
-                .unwrap()
-                .get(&path.0.display().to_string())
-                .cloned()
-                .unwrap_or_default())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockRigLogPort {
-        events: Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>,
-    }
-
-    impl MockRigLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    #[derive(Default)]
-    struct MockProfileRepository {
-        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .get(name)
-                .cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect())
-        }
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -4195,15 +3658,6 @@ mod phase3_profile_resolution_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-        }
-    }
-
-    /// Build a loom with the given ID and knots.
-    #[allow(dead_code)]
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
         }
     }
 
@@ -4234,7 +3688,7 @@ mod phase3_profile_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -4270,7 +3724,7 @@ mod phase3_profile_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -4316,7 +3770,7 @@ mod phase3_profile_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -4356,7 +3810,7 @@ mod phase3_profile_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -4420,7 +3874,7 @@ mod phase3_profile_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -4461,159 +3915,13 @@ mod phase6_timeout_tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    // ── Mock LoomLogPort ─────────────────────────────────────────────
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_loom, MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort,
+    };
 
-    #[derive(Default)]
-    struct MockLoomLogPort {
-        events: Arc<Mutex<Vec<LoomEvent>>>,
-    }
-
-    impl MockLoomLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentRunner (configurable error) ────────────────────────
-
-    /// Mock agent runner that returns a configurable result and captures
-    /// the execution context for inspection in tests.
-    ///
-    /// Supports two modes:
-    /// - Single result (via `new()`) — returns the same result for every call.
-    /// - Sequence (via `new_sequence()`) — pops results from a queue for each
-    ///   call, useful for testing session-resume retry behaviour.
-    struct ConfigurableAgentRunner {
-        result: Arc<Mutex<Result<AgentOutput, PortError>>>,
-        /// Sequence of results to return (popped front-to-back).
-        /// When `Some`, takes priority over `result`.
-        sequence: Arc<Mutex<Option<std::collections::VecDeque<
-            Result<AgentOutput, PortError>,
-        >>>>,
-        captured_ctx: Arc<Mutex<Vec<ExecutionContext>>>,
-    }
-
-    impl ConfigurableAgentRunner {
-        fn new(result: Result<AgentOutput, PortError>) -> Self {
-            Self {
-                result: Arc::new(Mutex::new(result)),
-                sequence: Arc::new(Mutex::new(None)),
-                captured_ctx: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        fn new_sequence(
-            results: Vec<Result<AgentOutput, PortError>>,
-        ) -> Self {
-            Self {
-                result: Arc::new(Mutex::new(Ok(AgentOutput {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: 0,
-                    metadata: None,
-                }))),
-                sequence: Arc::new(Mutex::new(Some(
-                    results.into_iter().collect(),
-                ))),
-                captured_ctx: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        fn set_result(&self, result: Result<AgentOutput, PortError>) {
-            *self.result.lock().unwrap() = result;
-        }
-
-        /// Return the last captured execution context (if any).
-        fn get_captured_ctx(&self) -> Option<ExecutionContext> {
-            self.captured_ctx
-                .lock()
-                .unwrap()
-                .last()
-                .cloned()
-        }
-
-        /// Return all captured execution contexts in order.
-        fn get_captured_contexts(&self) -> Vec<ExecutionContext> {
-            self.captured_ctx.lock().unwrap().clone()
-        }
-    }
-
-    impl AgentRunner for ConfigurableAgentRunner {
-        fn execute(
-            &self,
-            ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            self.captured_ctx.lock().unwrap().push(ctx);
-
-            // Check sequence first, then fall back to single result
-            if let Some(ref mut seq) = *self.sequence.lock().unwrap() {
-                if let Some(result) = seq.pop_front() {
-                    return result;
-                }
-            }
-            self.result.lock().unwrap().clone()
-        }
-
-        fn execute_with_config(
-            &self,
-            agent_config: &AgentConfig,
-            strand_path: StrandPath,
-            strand_file_ref: Option<StrandPath>,
-            prompt: String,
-            profile_prompt: String,
-            event_type: String,
-            knot_name: Option<String>,
-            timeout: Option<std::time::Duration>,
-        ) -> Result<AgentOutput, PortError> {
-            let mut config = agent_config.clone();
-            let strand_filename = strand_path.0
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let session_title = format!(
-                "{} triggered by {} on {}",
-                knot_name.as_deref().unwrap_or("unknown"),
-                event_type,
-                strand_filename,
-            );
-            config.extra_args.push("--name".to_string());
-            config.extra_args.push(session_title);
-            if let Some(ref file_path) = strand_file_ref {
-                config.extra_args.push(format!("@{}", file_path.0.display()));
-            }
-            let ctx = ExecutionContext {
-                agent_config: config,
-                prompt,
-                profile_prompt,
-                strand_path,
-                event_type,
-                knot_name,
-                timeout,
-            };
-            self.execute(ctx)
-        }
-    }
-
-    // ── Mock TieOffSink (tracks appends) ─────────────────────────────
+    // ── Mock TieOffSink (tracks appends — different from shared) ──────
 
     struct TrackingTieOffSink {
         appends: Arc<Mutex<Vec<TieOff>>>,
@@ -4667,85 +3975,6 @@ mod phase6_timeout_tests {
         }
     }
 
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    struct MockRigLogPort {
-        events: Arc<Mutex<Vec<RigLogEvent>>>,
-    }
-
-    impl MockRigLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<RigLogEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            event: RigLogEvent,
-        ) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<RigLogEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    struct MockProfileRepository {
-        profiles: Arc<Mutex<HashMap<String, crate::domain::value_objects::AgentProfile>>>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<crate::domain::value_objects::AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .get(name)
-                .cloned())
-        }
-
-        fn list(
-            &self,
-        ) -> Result<Vec<crate::domain::value_objects::AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect())
-        }
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -4758,14 +3987,6 @@ mod phase6_timeout_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-        }
-    }
-
-    /// Build a loom with the given ID and knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
         }
     }
 
@@ -4784,14 +4005,14 @@ mod phase6_timeout_tests {
     #[allow(clippy::type_complexity)]
     fn build_process_strand(
         loom: Loom,
-        agent_runner: Arc<ConfigurableAgentRunner>,
+        agent_runner: Arc<MockAgentRunner>,
     ) -> (
         ProcessStrand,
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<Vec<RigLogEvent>>>,
         Arc<Mutex<HashMap<String, String>>>,
-        Arc<ConfigurableAgentRunner>,
+        Arc<MockAgentRunner>,
     ) {
         let store = LoomStore::new();
         store.register(loom);
@@ -4847,7 +4068,7 @@ mod phase6_timeout_tests {
             message: "session exceeded 60s".to_string(),
             session_id: None,
         };
-        let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
+        let runner = Arc::new(MockAgentRunner::new(Err(timeout_err)));
 
         let (use_case, log_events, tie_off_appends, rig_events,
             _content, _runner) =
@@ -4928,7 +4149,7 @@ mod phase6_timeout_tests {
             message: "crash".to_string(),
             session_id: None,
         };
-        let runner = Arc::new(ConfigurableAgentRunner::new(Err(err)));
+        let runner = Arc::new(MockAgentRunner::new(Err(err)));
 
         let (use_case, log_events, tie_off_appends, rig_events,
             _content, _runner) =
@@ -4993,7 +4214,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, log_events, tie_off_appends, rig_events,
             _content, _runner) =
@@ -5040,7 +4261,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, _log_events, _tie_off_appends, _rig_events,
             _content, captured) =
@@ -5074,7 +4295,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, _log_events, _tie_off_appends, _rig_events,
             _content, captured) =
@@ -5114,7 +4335,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, _log_events, tie_off_appends, _rig_events,
             tie_off_content, captured) =
@@ -5208,7 +4429,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, _log_events, _tie_off_appends, _rig_events,
             _content, captured) =
@@ -5250,7 +4471,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new(output));
+        let runner = Arc::new(MockAgentRunner::new(output));
 
         let (use_case, _log_events, _tie_off_appends, _rig_events,
             tie_off_content, captured) =
@@ -5315,7 +4536,7 @@ mod phase6_timeout_tests {
             exit_code: 0,
             metadata: None,
         });
-        let runner = Arc::new(ConfigurableAgentRunner::new_sequence(vec![
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
             Err(timeout_err),
             success_output,
         ]));
@@ -5391,7 +4612,7 @@ mod phase6_timeout_tests {
                 })
             })
             .collect();
-        let runner = Arc::new(ConfigurableAgentRunner::new_sequence(responses));
+        let runner = Arc::new(MockAgentRunner::new_sequence(responses));
 
         let (use_case, log_events, _tie_off_appends, rig_events,
             _content, _runner) =
@@ -5447,7 +4668,7 @@ mod phase6_timeout_tests {
             message: "timed out (no session)".to_string(),
             session_id: None,
         };
-        let runner = Arc::new(ConfigurableAgentRunner::new(Err(timeout_err)));
+        let runner = Arc::new(MockAgentRunner::new(Err(timeout_err)));
 
         let (use_case, log_events, _tie_off_appends, rig_events,
             _content, _runner) =
@@ -5501,29 +4722,13 @@ mod phase7_timeout_resolution_tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    // ── Mock LoomLogPort ─────────────────────────────────────────────
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort, MockTieOffSink,
+    };
 
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Tracking AgentRunner (captures ExecutionContext) ────────────
+    // ── Tracking AgentRunner (captures ExecutionContext via returned Arc) ─
 
     /// Mock agent runner that records the ExecutionContext passed to it.
     struct TrackingAgentRunner {
@@ -5594,142 +4799,6 @@ mod phase7_timeout_resolution_tests {
         }
     }
 
-    // ── Mock AgentRunner (no-op) ─────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockAgentRunner;
-
-    impl AgentRunner for MockAgentRunner {
-        fn execute(
-            &self,
-            _ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            Ok(AgentOutput {
-                stdout: "mock".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-    }
-
-    // ── Mock TieOffSink ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockTieOffSink {
-        content: std::sync::RwLock<HashMap<String, String>>,
-    }
-
-    impl TieOffSink for MockTieOffSink {
-        fn write(
-            &self,
-            tie_off: TieOff,
-        ) -> Result<(), PortError> {
-            self.content
-                .write()
-                .unwrap()
-                .insert(tie_off.path.0.display().to_string(), tie_off.content);
-            Ok(())
-        }
-
-        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.write(tie_off)
-        }
-
-        fn read_content(
-            &self,
-            path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(self
-                .content
-                .read()
-                .unwrap()
-                .get(&path.0.display().to_string())
-                .cloned()
-                .unwrap_or_default())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockRigLogPort {
-        events: Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>,
-    }
-
-    impl MockRigLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<crate::domain::events::RigLogEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    #[derive(Default)]
-    struct MockProfileRepository {
-        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .get(name)
-                .cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect())
-        }
-
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
@@ -5778,7 +4847,7 @@ mod phase7_timeout_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -5818,7 +4887,7 @@ mod phase7_timeout_resolution_tests {
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -5869,7 +4938,7 @@ mod phase7_timeout_resolution_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -5930,7 +4999,7 @@ mod phase7_timeout_resolution_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -5998,13 +5067,13 @@ mod phase8_git_versioning_tests {
     // ── Tracking GitVersioningPort ───────────────────────────────────
 
     /// Mock that records all commit calls for inspection.
-    struct TrackingGitVersioningPort {
+    struct MockGitVersioningPort {
         commits: Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
         /// When set, `commit()` returns this error instead of Ok.
         force_error: Arc<Mutex<Option<PortError>>>,
     }
 
-    impl TrackingGitVersioningPort {
+    impl MockGitVersioningPort {
         fn new() -> (
             Self,
             Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
@@ -6024,7 +5093,7 @@ mod phase8_git_versioning_tests {
         }
     }
 
-    impl GitVersioningPort for TrackingGitVersioningPort {
+    impl GitVersioningPort for MockGitVersioningPort {
         fn commit(
             &self,
             loom_id: &LoomId,
@@ -6180,7 +5249,7 @@ mod phase8_git_versioning_tests {
 
         ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(MockAgentRunner),
             Arc::new(MockTieOffSink),
             RigAgentConfig::default_config(),
@@ -6205,7 +5274,7 @@ mod phase8_git_versioning_tests {
         let loom =
             build_loom("test-loom", vec![build_knot("k1", true)]);
 
-        let (git_port, commits) = TrackingGitVersioningPort::new();
+        let (git_port, commits) = MockGitVersioningPort::new();
         let use_case = build_process_strand(loom, Arc::new(git_port));
 
         let event = StrandEvent::Created {
@@ -6239,7 +5308,7 @@ mod phase8_git_versioning_tests {
         let loom =
             build_loom("test-loom", vec![build_knot("k1", false)]);
 
-        let (git_port, commits) = TrackingGitVersioningPort::new();
+        let (git_port, commits) = MockGitVersioningPort::new();
         let use_case = build_process_strand(loom, Arc::new(git_port));
 
         let event = StrandEvent::Created {
@@ -6270,7 +5339,7 @@ mod phase8_git_versioning_tests {
         let loom =
             build_loom("test-loom", vec![build_knot("k1", true)]);
 
-        let (git_port, commits) = TrackingGitVersioningPort::new();
+        let (git_port, commits) = MockGitVersioningPort::new();
         git_port.set_error(PortError::GitCommitFailed(
             "not a git repo".to_string(),
         ));
@@ -6307,64 +5376,12 @@ mod reload_config_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    // ── Tracking EventSource Mock ──────────────────────────────────────
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
+    };
 
-    /// A mock `EventSource` that records all `watch()` calls.
-    struct TrackingEventSource {
-        watch_calls: Arc<Mutex<Vec<PathBuf>>>,
-    }
-
-    impl TrackingEventSource {
-        fn new(
-        ) -> (
-            Self,
-            Arc<Mutex<Vec<PathBuf>>>,
-        ) {
-            let watch_calls = Arc::new(Mutex::new(vec![]));
-            let source = Self {
-                watch_calls: watch_calls.clone(),
-            };
-            (source, watch_calls)
-        }
-    }
-
-    impl EventSource for TrackingEventSource {
-        fn watch(&self, path: &std::path::Path) -> Result<(), PortError> {
-            self.watch_calls
-                .lock()
-                .unwrap()
-                .push(path.to_path_buf());
-            Ok(())
-        }
-
-        fn unwatch(&self, _path: &std::path::Path) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Mock LoomLogPort ───────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock LoomRepository ────────────────────────────────────────────
+    // ── Mock LoomRepository (simplified for ReloadConfig tests) ───────
 
     struct MockLoomRepository {
         scan_looms: Vec<Loom>,
@@ -6401,29 +5418,6 @@ mod reload_config_tests {
         }
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────
-
-    /// Build a loom with the given ID and optional knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
-
-    /// Build a knot with the given ID.
-    fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
     // ── Tests ──────────────────────────────────────────────────────────
 
     /// `ReloadConfig` re-scans the rig and registers any looms not
@@ -6437,12 +5431,12 @@ mod reload_config_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: vec![new_loom, new_loom2],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = ReloadConfig::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
             PathBuf::from("/workspace/rig"),
@@ -6481,12 +5475,12 @@ mod reload_config_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: vec![existing_loom, new_loom],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = ReloadConfig::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
             PathBuf::from("/workspace/rig"),
@@ -6524,12 +5518,12 @@ mod reload_config_tests {
         let repo = Arc::new(MockLoomRepository {
             scan_looms: vec![loom1, loom2],
         });
-        let (event_source, watch_calls) = TrackingEventSource::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
         let es: Arc<dyn EventSource> = Arc::new(event_source);
 
         let use_case = ReloadConfig::new(
             repo,
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
             PathBuf::from("/workspace/rig"),
@@ -6804,7 +5798,7 @@ mod phase9_session_title_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -6860,7 +5854,7 @@ mod phase9_session_title_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -6904,7 +5898,7 @@ mod phase9_session_title_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -6955,7 +5949,7 @@ mod phase9_session_title_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
@@ -7034,7 +6028,7 @@ mod phase9_session_title_tests {
 
         let use_case = ProcessStrand::new(
             store.clone(),
-            Arc::new(MockLoomLogPort),
+            Arc::new(MockLoomLogPort::default()),
             Arc::new(runner),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),

@@ -114,18 +114,32 @@ No new tests needed — this is a structural refactor. All existing tests must c
 - [ ] Update `src/application/mod.rs`: change `pub mod usecases;` to reference the directory's `mod.rs` (directory-style module)
 - [ ] **Verify:** `cargo test` — all 87+ existing tests still pass (no code moved yet, just structure)
 
-### Phase 1: Extract shared test fixtures
+### Phase 1: Extract shared test fixtures ✅ DONE
 
 **Goal:** Move duplicated mock implementations from individual test modules into `test_fixtures.rs`. Each test module that had its own copy switches to `use super::super::test_fixtures::*`.
 
-- [ ] In each test module that defines `TrackingEventSource`: remove local definition, add `use super::super::test_fixtures::TrackingEventSource`
-- [ ] In each test module that defines `MockLoomLogPort`: remove local definition, add `use super::super::test_fixtures::MockLoomLogPort`
-- [ ] In each test module that defines `MockLoomRepository`: remove local definition, add `use super::super::test_fixtures::MockLoomRepository`
-- [ ] In each test module that defines `MockAgentRunner` (configurable): remove local, import from fixtures
-- [ ] In each test module that defines `MockTieOffSink`: remove local, import from fixtures
-- [ ] In each test module that defines `build_knot` / `build_loom`: remove local, import from fixtures
-- [ ] Handle variant differences: some test modules use simplified mocks (e.g. `MockLoomLogPort` with no-op `append` vs. recorded). Where a test module used a simplified variant that is semantically different, keep the local variant or parameterise the shared one.
-- [ ] **Verify:** `cargo test` — all tests still pass
+- [x] In each test module that defines `TrackingEventSource`: remove local definition, add `use super::super::test_fixtures::TrackingEventSource`
+- [x] In each test module that defines `MockLoomLogPort`: remove local definition, add `use super::super::test_fixtures::MockLoomLogPort`
+- [x] In each test module that defines `MockLoomRepository`: remove local definition, add `use super::super::test_fixtures::MockLoomRepository`
+- [x] In each test module that defines `MockAgentRunner` (configurable): remove local, import from fixtures
+- [x] In each test module that defines `MockTieOffSink`: remove local, import from fixtures
+- [x] In each test module that defines `build_knot` / `build_loom`: remove local, import from fixtures
+- [x] Handle variant differences: some test modules use simplified mocks (e.g. `MockLoomLogPort` with no-op `append` vs. recorded). Where a test module used a simplified variant that is semantically different, keep the local variant or parameterise the shared one.
+- [x] **Verify:** `cargo test` — all 86 tests still pass
+
+**Variants kept local (semantically different from shared):**
+
+| Module | Local Fixture | Reason |
+|--------|---------------|--------|
+| `phase2_tests` | `MockLoomRepository` | Has `scan_error` field for error injection |
+| `phase4_tests` | `MockLoomRepository` | Simplified `Vec<Loom>` (no Arc/Mutex) |
+| `reload_config_tests` | `MockLoomRepository` | Simplified `Vec<Loom>` (no Arc/Mutex) |
+| `phase3_profile_resolution_tests` | `MockAgentRunner` | Simplified, no context capture |
+| `phase6_timeout_tests` | `TrackingTieOffSink` | Tracks `appends` list (shared doesn't) |
+| `phase7_timeout_resolution_tests` | `TrackingAgentRunner` | Returns contexts via tuple (shared uses method) |
+| `phase8_git_versioning_tests` | `MockProfileRepository` | Simplified `HashMap` (no Arc/Mutex) |
+| `manage_knot_tests` | `build_knot` | Uses `"default"` profile (shared uses `"fast"`) |
+| `phase6/7/8/9_timeout_*` | `build_knot(id, profile)` | Takes profile parameter (shared doesn't) |
 
 ### Phase 2: Extract `loom/` module (DiscoverLooms, ReloadConfig, RegisterLoom, UnregisterLoom)
 

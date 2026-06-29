@@ -3,7 +3,7 @@
 //! Contains mock implementations and domain builders that are reused
 //! across multiple test modules. Extracted to eliminate duplication.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -99,6 +99,14 @@ impl MockLoomLogPort {
     }
 }
 
+impl Default for MockLoomLogPort {
+    fn default() -> Self {
+        Self {
+            events: Arc::new(Mutex::new(vec![])),
+        }
+    }
+}
+
 impl LoomLogPort for MockLoomLogPort {
     fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
         Ok(())
@@ -121,9 +129,9 @@ impl LoomLogPort for MockLoomLogPort {
 /// Defaults to empty scan. Set `scan_looms`, `scan_warnings`, and
 /// `scan_knots` via the provided `Arc<Mutex<...>>` handles.
 pub struct MockLoomRepository {
-    scan_looms: Arc<Mutex<Vec<Loom>>>,
-    scan_warnings: Arc<Mutex<Vec<String>>>,
-    scan_knots: Arc<Mutex<Vec<Knot>>>,
+    pub scan_looms: Arc<Mutex<Vec<Loom>>>,
+    pub scan_warnings: Arc<Mutex<Vec<String>>>,
+    pub scan_knots: Arc<Mutex<Vec<Knot>>>,
 }
 
 impl MockLoomRepository {
@@ -233,6 +241,17 @@ impl MockAgentRunner {
     /// Return all captured execution contexts in order.
     pub fn get_captured_contexts(&self) -> Vec<ExecutionContext> {
         self.captured_ctx.lock().unwrap().clone()
+    }
+}
+
+impl Default for MockAgentRunner {
+    fn default() -> Self {
+        Self::new(Ok(AgentOutput {
+            stdout: "mock".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        }))
     }
 }
 
@@ -352,6 +371,14 @@ impl MockRigLogPort {
     }
 }
 
+impl Default for MockRigLogPort {
+    fn default() -> Self {
+        Self {
+            events: Arc::new(Mutex::new(vec![])),
+        }
+    }
+}
+
 impl RigLogPort for MockRigLogPort {
     fn append(&self, event: RigLogEvent) -> Result<(), PortError> {
         self.events.lock().unwrap().push(event);
@@ -367,7 +394,7 @@ impl RigLogPort for MockRigLogPort {
 
 /// A mock [`AgentProfileRepository`] backed by a map of name → profile.
 pub struct MockProfileRepository {
-    profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
+    pub profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
 }
 
 impl MockProfileRepository {
