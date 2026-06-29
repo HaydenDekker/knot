@@ -578,3 +578,157 @@ pub fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
         knots,
     }
 }
+
+/// Build a knot with a custom profile ref.
+pub fn build_knot_with_profile(id: impl Into<String>, profile: &str) -> Knot {
+    let mut knot = build_knot(id);
+    knot.agent_profile_ref = profile.to_string();
+    knot
+}
+
+/// Build a default "fast" profile for tests.
+pub fn default_profile() -> AgentProfile {
+    AgentProfile::new(
+        "fast".to_string(),
+        "openai".to_string(),
+        "gpt-4o".to_string(),
+        "You are fast.".to_string(),
+    )
+    .unwrap()
+}
+
+// ── Tracking TieOffSink ───────────────────────────────────────────────────
+
+/// A mock [`TieOffSink`] that tracks both append calls and content by path.
+///
+/// Unlike [`MockTieOffSink`], this records every `append()` call in a
+/// `Vec<TieOff>` so tests can inspect the full tie-off record (status,
+/// content, path) as well as the stored content map.
+pub struct TrackingTieOffSink {
+    appends: Arc<Mutex<Vec<TieOff>>>,
+    content: Arc<Mutex<std::collections::HashMap<String, String>>>,
+}
+
+impl TrackingTieOffSink {
+    pub fn new() -> (
+        Self,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<std::collections::HashMap<String, String>>>,
+    ) {
+        let appends = Arc::new(Mutex::new(vec![]));
+        let content = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        (
+            Self {
+                appends: appends.clone(),
+                content: content.clone(),
+            },
+            appends,
+            content,
+        )
+    }
+}
+
+impl TieOffSink for TrackingTieOffSink {
+    fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
+        self.content
+            .lock()
+            .unwrap()
+            .insert(tie_off.path.0.display().to_string(), tie_off.content);
+        Ok(())
+    }
+
+    fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
+        self.appends.lock().unwrap().push(tie_off.clone());
+        self.write(tie_off)
+    }
+
+    fn read_content(&self, path: &TieOffPath) -> Result<String, PortError> {
+        Ok(self
+            .content
+            .lock()
+            .unwrap()
+            .get(&path.0.display().to_string())
+            .cloned()
+            .unwrap_or_default())
+    }
+}
+
+// ── Tracking AgentRunner ─────────────────────────────────────────────────
+
+/// A mock [`AgentRunner`] that records the [`ExecutionContext`] passed
+/// to it and returns a successful mock response.
+///
+/// Unlike [`MockAgentRunner`], this always succeeds and is used when the
+/// test needs to inspect the context (e.g. CLI args, prompt, timeout).
+pub struct TrackingAgentRunner {
+    contexts: Arc<Mutex<Vec<ExecutionContext>>>,
+}
+
+impl TrackingAgentRunner {
+    pub fn new() -> (Self, Arc<Mutex<Vec<ExecutionContext>>>) {
+        let contexts = Arc::new(Mutex::new(vec![]));
+        (Self { contexts: contexts.clone() }, contexts)
+    }
+
+    /// Return the last captured execution context (if any).
+    pub fn get_captured_ctx(&self) -> Option<ExecutionContext> {
+        self.contexts.lock().unwrap().last().cloned()
+    }
+
+    /// Return all captured execution contexts in order.
+    pub fn get_captured_contexts(&self) -> Vec<ExecutionContext> {
+        self.contexts.lock().unwrap().clone()
+    }
+}
+
+impl AgentRunner for TrackingAgentRunner {
+    fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+        self.contexts.lock().unwrap().push(ctx);
+        Ok(AgentOutput {
+            stdout: "mock output".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })
+    }
+
+    fn execute_with_config(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<AgentOutput, PortError> {
+        let mut config = agent_config.clone();
+        let strand_filename = strand_path
+            .0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot_name.as_deref().unwrap_or("unknown"),
+            event_type,
+            strand_filename,
+        );
+        config.extra_args.push("--name".to_string());
+        config.extra_args.push(session_title);
+        if let Some(ref file_path) = strand_file_ref {
+            config.extra_args.push(format!("@{}", file_path.0.display()));
+        }
+        let ctx = ExecutionContext {
+            agent_config: config,
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        self.execute(ctx)
+    }
+}

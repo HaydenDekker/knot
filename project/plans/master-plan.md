@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ⬜ Draft | 2026-06-29 |
 | 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ⬜ Planned | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
@@ -97,6 +98,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 49. Split `process_strand.rs` Tests into Isolated Module
+
+**Status:** ⬜ Draft
+**Created:** 2026-06-29
+**Goal:** Extract ~3,358 lines of inline tests from `process_strand.rs` (3,862 lines total) into an organised `process_strand/tests/` subdirectory, consolidate duplicated mocks/helpers into `test_fixtures.rs`, and leave only ~500 lines of production code in the main module. Pure structural refactor — zero behaviour change.
+
+Full details in [process-strand-test-extraction.md](process-strand-test-extraction.md).
 
 ### 47. Session Resume on Invocation Failure
 

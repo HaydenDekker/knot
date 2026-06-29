@@ -687,7 +687,7 @@ sleep 300
         let runner = make_mock_runner();
         // extra_args are individual CLI args — the mock echoes stdin.
         // We verify success; the `execute_with_config` path is tested
-        // in the phase9_session_title_tests module (TrackingAgentRunner).
+        // in the session_title_tests module (TrackingAgentRunner).
         let ctx = make_context(&[]);
 
         let result = runner.execute(ctx);

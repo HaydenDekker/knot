@@ -500,128 +500,33 @@ impl ProcessStrand {
 
 
 
-// ── Phase 3 Tests ─────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod phase3_tests {
-    use super::*;
-    use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::PromptTemplate;
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::{
-        build_knot, build_loom, MockLoomLogPort, MockStrandFileChecker,
-        TrackingEventSource,
-    };
-
-}
-
-// ── Phase 4 Tests ─────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod phase4_tests {
-    use super::*;
-    use crate::application::ports::LoomRepository;
-    use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::PromptTemplate;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::{
-        build_knot, build_loom, MockLoomLogPort, MockStrandFileChecker,
-        TrackingEventSource,
-    };
-
-    // ── Mock LoomRepository (simplified for DiscoverLooms tests) ──────
-
-    struct MockLoomRepository {
-        scan_looms: Vec<Loom>,
-    }
-
-    impl LoomRepository for MockLoomRepository {
-        fn scan(&self, _rig: &std::path::Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
-            Ok((self.scan_looms.clone(), vec![]))
-        }
-
-        fn scan_knot_files(
-            &self,
-            _loom_dir: &std::path::Path,
-        ) -> Result<(Vec<Knot>, Vec<String>), PortError> {
-            Ok((vec![], vec![]))
-        }
-
-        fn get(&self, _id: &LoomId) -> Result<Option<Loom>, PortError> {
-            Ok(None)
-        }
-
-        fn list(&self) -> Result<Vec<Loom>, PortError> {
-            Ok(vec![])
-        }
-
-        fn save(&self, _loom: Loom) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-}
-
 // ── Phase 3: Profile Resolution Tests ─────────────────────────────
 
 #[cfg(test)]
-mod phase3_profile_resolution_tests {
+mod profile_resolution_tests {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_loom, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        MockTieOffSink,
+        build_knot_with_profile, default_profile, MockAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
     };
-
-    // ── Mock AgentRunner (simplified, no context capture) ──────────────
-
-    #[derive(Default)]
-    struct MockAgentRunner;
-
-    impl AgentRunner for MockAgentRunner {
-        fn execute(
-            &self,
-            _ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            Ok(AgentOutput {
-                stdout: "mock output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
 
     /// Build a knot with the given profile ref.
     fn build_profile_knot(
         id: impl Into<String>,
         profile_name: &str,
     ) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: profile_name.to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check with profile".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
+        let mut knot = build_knot_with_profile(id, profile_name);
+        knot.prompt_template = PromptTemplate {
+            instructions: "check with profile".to_string(),
+        };
+        knot
     }
 
     // ── resolve_agent_config Tests ───────────────────────────────────
@@ -652,7 +557,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -689,7 +594,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -736,7 +641,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -777,7 +682,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -842,7 +747,7 @@ mod phase3_profile_resolution_tests {
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
@@ -872,106 +777,28 @@ mod phase3_profile_resolution_tests {
 // ── Phase 6: Timeout Handling Tests ───────────────────────────────
 
 #[cfg(test)]
-mod phase6_timeout_tests {
+mod execution_test_shared {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
-    use crate::domain::entities::{Knot, KnotId, TieOffStatus};
     use crate::domain::events::RigLogEvent;
-    use crate::domain::value_objects::PromptTemplate;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
-    use tempfile::TempDir;
 
-    #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_loom, MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
+        build_knot_with_profile, build_loom, default_profile,
+        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
         MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        TrackingTieOffSink,
     };
 
-    // ── Mock TieOffSink (tracks appends — different from shared) ──────
-
-    struct TrackingTieOffSink {
-        appends: Arc<Mutex<Vec<TieOff>>>,
-        content: Arc<Mutex<HashMap<String, String>>>,
-    }
-
-    impl TrackingTieOffSink {
-        fn new() -> (
-            Self,
-            Arc<Mutex<Vec<TieOff>>>,
-            Arc<Mutex<HashMap<String, String>>>,
-        ) {
-            let appends = Arc::new(Mutex::new(vec![]));
-            let content = Arc::new(Mutex::new(HashMap::new()));
-            (
-                Self {
-                    appends: appends.clone(),
-                    content: content.clone(),
-                },
-                appends,
-                content,
-            )
-        }
-    }
-
-    impl TieOffSink for TrackingTieOffSink {
-        fn write(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.content
-                .lock()
-                .unwrap()
-                .insert(tie_off.path.0.display().to_string(), tie_off.content);
-            Ok(())
-        }
-
-        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.appends.lock().unwrap().push(tie_off.clone());
-            self.write(tie_off)
-        }
-
-        fn read_content(
-            &self,
-            path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(self
-                .content
-                .lock()
-                .unwrap()
-                .get(&path.0.display().to_string())
-                .cloned()
-                .unwrap_or_default())
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    /// Build a knot with the given profile ref.
-    fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: profile.to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
-    /// Build a default profile for "fast".
-    fn default_profile() -> crate::domain::value_objects::AgentProfile {
-        crate::domain::value_objects::AgentProfile::new(
-            "fast".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are fast.".to_string(),
-        )
-        .unwrap()
+    /// Re-export build_knot with profile parameter for execution tests.
+    pub fn build_knot(id: impl Into<String>, profile: &str) -> crate::domain::entities::Knot {
+        build_knot_with_profile(id, profile)
     }
 
     /// Build the ProcessStrand use case with all mocks.
     #[allow(clippy::type_complexity)]
-    fn build_process_strand(
+    pub fn build_process_strand(
         loom: Loom,
         agent_runner: Arc<MockAgentRunner>,
     ) -> (
@@ -1019,8 +846,24 @@ mod phase6_timeout_tests {
             agent_runner,
         )
     }
+}
 
-    // ── Tests ────────────────────────────────────────────────────────
+// ── Execution: happy-path and error handling ──────────────────────────
+
+#[cfg(test)]
+mod execution_tests {
+    use super::execution_test_shared::{build_knot, build_process_strand};
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{KnotId, TieOffStatus};
+    use crate::domain::events::RigLogEvent;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_loom, MockAgentRunner,
+    };
 
     /// On `PortError::Timeout`:
     /// - loom-log receives `KnotProcessing`, `KnotFailed`, `StrandProcessed`
@@ -1216,8 +1059,24 @@ mod phase6_timeout_tests {
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "agent output");
     }
+}
 
-    // ── Deleted Event Context Extraction Tests ───────────────────────
+// ── Execution: deleted event context extraction ───────────────────────
+
+#[cfg(test)]
+mod execution_deleted_tests {
+    use super::execution_test_shared::{build_knot, build_process_strand};
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::KnotId;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_loom, MockAgentRunner,
+    };
 
     /// For Deleted events, `@{strand_path}` must NOT appear in CLI args
     /// because the file no longer exists.
@@ -1482,8 +1341,24 @@ mod phase6_timeout_tests {
             "Deleted events must NOT contain @file reference",
         );
     }
+}
 
-    // ── Session Resume Integration Tests ─────────────────────────────
+// ── Execution: session resume (retry) ─────────────────────────────────
+
+#[cfg(test)]
+mod session_resume_tests {
+    use super::execution_test_shared::{build_knot, build_process_strand};
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::entities::{KnotId, TieOffStatus};
+    use crate::domain::events::RigLogEvent;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::{
+        build_loom, MockAgentRunner,
+    };
 
     /// ProcessStrand with mock runner that fails then succeeds:
     /// session-resume retry triggers, strand completes normally.
@@ -1680,116 +1555,25 @@ mod phase6_timeout_tests {
 // ── Phase 7: Profile Timeout Resolution Tests ─────────────────────────
 
 #[cfg(test)]
-mod phase7_timeout_resolution_tests {
+mod profile_timeout_tests {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
-    use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+    use crate::domain::entities::KnotId;
+    use crate::domain::value_objects::AgentProfile;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::TempDir;
 
-    #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        MockTieOffSink,
+        build_knot_with_profile, build_loom, MockAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        TrackingAgentRunner,
     };
 
-    // ── Tracking AgentRunner (captures ExecutionContext via returned Arc) ─
-
-    /// Mock agent runner that records the ExecutionContext passed to it.
-    struct TrackingAgentRunner {
-        contexts: Arc<Mutex<Vec<ExecutionContext>>>,
-    }
-
-    impl TrackingAgentRunner {
-        fn new() -> (Self, Arc<Mutex<Vec<ExecutionContext>>>) {
-            let contexts = Arc::new(Mutex::new(vec![]));
-            (
-                Self { contexts: contexts.clone() },
-                contexts,
-            )
-        }
-    }
-
-    impl AgentRunner for TrackingAgentRunner {
-        fn execute(
-            &self,
-            ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            self.contexts.lock().unwrap().push(ctx);
-            Ok(AgentOutput {
-                stdout: "mock output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-
-        fn execute_with_config(
-            &self,
-            agent_config: &AgentConfig,
-            strand_path: StrandPath,
-            strand_file_ref: Option<StrandPath>,
-            prompt: String,
-            profile_prompt: String,
-            event_type: String,
-            knot_name: Option<String>,
-            timeout: Option<std::time::Duration>,
-        ) -> Result<AgentOutput, PortError> {
-            let mut config = agent_config.clone();
-            let strand_filename = strand_path.0
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let session_title = format!(
-                "{} triggered by {} on {}",
-                knot_name.as_deref().unwrap_or("unknown"),
-                event_type,
-                strand_filename,
-            );
-            config.extra_args.push("--name".to_string());
-            config.extra_args.push(session_title);
-            if let Some(ref file_path) = strand_file_ref {
-                config.extra_args.push(format!("@{}", file_path.0.display()));
-            }
-            let ctx = ExecutionContext {
-                agent_config: config,
-                prompt,
-                profile_prompt,
-                strand_path,
-                event_type,
-                knot_name,
-                timeout,
-            };
-            self.execute(ctx)
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    /// Build a knot with the given profile ref.
-    fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: profile.to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
-    /// Build a loom with the given ID and knots.
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
+    fn build_knot(id: impl Into<String>, profile: &str) -> crate::domain::entities::Knot {
+        build_knot_with_profile(id, profile)
     }
 
     // ── resolve_agent_config Timeout Tests ───────────────────────────
@@ -2003,212 +1787,28 @@ mod phase7_timeout_resolution_tests {
     }
 }
 
-// ── Phase 8: Git Versioning Tests ────────────────────────────────
+// ── Git Versioning Tests ────────────────────────────────
 
 #[cfg(test)]
-mod phase8_git_versioning_tests {
+mod git_versioning_tests {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
-    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::MockStrandFileChecker;
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+    };
 
-    // ── Mock LoomLogPort ─────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Tracking GitVersioningPort ───────────────────────────────────
-
-    /// Mock that records all commit calls for inspection.
-    struct MockGitVersioningPort {
-        commits: Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
-        /// When set, `commit()` returns this error instead of Ok.
-        force_error: Arc<Mutex<Option<PortError>>>,
-    }
-
-    impl MockGitVersioningPort {
-        fn new() -> (
-            Self,
-            Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
-        ) {
-            let commits = Arc::new(Mutex::new(vec![]));
-            (
-                Self {
-                    commits: commits.clone(),
-                    force_error: Arc::new(Mutex::new(None)),
-                },
-                commits,
-            )
-        }
-
-        fn set_error(&self, error: PortError) {
-            *self.force_error.lock().unwrap() = Some(error);
-        }
-    }
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            loom_id: &LoomId,
-            knot_id: &KnotId,
-            strand_path: &StrandPath,
-            event_type: &str,
-            tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            self.commits
-                .lock()
-                .unwrap()
-                .push((
-                    loom_id.clone(),
-                    knot_id.clone(),
-                    strand_path.0.display().to_string(),
-                    event_type.to_string(),
-                    tie_off_content.to_string(),
-                ));
-            if let Some(ref err) = *self.force_error.lock().unwrap() {
-                return Err(err.clone());
-            }
-            Ok(())
-        }
-    }
-
-    // ── Mock AgentRunner ─────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockAgentRunner;
-
-    impl AgentRunner for MockAgentRunner {
-        fn execute(
-            &self,
-            _ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            Ok(AgentOutput {
-                stdout: "agent output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-    }
-
-    // ── Mock TieOffSink ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockTieOffSink;
-
-    impl TieOffSink for MockTieOffSink {
-        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_content(
-            &self,
-            _path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(String::new())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockRigLogPort;
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            _event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    struct MockProfileRepository {
-        profiles: HashMap<String, AgentProfile>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self.profiles.get(name).cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self.profiles.values().cloned().collect())
-        }
-
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    fn default_profile() -> AgentProfile {
-        AgentProfile::new(
-            "fast".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are fast.".to_string(),
-        )
-        .unwrap()
-    }
-
-    fn build_knot(
-        id: impl Into<String>,
-        git_versioned: bool,
-    ) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned,
-        }
-    }
-
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
+    /// Build a knot with configurable git_versioned flag.
+    fn build_knot_with_git(id: impl Into<String>, git_versioned: bool) -> Knot {
+        let mut knot = build_knot(id);
+        knot.git_versioned = git_versioned;
+        knot
     }
 
     fn build_process_strand(
@@ -2219,20 +1819,20 @@ mod phase8_git_versioning_tests {
         store.register(loom);
 
         let profile_repo = Arc::new(MockProfileRepository {
-            profiles: HashMap::from_iter([
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
-            ]),
+            ]))),
         });
 
         ProcessStrand::new(
             store.clone(),
             Arc::new(MockLoomLogPort::default()),
-            Arc::new(MockAgentRunner),
-            Arc::new(MockTieOffSink),
+            Arc::new(MockAgentRunner::default()),
+            Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
-            Arc::new(MockRigLogPort),
+            Arc::new(MockRigLogPort::default()),
             git_port,
             Arc::new(MockStrandFileChecker::new()),
         )
@@ -2250,7 +1850,7 @@ mod phase8_git_versioning_tests {
         std::fs::write(&strand_path, "test content").unwrap();
 
         let loom =
-            build_loom("test-loom", vec![build_knot("k1", true)]);
+            build_loom("test-loom", vec![build_knot_with_git("k1", true)]);
 
         let (git_port, commits) = MockGitVersioningPort::new();
         let use_case = build_process_strand(loom, Arc::new(git_port));
@@ -2272,7 +1872,7 @@ mod phase8_git_versioning_tests {
         assert_eq!(knot_id.0, "k1");
         assert!(strand.ends_with("strand.md"));
         assert_eq!(et, "Created");
-        assert_eq!(content, "agent output");
+        assert_eq!(content, "mock");
     }
 
     /// When `git_versioned: false`, the git port is never called
@@ -2284,7 +1884,7 @@ mod phase8_git_versioning_tests {
         std::fs::write(&strand_path, "test content").unwrap();
 
         let loom =
-            build_loom("test-loom", vec![build_knot("k1", false)]);
+            build_loom("test-loom", vec![build_knot_with_git("k1", false)]);
 
         let (git_port, commits) = MockGitVersioningPort::new();
         let use_case = build_process_strand(loom, Arc::new(git_port));
@@ -2315,7 +1915,7 @@ mod phase8_git_versioning_tests {
         std::fs::write(&strand_path, "test content").unwrap();
 
         let loom =
-            build_loom("test-loom", vec![build_knot("k1", true)]);
+            build_loom("test-loom", vec![build_knot_with_git("k1", true)]);
 
         let (git_port, commits) = MockGitVersioningPort::new();
         git_port.set_error(PortError::GitCommitFailed(
@@ -2343,12 +1943,11 @@ mod phase8_git_versioning_tests {
     }
 }
 
-// ── Phase 9: Session Title (--name) Tests ──────────────────────────
+// ── Session Title (--name) Tests ──────────────────────────
 
 #[cfg(test)]
-mod phase9_session_title_tests {
+mod session_title_tests {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
@@ -2356,222 +1955,15 @@ mod phase9_session_title_tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::MockStrandFileChecker;
-
-    // ── Mock LoomLogPort ─────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockLoomLogPort;
-
-    impl LoomLogPort for MockLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _event: LoomEvent) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Tracking AgentRunner (captures ExecutionContext) ────────────
-
-    /// Mock agent runner that records the ExecutionContext passed to it.
-    struct TrackingAgentRunner {
-        contexts: Arc<Mutex<Vec<ExecutionContext>>>,
-    }
-
-    impl TrackingAgentRunner {
-        fn new() -> (Self, Arc<Mutex<Vec<ExecutionContext>>>) {
-            let contexts = Arc::new(Mutex::new(vec![]));
-            (
-                Self { contexts: contexts.clone() },
-                contexts,
-            )
-        }
-    }
-
-    impl AgentRunner for TrackingAgentRunner {
-        fn execute(
-            &self,
-            ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            self.contexts.lock().unwrap().push(ctx);
-            Ok(AgentOutput {
-                stdout: "mock output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-
-        fn execute_with_config(
-            &self,
-            agent_config: &AgentConfig,
-            strand_path: StrandPath,
-            strand_file_ref: Option<StrandPath>,
-            prompt: String,
-            profile_prompt: String,
-            event_type: String,
-            knot_name: Option<String>,
-            timeout: Option<std::time::Duration>,
-        ) -> Result<AgentOutput, PortError> {
-            let mut config = agent_config.clone();
-            let strand_filename = strand_path.0
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let session_title = format!(
-                "{} triggered by {} on {}",
-                knot_name.as_deref().unwrap_or("unknown"),
-                event_type,
-                strand_filename,
-            );
-            config.extra_args.push("--name".to_string());
-            config.extra_args.push(session_title);
-            if let Some(ref file_path) = strand_file_ref {
-                config.extra_args.push(format!("@{}", file_path.0.display()));
-            }
-            let ctx = ExecutionContext {
-                agent_config: config,
-                prompt,
-                profile_prompt,
-                strand_path,
-                event_type,
-                knot_name,
-                timeout,
-            };
-            self.execute(ctx)
-        }
-    }
-
-    // ── Mock TieOffSink ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockTieOffSink;
-
-    impl TieOffSink for MockTieOffSink {
-        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_content(
-            &self,
-            _path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(String::new())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockRigLogPort;
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            _event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    struct MockProfileRepository {
-        profiles: Arc<Mutex<HashMap<String, AgentProfile>>>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .get(name)
-                .cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self
-                .profiles
-                .lock()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect())
-        }
-
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    #[derive(Default)]
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
+    use super::super::test_fixtures::{
+        build_knot_with_profile, build_loom, default_profile,
+        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        MockTieOffSink, TrackingAgentRunner,
+    };
 
     fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: profile.to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: true,
-        }
-    }
-
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
-    }
-
-    fn default_profile() -> AgentProfile {
-        AgentProfile::new(
-            "fast".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are fast.".to_string(),
-        )
-        .unwrap()
+        build_knot_with_profile(id, profile)
     }
 
     /// Find the value after `--name` in a CLI args list.
@@ -2876,189 +2268,31 @@ mod phase9_session_title_tests {
     }
 }
 
-// ── Phase 2: Text Check Tests ───────────────────────────────────────
+// ── Text Check Tests ───────────────────────────────────────
 
 #[cfg(test)]
-mod phase2_text_check_tests {
+mod text_check_tests {
     use super::*;
     use crate::adapters::outbound::content_inspector::is_text_file;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId, TieOffStatus};
-    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::MockStrandFileChecker;
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        TrackingTieOffSink,
+    };
 
-    // ── Tracking LoomLogPort ─────────────────────────────────────────
-
-    struct TrackingLoomLogPort {
-        events: Arc<Mutex<Vec<LoomEvent>>>,
-    }
-
-    impl TrackingLoomLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl LoomLogPort for TrackingLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentRunner ─────────────────────────────────────────────
-
-    struct MockAgentRunner;
-
-    impl AgentRunner for MockAgentRunner {
-        fn execute(
-            &self,
-            _ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            Ok(AgentOutput {
-                stdout: "mock output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-    }
-
-    // ── Tracking TieOffSink ──────────────────────────────────────────
-
-    struct TrackingTieOffSink {
-        appends: Arc<Mutex<Vec<TieOff>>>,
-    }
-
-    impl TrackingTieOffSink {
-        fn new() -> (Self, Arc<Mutex<Vec<TieOff>>>) {
-            let appends = Arc::new(Mutex::new(vec![]));
-            (Self { appends: appends.clone() }, appends)
-        }
-    }
-
-    impl TieOffSink for TrackingTieOffSink {
-        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.appends.lock().unwrap().push(tie_off);
-            Ok(())
-        }
-
-        fn read_content(
-            &self,
-            _path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(String::new())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    struct MockRigLogPort;
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            _event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    struct MockProfileRepository {
-        profiles: HashMap<String, AgentProfile>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self.profiles.get(name).cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self.profiles.values().cloned().collect())
-        }
-
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    fn default_profile() -> AgentProfile {
-        AgentProfile::new(
-            "fast".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are fast.".to_string(),
-        )
-        .unwrap()
-    }
-
-    fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: false,
-        }
-    }
-
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
+    /// Build a knot with git_versioned: false (not needed for text checks).
+    fn build_knot_no_git(id: impl Into<String>) -> Knot {
+        let mut knot = build_knot(id);
+        knot.git_versioned = false;
+        knot
     }
 
     #[allow(clippy::type_complexity)]
@@ -3072,25 +2306,26 @@ mod phase2_text_check_tests {
         let store = LoomStore::new();
         store.register(loom);
 
-        let (log_port, log_events) = TrackingLoomLogPort::new();
-        let (tie_off_sink, tie_off_appends) = TrackingTieOffSink::new();
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, _content) =
+            TrackingTieOffSink::new();
 
         let profile_repo = Arc::new(MockProfileRepository {
-            profiles: HashMap::from_iter([
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
-            ]),
+            ]))),
         });
 
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(log_port),
-            Arc::new(MockAgentRunner),
+            Arc::new(MockAgentRunner::default()),
             Arc::new(tie_off_sink),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
-            Arc::new(MockRigLogPort),
-            Arc::new(MockGitVersioningPort),
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
             Arc::new(
                 crate::adapters::outbound::ContentInspectorChecker,
             ),
@@ -3120,7 +2355,7 @@ mod phase2_text_check_tests {
             "test fixture should be binary"
         );
 
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
         let (use_case, log_events, tie_off_appends) =
             build_process_strand(loom);
 
@@ -3180,7 +2415,7 @@ mod phase2_text_check_tests {
             "test fixture should be text"
         );
 
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
         let (use_case, log_events, tie_off_appends) =
             build_process_strand(loom);
 
@@ -3228,7 +2463,7 @@ mod phase2_text_check_tests {
         // Path that doesn't exist — text check would fail if called
         let nonexistent = PathBuf::from("/nonexistent/path/file.txt");
 
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
         let (use_case, log_events, tie_off_appends) =
             build_process_strand(loom);
 
@@ -3287,7 +2522,7 @@ mod phase2_text_check_tests {
             "test fixture should be binary"
         );
 
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
         let (use_case, log_events, _tie_off_appends) =
             build_process_strand(loom);
 
@@ -3328,7 +2563,7 @@ mod phase2_text_check_tests {
             "empty file should be treated as text"
         );
 
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
         let (use_case, log_events, tie_off_appends) =
             build_process_strand(loom);
 
@@ -3353,201 +2588,29 @@ mod phase2_text_check_tests {
     }
 }
 
-// ── Phase 2: File Existence Check Tests ───────────────────────────────────
+// ── File Existence Check Tests ───────────────────────────────────
 
 #[cfg(test)]
-mod phase2_file_existence_tests {
+mod file_existence_tests {
     use super::*;
-    use crate::application::ports::{AgentOutput, ExecutionContext};
     use crate::domain::entities::{Knot, KnotId};
     use crate::domain::temp_file::is_known_temp_file;
-    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    #[allow(unused_imports)]
-    use super::super::test_fixtures::MockStrandFileChecker;
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, TrackingTieOffSink,
+    };
 
-    // ── Tracking LoomLogPort ─────────────────────────────────────────
-
-    struct TrackingLoomLogPort {
-        events: Arc<Mutex<Vec<LoomEvent>>>,
-    }
-
-    impl TrackingLoomLogPort {
-        fn new() -> (Self, Arc<Mutex<Vec<LoomEvent>>>) {
-            let events = Arc::new(Mutex::new(vec![]));
-            (Self { events: events.clone() }, events)
-        }
-    }
-
-    impl LoomLogPort for TrackingLoomLogPort {
-        fn open(&self, _loom_id: &LoomId) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, event: LoomEvent) -> Result<(), PortError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-            _loom_id: &LoomId,
-        ) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(self.events.lock().unwrap().clone())
-        }
-    }
-
-    // ── Mock AgentRunner (tracks if execute was called) ──────────────
-
-    struct MockAgentRunner {
-        called: Arc<Mutex<bool>>,
-    }
-
-    impl MockAgentRunner {
-        fn new() -> (Self, Arc<Mutex<bool>>) {
-            let called = Arc::new(Mutex::new(false));
-            (
-                Self { called: called.clone() },
-                called,
-            )
-        }
-    }
-
-    impl AgentRunner for MockAgentRunner {
-        fn execute(
-            &self,
-            _ctx: ExecutionContext,
-        ) -> Result<AgentOutput, PortError> {
-            *self.called.lock().unwrap() = true;
-            Ok(AgentOutput {
-                stdout: "mock output".to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                metadata: None,
-            })
-        }
-    }
-
-    // ── Tracking TieOffSink ──────────────────────────────────────────
-
-    struct TrackingTieOffSink {
-        appends: Arc<Mutex<Vec<TieOff>>>,
-    }
-
-    impl TrackingTieOffSink {
-        fn new() -> (Self, Arc<Mutex<Vec<TieOff>>>) {
-            let appends = Arc::new(Mutex::new(vec![]));
-            (Self { appends: appends.clone() }, appends)
-        }
-    }
-
-    impl TieOffSink for TrackingTieOffSink {
-        fn write(&self, _tie_off: TieOff) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn append(&self, tie_off: TieOff) -> Result<(), PortError> {
-            self.appends.lock().unwrap().push(tie_off);
-            Ok(())
-        }
-
-        fn read_content(
-            &self,
-            _path: &TieOffPath,
-        ) -> Result<String, PortError> {
-            Ok(String::new())
-        }
-    }
-
-    // ── Mock RigLogPort ──────────────────────────────────────────────
-
-    struct MockRigLogPort;
-
-    impl RigLogPort for MockRigLogPort {
-        fn append(
-            &self,
-            _event: crate::domain::events::RigLogEvent,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        fn read_all(
-            &self,
-        ) -> Result<Vec<crate::domain::events::RigLogEvent>, PortError> {
-            Ok(vec![])
-        }
-    }
-
-    // ── Mock GitVersioningPort ───────────────────────────────────────
-
-    struct MockGitVersioningPort;
-
-    impl GitVersioningPort for MockGitVersioningPort {
-        fn commit(
-            &self,
-            _loom_id: &LoomId,
-            _knot_id: &KnotId,
-            _strand_path: &StrandPath,
-            _event_type: &str,
-            _tie_off_content: &str,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-    }
-
-    // ── Mock AgentProfileRepository ──────────────────────────────────
-
-    struct MockProfileRepository {
-        profiles: HashMap<String, AgentProfile>,
-    }
-
-    impl AgentProfileRepository for MockProfileRepository {
-        fn get(
-            &self,
-            name: &str,
-        ) -> Result<Option<AgentProfile>, PortError> {
-            Ok(self.profiles.get(name).cloned())
-        }
-
-        fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(self.profiles.values().cloned().collect())
-        }
-
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    fn default_profile() -> AgentProfile {
-        AgentProfile::new(
-            "fast".to_string(),
-            "openai".to_string(),
-            "gpt-4o".to_string(),
-            "You are fast.".to_string(),
-        )
-        .unwrap()
-    }
-
-    fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            strand_dir: PathBuf::from("strands"),
-            git_versioned: false,
-        }
-    }
-
-    fn build_loom(id: impl Into<String>, knots: Vec<Knot>) -> Loom {
-        Loom {
-            id: LoomId(id.into()),
-            knots,
-        }
+    /// Build a knot with git_versioned: false.
+    fn build_knot_no_git(id: impl Into<String>) -> Knot {
+        let mut knot = build_knot(id);
+        knot.git_versioned = false;
+        knot
     }
 
     #[allow(clippy::type_complexity)]
@@ -3558,36 +2621,35 @@ mod phase2_file_existence_tests {
         ProcessStrand,
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
-        Arc<Mutex<bool>>,
+        Arc<MockAgentRunner>,
     ) {
         let store = LoomStore::new();
         store.register(loom);
 
-        let (log_port, log_events) = TrackingLoomLogPort::new();
-        let (tie_off_sink, tie_off_appends) = TrackingTieOffSink::new();
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, _content) =
+            TrackingTieOffSink::new();
 
         let profile_repo = Arc::new(MockProfileRepository {
-            profiles: HashMap::from_iter([
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
                 ("fast".to_string(), default_profile()),
-            ]),
+            ]))),
         });
-
-        let called = agent_runner.called.clone();
 
         let use_case = ProcessStrand::new(
             store.clone(),
             Arc::new(log_port),
-            agent_runner as Arc<dyn AgentRunner>,
+            agent_runner.clone() as Arc<dyn AgentRunner>,
             Arc::new(tie_off_sink),
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
-            Arc::new(MockRigLogPort),
-            Arc::new(MockGitVersioningPort),
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
         );
 
-        (use_case, log_events, tie_off_appends, called)
+        (use_case, log_events, tie_off_appends, agent_runner)
     }
 
     // ── Tests ────────────────────────────────────────────────────────
@@ -3614,10 +2676,10 @@ mod phase2_file_existence_tests {
             "should be recognised as known temp file"
         );
 
-        let (runner, called) = MockAgentRunner::new();
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
-        let (use_case, log_events, tie_off_appends, _) =
-            build_process_strand(loom, Arc::new(runner));
+        let runner = Arc::new(MockAgentRunner::default());
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
+        let (use_case, log_events, tie_off_appends, captured) =
+            build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
@@ -3638,9 +2700,9 @@ mod phase2_file_existence_tests {
         );
 
         // Agent runner NOT called
-        let was_called = called.lock().unwrap();
+        let was_called = !captured.get_captured_contexts().is_empty();
         assert!(
-            !*was_called,
+            !was_called,
             "agent runner should NOT be called for known temp files"
         );
 
@@ -3660,10 +2722,10 @@ mod phase2_file_existence_tests {
         std::fs::write(&temp_path, "temp").unwrap();
         std::fs::remove_file(&temp_path).unwrap();
 
-        let (runner, called) = MockAgentRunner::new();
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
-        let (use_case, log_events, tie_off_appends, _) =
-            build_process_strand(loom, Arc::new(runner));
+        let runner = Arc::new(MockAgentRunner::default());
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
+        let (use_case, log_events, tie_off_appends, captured) =
+            build_process_strand(loom, runner);
 
         let event = StrandEvent::Modified {
             loom_id: LoomId("test-loom".to_string()),
@@ -3679,8 +2741,8 @@ mod phase2_file_existence_tests {
         assert!(events.is_empty());
 
         // Agent runner NOT called
-        let was_called = called.lock().unwrap();
-        assert!(!*was_called);
+        let was_called = !captured.get_captured_contexts().is_empty();
+        assert!(!was_called);
 
         // No tie-off written
         let appends = tie_off_appends.lock().unwrap();
@@ -3706,10 +2768,10 @@ mod phase2_file_existence_tests {
             "should not be a known temp file"
         );
 
-        let (runner, called) = MockAgentRunner::new();
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
-        let (use_case, log_events, tie_off_appends, _) =
-            build_process_strand(loom, Arc::new(runner));
+        let runner = Arc::new(MockAgentRunner::default());
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
+        let (use_case, log_events, tie_off_appends, captured) =
+            build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
@@ -3743,9 +2805,9 @@ mod phase2_file_existence_tests {
         }
 
         // Agent runner NOT called
-        let was_called = called.lock().unwrap();
+        let was_called = !captured.get_captured_contexts().is_empty();
         assert!(
-            !*was_called,
+            !was_called,
             "agent runner should NOT be called for missing files"
         );
 
@@ -3767,10 +2829,10 @@ mod phase2_file_existence_tests {
         std::fs::write(&file_path, "real content").unwrap();
         assert!(file_path.exists());
 
-        let (runner, called) = MockAgentRunner::new();
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
-        let (use_case, log_events, tie_off_appends, _) =
-            build_process_strand(loom, Arc::new(runner));
+        let runner = Arc::new(MockAgentRunner::default());
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
+        let (use_case, log_events, tie_off_appends, captured) =
+            build_process_strand(loom, runner);
 
         let event = StrandEvent::Created {
             loom_id: LoomId("test-loom".to_string()),
@@ -3797,9 +2859,9 @@ mod phase2_file_existence_tests {
         }
 
         // Agent runner IS called
-        let was_called = called.lock().unwrap();
+        let was_called = !captured.get_captured_contexts().is_empty();
         assert!(
-            *was_called,
+            was_called,
             "agent runner should be called for existing files"
         );
 
@@ -3818,10 +2880,10 @@ mod phase2_file_existence_tests {
         // Don't create the file — it's deleted
         assert!(!deleted_path.exists());
 
-        let (runner, called) = MockAgentRunner::new();
-        let loom = build_loom("test-loom", vec![build_knot("k1")]);
-        let (use_case, log_events, tie_off_appends, _) =
-            build_process_strand(loom, Arc::new(runner));
+        let runner = Arc::new(MockAgentRunner::default());
+        let loom = build_loom("test-loom", vec![build_knot_no_git("k1")]);
+        let (use_case, log_events, tie_off_appends, captured) =
+            build_process_strand(loom, runner);
 
         let event = StrandEvent::Deleted {
             loom_id: LoomId("test-loom".to_string()),
@@ -3849,9 +2911,9 @@ mod phase2_file_existence_tests {
 
         // Agent runner IS called (deleted events invoke the agent
         // with deletion notice in prompt)
-        let was_called = called.lock().unwrap();
+        let was_called = !captured.get_captured_contexts().is_empty();
         assert!(
-            *was_called,
+            was_called,
             "agent runner should be called for deleted events"
         );
 
