@@ -14,7 +14,8 @@ use crate::application::ports::{
     LoomRepository, PortError, RigLogPort, TieOffSink,
 };
 use crate::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
+    Knot, KnotId, Loom, LoomId, StrandFileChecker, StrandPath, TieOff,
+    TieOffPath,
 };
 use crate::domain::events::{LoomEvent, RigLogEvent};
 use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
@@ -483,6 +484,65 @@ impl GitVersioningPort for MockGitVersioningPort {
             return Err(err.clone());
         }
         Ok(())
+    }
+}
+
+// ── Mock StrandFileChecker ─────────────────────────────────────────────
+
+/// A configurable mock [`StrandFileChecker`] for use case tests.
+///
+/// By default all existing files are treated as text. Tests can configure
+/// specific paths to return `false` (binary) or `Err` (read error).
+pub struct MockStrandFileChecker {
+    /// Paths that should return `false` (binary).
+    binary_paths: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
+    /// Paths that should return an error.
+    error_paths: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
+}
+
+impl MockStrandFileChecker {
+    pub fn new() -> Self {
+        Self {
+            binary_paths: Arc::new(RwLock::new(
+                std::collections::HashSet::new(),
+            )),
+            error_paths: Arc::new(RwLock::new(
+                std::collections::HashSet::new(),
+            )),
+        }
+    }
+
+    pub fn mark_binary(&self, path: &Path) {
+        self.binary_paths.write().unwrap().insert(path.to_path_buf());
+    }
+
+    pub fn mark_error(&self, path: &Path) {
+        self.error_paths.write().unwrap().insert(path.to_path_buf());
+    }
+}
+
+impl StrandFileChecker for MockStrandFileChecker {
+    fn is_text_file(
+        &self,
+        path: &Path,
+    ) -> Result<bool, std::io::Error> {
+        if self.error_paths.read().unwrap().contains(path) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
+            ));
+        }
+        if self.binary_paths.read().unwrap().contains(path) {
+            return Ok(false);
+        }
+        // Default: treat as text
+        Ok(true)
+    }
+}
+
+impl Default for MockStrandFileChecker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -175,6 +175,91 @@ pub struct RigStateProfile {
     pub timeout: Option<u64>,
 }
 
+// ── Strand File Check Results ────────────────────────────────────────────
+
+/// Result of checking whether a strand file should be processed.
+///
+/// Encapsulates the domain rule: what counts as a valid strand file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StrandCheckResult {
+    /// File is valid text — proceed with normal processing.
+    Proceed,
+    /// File exists but cannot be confirmed as text (e.g. permission error).
+    /// Proceed with a warning logged.
+    ProceedWithWarning,
+    /// File is binary — skip, log `StrandIgnored`.
+    SkipBinary,
+    /// File is a known temp file (e.g. sedXXXXXXX) — skip silently.
+    SkipTemp,
+    /// File is missing and not a known temp pattern — skip, log `StrandSkipped`.
+    SkipMissing,
+}
+
+/// Error from strand file check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrandCheckError {
+    /// Human-readable description of the read failure.
+    pub message: String,
+}
+
+impl std::fmt::Display for StrandCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "strand check failed: {}", self.message)
+    }
+}
+
+impl std::error::Error for StrandCheckError {}
+
+/// Trait for checking whether a file is text.
+///
+/// Abstracts the content inspection so the domain layer is not coupled
+/// to the `content_inspector` adapter.
+pub trait StrandFileChecker: Send + Sync {
+    /// Returns `Ok(true)` if the file contains text, `Ok(false)` if binary.
+    /// Returns `Err` if the file cannot be read.
+    fn is_text_file(&self, path: &std::path::Path) -> Result<bool, std::io::Error>;
+}
+
+impl StrandPath {
+    /// Determine whether this strand file should be processed.
+    ///
+    /// For **Deleted** events the check is skipped (file is gone) — always
+    /// returns `Proceed`. For **Created**/**Modified** events the file is
+    /// inspected: binary files are `SkipBinary`, known temp files are
+    /// `SkipTemp`, missing unknown files are `SkipMissing`, and text files
+    /// are `Proceed` (or `ProceedWithWarning` on read errors).
+    pub fn should_process(
+        &self,
+        is_deleted: bool,
+        checker: &dyn StrandFileChecker,
+    ) -> Result<StrandCheckResult, StrandCheckError> {
+        if is_deleted {
+            return Ok(StrandCheckResult::Proceed);
+        }
+
+        // File doesn't exist — check for known temp file pattern
+        if !self.0.exists() {
+            return if crate::domain::temp_file::is_known_temp_file(&self.0) {
+                Ok(StrandCheckResult::SkipTemp)
+            } else {
+                Ok(StrandCheckResult::SkipMissing)
+            };
+        }
+
+        // File exists — check if text
+        match checker.is_text_file(&self.0) {
+            Ok(true) => Ok(StrandCheckResult::Proceed),
+            Ok(false) => Ok(StrandCheckResult::SkipBinary),
+            Err(e) => {
+                // File exists but can't be read (permission error etc).
+                // Log warning but proceed — better to attempt processing
+                // than silently skip.
+                Ok(StrandCheckResult::ProceedWithWarning)
+            }
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -607,5 +692,139 @@ mod tests {
         assert_eq!(deserialized.looms[0].knots.len(), 2);
         assert_eq!(deserialized.looms[1].knots.len(), 0);
         assert_eq!(deserialized.profiles.len(), 2);
+    }
+
+    // ── StrandCheckResult / StrandPath::should_process Tests ──────
+
+    /// In-memory file checker for domain tests.
+    struct TestFileChecker {
+        /// Paths that exist.
+        existing: std::collections::HashSet<std::path::PathBuf>,
+        /// Paths that are text (must also be in existing).
+        is_text: std::collections::HashSet<std::path::PathBuf>,
+        /// Paths that should return an error on read.
+        error_on_read: std::collections::HashSet<std::path::PathBuf>,
+    }
+
+    impl TestFileChecker {
+        fn new() -> Self {
+            Self {
+                existing: std::collections::HashSet::new(),
+                is_text: std::collections::HashSet::new(),
+                error_on_read: std::collections::HashSet::new(),
+            }
+        }
+
+        fn text_file(mut self, path: &std::path::Path) -> Self {
+            self.existing.insert(path.to_path_buf());
+            self.is_text.insert(path.to_path_buf());
+            self
+        }
+
+        fn binary_file(mut self, path: &std::path::Path) -> Self {
+            self.existing.insert(path.to_path_buf());
+            self
+        }
+
+        fn error_file(mut self, path: &std::path::Path) -> Self {
+            self.existing.insert(path.to_path_buf());
+            self.error_on_read.insert(path.to_path_buf());
+            self
+        }
+    }
+
+    impl StrandFileChecker for TestFileChecker {
+        fn is_text_file(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<bool, std::io::Error> {
+            if self.error_on_read.contains(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                ));
+            }
+            Ok(self.is_text.contains(path))
+        }
+    }
+
+    #[test]
+    fn strand_check_deleted_always_proceeds() {
+        let path =
+            StrandPath(std::path::PathBuf::from("/nonexistent/file.md"));
+        let checker = TestFileChecker::new();
+        let result = path.should_process(true, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::Proceed);
+    }
+
+    #[test]
+    fn strand_check_text_file_proceeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("hello.md");
+        std::fs::write(&file_path, "hello").unwrap();
+        let path = StrandPath(file_path);
+        let checker = TestFileChecker::new().text_file(&path.0);
+        let result = path.should_process(false, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::Proceed);
+    }
+
+    #[test]
+    fn strand_check_binary_file_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("image.png");
+        std::fs::write(&file_path, vec![0x00, 0x01, 0x02]).unwrap();
+        let path = StrandPath(file_path);
+        let checker = TestFileChecker::new().binary_file(&path.0);
+        let result = path.should_process(false, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::SkipBinary);
+    }
+
+    #[test]
+    fn strand_check_temp_file_skips_silently() {
+        // sedXXXXXXX pattern — path doesn't need to exist
+        let path =
+            StrandPath(std::path::PathBuf::from("/project/sedXXXXXXX"));
+        let checker = TestFileChecker::new();
+        let result = path.should_process(false, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::SkipTemp);
+    }
+
+    #[test]
+    fn strand_check_missing_unknown_file_skips() {
+        let path =
+            StrandPath(std::path::PathBuf::from("/nonexistent/gone.md"));
+        let checker = TestFileChecker::new();
+        let result = path.should_process(false, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::SkipMissing);
+    }
+
+    #[test]
+    fn strand_check_read_error_proceeds_with_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("locked.md");
+        std::fs::write(&file_path, "content").unwrap();
+        let path = StrandPath(file_path);
+        let checker = TestFileChecker::new().error_file(&path.0);
+        let result = path.should_process(false, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::ProceedWithWarning);
+    }
+
+    #[test]
+    fn strand_check_deleted_skips_file_checks() {
+        // Even for a path that would be "temp" or "missing",
+        // Deleted events always Proceed.
+        let path =
+            StrandPath(std::path::PathBuf::from("/project/sedXXXXXXX"));
+        let checker = TestFileChecker::new();
+        let result = path.should_process(true, &checker).unwrap();
+        assert_eq!(result, StrandCheckResult::Proceed);
+    }
+
+    #[test]
+    fn strand_check_error_display() {
+        let err = StrandCheckError {
+            message: "read failed".to_string(),
+        };
+        assert_eq!(err.to_string(), "strand check failed: read failed");
     }
 }

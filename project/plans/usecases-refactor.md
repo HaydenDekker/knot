@@ -197,37 +197,34 @@ No new tests needed — this is a structural refactor. All existing tests must c
 - [x] `cargo test` — all 436 tests pass (1 flaky `runner_passes_name_flag_through_cli_args` due to E26 "Text file busy", passes on retry)
 - [x] `cargo clippy` — no new warnings (34 pre-existing)
 
-### Phase 6: Extract `StrandFilePolicy` into domain layer
+### Phase 6: Extract `StrandFilePolicy` into domain layer ✅ DONE
 
 **Problem:** `ProcessStrand::execute()` contains ~80 lines of text-check/temp-file/missing-file logic that decides whether a strand should be processed. This is a **domain rule** (what counts as a valid strand file) embedded in application orchestration. It calls `content_inspector::is_text_file()` (adapter) and `temp_file::is_known_temp_file()` (domain), mixing concerns.
 
 **Target:** Move the strand validity decision into `StrandPath.should_process()` as a domain method that returns `Result<StrandCheckResult, StrandCheckError>` where the result is an enum: `Proceed`, `SkipBinary`, `SkipTemp`, `SkipMissing`.
 
 **Changes:**
-- [ ] Add `StrandCheckResult` enum and `StrandCheckError` to `src/domain/entities.rs` (on `StrandPath`)
+- [x] Added `StrandCheckResult` enum and `StrandCheckError` to `src/domain/entities.rs` (on `StrandPath`)
   - `StrandCheckResult::{Proceed, SkipBinary, SkipTemp, SkipMissing, ProceedWithWarning}`
-  - `StrandCheckError::ReadFailed(String)`
-- [ ] Move the text-check logic from `ProcessStrand::execute()` into `impl StrandPath`:
-  - Calls `content_inspector::is_text_file()` via a **port trait** `StrandFileChecker` (new, not adapter-coupled)
+  - `StrandCheckError { message: String }`
+- [x] Added `StrandPath::should_process(is_deleted, &dyn StrandFileChecker)` domain method:
+  - Calls `StrandFileChecker::is_text_file()` via port trait (not adapter-coupled)
   - Calls `temp_file::is_known_temp_file()` (already in domain)
   - Returns structured result instead of side-effecting logs
-- [ ] Define `StrandFileChecker` port trait in `src/application/ports.rs`:
+- [x] Defined `StrandFileChecker` trait in `src/domain/entities.rs` (domain-level port trait with `Send + Sync`):
   - `fn is_text_file(&self, path: &Path) -> Result<bool, std::io::Error>`
-- [ ] In `ProcessStrand::execute()`: replace the 80-line text-check block with:
-  ```rust
-  let check = strand_path.should_process(&file_checker)?;
-  match check {
-      StrandCheckResult::Proceed | StrandCheckResult::ProceedWithWarning => {}
-      StrandCheckResult::SkipBinary => { log StrandIgnored; return Ok(()); }
-      StrandCheckResult::SkipTemp => { log event; return Ok(()); }
-      StrandCheckResult::SkipMissing => { log StrandSkipped; return Ok(()); }
-  }
-  ```
-- [ ] Create `src/adapters/outbound/strand_file_checker.rs` implementing `StrandFileChecker` using current `content_inspector`
-- [ ] Move related tests from `process_strand.rs` (`phase2_text_check_tests`, `phase2_file_existence_tests`) to `src/domain/entities.rs` tests (pure domain tests — no port mocks needed for the rule logic)
-- [ ] **Verify:** `cargo test` — all tests pass. Domain tests cover all `StrandCheckResult` variants.
+- [x] In `ProcessStrand::execute()`: replaced the 80-line text-check block with `strand_path.should_process()` + match on `StrandCheckResult`
+- [x] Added `file_checker: Arc<dyn StrandFileChecker>` field to `ProcessStrand` struct
+- [x] Added `PortError::StrandCheckFailed(String)` variant
+- [x] Created `src/adapters/outbound/strand_file_checker.rs` — `ContentInspectorChecker` adapter implementing `StrandFileChecker`
+- [x] Added `MockStrandFileChecker` to `test_fixtures.rs` (configurable for text/binary/error paths)
+- [x] Added 7 domain tests in `entities.rs` covering all `StrandCheckResult` variants
+- [x] Updated `server.rs` to wire `ContentInspectorChecker` into `ProcessStrand`
+- [x] `phase2_text_check_tests` uses real `ContentInspectorChecker` for pipeline validation
+- [x] **Verify:** `cargo test` — all 448 tests pass (lib + integration). Domain tests cover all `StrandCheckResult` variants.
+- [x] **Verify:** `cargo clippy` — no new warnings
 
-**Test Gaps:** Domain tests need fixtures for binary files, temp files, and missing files. These are small (tempdir + write) and don't require port mocks.
+**Note:** The `StrandFileChecker` trait was placed in `src/domain/entities.rs` (not `ports.rs`) because the domain method `StrandPath::should_process()` calls it directly. Keeping it in the domain layer avoids a circular dependency (application/ports → domain → application/ports).
 
 ### Phase 7: Extract `Knot::deleted_prompt()` into domain layer
 

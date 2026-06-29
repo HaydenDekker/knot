@@ -11,7 +11,8 @@ use crate::application::ports::{
 use crate::application::session_resume;
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffPath,
+    Knot, KnotId, Loom, LoomId, StrandCheckResult, StrandFileChecker,
+    StrandPath, TieOff, TieOffPath,
 };
 use crate::domain::events::{LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
@@ -46,6 +47,8 @@ pub struct ProcessStrand {
     rig_log: Arc<dyn RigLogPort>,
     /// Git versioning port for creating commits after successful runs.
     git_versioning_port: Arc<dyn GitVersioningPort>,
+    /// Strand file checker for text/binary/temp detection.
+    file_checker: Arc<dyn StrandFileChecker>,
 }
 
 impl ProcessStrand {
@@ -60,6 +63,7 @@ impl ProcessStrand {
         profile_repo: Arc<dyn AgentProfileRepository>,
         rig_log: Arc<dyn RigLogPort>,
         git_versioning_port: Arc<dyn GitVersioningPort>,
+        file_checker: Arc<dyn StrandFileChecker>,
     ) -> Self {
         Self {
             store,
@@ -71,6 +75,7 @@ impl ProcessStrand {
             profile_repo,
             rig_log,
             git_versioning_port,
+            file_checker,
         }
     }
 
@@ -158,86 +163,70 @@ impl ProcessStrand {
         // Determine tie-off path (statically derived from loom + knot)
         let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
-        // Text check: skip binary files for Created/Modified events.
-        // Deleted events skip the check (file is gone).
-        // When text check errors, we check if the file is simply missing
-        // (temp file race) before deciding to proceed or skip.
-        let _text_check_confirmed = matches!(
-            event,
-            StrandEvent::Created { .. } | StrandEvent::Modified { .. }
-        ) && {
-            match crate::adapters::outbound::content_inspector::is_text_file(
-                &strand_path.0,
-            ) {
-                Ok(true) => true,
-                Ok(false) => {
-                    eprintln!(
-                        "WARN: strand '{}' is a binary file, skipping \
-                         processing (knot={})",
-                        strand_path.0.display(),
-                        knot_id.0,
-                    );
-                    self.log_port.append(LoomEvent::StrandIgnored {
-                        loom_id: loom_id.clone(),
-                        knot_id: knot_id.clone(),
-                        strand_path: strand_path.clone(),
-                        reason: "binary file".to_string(),
-                        timestamp: format_timestamp(),
-                    })?;
-                    return Ok(());
-                }
-                Err(_e) => {
-                    // Cannot read file — check if it's simply missing
-                    // (temp file race with sed -i or similar).
-                    if !strand_path.0.exists() {
-                        if crate::domain::temp_file::is_known_temp_file(
-                            &strand_path.0,
-                        ) {
-                            // Known temp file pattern (e.g. sedXXXXXXX)
-                            // — skip silently. No loom-log entry,
-                            // no agent invocation.
-                            logging::log_strand_event(
-                                &format!(
-                                    "{} skipped known temp file (knot={})",
-                                    strand_kind, knot_id.0,
-                                ),
-                                &strand_path.0,
-                            );
-                            return Ok(());
-                        }
+        // Strand file check: skip binary/temp/missing files.
+        // Domain rule lives in StrandPath::should_process().
+        let is_deleted = matches!(event, StrandEvent::Deleted { .. });
+        let check = strand_path
+            .should_process(is_deleted, &*self.file_checker)
+            .map_err(|e| PortError::StrandCheckFailed(e.message))?;
 
-                        // Unknown missing file — log StrandSkipped so
-                        // the user can investigate if it's a real issue.
-                        eprintln!(
-                            "WARN: strand '{}' not found on disk (unknown \
-                             pattern), skipping processing (knot={})",
-                            strand_path.0.display(),
-                            knot_id.0,
-                        );
-                        self.log_port.append(LoomEvent::StrandSkipped {
-                            loom_id: loom_id.clone(),
-                            knot_id: knot_id.clone(),
-                            strand_path: strand_path.clone(),
-                            reason: "missing file (unknown pattern)"
-                                .to_string(),
-                            timestamp: format_timestamp(),
-                        })?;
-                        return Ok(());
-                    }
-
-                    // File exists but can't be read (permission error etc).
-                    // Log warning but proceed — better to attempt processing
-                    // than silently skip.
+        match check {
+            StrandCheckResult::Proceed | StrandCheckResult::ProceedWithWarning => {
+                if matches!(check, StrandCheckResult::ProceedWithWarning) {
                     eprintln!(
                         "WARN: cannot determine if strand '{}' is text, \
                          proceeding with processing (knot={})",
                         strand_path.0.display(),
                         knot_id.0,
                     );
-                    false
                 }
             }
-        };
+            StrandCheckResult::SkipBinary => {
+                eprintln!(
+                    "WARN: strand '{}' is a binary file, skipping \
+                     processing (knot={})",
+                    strand_path.0.display(),
+                    knot_id.0,
+                );
+                self.log_port.append(LoomEvent::StrandIgnored {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    reason: "binary file".to_string(),
+                    timestamp: format_timestamp(),
+                })?;
+                return Ok(());
+            }
+            StrandCheckResult::SkipTemp => {
+                // Known temp file pattern (e.g. sedXXXXXXX)
+                // — skip silently. No loom-log entry, no agent invocation.
+                logging::log_strand_event(
+                    &format!(
+                        "{} skipped known temp file (knot={})",
+                        strand_kind, knot_id.0,
+                    ),
+                    &strand_path.0,
+                );
+                return Ok(());
+            }
+            StrandCheckResult::SkipMissing => {
+                eprintln!(
+                    "WARN: strand '{}' not found on disk (unknown \
+                     pattern), skipping processing (knot={})",
+                    strand_path.0.display(),
+                    knot_id.0,
+                );
+                self.log_port.append(LoomEvent::StrandSkipped {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    reason: "missing file (unknown pattern)"
+                        .to_string(),
+                    timestamp: format_timestamp(),
+                })?;
+                return Ok(());
+            }
+        }
 
         // 1. Append KnotProcessing to loom-log
         self.log_port.append(LoomEvent::KnotProcessing {
@@ -554,7 +543,8 @@ mod phase3_tests {
 
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
+        build_knot, build_loom, MockLoomLogPort, MockStrandFileChecker,
+        TrackingEventSource,
     };
 
 }
@@ -572,7 +562,8 @@ mod phase4_tests {
 
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
+        build_knot, build_loom, MockLoomLogPort, MockStrandFileChecker,
+        TrackingEventSource,
     };
 
     // ── Mock LoomRepository (simplified for DiscoverLooms tests) ──────
@@ -622,7 +613,8 @@ mod phase3_profile_resolution_tests {
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
         build_loom, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockTieOffSink,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        MockTieOffSink,
     };
 
     // ── Mock AgentRunner (simplified, no context capture) ──────────────
@@ -697,6 +689,7 @@ mod phase3_profile_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
@@ -733,6 +726,7 @@ mod phase3_profile_resolution_tests {
             profile_repo,
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let profile_knot = build_profile_knot("k1", "nonexistent");
@@ -779,6 +773,7 @@ mod phase3_profile_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let knot1 = build_profile_knot("k1", "detailed");
@@ -819,6 +814,7 @@ mod phase3_profile_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         // Profile doesn't exist yet — should error
@@ -883,6 +879,7 @@ mod phase3_profile_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
@@ -919,7 +916,7 @@ mod phase6_timeout_tests {
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
         build_loom, MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
     };
 
     // ── Mock TieOffSink (tracks appends — different from shared) ──────
@@ -1040,6 +1037,7 @@ mod phase6_timeout_tests {
             profile_repo,
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         (
@@ -1726,7 +1724,8 @@ mod phase7_timeout_resolution_tests {
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
         MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockTieOffSink,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        MockTieOffSink,
     };
 
     // ── Tracking AgentRunner (captures ExecutionContext via returned Arc) ─
@@ -1856,6 +1855,7 @@ mod phase7_timeout_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let knot = build_knot("k1", "slow");
@@ -1896,6 +1896,7 @@ mod phase7_timeout_resolution_tests {
             profile_repo.clone(),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let knot = build_knot("k1", "fast");
@@ -1947,6 +1948,7 @@ mod phase7_timeout_resolution_tests {
             profile_repo,
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Created {
@@ -2008,6 +2010,7 @@ mod phase7_timeout_resolution_tests {
             profile_repo,
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Created {
@@ -2042,6 +2045,9 @@ mod phase8_git_versioning_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::MockStrandFileChecker;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -2258,6 +2264,7 @@ mod phase8_git_versioning_tests {
             profile_repo,
             Arc::new(MockRigLogPort),
             git_port,
+            Arc::new(MockStrandFileChecker::new()),
         )
     }
 
@@ -2378,6 +2385,9 @@ mod phase9_session_title_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::MockStrandFileChecker;
 
     // ── Mock LoomLogPort ─────────────────────────────────────────────
 
@@ -2632,6 +2642,7 @@ mod phase9_session_title_tests {
             profile_repo,
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Modified {
@@ -2688,6 +2699,7 @@ mod phase9_session_title_tests {
             profile_repo,
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Created {
@@ -2732,6 +2744,7 @@ mod phase9_session_title_tests {
             profile_repo,
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Deleted {
@@ -2783,6 +2796,7 @@ mod phase9_session_title_tests {
             profile_repo,
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         // Process first strand
@@ -2862,6 +2876,7 @@ mod phase9_session_title_tests {
             profile_repo,
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         let event = StrandEvent::Modified {
@@ -2905,6 +2920,9 @@ mod phase2_text_check_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::MockStrandFileChecker;
 
     // ── Tracking LoomLogPort ─────────────────────────────────────────
 
@@ -3103,6 +3121,9 @@ mod phase2_text_check_tests {
             profile_repo,
             Arc::new(MockRigLogPort),
             Arc::new(MockGitVersioningPort),
+            Arc::new(
+                crate::adapters::outbound::ContentInspectorChecker,
+            ),
         );
 
         (use_case, log_events, tie_off_appends)
@@ -3376,6 +3397,9 @@ mod phase2_file_existence_tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
+    #[allow(unused_imports)]
+    use super::super::test_fixtures::MockStrandFileChecker;
+
     // ── Tracking LoomLogPort ─────────────────────────────────────────
 
     struct TrackingLoomLogPort {
@@ -3590,6 +3614,7 @@ mod phase2_file_existence_tests {
             profile_repo,
             Arc::new(MockRigLogPort),
             Arc::new(MockGitVersioningPort),
+            Arc::new(MockStrandFileChecker::new()),
         );
 
         (use_case, log_events, tie_off_appends, called)

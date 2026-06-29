@@ -316,6 +316,9 @@ pub fn start_event_pipeline(
             profile_repo,
             rig_log_port.clone(),
             git_versioning_port,
+            Arc::new(
+                crate::adapters::outbound::ContentInspectorChecker,
+            ),
         );
 
         // Process strand events with queue idle detection.

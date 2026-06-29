@@ -64,6 +64,8 @@ pub enum PortError {
     GitCommitFailed(String),
     /// Failed to write the state file.
     StateWriteFailed(String),
+    /// Failed to check strand file validity.
+    StrandCheckFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -128,6 +130,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::StateWriteFailed(msg) => {
                 write!(f, "state write failed: {msg}")
+            }
+            PortError::StrandCheckFailed(msg) => {
+                write!(f, "strand check failed: {msg}")
             }
         }
     }
