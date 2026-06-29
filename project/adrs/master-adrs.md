@@ -1,11 +1,12 @@
 # Master ADR — Decision Index
 
-> **Last Updated:** 2026-06-27
+> **Last Updated:** 2026-06-29
 
 ## ADR Index
 
 | # | ADR | Status | Date |
 |---|-----|--------|------|
+| 10 | [ADR-010: Domain Rule Extraction](adr-010-domain-rule-extraction.md) | Accepted | 2026-06-29 |
 | 9 | [ADR-009: Agent-Specific Adapters](adr-009-agent-specific-adapters.md) | Accepted | 2026-06-27 |
 | 8 | [ADR-008: Full File-First State](adr-008-full-file-first-state.md) | Accepted | 2026-06-19 |
 | 7 | [ADR-007: Stdin-Only Agent Invocation](adr-007-stdin-only-agent-invocation.md) | Accepted | 2026-06-16 |
@@ -17,6 +18,14 @@
 | 1 | [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) | Accepted | 2026-06-07 |
 
 ## ADR Summaries
+
+### 10. Domain Rule Extraction
+
+**Status:** Accepted
+**Date:** 2026-06-29
+**Summary:** Business rules about entities (strand validity, outcome derivation, prompt composition) live on domain entities, not in application use cases. Port traits called from domain methods live in the domain layer.
+
+Full details in [adr-010-domain-rule-extraction.md](adr-010-domain-rule-extraction.md).
 
 ### 9. Agent-Specific Adapters
 
