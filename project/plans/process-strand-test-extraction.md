@@ -24,7 +24,14 @@ After this refactor:
 - Duplicate local definitions are removed in favour of fixture imports
 - Tests remain inline in `process_strand.rs` following Rust convention — unit tests stay with the code they test
 
-## Implementation Status: ✅ Complete
+## Implementation Status: ✅ Complete (2026-06-29)
+
+## Notes
+- Phase 2 required an additional step (Phase 4) to split `execution_tests` into focused sub-modules
+- Full test suite passes (461 tests, 0 failures)
+- 38 process_strand tests pass with `--test-threads=1` — no ordering dependencies
+- No version bump needed — pure structural refactor, zero behaviour change
+- Net change: −669 lines (3,862 → 3,193)
 
 ### Phase 0: Baseline Verification (Done 2026-06-29)
 - **File:** `process_strand.rs` — 3,862 lines
@@ -104,3 +111,5 @@ None — this is a pure structural refactor. All existing tests are preserved an
 - This is a pure structural refactor — no behaviour change, no API change, no version bump needed
 - Tests remain inline in `process_strand.rs` following Rust convention (unit tests stay with the code they test)
 - The existing `usecases-refactor.md` (#48) plan split `usecases.rs` into isolated modules. This plan cleans up the test hygiene within the largest resulting module.
+- Full test suite passes (461 tests, 0 failures), clippy clean, `--test-threads=1` verified
+- Net change: −669 lines (3,862 → 3,193), 7 test modules renamed, shared fixtures consolidated

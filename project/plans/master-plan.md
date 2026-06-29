@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ⬜ Draft | 2026-06-29 |
+| 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ✅ Complete | 2026-06-29 |
 | 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ⬜ Planned | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
@@ -101,9 +101,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 49. Split `process_strand.rs` Tests into Isolated Module
 
-**Status:** ⬜ Draft
+**Status:** ✅ Complete
 **Created:** 2026-06-29
-**Goal:** Extract ~3,358 lines of inline tests from `process_strand.rs` (3,862 lines total) into an organised `process_strand/tests/` subdirectory, consolidate duplicated mocks/helpers into `test_fixtures.rs`, and leave only ~500 lines of production code in the main module. Pure structural refactor — zero behaviour change.
+**Completed:** 2026-06-29
+**Goal:** Consolidate ~3,358 lines of inline tests from `process_strand.rs` (3,862 lines total) — remove dead-code stubs, rename phase-numbered modules by concern, consolidate duplicated mocks/helpers into `test_fixtures.rs`, and split execution tests into focused sub-modules. Pure structural refactor — zero behaviour change.
+
+**Result:** 7 test modules renamed to describe what they test. 2 empty dead-code stubs removed. Shared helpers (`TrackingTieOffSink`, `TrackingAgentRunner`, `build_knot_with_profile`, `default_profile`) consolidated into `test_fixtures.rs`. Duplicate local mock definitions eliminated. `execution_tests` split into `execution_tests`, `execution_deleted_tests`, and `session_resume_tests`. Net change: −669 lines (3,862 → 3,193). 461 unit tests pass, 38 process_strand tests pass with `--test-threads=1`. No version bump — pure structural refactor.
 
 Full details in [process-strand-test-extraction.md](process-strand-test-extraction.md).
 
