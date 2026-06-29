@@ -157,29 +157,33 @@ No new tests needed — this is a structural refactor. All existing tests must c
 - [x] Create `usecases/loom/unregister.rs` — move `UnregisterLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
 - [x] Create `usecases/loom/reload.rs` — move `ReloadConfig` + tests. Depends on `DiscoverLooms` (import from sibling). Re-export. Remove from `usecases.rs`. → **`cargo test`**
 
-### Phase 3: Extract `query/` module (ListLooms, GetLoom, GetLoomActivity, GetKnotStatus)
+### Phase 3: Extract `query/` module (ListLooms, GetLoom, GetLoomActivity, GetKnotStatus) ✅ DONE
 
 **Goal:** Move read-only query use cases into `usecases/query/` subdirectory. Each extracted individually (create file → remove from usecases.rs → re-export → test).
 
-- [ ] Create `usecases/query/mod.rs` (empty skeleton). Re-export in `usecases/mod.rs`.
-- [ ] Create `usecases/query/list_looms.rs` — move `ListLooms` + tests. Re-export in `query/mod.rs` and `usecases/mod.rs`. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/query/get_loom.rs` — move `GetLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/query/get_activity.rs` — move `GetLoomActivity` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/query/get_knot_status.rs` — move `GetKnotStatus` + tests. (`KnotStatus` already in `types.rs` from Phase 0). Re-export. Remove from `usecases.rs`. → **`cargo test`**
+- [x] Create `usecases/query/mod.rs` (skeleton). Re-export in `usecases/mod.rs`.
+- [x] Create `usecases/query/list_looms.rs` — move `ListLooms`. Re-export in `query/mod.rs` and `usecases/mod.rs`. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/query/get_loom.rs` — move `GetLoom`. Re-export. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/query/get_activity.rs` — move `GetLoomActivity`. Re-export. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/query/get_knot_status.rs` — move `GetKnotStatus`. (`KnotStatus` already in `types.rs` from Phase 0). Re-export. Remove from `all.rs`. → **`cargo test`**
 
-### Phase 4: Extract standalone use cases
+**Note:** These query use cases have no dedicated unit test modules — they are simple read-through operations tested via the HTTP/integration layer.
+
+### Phase 4: Extract standalone use cases ✅ DONE
 
 **Goal:** Move remaining use cases into flat files under `usecases/`. Each file owns its use case + all related tests. Each extracted individually (create file → remove from usecases.rs → re-export → test).
 
-- [ ] Create `usecases/manage_knot.rs` — move `ManageKnot`, `KnotAction` + `manage_knot_tests`. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/write_state.rs` — move `WriteState` + `write_state_tests`. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/config_event_handler.rs` — move `ConfigEventHandler` + `config_handler_tests`. Update `ensure_strand_dir_and_watch` calls to use `super::loom::ensure_strand_dir_and_watch` (from Phase 2). Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/process_strand.rs` — move `ProcessStrand` + all its test modules:
+- [x] Create `usecases/manage_knot.rs` — move `ManageKnot`, `KnotAction` + `manage_knot_tests`. Re-export. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/write_state.rs` — move `WriteState` + `write_state_tests`. Re-export. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/config_event_handler.rs` — move `ConfigEventHandler` + `config_handler_tests` + `phase2_tests`. Uses `super::loom::ensure_strand_dir_and_watch` (from Phase 2). Re-export. Remove from `all.rs`. → **`cargo test`**
+- [x] Create `usecases/process_strand.rs` — move `ProcessStrand` + all its test modules:
   - `phase3_tests`, `phase4_tests`, `phase3_profile_resolution_tests`
   - `phase6_timeout_tests`, `phase7_timeout_resolution_tests`
   - `phase8_git_versioning_tests`, `phase9_session_title_tests`
   - `phase2_text_check_tests`, `phase2_file_existence_tests`
-  - Re-export. Remove from `usecases.rs`. → **`cargo test`**
+  - Re-export. Remove from `all.rs`. → **`cargo test`**
+
+**Verification:** `cargo build` (clean, only pre-existing warnings), `cargo test --lib` (436 tests pass), `cargo clippy` (no new warnings)
 
 ### Phase 5: Remove old `usecases.rs`, finalise `mod.rs`, verify server wiring
 
@@ -198,6 +202,148 @@ No new tests needed — this is a structural refactor. All existing tests must c
 - [ ] Run `cargo build` — compilation succeeds
 - [ ] Run `cargo test` — all 87+ tests pass
 - [ ] Run `cargo clippy` — no new warnings
+
+### Phase 6: Extract `StrandFilePolicy` into domain layer
+
+**Problem:** `ProcessStrand::execute()` contains ~80 lines of text-check/temp-file/missing-file logic that decides whether a strand should be processed. This is a **domain rule** (what counts as a valid strand file) embedded in application orchestration. It calls `content_inspector::is_text_file()` (adapter) and `temp_file::is_known_temp_file()` (domain), mixing concerns.
+
+**Target:** Move the strand validity decision into `StrandPath.should_process()` as a domain method that returns `Result<StrandCheckResult, StrandCheckError>` where the result is an enum: `Proceed`, `SkipBinary`, `SkipTemp`, `SkipMissing`.
+
+**Changes:**
+- [ ] Add `StrandCheckResult` enum and `StrandCheckError` to `src/domain/entities.rs` (on `StrandPath`)
+  - `StrandCheckResult::{Proceed, SkipBinary, SkipTemp, SkipMissing, ProceedWithWarning}`
+  - `StrandCheckError::ReadFailed(String)`
+- [ ] Move the text-check logic from `ProcessStrand::execute()` into `impl StrandPath`:
+  - Calls `content_inspector::is_text_file()` via a **port trait** `StrandFileChecker` (new, not adapter-coupled)
+  - Calls `temp_file::is_known_temp_file()` (already in domain)
+  - Returns structured result instead of side-effecting logs
+- [ ] Define `StrandFileChecker` port trait in `src/application/ports.rs`:
+  - `fn is_text_file(&self, path: &Path) -> Result<bool, std::io::Error>`
+- [ ] In `ProcessStrand::execute()`: replace the 80-line text-check block with:
+  ```rust
+  let check = strand_path.should_process(&file_checker)?;
+  match check {
+      StrandCheckResult::Proceed | StrandCheckResult::ProceedWithWarning => {}
+      StrandCheckResult::SkipBinary => { log StrandIgnored; return Ok(()); }
+      StrandCheckResult::SkipTemp => { log event; return Ok(()); }
+      StrandCheckResult::SkipMissing => { log StrandSkipped; return Ok(()); }
+  }
+  ```
+- [ ] Create `src/adapters/outbound/strand_file_checker.rs` implementing `StrandFileChecker` using current `content_inspector`
+- [ ] Move related tests from `process_strand.rs` (`phase2_text_check_tests`, `phase2_file_existence_tests`) to `src/domain/entities.rs` tests (pure domain tests — no port mocks needed for the rule logic)
+- [ ] **Verify:** `cargo test` — all tests pass. Domain tests cover all `StrandCheckResult` variants.
+
+**Test Gaps:** Domain tests need fixtures for binary files, temp files, and missing files. These are small (tempdir + write) and don't require port mocks.
+
+### Phase 7: Extract `Knot::deleted_prompt()` into domain layer
+
+**Problem:** `ProcessStrand::execute()` contains ~70 lines that build a special prompt for Deleted events: reads tie-off history, extracts last N entries, and composes a prompt with deletion notice + scoped history. This is **Knot business logic** — how a Knot represents its own deletion context.
+
+**Target:** Move into `impl Knot` as `pub fn deleted_prompt(&self, filename: &str, sections: &[TieOffSection]) -> String`.
+
+**Changes:**
+- [ ] Add `impl Knot` method `deleted_prompt(filename: &str, sections: &[TieOffSection]) -> String` in `src/domain/entities.rs`
+  - Takes the deletion notice string as a const or parameter
+  - Formats the scoped strand history using `TieOffSection` fields
+  - Returns composed prompt string
+- [ ] In `ProcessStrand::execute()`: replace the 70-line prompt-building block with:
+  ```rust
+  let prompt = if is_deleted {
+      knot.deleted_prompt(&strand_filename, &sections)
+  } else {
+      knot.prompt_template.instructions.clone()
+  };
+  ```
+- [ ] Move the existing deleted-event prompt tests from `process_strand.rs` (in `phase6_timeout_tests` or wherever they live) to `src/domain/entities.rs` tests
+- [ ] **Verify:** `cargo test` — all tests pass. Domain tests verify prompt composition without any port mocks.
+
+### Phase 8: Extract `TieOffOutcome` derivation into domain layer
+
+**Problem:** `ProcessStrand::execute()` has 3-way branching for tie-off writing based on processing result:
+- Success → `TieOffStatus::Produced`, write to tie-off
+- Non-timeout error → `TieOffStatus::Failed`, write to tie-off
+- Timeout error → **skip** tie-off write, write to rig-log instead
+
+This is a **domain rule** about what outcomes mean, expressed as imperative branching in the use case.
+
+**Target:** Define a `TieOffOutcome` enum in domain that captures the three cases, with a derivation method.
+
+**Changes:**
+- [ ] Add to `src/domain/entities.rs`:
+  ```rust
+  pub enum TieOffOutcome {
+      Produced { content: String },
+      Failed { error: String },
+      TimeoutSkipped { error: String },
+  }
+  ```
+- [ ] Add `impl TieOffOutcome`:
+  ```rust
+  pub fn derive(result: Result<AgentOutput, PortError>) -> Self { ... }
+  pub fn tie_off_status(&self) -> TieOffStatus { ... }
+  pub fn tie_off_content(&self) -> Option<&str> { ... }
+  ```
+- [ ] In `ProcessStrand::execute()`: replace the 3-way match with:
+  ```rust
+  let outcome = TieOffOutcome::derive(result);
+  // Write tie-off (skip for TimeoutSkipped)
+  // Write loom-log (KnotCompleted vs KnotFailed)
+  // Write rig-log for timeout
+  ```
+- [ ] Move timeout-related tests from `process_strand.rs` (`phase6_timeout_tests`) to `src/domain/entities.rs` tests for the derivation logic
+- [ ] **Verify:** `cargo test` — all tests pass. Domain tests cover all three outcome variants.
+
+### Phase 9: Extract `AgentProfile::resolve_for_knot()` into domain layer
+
+**Problem:** `ProcessStrand::resolve_agent_config()` loads a profile and builds an `AgentConfig` from it. The mapping (profile fields → agent config fields) is **domain composition logic** buried in the use case.
+
+**Target:** Move into `impl AgentProfile` as `pub fn resolve_for_knot(&self, knot: &Knot) -> AgentConfig`.
+
+**Changes:**
+- [ ] Add to `src/domain/value_objects.rs`:
+  ```rust
+  impl AgentProfile {
+      /// Build an `AgentConfig` by merging this profile's fields
+      /// with the knot's prompt instructions.
+      pub fn resolve_for_knot(&self, knot: &Knot) -> AgentConfig {
+          AgentConfig {
+              goal: knot.prompt_template.instructions.clone(),
+              provider: self.provider.clone(),
+              model: self.model.clone(),
+              tools: self.tools.clone(),
+              extra_args: Vec::new(),
+          }
+      }
+
+      /// Return the profile's session timeout as a Duration.
+      pub fn session_timeout(&self) -> Option<std::time::Duration> {
+          self.timeout.map(std::time::Duration::from_secs)
+      }
+  }
+  ```
+- [ ] In `ProcessStrand::resolve_agent_config()`: replace the manual field mapping with:
+  ```rust
+  let profile = self.profile_repo.get(&knot.agent_profile_ref)?
+      .ok_or_else(|| PortError::ProfileNotFound(...))?;
+  let config = profile.resolve_for_knot(knot);
+  let timeout = profile.session_timeout();
+  Ok((config, timeout))
+  ```
+- [ ] Move profile resolution tests from `process_strand.rs` (`phase3_profile_resolution_tests`, `phase7_timeout_resolution_tests`) to `src/domain/value_objects.rs` tests
+- [ ] **Verify:** `cargo test` — all tests pass. Domain tests verify profile→config mapping without port mocks.
+
+### Phase 10: Final verification — `ProcessStrand` slimmed down
+
+**Goal:** After Phases 6–9, `ProcessStrand::execute()` should be primarily orchestration: call domain methods, fan results to ports. Verify the use case is significantly smaller.
+
+- [ ] `ProcessStrand::execute()` body is primarily `match`/port calls (~100 lines of orchestration)
+- [ ] Domain tests cover: `StrandCheckResult` variants, `Knot::deleted_prompt()`, `TieOffOutcome::derive()`, `AgentProfile::resolve_for_knot()`
+- [ ] Application tests in `process_strand.rs` test the pipeline flow, not individual rules
+- [ ] `cargo test` — all tests pass
+- [ ] `cargo clippy` — no new warnings
+- [ ] `cargo build` — compiles cleanly
+
+**Expected result:** `process_strand.rs` drops from ~3,867 lines to ~2,000 (mostly tests). The ~545 lines of use case code shrink to ~200. Domain layer gains ~200 lines of rule logic with their own test modules.
 
 ## Notes
 
