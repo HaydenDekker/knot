@@ -311,6 +311,32 @@ impl AgentProfile {
         self.timeout = timeout;
         self
     }
+
+    /// Build an `AgentConfig` by merging this profile's fields
+    /// with the knot's prompt instructions.
+    ///
+    /// The profile provides `provider`, `model`, and `tools`.
+    /// The knot's `PromptTemplate.instructions` becomes the goal.
+    pub fn resolve_for_knot(
+        &self,
+        knot: &crate::domain::entities::Knot,
+    ) -> AgentConfig {
+        AgentConfig {
+            goal: knot.prompt_template.instructions.clone(),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            tools: self.tools.clone(),
+            extra_args: Vec::new(),
+        }
+    }
+
+    /// Return the profile's session timeout as a `Duration`.
+    ///
+    /// Returns `None` when the profile does not specify a timeout
+    /// (the agent runner uses its own default).
+    pub fn session_timeout(&self) -> Option<std::time::Duration> {
+        self.timeout.map(std::time::Duration::from_secs)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -794,6 +820,101 @@ mod tests {
         let profile: AgentProfile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.timeout, None);
         assert_eq!(profile.name, "legacy");
+    }
+
+    // ── AgentProfile resolve_for_knot Tests ─────────────────────────
+
+    #[test]
+    fn agent_profile_resolve_for_knot_maps_fields() {
+        use crate::domain::entities::{Knot, KnotId};
+        use std::path::PathBuf;
+
+        let profile = AgentProfile::with_tools(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            vec!["fs".to_string(), "web".to_string()],
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+
+        let knot = Knot {
+            id: KnotId("reviewer".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "Review the document.".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+        };
+
+        let config = profile.resolve_for_knot(&knot);
+
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "gpt-4o");
+        assert_eq!(config.tools, vec!["fs", "web"]);
+        assert_eq!(config.goal, "Review the document.");
+        assert!(config.extra_args.is_empty());
+    }
+
+    #[test]
+    fn agent_profile_resolve_for_knot_no_tools() {
+        use crate::domain::entities::{Knot, KnotId};
+        use std::path::PathBuf;
+
+        let profile = AgentProfile::new(
+            "minimal".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Be concise.".to_string(),
+        )
+        .unwrap();
+
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "minimal".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "Check the code.".to_string(),
+            },
+            strand_dir: PathBuf::from("input"),
+            git_versioned: false,
+        };
+
+        let config = profile.resolve_for_knot(&knot);
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.model, "claude-sonnet");
+        assert!(config.tools.is_empty());
+        assert_eq!(config.goal, "Check the code.");
+    }
+
+    #[test]
+    fn agent_profile_session_timeout_some() {
+        let profile = AgentProfile::new(
+            "slow".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Thorough review.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+
+        assert_eq!(
+            profile.session_timeout(),
+            Some(std::time::Duration::from_secs(600))
+        );
+    }
+
+    #[test]
+    fn agent_profile_session_timeout_none() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Quick review.".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(profile.session_timeout(), None);
     }
 
     // ── AgentAdapter Tests ──────────────────────────────────────────────────

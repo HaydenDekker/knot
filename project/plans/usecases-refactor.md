@@ -289,35 +289,17 @@ This is a **domain rule** about what outcomes mean, expressed as imperative bran
 - [x] **Verify:** `cargo test` — all 457 tests pass (451 existing + 6 new). Domain tests cover all `TieOffOutcome` variants.
 - [x] **Verify:** `cargo clippy` — no new warnings
 
-### Phase 9: Extract `AgentProfile::resolve_for_knot()` into domain layer
+### Phase 9: Extract `AgentProfile::resolve_for_knot()` into domain layer ✅ DONE
 
 **Problem:** `ProcessStrand::resolve_agent_config()` loads a profile and builds an `AgentConfig` from it. The mapping (profile fields → agent config fields) is **domain composition logic** buried in the use case.
 
 **Target:** Move into `impl AgentProfile` as `pub fn resolve_for_knot(&self, knot: &Knot) -> AgentConfig`.
 
 **Changes:**
-- [ ] Add to `src/domain/value_objects.rs`:
-  ```rust
-  impl AgentProfile {
-      /// Build an `AgentConfig` by merging this profile's fields
-      /// with the knot's prompt instructions.
-      pub fn resolve_for_knot(&self, knot: &Knot) -> AgentConfig {
-          AgentConfig {
-              goal: knot.prompt_template.instructions.clone(),
-              provider: self.provider.clone(),
-              model: self.model.clone(),
-              tools: self.tools.clone(),
-              extra_args: Vec::new(),
-          }
-      }
-
-      /// Return the profile's session timeout as a Duration.
-      pub fn session_timeout(&self) -> Option<std::time::Duration> {
-          self.timeout.map(std::time::Duration::from_secs)
-      }
-  }
-  ```
-- [ ] In `ProcessStrand::resolve_agent_config()`: replace the manual field mapping with:
+- [x] Add to `src/domain/value_objects.rs`:
+  - `AgentProfile::resolve_for_knot(&self, knot: &Knot) -> AgentConfig` — maps profile fields + knot instructions into `AgentConfig`
+  - `AgentProfile::session_timeout(&self) -> Option<std::time::Duration>` — converts optional timeout seconds to `Duration`
+- [x] In `ProcessStrand::resolve_agent_config()`: replaced the manual field mapping with:
   ```rust
   let profile = self.profile_repo.get(&knot.agent_profile_ref)?
       .ok_or_else(|| PortError::ProfileNotFound(...))?;
@@ -325,8 +307,13 @@ This is a **domain rule** about what outcomes mean, expressed as imperative bran
   let timeout = profile.session_timeout();
   Ok((config, timeout))
   ```
-- [ ] Move profile resolution tests from `process_strand.rs` (`phase3_profile_resolution_tests`, `phase7_timeout_resolution_tests`) to `src/domain/value_objects.rs` tests
-- [ ] **Verify:** `cargo test` — all tests pass. Domain tests verify profile→config mapping without port mocks.
+- [x] Added 4 domain tests in `value_objects.rs`:
+  - `agent_profile_resolve_for_knot_maps_fields` — verifies provider, model, tools, goal mapping with tools
+  - `agent_profile_resolve_for_knot_no_tools` — verifies mapping without tools
+  - `agent_profile_session_timeout_some` — verifies `Some(600s)` conversion
+  - `agent_profile_session_timeout_none` — verifies `None` when no timeout set
+- [x] **Verify:** `cargo test` — all 461 tests pass (457 existing + 4 new domain tests). Domain tests verify profile→config mapping without port mocks.
+- [x] **Verify:** `cargo clippy` — no new warnings
 
 ### Phase 10: Final verification — `ProcessStrand` slimmed down
 

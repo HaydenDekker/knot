@@ -82,10 +82,10 @@ impl ProcessStrand {
     /// Resolve the effective `AgentConfig` for a knot and the profile's
     /// session timeout.
     ///
-    /// Loads the profile from the repository and builds an `AgentConfig`
-    /// from it. The profile's `profile_prompt` is delivered via stdin
+    /// Loads the profile from the repository and delegates the
+    /// profile→config mapping to `AgentProfile::resolve_for_knot()`.
+    /// The profile's `profile_prompt` is delivered via stdin
     /// (not `--system-prompt`), so it is not merged here.
-    /// If the profile specifies `timeout`, it is converted to a `Duration`.
     ///
     /// Returns a tuple of `(AgentConfig, Option<Duration>)` where
     /// the `Option<Duration>` is the profile's timeout
@@ -102,20 +102,10 @@ impl ProcessStrand {
                 PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
 
-        let timeout = profile
-            .timeout
-            .map(std::time::Duration::from_secs);
+        let config = profile.resolve_for_knot(knot);
+        let timeout = profile.session_timeout();
 
-        Ok((
-            AgentConfig {
-                goal: knot.prompt_template.instructions.clone(),
-                provider: profile.provider.clone(),
-                model: profile.model.clone(),
-                tools: profile.tools.clone(),
-                extra_args: Vec::new(),
-            },
-            timeout,
-        ))
+        Ok((config, timeout))
     }
 
     /// Execute the strand processing pipeline.
