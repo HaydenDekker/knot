@@ -48,6 +48,91 @@ pub enum TieOffStatus {
     Failed,
 }
 
+/// Result of strand processing, capturing the three possible outcomes
+/// and what should be written (tie-off, rig-log, etc.).
+///
+/// Derived from `Result<AgentOutput, PortError>` by classifying the
+/// error type: timeout errors skip the tie-off write (preserve unchanged),
+/// all other errors write an error tie-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TieOffOutcome {
+    /// Agent succeeded — write tie-off with output content.
+    Produced { content: String },
+    /// Agent failed (non-timeout) — write tie-off with error message.
+    Failed { error: String },
+    /// Agent timed out — skip tie-off write, log to rig-log instead.
+    TimeoutSkipped { error: String },
+}
+
+impl TieOffOutcome {
+    /// Derive the outcome from the agent execution result.
+    ///
+    /// - `Ok(AgentOutput)` → `Produced`
+    /// - `Err(PortError::Timeout)` → `TimeoutSkipped`
+    /// - `Err(other)` → `Failed`
+    pub fn derive(
+        result: Result<
+            crate::application::ports::AgentOutput,
+            crate::application::ports::PortError,
+        >,
+    ) -> Self {
+        match result {
+            Ok(output) => Self::Produced { content: output.stdout },
+            Err(err)
+                if matches!(err,
+                    crate::application::ports::PortError::Timeout { .. }) =>
+            {
+                Self::TimeoutSkipped { error: err.to_string() }
+            }
+            Err(err) => Self::Failed { error: err.to_string() },
+        }
+    }
+
+    /// Return the `TieOffStatus` for the tie-off section (when written).
+    ///
+    /// `TimeoutSkipped` has no tie-off status because the tie-off is not
+    /// written for that case.
+    pub fn tie_off_status(&self) -> Option<TieOffStatus> {
+        match self {
+            Self::Produced { .. } => Some(TieOffStatus::Produced),
+            Self::Failed { .. } => Some(TieOffStatus::Failed),
+            Self::TimeoutSkipped { .. } => None,
+        }
+    }
+
+    /// Return the tie-off content (when a tie-off should be written).
+    ///
+    /// Returns `None` for `TimeoutSkipped` (tie-off is not written).
+    pub fn tie_off_content(&self) -> Option<String> {
+        match self {
+            Self::Produced { content } => Some(content.clone()),
+            Self::Failed { error } => {
+                Some(format!("Processing failed: {}", error))
+            }
+            Self::TimeoutSkipped { .. } => None,
+        }
+    }
+
+    /// Return `true` if a tie-off should be written for this outcome.
+    pub fn should_write_tie_off(&self) -> bool {
+        !matches!(self, Self::TimeoutSkipped { .. })
+    }
+
+    /// Return the error message (when applicable).
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            Self::Produced { .. } => None,
+            Self::Failed { error }
+            | Self::TimeoutSkipped { error } => Some(error),
+        }
+    }
+
+    /// Return `true` if this is a timeout that should be logged to rig-log.
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::TimeoutSkipped { .. })
+    }
+}
+
 // ── Entities ───────────────────────────────────────────────────────────────
 
 /// Default value for `git_versioned`: enabled.
@@ -982,5 +1067,104 @@ mod tests {
             prompt.contains("Previous processing history"),
             "prompt should contain history header when sections exist, even with empty body"
         );
+    }
+
+    // ── TieOffOutcome Tests ────────────────────────────────────────
+
+    use crate::application::ports::{AgentOutput, PortError};
+
+    fn ok_output(stdout: &str) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        }
+    }
+
+    fn err_timeout() -> PortError {
+        PortError::Timeout {
+            message: "timed out".to_string(),
+            session_id: None,
+        }
+    }
+
+    fn err_other() -> PortError {
+        PortError::AgentExecutionFailed {
+            message: "crash".to_string(),
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn tieoff_outcome_derive_success() {
+        let outcome = TieOffOutcome::derive(Ok(ok_output("agent result")));
+
+        assert!(matches!(outcome, TieOffOutcome::Produced { .. }));
+        if let TieOffOutcome::Produced { content } = outcome {
+            assert_eq!(content, "agent result");
+        }
+    }
+
+    #[test]
+    fn tieoff_outcome_derive_timeout() {
+        let outcome = TieOffOutcome::derive(Err(err_timeout()));
+
+        assert!(matches!(
+            outcome,
+            TieOffOutcome::TimeoutSkipped { .. }
+        ));
+        if let TieOffOutcome::TimeoutSkipped { error } = outcome {
+            assert!(error.contains("timeout"));
+        }
+    }
+
+    #[test]
+    fn tieoff_outcome_derive_non_timeout_error() {
+        let outcome = TieOffOutcome::derive(Err(err_other()));
+
+        assert!(matches!(outcome, TieOffOutcome::Failed { .. }));
+        if let TieOffOutcome::Failed { error } = outcome {
+            assert!(error.contains("crash"));
+        }
+    }
+
+    #[test]
+    fn tieoff_outcome_produced_status_and_content() {
+        let outcome = TieOffOutcome::derive(Ok(ok_output("hello")));
+
+        assert_eq!(
+            outcome.tie_off_status(),
+            Some(TieOffStatus::Produced)
+        );
+        assert_eq!(outcome.tie_off_content(), Some("hello".to_string()));
+        assert!(outcome.should_write_tie_off());
+        assert!(!outcome.is_timeout());
+        assert!(outcome.error_message().is_none());
+    }
+
+    #[test]
+    fn tieoff_outcome_failed_status_and_content() {
+        let outcome = TieOffOutcome::derive(Err(err_other()));
+
+        assert_eq!(outcome.tie_off_status(), Some(TieOffStatus::Failed));
+        assert_eq!(
+            outcome.tie_off_content(),
+            Some("Processing failed: agent execution failed: crash".to_string())
+        );
+        assert!(outcome.should_write_tie_off());
+        assert!(!outcome.is_timeout());
+        assert!(outcome.error_message().is_some());
+    }
+
+    #[test]
+    fn tieoff_outcome_timeout_skipped_no_tieoff() {
+        let outcome = TieOffOutcome::derive(Err(err_timeout()));
+
+        assert_eq!(outcome.tie_off_status(), None);
+        assert_eq!(outcome.tie_off_content(), None);
+        assert!(!outcome.should_write_tie_off());
+        assert!(outcome.is_timeout());
+        assert!(outcome.error_message().is_some());
     }
 }

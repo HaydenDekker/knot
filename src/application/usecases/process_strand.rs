@@ -12,7 +12,7 @@ use crate::application::session_resume;
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandCheckResult, StrandFileChecker,
-    StrandPath, TieOff, TieOffPath,
+    StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
 use crate::domain::events::{LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
@@ -356,23 +356,66 @@ impl ProcessStrand {
             profile_timeout,
         );
 
-        match result {
-            Ok(output) => {
-                // 4. Write successful tie-off
-                let tie_off_content = output.stdout.clone();
-                let tie_off = TieOff {
-                    content: output.stdout,
-                    path: tie_off_path.clone(),
-                    status: crate::domain::entities::TieOffStatus::Produced,
-                    knot_name: Some(knot.id.0.clone()),
-                    event_type: Some(event_label.clone()),
-                    strand_path: Some(strand_path.0.display().to_string()),
-                    timestamp: None,
-                };
-                self.tie_off_sink.append(tie_off)?;
+        // Derive outcome from execution result — domain rule.
+        let outcome = TieOffOutcome::derive(result);
 
-                // 5. Append KnotCompleted to loom-log (before commit so
-                //    the log entries are included in this commit)
+        // Write tie-off (skipped for timeout).
+        if outcome.should_write_tie_off() {
+            let tie_off = TieOff {
+                content: outcome.tie_off_content().unwrap_or_default(),
+                path: tie_off_path.clone(),
+                status: outcome
+                    .tie_off_status()
+                    .unwrap_or(crate::domain::entities::TieOffStatus::Produced),
+                knot_name: Some(knot.id.0.clone()),
+                event_type: Some(event_label.clone()),
+                strand_path: Some(strand_path.0.display().to_string()),
+                timestamp: None,
+            };
+            let _ = self.tie_off_sink.append(tie_off);
+        }
+
+        // Write rig-log for timeout (preserve unchanged).
+        if outcome.is_timeout() {
+            let _ = self.rig_log.append(
+                crate::domain::events::RigLogEvent::TimeoutExceeded {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    error: outcome
+                        .error_message()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                    timestamp: format_timestamp(),
+                },
+            );
+        }
+
+        // Write loom-log: KnotCompleted or KnotFailed.
+        match outcome.tie_off_status() {
+            Some(crate::domain::entities::TieOffStatus::Produced) => {
+                // Git versioning commit (best-effort, non-fatal).
+                // Runs AFTER loom-log appends so the commit captures
+                // the tie-off, KnotCompleted, and StrandProcessed entries.
+                if knot.git_versioned {
+                    if let Some(ref content) = outcome.tie_off_content() {
+                        let commit_result = self.git_versioning_port.commit(
+                            &loom_id,
+                            &knot_id,
+                            &strand_path,
+                            &event_label,
+                            content,
+                        );
+                        if let Err(ref e) = commit_result {
+                            logging::log_strand_event(
+                                &format!("git commit warning: {}", e),
+                                &strand_path.0,
+                            );
+                        }
+                    }
+                }
+
+                // Append KnotCompleted to loom-log.
                 self.log_port.append(LoomEvent::KnotCompleted {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
@@ -381,7 +424,7 @@ impl ProcessStrand {
                     timestamp: format_timestamp(),
                 })?;
 
-                // 6. Append StrandProcessed to loom-log
+                // Append StrandProcessed to loom-log.
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id: loom_id.clone(),
                     strand_path: strand_path.clone(),
@@ -389,63 +432,18 @@ impl ProcessStrand {
                     timestamp: format_timestamp(),
                 })?;
 
-                // 7. Git versioning commit (best-effort, non-fatal).
-                //    Runs AFTER loom-log appends so the commit captures
-                //    the tie-off, KnotCompleted, and StrandProcessed entries.
-                if knot.git_versioned {
-                    let commit_result = self.git_versioning_port.commit(
-                        &loom_id,
-                        &knot_id,
-                        &strand_path,
-                        &event_label,
-                        &tie_off_content,
-                    );
-                    if let Err(ref e) = commit_result {
-                        logging::log_strand_event(
-                            &format!("git commit warning: {}", e),
-                            &strand_path.0,
-                        );
-                    }
-                }
-
                 logging::log_strand_event(
                     &format!("{} completed (knot={})", strand_kind, knot_id.0),
                     &strand_path.0,
                 );
-                Ok(())
             }
-            Err(err) => {
-                let error_msg = err.to_string();
+            _ => {
+                // KnotFailed (error or timeout).
+                let error_msg = outcome
+                    .error_message()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
 
-                // On timeout: skip tie-off write, write to rig-log instead.
-                // On other errors: preserve existing behaviour (write to tie-off).
-                if matches!(err, PortError::Timeout { .. }) {
-                    // Timeout: do NOT write error to tie-off (preserve unchanged).
-                    // Write TimeoutExceeded to rig-log.
-                    let _ = self.rig_log.append(
-                        crate::domain::events::RigLogEvent::TimeoutExceeded {
-                            loom_id: loom_id.clone(),
-                            knot_id: knot_id.clone(),
-                            strand_path: strand_path.clone(),
-                            error: error_msg.clone(),
-                            timestamp: format_timestamp(),
-                        },
-                    );
-                } else {
-                    // Non-timeout error: existing behaviour — write to tie-off.
-                    let tie_off = TieOff {
-                        content: format!("Processing failed: {}", error_msg),
-                        path: tie_off_path.clone(),
-                        status: crate::domain::entities::TieOffStatus::Failed,
-                        knot_name: Some(knot.id.0.clone()),
-                        event_type: Some(event_label.clone()),
-                        strand_path: Some(strand_path.0.display().to_string()),
-                        timestamp: None,
-                    };
-                    let _ = self.tie_off_sink.append(tie_off);
-                }
-
-                // 5. Append KnotFailed to loom-log
                 self.log_port.append(LoomEvent::KnotFailed {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
@@ -454,7 +452,6 @@ impl ProcessStrand {
                     timestamp: format_timestamp(),
                 })?;
 
-                // 6. Append StrandProcessed with error details
                 self.log_port.append(LoomEvent::StrandProcessed {
                     loom_id,
                     strand_path: strand_path.clone(),
@@ -466,9 +463,10 @@ impl ProcessStrand {
                     &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
                 );
-                Ok(())
             }
         }
+
+        Ok(())
     }
 
     /// Extract common fields from any `StrandEvent` variant.

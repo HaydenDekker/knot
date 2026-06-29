@@ -249,7 +249,7 @@ No new tests needed — this is a structural refactor. All existing tests must c
 - [x] **Verify:** `cargo test` — all 451 tests pass (448 existing + 3 new). Domain tests verify prompt composition without any port mocks.
 - [x] **Verify:** `cargo clippy` — no new warnings
 
-### Phase 8: Extract `TieOffOutcome` derivation into domain layer
+### Phase 8: Extract `TieOffOutcome` derivation into domain layer ✅ DONE
 
 **Problem:** `ProcessStrand::execute()` has 3-way branching for tie-off writing based on processing result:
 - Success → `TieOffStatus::Produced`, write to tie-off
@@ -261,7 +261,7 @@ This is a **domain rule** about what outcomes mean, expressed as imperative bran
 **Target:** Define a `TieOffOutcome` enum in domain that captures the three cases, with a derivation method.
 
 **Changes:**
-- [ ] Add to `src/domain/entities.rs`:
+- [x] Add to `src/domain/entities.rs`:
   ```rust
   pub enum TieOffOutcome {
       Produced { content: String },
@@ -269,21 +269,25 @@ This is a **domain rule** about what outcomes mean, expressed as imperative bran
       TimeoutSkipped { error: String },
   }
   ```
-- [ ] Add `impl TieOffOutcome`:
+- [x] Add `impl TieOffOutcome`:
   ```rust
   pub fn derive(result: Result<AgentOutput, PortError>) -> Self { ... }
-  pub fn tie_off_status(&self) -> TieOffStatus { ... }
-  pub fn tie_off_content(&self) -> Option<&str> { ... }
+  pub fn tie_off_status(&self) -> Option<TieOffStatus> { ... }
+  pub fn tie_off_content(&self) -> Option<String> { ... }
+  pub fn should_write_tie_off(&self) -> bool { ... }
+  pub fn error_message(&self) -> Option<&str> { ... }
+  pub fn is_timeout(&self) -> bool { ... }
   ```
-- [ ] In `ProcessStrand::execute()`: replace the 3-way match with:
+- [x] In `ProcessStrand::execute()`: replaced the 3-way match with:
   ```rust
   let outcome = TieOffOutcome::derive(result);
   // Write tie-off (skip for TimeoutSkipped)
   // Write loom-log (KnotCompleted vs KnotFailed)
   // Write rig-log for timeout
   ```
-- [ ] Move timeout-related tests from `process_strand.rs` (`phase6_timeout_tests`) to `src/domain/entities.rs` tests for the derivation logic
-- [ ] **Verify:** `cargo test` — all tests pass. Domain tests cover all three outcome variants.
+- [x] Added 6 domain tests in `entities.rs` covering all three outcome variants and their accessor methods
+- [x] **Verify:** `cargo test` — all 457 tests pass (451 existing + 6 new). Domain tests cover all `TieOffOutcome` variants.
+- [x] **Verify:** `cargo clippy` — no new warnings
 
 ### Phase 9: Extract `AgentProfile::resolve_for_knot()` into domain layer
 
