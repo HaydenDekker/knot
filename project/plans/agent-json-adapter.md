@@ -364,3 +364,15 @@ Work in `src/server.rs` (composition root), `src/adapters/mod.rs`, and `src/appl
 - This plan does NOT change how the prompt is sent to the agent (still via stdin). It only changes how stdout is interpreted.
 - Plan 47 (Session Resume) depends on this plan's `session_id` capture, `AgentInvocationMetadata`, and `PortError::is_resumable()`.
 - ADR-009 documents the decision to use agent-specific adapters rather than a generic CLI wrapper.
+
+## Bugfix
+
+**2026-06-29 — `ProcessStrand` blocks tokio thread, preventing graceful shutdown on Ctrl+C.**
+
+`ProcessStrand::execute()` calls `AgentRunner::execute()` (both `PiJsonAgentRunner` and `PiStdioAgentRunner`), which spawns a child process and blocks the tokio task synchronously via `std::thread::sleep(50ms)` polling loops waiting for the child to exit. There is no yield point until the child finishes (up to 300s default timeout).
+
+When Ctrl+C arrived, `join_set.join_next().await` waited for tasks to complete naturally. The debounce engine, config handler, and state writer were all at yield points and could be reaped. But ProcessStrand was blocked inside synchronous `execute()` with no `.await` — it could not be aborted. After the 5s drain timeout fired, `abort_all()` killed the other tasks, but ProcessStrand remained stuck. The function returned, but the tokio runtime couldn't shut down because the ProcessStrand task was still alive on its thread — the process hung forever.
+
+Fix: wrapped `use_case.execute(event)` in `tokio::task::spawn_blocking()` so the tokio task yields at `.await`. The blocking work runs on a separate OS thread; the tokio task itself can be aborted during shutdown. `ProcessStrand` is wrapped in `Arc` so the closure can capture it by move across the `spawn_blocking` `'static` boundary.
+
+Root cause: the JSON/std adapters use `std::thread::sleep` polling instead of async sleep (`tokio::time::sleep`) to avoid blocking the tokio thread. This works fine when called from a `spawn_blocking` context, but the call site in `server.rs` invoked `execute()` directly on the tokio task, negating the protection.

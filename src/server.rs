@@ -306,7 +306,7 @@ pub fn start_event_pipeline(
     );
 
     join_set.spawn(async move {
-        let use_case = application::usecases::ProcessStrand::new(
+        let use_case = Arc::new(application::usecases::ProcessStrand::new(
             store,
             log_port,
             agent_runner,
@@ -319,7 +319,7 @@ pub fn start_event_pipeline(
             Arc::new(
                 crate::adapters::outbound::ContentInspectorChecker,
             ),
-        );
+        ));
 
         // Process strand events with queue idle detection.
         //
@@ -389,8 +389,23 @@ pub fn start_event_pipeline(
             match next_event {
                 Some(event) => {
                     is_burst_active = true;
-                    if let Err(e) = use_case.execute(event) {
-                        eprintln!("[pipeline] ProcessStrand error: {e}");
+                    // Run agent execution on a blocking thread so the tokio
+                    // task yields. This allows the task to be aborted during
+                    // shutdown — without this, the synchronous execute() call
+                    // blocks the tokio thread with no yield point, preventing
+                    // graceful shutdown (process hangs on Ctrl+C).
+                    let use_case = Arc::clone(&use_case);
+                    let result = tokio::task::spawn_blocking(
+                        move || use_case.execute(event),
+                    ).await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            eprintln!("[pipeline] ProcessStrand error: {e}");
+                        }
+                        Err(e) => {
+                            eprintln!("[pipeline] ProcessStrand blocking task failed: {e}");
+                        }
                     }
                     // Loop continues — next poll will use timeout (drain check).
                 }
