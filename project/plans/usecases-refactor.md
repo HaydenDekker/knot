@@ -185,23 +185,17 @@ No new tests needed — this is a structural refactor. All existing tests must c
 
 **Verification:** `cargo build` (clean, only pre-existing warnings), `cargo test --lib` (436 tests pass), `cargo clippy` (no new warnings)
 
-### Phase 5: Remove old `usecases.rs`, finalise `mod.rs`, verify server wiring
+### Phase 5: Remove old `usecases.rs`, finalise `mod.rs`, verify server wiring ✅ DONE
 
 **Goal:** Delete the now-empty `usecases.rs`, ensure `mod.rs` re-exports everything, and verify `server.rs` imports still compile.
 
-- [ ] Delete `src/application/usecases.rs`
-- [ ] Ensure `usecases/mod.rs` re-exports all public types:
-  - All use case structs: `DiscoverLooms`, `ReloadConfig`, `RegisterLoom`, `UnregisterLoom`, `ListLooms`, `GetLoom`, `GetLoomActivity`, `GetKnotStatus`, `ProcessStrand`, `ManageKnot`, `KnotAction`, `ConfigEventHandler`, `WriteState`
-  - Shared types: `LoomSummary`, `KnotStatus`, `format_timestamp`
-- [ ] Verify `server.rs` imports still compile:
-  - `application::usecases::ProcessStrand`
-  - `application::usecases::format_timestamp`
-  - `application::usecases::DiscoverLooms`
-  - `application::usecases::ConfigEventHandler`
-  - `application::usecases::WriteState`
-- [ ] Run `cargo build` — compilation succeeds
-- [ ] Run `cargo test` — all 87+ tests pass
-- [ ] Run `cargo clippy` — no new warnings
+- [x] Delete `src/application/usecases.rs` (already removed; removed leftover `all.rs` stub with stale imports)
+- [x] Removed `mod all;` from `usecases/mod.rs`
+- [x] Verified `usecases/mod.rs` re-exports all public types (13 use case types + 3 shared types)
+- [x] Verified `server.rs` imports still compile (5 import sites all resolve via `mod.rs` re-exports)
+- [x] `cargo build` — compilation succeeds (pre-existing warnings only)
+- [x] `cargo test` — all 436 tests pass (1 flaky `runner_passes_name_flag_through_cli_args` due to E26 "Text file busy", passes on retry)
+- [x] `cargo clippy` — no new warnings (34 pre-existing)
 
 ### Phase 6: Extract `StrandFilePolicy` into domain layer
 

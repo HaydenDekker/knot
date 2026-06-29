@@ -3,7 +3,6 @@
 //! Each use case orchestrates domain entities through port traits and the
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
-mod all;
 mod config_event_handler;
 mod loom;
 mod manage_knot;
