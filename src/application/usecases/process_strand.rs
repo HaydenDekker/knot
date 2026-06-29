@@ -1957,9 +1957,9 @@ mod session_title_tests {
 
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, default_profile,
-        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
+        MockGitVersioningPort, MockLoomLogPort, MockTieOffSink,
         MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        MockTieOffSink, TrackingAgentRunner,
+        TrackingAgentRunner,
     };
 
     fn build_knot(id: impl Into<String>, profile: &str) -> Knot {

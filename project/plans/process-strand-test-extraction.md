@@ -24,7 +24,7 @@ After this refactor:
 - Duplicate local definitions are removed in favour of fixture imports
 - Tests remain inline in `process_strand.rs` following Rust convention — unit tests stay with the code they test
 
-## Implementation Status: 🟡 In Progress
+## Implementation Status: ✅ Complete
 
 ### Phase 0: Baseline Verification (Done 2026-06-29)
 - **File:** `process_strand.rs` — 3,862 lines
@@ -95,10 +95,10 @@ None — this is a pure structural refactor. All existing tests are preserved an
   - `session_resume_tests` — retry tests (transparent success, exhausted, no-retry stdio)
 - [x] Verify: `cargo test process_strand` — 38 tests pass (unchanged)
 
-### Phase 5: Cleanup and verify
-- [ ] Run `cargo clippy -- -D warnings` — ensure no new warnings
-- [ ] Run `cargo test` — verify full test count unchanged
-- [ ] Run `cargo test -- --test-threads=1` — verify no test ordering dependencies
+### Phase 5: Cleanup and verify ✅
+- [x] Run `cargo clippy -- -D warnings` — no new warnings (37 pre-existing warnings in other files)
+- [x] Run `cargo test` — 461 tests pass (unchanged)
+- [x] Run `cargo test -- --test-threads=1` — 38 process_strand tests pass, no ordering dependencies
 
 ## Notes
 - This is a pure structural refactor — no behaviour change, no API change, no version bump needed
