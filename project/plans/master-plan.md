@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-28
+> **Last Updated:** 2026-06-29
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ⬜ Planned | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
