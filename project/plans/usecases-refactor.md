@@ -141,21 +141,21 @@ No new tests needed — this is a structural refactor. All existing tests must c
 | `manage_knot_tests` | `build_knot` | Uses `"default"` profile (shared uses `"fast"`) |
 | `phase6/7/8/9_timeout_*` | `build_knot(id, profile)` | Takes profile parameter (shared doesn't) |
 
-### Phase 2: Extract `loom/` module (DiscoverLooms, ReloadConfig, RegisterLoom, UnregisterLoom)
+### Phase 2: Extract `loom/` module (DiscoverLooms, ReloadConfig, RegisterLoom, UnregisterLoom) ✅ DONE
 
 **Goal:** Move loom CRUD + discovery use cases into `usecases/loom/` subdirectory. Extract shared `ensure_strand_dir_and_watch()` helper.
 
 **Extract `ensure_strand_dir_and_watch` first:**
-- [ ] Create `usecases/loom/mod_watchers.rs` — extract `ensure_strand_dir_and_watch()` as a standalone `pub(crate)` function taking `(loom_id, knot_id, strand_dir, log_port, event_source)`. This eliminates the copy-paste across `DiscoverLooms`, `RegisterLoom`, and `ConfigEventHandler`.
-- [ ] Create `usecases/loom/mod.rs` — `pub mod mod_watchers` + `pub use mod_watchers::ensure_strand_dir_and_watch`.
-- [ ] In `usecases.rs`: replace each `ensure_strand_dir_and_watch` method call with `super::loom::ensure_strand_dir_and_watch(...)`. Remove the method from each use case struct.
-- [ ] **Verify:** `cargo test` — all tests pass before moving any use case structs.
+- [x] Create `usecases/loom/mod_watchers.rs` — extract `ensure_strand_dir_and_watch()` as a standalone `pub(crate)` function taking `(loom_id, knot_id, strand_dir, log_port, event_source)`. This eliminates the copy-paste across `DiscoverLooms`, `RegisterLoom`, and `ConfigEventHandler`.
+- [x] Create `usecases/loom/mod.rs` — `pub mod mod_watchers` + `pub use mod_watchers::ensure_strand_dir_and_watch`.
+- [x] In `usecases.rs`: replace each `ensure_strand_dir_and_watch` method call with `super::loom::ensure_strand_dir_and_watch(...)`. Remove the method from each use case struct.
+- [x] **Verify:** `cargo test` — all tests pass before moving any use case structs.
 
 **Then extract each use case one at a time (create file → remove from usecases.rs → re-export → test):**
-- [ ] Create `usecases/loom/discover.rs` — move `DiscoverLooms` + tests. Re-export in `loom/mod.rs` and `usecases/mod.rs`. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/loom/register.rs` — move `RegisterLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/loom/unregister.rs` — move `UnregisterLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
-- [ ] Create `usecases/loom/reload.rs` — move `ReloadConfig` + tests. Depends on `DiscoverLooms` (import from sibling). Re-export. Remove from `usecases.rs`. → **`cargo test`**
+- [x] Create `usecases/loom/discover.rs` — move `DiscoverLooms` + tests. Re-export in `loom/mod.rs` and `usecases/mod.rs`. Remove from `usecases.rs`. → **`cargo test`**
+- [x] Create `usecases/loom/register.rs` — move `RegisterLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
+- [x] Create `usecases/loom/unregister.rs` — move `UnregisterLoom` + tests. Re-export. Remove from `usecases.rs`. → **`cargo test`**
+- [x] Create `usecases/loom/reload.rs` — move `ReloadConfig` + tests. Depends on `DiscoverLooms` (import from sibling). Re-export. Remove from `usecases.rs`. → **`cargo test`**
 
 ### Phase 3: Extract `query/` module (ListLooms, GetLoom, GetLoomActivity, GetKnotStatus)
 

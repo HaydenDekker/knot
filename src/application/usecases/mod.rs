@@ -4,14 +4,14 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 mod all;
+mod loom;
 #[cfg(test)]
 mod test_fixtures;
 pub mod types;
 
-// ── Re-export all public types from all.rs for backward compatibility ────
+// ── Re-export all public types for backward compatibility ────
 
 pub use all::ConfigEventHandler;
-pub use all::DiscoverLooms;
 pub use all::GetKnotStatus;
 pub use all::GetLoom;
 pub use all::GetLoomActivity;
@@ -19,10 +19,11 @@ pub use all::KnotAction;
 pub use all::ListLooms;
 pub use all::ManageKnot;
 pub use all::ProcessStrand;
-pub use all::ReloadConfig;
-pub use all::RegisterLoom;
-pub use all::UnregisterLoom;
+pub use loom::ReloadConfig;
+pub use loom::RegisterLoom;
+pub use loom::UnregisterLoom;
 pub use all::WriteState;
+pub use loom::DiscoverLooms;
 
 // ── Re-export shared types ──────────────────────────────────────────────
 
