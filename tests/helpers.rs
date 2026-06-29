@@ -974,6 +974,56 @@ pub fn wait_for_loom_log_event(
     }
 }
 
+/// Poll until a loom-log contains an event with a specific type,
+/// using a caller-provided deadline.
+///
+/// This is useful when the event may not appear until after a long
+/// processing step (e.g. a timeout) — the caller can start a timer
+/// before triggering processing and pass the extended deadline here.
+///
+/// # Arguments
+///
+/// * `rig_dir` - Path to the rig directory
+/// * `loom_id` - The loom's ID
+/// * `event_type` - Expected event type string (e.g. "KnotCompleted")
+/// * `deadline` - Absolute instant at which to give up
+///
+/// # Panics
+///
+/// Panics if the event type is not found by the deadline.
+pub fn wait_for_loom_log_event_with_deadline(
+    rig_dir: &Path,
+    loom_id: &str,
+    event_type: &str,
+    deadline: std::time::Instant,
+) {
+    loop {
+        if std::time::Instant::now() > deadline {
+            let events = read_loom_log(rig_dir, loom_id);
+            let types: Vec<_> = events
+                .iter()
+                .filter_map(|e| loom_log_event_type(e))
+                .collect();
+            panic!(
+                "timeout waiting for loom-log event '{}' in loom '{}'. \
+                 Events found: {:?}",
+                event_type, loom_id, types
+            );
+        }
+
+        let events = read_loom_log(rig_dir, loom_id);
+        for event in &events {
+            if let Some(ty) = loom_log_event_type(event) {
+                if ty == event_type {
+                    return;
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

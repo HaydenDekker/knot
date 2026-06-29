@@ -14,6 +14,7 @@ use crate::application::ports::{
 };
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::events::LoomEvent;
+use crate::domain::value_objects::AgentConfig;
 
 /// Maximum number of retry attempts (not counting the initial attempt).
 const MAX_RETRIES: u32 = 10;
@@ -41,6 +42,9 @@ fn format_timestamp() -> String {
 /// timeout budget is expired.
 ///
 /// `SessionResumed` events are appended to `loom_log` for each retry attempt.
+///
+/// `agent_config` contains the provider/model/tools. The retry loop
+/// appends `--session-id` to `agent_config.extra_args` on each attempt.
 pub fn execute_with_resume(
     agent_runner: &dyn AgentRunner,
     loom_log: &dyn LoomLogPort,
@@ -48,7 +52,7 @@ pub fn execute_with_resume(
     knot_id: &KnotId,
     strand_path: &StrandPath,
     session_id: &mut Option<String>,
-    cli_args: Vec<String>,
+    agent_config: AgentConfig,
     prompt: String,
     strand_file_ref: Option<StrandPath>,
     profile_prompt: String,
@@ -70,7 +74,7 @@ pub fn execute_with_resume(
         knot_id,
         strand_path,
         session_id,
-        cli_args,
+        agent_config,
         prompt,
         strand_file_ref,
         profile_prompt,
@@ -91,9 +95,9 @@ fn execute_with_resume_internal(
     knot_id: &KnotId,
     strand_path: &StrandPath,
     session_id: &mut Option<String>,
-    mut cli_args: Vec<String>,
+    mut agent_config: AgentConfig,
     mut prompt: String,
-    _strand_file_ref: Option<StrandPath>,
+    strand_file_ref: Option<StrandPath>,
     profile_prompt: String,
     event_type: String,
     knot_name: Option<String>,
@@ -103,18 +107,18 @@ fn execute_with_resume_internal(
     let start = Instant::now();
 
     // --- First attempt (no session ID) ---
-    let ctx = build_retry_context(
-        cli_args.clone(),
-        prompt.clone(),
+    // Delegate to execute_with_config so the adapter layer can
+    // inject --name and @{path} into extra_args.
+    let result = agent_runner.execute_with_config(
+        &agent_config,
         strand_path.clone(),
+        strand_file_ref.clone(),
+        prompt.clone(),
         profile_prompt.clone(),
         event_type.clone(),
         knot_name.clone(),
         profile_timeout,
-        start,
     );
-
-    let result = agent_runner.execute(ctx);
 
     if let Ok(output) = &result {
         // Check for empty response — log and treat as resumable
@@ -206,8 +210,13 @@ fn execute_with_resume_internal(
             *session_id = Some(sid.clone());
         }
 
-        // Prepare cli_args and prompt for retry
-        (cli_args, prompt) = prepare_retry(cli_args, prompt, session_id);
+        // Prepare agent_config and prompt for retry
+        // Append --session-id to extra_args and "please continue" to prompt.
+        if let Some(sid) = session_id {
+            agent_config.extra_args.push("--session-id".to_string());
+            agent_config.extra_args.push(sid.clone());
+        }
+        prompt.push_str("\n\nplease continue");
 
         // Log SessionResumed event
         loom_log.append(LoomEvent::SessionResumed {
@@ -219,20 +228,20 @@ fn execute_with_resume_internal(
             timestamp: format_timestamp(),
         })?;
 
-        // Build context with remaining time and execute
+        // Build context with remaining time and execute.
+        // Delegate to execute_with_config so the adapter layer
+        // can inject --name and @{path} into extra_args.
         let timeout = profile_timeout.as_ref().map(|t| t.saturating_sub(start.elapsed()));
-        let ctx = build_retry_context(
-            cli_args.clone(),
-            prompt.clone(),
+        match agent_runner.execute_with_config(
+            &agent_config,
             strand_path.clone(),
+            strand_file_ref.clone(),
+            prompt.clone(),
             profile_prompt.clone(),
             event_type.clone(),
             knot_name.clone(),
             timeout,
-            start,
-        );
-
-        match agent_runner.execute(ctx) {
+        ) {
             Ok(output) => {
                 if output.stdout.trim().is_empty() {
                     // Log empty response to loom-log (attempt = loop_attempt + 1
@@ -308,54 +317,13 @@ fn execute_with_resume_internal(
     })
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Build an [`ExecutionContext`] for a retry attempt with remaining timeout.
-fn build_retry_context(
-    cli_args: Vec<String>,
-    prompt: String,
-    strand_path: StrandPath,
-    profile_prompt: String,
-    event_type: String,
-    knot_name: Option<String>,
-    timeout: Option<Duration>,
-    _start: Instant,
-) -> ExecutionContext {
-    ExecutionContext {
-        cli_path: "pi".to_string(),
-        cli_args,
-        prompt,
-        profile_prompt,
-        strand_path,
-        event_type,
-        knot_name,
-        timeout,
-    }
-}
-
-/// Prepare `cli_args` and `prompt` for the next retry attempt.
-///
-/// Appends `--session-id <id>` to cli_args and `"please continue"` to the
-/// prompt.
-fn prepare_retry(
-    mut cli_args: Vec<String>,
-    mut prompt: String,
-    session_id: &Option<String>,
-) -> (Vec<String>, String) {
-    if let Some(sid) = session_id {
-        cli_args.push("--session-id".to_string());
-        cli_args.push(sid.clone());
-    }
-    prompt.push_str("\n\nplease continue");
-    (cli_args, prompt)
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::application::ports::AgentInvocationMetadata;
+    use crate::domain::value_objects::AgentConfig;
     use std::path::PathBuf;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -499,7 +467,13 @@ mod tests {
             &make_knot_id(),
             &make_strand_path(),
             &mut None,
-            vec!["--goal".to_string(), "review".to_string()],
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             "Review this document".to_string(),
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
@@ -591,7 +565,13 @@ mod tests {
             &make_knot_id(),
             &make_strand_path(),
             &mut None,
-            vec!["--goal".to_string(), "review".to_string()],
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             "Review this document".to_string(),
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
@@ -637,7 +617,13 @@ mod tests {
             &make_knot_id(),
             &make_strand_path(),
             &mut None,
-            vec!["--goal".to_string(), "review".to_string()],
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             "Review this document".to_string(),
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
@@ -717,17 +703,13 @@ mod tests {
         let contexts = runner.contexts();
         assert!(contexts.len() >= 2);
 
-        // Second context (retry) has --session-id appended
+        // Second context (retry) has --session-id in extra_args
         let retry_ctx = &contexts[1];
-        let args = &retry_ctx.cli_args;
+        let extra_args = &retry_ctx.agent_config.extra_args;
 
-        // Original args preserved
-        assert!(args.contains(&"--goal".to_string()));
-        assert!(args.contains(&"review".to_string()));
-
-        // --session-id appended
-        assert!(args.contains(&"--session-id".to_string()));
-        assert!(args.contains(&"sess-abc".to_string()));
+        // --session-id appended via extra_args
+        assert!(extra_args.contains(&"--session-id".to_string()));
+        assert!(extra_args.contains(&"sess-abc".to_string()));
     }
 
     #[test]
@@ -776,7 +758,13 @@ mod tests {
             &make_knot_id(),
             &make_strand_path(),
             &mut None,
-            vec!["--goal".to_string(), "review".to_string()],
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             "Review this document".to_string(),
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
@@ -812,7 +800,13 @@ mod tests {
             &make_knot_id(),
             &make_strand_path(),
             &mut session_id,
-            vec!["--goal".to_string(), "review".to_string()],
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             "Review this document".to_string(),
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),

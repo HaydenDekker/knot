@@ -222,15 +222,19 @@ pub struct KnotState {
 
 /// Context passed to the agent runner when executing a knot.
 ///
+/// The adapter builds CLI arguments from `agent_config` internally,
+/// so the application layer does not construct `cli_args`.
+///
 /// The optional `timeout` field allows per-knot timeout overrides.
 /// When `None`, the runner's global default timeout is used.
 /// When `Some(d)`, the agent session deadline is `d`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionContext {
-    /// Path to the agent CLI binary.
-    pub cli_path: String,
-    /// Arguments passed to the CLI.
-    pub cli_args: Vec<String>,
+    /// Agent configuration (provider, model, tools, extra args).
+    ///
+    /// The adapter builds CLI arguments from this internally.
+    /// `extra_args` may contain `--session-id` from a retry attempt.
+    pub agent_config: AgentConfig,
     /// Prompt to send to the agent (knot instructions).
     pub prompt: String,
     /// Profile-level prompt segment (agent persona).
@@ -410,9 +414,9 @@ pub trait AgentRunner: Send + Sync {
 
     /// Execute the agent using an `AgentConfig` to build CLI arguments.
     ///
-    /// Each adapter hardcodes its own binary path and flags. The adapter
-    /// builds CLI args from `agent_config` internally, so the caller
-    /// (ProcessStrand) does not construct `cli_path`/`cli_args`.
+    /// Each adapter owns its own binary path and builds CLI args from
+    /// `agent_config` internally, so the caller (ProcessStrand) does not
+    /// construct `cli_args`.
     ///
     /// `strand_file_ref` is `Some(path)` for Created/Modified events
     /// (appended as `@{path}`) and `None` for Deleted events (file gone).
@@ -431,8 +435,7 @@ pub trait AgentRunner: Send + Sync {
         timeout: Option<Duration>,
     ) -> Result<AgentOutput, PortError> {
         let ctx = ExecutionContext {
-            cli_path: String::new(),
-            cli_args: Vec::new(),
+            agent_config: agent_config.clone(),
             prompt,
             profile_prompt,
             strand_path,
@@ -440,7 +443,7 @@ pub trait AgentRunner: Send + Sync {
             knot_name,
             timeout,
         };
-        let _ = (agent_config, strand_file_ref); // unused by default impl
+        let _ = strand_file_ref; // unused by default impl (adapter handles @file)
         self.execute(ctx)
     }
 
@@ -819,8 +822,13 @@ mod tests {
 
         // Verify ExecutionContext and AgentOutput types exist and work
         let ctx = ExecutionContext {
-            cli_path: "/usr/bin/pi".to_string(),
-            cli_args: vec!["--verbose".to_string()],
+            agent_config: AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             prompt: "Review this document".to_string(),
             profile_prompt: "You are a reviewer.".to_string(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
@@ -1039,8 +1047,13 @@ mod tests {
     #[test]
     fn execution_context_fields() {
         let ctx = ExecutionContext {
-            cli_path: "pi".to_string(),
-            cli_args: vec!["--mode".to_string(), "stream".to_string()],
+            agent_config: AgentConfig {
+                goal: "process".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+            },
             prompt: "Process this file".to_string(),
             profile_prompt: "You are an agent.".to_string(),
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
@@ -1049,8 +1062,7 @@ mod tests {
             timeout: None,
         };
 
-        assert_eq!(ctx.cli_path, "pi");
-        assert_eq!(ctx.cli_args.len(), 2);
+        assert_eq!(ctx.agent_config.model, "gpt-4o");
         assert!(!ctx.prompt.is_empty());
         assert!(!ctx.profile_prompt.is_empty());
         assert_eq!(ctx.event_type, "Created");

@@ -72,6 +72,12 @@ pub struct AgentConfig {
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Extra CLI arguments appended after the standard args.
+    ///
+    /// Used by the retry loop to inject `--session-id <id>` on retry
+    /// attempts. Not serialized — always empty on deserialization.
+    #[serde(default, skip_serializing)]
+    pub extra_args: Vec<String>,
 }
 
 impl AgentConfig {
@@ -99,6 +105,7 @@ impl AgentConfig {
             provider,
             model,
             tools: Vec::new(),
+            extra_args: Vec::new(),
         })
     }
 
@@ -110,9 +117,14 @@ impl AgentConfig {
     /// ```
     ///
     /// If `tools` is non-empty, appends `--tools <comma-separated-list>`.
+    /// If `extra_args` is non-empty (e.g. `--session-id` from retry loop),
+    /// appends those after the standard args.
     ///
     /// The profile prompt and knot instructions are delivered via stdin
     /// (not `--system-prompt`), so they are not included in CLI args.
+    ///
+    /// **Adapter use only** — this constructs CLI plumbing from domain
+    /// data. The application layer should not call this directly.
     pub fn build_cli_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "-p".to_string(),
@@ -123,6 +135,7 @@ impl AgentConfig {
             args.push("--tools".to_string());
             args.push(self.tools.join(","));
         }
+        args.extend(self.extra_args.clone());
         args
     }
 }

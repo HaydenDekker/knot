@@ -16,7 +16,10 @@ This wastes provider capacity and increases cost: the conversation history alrea
 
 When a resumable invocation failure occurs and a session ID was captured, Knot automatically retries the same invocation using `--session-id <id>` to continue the Pi session — up to 10 retry attempts **or** until the profile's overall timeout budget is exhausted (whichever comes first). On retry, a `"please continue"` message is appended to the session so the agent resumes where it left off. A 10-second delay between retries allows transient network errors to recover. On successful resume, the strand completes normally (transparent). On exhausted retries or budget expiry, the strand is marked failed and the existing failure path (loom-log, rig-log) takes over.
 
-## Implementation Status: ✅ Complete
+## Implementation Status: 🟡 In Progress
+
+**Core session resume:** 2026-06-28, merged to main, version 0.20.0
+**Empty response handling:** not yet implemented (Phases 5–6 below)
 
 **Completed:** 2026-06-28 on branch `refactor/session-resume-on-invocation-failure`
 **Merged to main:** 2026-06-28
@@ -190,7 +193,7 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 - [ ] Regression: all existing tests pass (especially timeout tests in `profile_timeout.rs`, pipeline tests in `pipeline.rs`)
 - [ ] `cargo clippy` clean
 
-### [x] Phase 4: Domain Glossary
+### [ ] Phase 4: Domain Glossary
 
 - [ ] Update `project/domain-glossary.md`:
   - `Session resume` — automatic retry using `--session-id` to continue a Pi session after invocation failure, up to 10 retries or until the profile timeout budget is exhausted
@@ -198,6 +201,8 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
   - `Overall timeout budget` — the profile's timeout value governs the total time across all retry attempts, not per-attempt
   - `Retry delay` — 10-second pause between retry attempts to allow transient network errors to recover
   - `Please continue` — prompt suffix appended to the session on retry, telling the agent to resume where it left off
+  - `KnotEmptyResponse` — loom-log event recorded when an agent exits successfully but produces no response text; treated as a resumable failure and retried with a stronger guidance prompt
+  - `Empty response retry` — retry path that injects "you must provide a final response if finished or continue with the task" into the prompt, distinct from the generic "please continue" used for timeout/crash retries
 
 ## Notes
 
@@ -210,6 +215,79 @@ Work in `src/application/usecases.rs`, `ProcessStrand::execute()`.
 - **Hard cap: 10 retries:** The retry loop runs at most 11 times total (initial + 10 retries). After 10 retries, strand fails regardless of remaining time.
 - **The session ID is captured from the FIRST JSON-L line**, before any generation happens. This means even if the process is killed immediately, the session ID is available for retry. This is the key insight that makes session resume feasible.
 - **On timeout, the PiJsonAgentRunner reads the stdout it captured before killing the process.** The first line (`{"type":"session","id":"..."}`) is already in the buffer. The adapter extracts it and includes it in the error.
+
+### [ ] Phase 5: Empty Response Handling
+
+An agent can exit cleanly (exit-code 0) but produce **empty output** — the provider returned no response text (e.g. immediate finish, empty `message_end`). This is treated as a resumable failure: Knot logs a `KnotEmptyResponse` event to the loom-log and retries with a stronger guidance prompt.
+
+**What is already done** (from Phase 1):
+- `KnotEmptyResponse` event variant exists in `src/domain/events.rs` with `attempt` counter
+- Empty response detection in `session_resume.rs` (`output.stdout.trim().is_empty()`) — logs event and returns `PortError::Timeout` (resumable)
+- Retry loop picks this up and retries with `prepare_retry()` (which appends `"please continue"`)
+- `usecases.rs` maps `KnotEmptyResponse` to `ProcessingStatus::Failed` with no `last_tie_off_path`
+- No tie-off is written — previous tie-off preserved, loom-log records the event
+
+**What needs to change:**
+
+1. **`src/application/session_resume.rs`** — `prepare_retry()` needs an overload for empty-response retries that injects a stronger guidance message instead of the generic `"please continue"`:
+   ```rust
+   /// Prepare for retry after an empty response.
+   /// Injects guidance telling the agent it must produce output.
+   fn prepare_empty_response_retry(
+       mut cli_args: Vec<String>,
+       mut prompt: String,
+       session_id: &Option<String>,
+   ) -> (Vec<String>, String) {
+       if let Some(sid) = session_id {
+           cli_args.push("--session-id".to_string());
+           cli_args.push(sid.clone());
+       }
+       prompt.push_str("\n\nyou must provide a final response if finished or continue with the task");
+       (cli_args, prompt)
+   }
+   ```
+
+2. **Retry loop** — distinguish empty-response failures from other failures:
+   - When `output.stdout.trim().is_empty()` on the first attempt: flag that the retry should use empty-response guidance
+   - When `output.stdout.trim().is_empty()` on a retry attempt: same — continue retrying with empty-response guidance
+   - When any other resumable error (timeout, crash): use existing `prepare_retry()` with `"please continue"`
+   - Implementation: add a `was_empty_response: bool` flag that controls which prepare function is called
+
+3. **`KnotEmptyResponse` event** — already emitted per-attempt with incrementing `attempt` counter. No change needed.
+
+**Behaviour summary:**
+- Agent finishes with empty output → `KnotEmptyResponse` logged → retry with stronger guidance prompt → agent provides real output → `KnotCompleted`, tie-off written. User sees `KnotEmptyResponse` in loom-log but the strand succeeds.
+- Agent finishes with empty output → retry with guidance → agent again returns empty → `KnotEmptyResponse` logged again → retry continues until budget exhausted → `KnotFailed` + `TimeoutExceeded` in rig-log.
+- The tie-off file records only complete final responses. The loom-log records intermittent errors. The rig-log receives the final timeout failure.
+
+**Tests (unit with mock runner):**
+- `empty_response_retries_with_guidance_prompt()` — mock returns `[Ok(empty), Ok(real)]` → retry uses empty-response guidance, second attempt succeeds
+- `empty_response_multiple_retries_logs_attempts()` — mock returns `[Ok(empty), Ok(empty), Ok(real)]` → two `KnotEmptyResponse` events with attempt 1 and 2, then success
+- `empty_response_exhausted_budget()` — mock returns `[Ok(empty) × N]` → budget exhausted, `KnotFailed`
+- `empty_response_then_timeout_mixed()` — mock returns `[Ok(empty), Err(timeout)]` → first retry uses empty guidance, subsequent retry uses generic guidance
+
+**Tests (integration):**
+- Integration test in `tests/session_resume.rs`: mock pi that returns empty JSON-L (`session` + `agent_end` with empty content) on first call, real content on second
+
+**Existing tests to update:**
+- `empty_response_first_attempt_no_retry_budget()` — existing test already verifies empty response with no budget → verify it still passes with new guidance prompt path
+
+### [ ] Phase 6: Post-Merge Reliability Fixes (Commit)
+
+Uncommitted changes (2026-06-29) — targeted fixes to adapter subprocess lifecycle and test stability, discovered during session-resume integration testing.
+
+**Process group cleanup** (`src/adapters/pi_json.rs`, `src/adapters/pi_stdio.rs`):
+- Child processes are now spawned in their own process group via `setpgid(0, 0)` in `pre_exec`
+- Timeout kills use `kill(-pid, SIGKILL)` (negative PID) to kill the **entire process group**, including any subprocesses the child spawned — prevents orphaned processes
+- `pi_stdio.rs` additionally wraps `wait_with_output()` in a background thread with a 2× timeout deadline, so the main thread doesn't block forever if pipes are held open by orphaned subprocesses
+
+**Test stability** (`tests/adapter_integration.rs`, `tests/agent_integration.rs`, `tests/session_resume.rs`, `tests/helpers.rs`):
+- Global `TEST_MUTEX` serialises tests that modify process-global state (`PATH` / env vars), preventing race conditions from parallel test execution; poisoned locks from panics are recovered gracefully
+- New helper `wait_for_loom_log_event_with_deadline()` uses caller-provided deadlines instead of fixed timeouts — accounts for the time long operations (e.g. timeouts) take before the event appears
+- `handle.abort()` moved **before assertions** in session_resume tests so loom-log is fully flushed before reading
+- Reduced test timeout profiles (120s → 60s, 15s → 1s) and retry delays (100ms → 50ms) for faster CI without changing behaviour
+
+> **Action required:** commit these changes before proceeding with plan-completion.
 
 ### Completion Notes
 

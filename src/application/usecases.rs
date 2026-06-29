@@ -765,6 +765,7 @@ impl ProcessStrand {
                 provider: profile.provider.clone(),
                 model: profile.model.clone(),
                 tools: profile.tools.clone(),
+                extra_args: Vec::new(),
             },
             timeout,
         ))
@@ -1025,22 +1026,6 @@ impl ProcessStrand {
         } else {
             Some(strand_path.clone())
         };
-        let strand_filename = strand_path.0
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let session_title = format!(
-            "{} triggered by {} on {}",
-            knot.id.0,
-            event_label,
-            strand_filename,
-        );
-        let mut cli_args = agent_config.build_cli_args();
-        cli_args.push("--name".to_string());
-        cli_args.push(session_title);
-        if let Some(ref file_path) = strand_file_ref {
-            cli_args.push(format!("@{}", file_path.0.display()));
-        }
         let mut session_id: Option<String> = None;
         let result = session_resume::execute_with_resume(
             &*self.agent_runner,
@@ -1049,7 +1034,7 @@ impl ProcessStrand {
             &knot_id,
             &strand_path,
             &mut session_id,
-            cli_args,
+            agent_config,
             prompt,
             strand_file_ref,
             profile.profile_prompt,
@@ -4637,7 +4622,7 @@ mod phase6_timeout_tests {
             knot_name: Option<String>,
             timeout: Option<std::time::Duration>,
         ) -> Result<AgentOutput, PortError> {
-            let mut cli_args = agent_config.build_cli_args();
+            let mut config = agent_config.clone();
             let strand_filename = strand_path.0
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -4648,14 +4633,13 @@ mod phase6_timeout_tests {
                 event_type,
                 strand_filename,
             );
-            cli_args.push("--name".to_string());
-            cli_args.push(session_title);
+            config.extra_args.push("--name".to_string());
+            config.extra_args.push(session_title);
             if let Some(ref file_path) = strand_file_ref {
-                cli_args.push(format!("@{}", file_path.0.display()));
+                config.extra_args.push(format!("@{}", file_path.0.display()));
             }
             let ctx = ExecutionContext {
-                cli_path: "pi".to_string(),
-                cli_args,
+                agent_config: config,
                 prompt,
                 profile_prompt,
                 strand_path,
@@ -5110,11 +5094,11 @@ mod phase6_timeout_tests {
         assert!(result.is_ok());
 
         let ctx = captured.get_captured_ctx().expect("ctx should be captured");
-        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        let has_at_ref = ctx.agent_config.extra_args.iter().any(|arg| arg.starts_with('@'));
         assert!(
             !has_at_ref,
             "Deleted events must NOT contain @file reference in cli_args: {:?}",
-            ctx.cli_args,
+            ctx.agent_config.extra_args,
         );
     }
 
@@ -5236,7 +5220,7 @@ mod phase6_timeout_tests {
         );
 
         // Verify no @file reference
-        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        let has_at_ref = ctx.agent_config.extra_args.iter().any(|arg| arg.starts_with('@'));
         assert!(
             !has_at_ref,
             "Deleted events must NOT contain @file reference",
@@ -5278,13 +5262,13 @@ mod phase6_timeout_tests {
         assert!(result.is_ok());
 
         let ctx = captured.get_captured_ctx().expect("ctx should be captured");
-        let has_at_ref = ctx.cli_args.iter().any(|arg| {
+        let has_at_ref = ctx.agent_config.extra_args.iter().any(|arg| {
             arg.starts_with('@') && arg.contains("strand.md")
         });
         assert!(
             has_at_ref,
             "Created events MUST contain @file reference in cli_args: {:?}",
-            ctx.cli_args,
+            ctx.agent_config.extra_args,
         );
         // Prompt should NOT contain deletion notice for Created events
         assert!(
@@ -5340,7 +5324,7 @@ mod phase6_timeout_tests {
             "prompt should NOT contain history section when no entries exist",
         );
         // Should NOT contain @file reference
-        let has_at_ref = ctx.cli_args.iter().any(|arg| arg.starts_with('@'));
+        let has_at_ref = ctx.agent_config.extra_args.iter().any(|arg| arg.starts_with('@'));
         assert!(
             !has_at_ref,
             "Deleted events must NOT contain @file reference",
@@ -5619,7 +5603,7 @@ mod phase7_timeout_resolution_tests {
             knot_name: Option<String>,
             timeout: Option<std::time::Duration>,
         ) -> Result<AgentOutput, PortError> {
-            let mut cli_args = agent_config.build_cli_args();
+            let mut config = agent_config.clone();
             let strand_filename = strand_path.0
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -5630,14 +5614,13 @@ mod phase7_timeout_resolution_tests {
                 event_type,
                 strand_filename,
             );
-            cli_args.push("--name".to_string());
-            cli_args.push(session_title);
+            config.extra_args.push("--name".to_string());
+            config.extra_args.push(session_title);
             if let Some(ref file_path) = strand_file_ref {
-                cli_args.push(format!("@{}", file_path.0.display()));
+                config.extra_args.push(format!("@{}", file_path.0.display()));
             }
             let ctx = ExecutionContext {
-                cli_path: "pi".to_string(),
-                cli_args,
+                agent_config: config,
                 prompt,
                 profile_prompt,
                 strand_path,
@@ -6678,7 +6661,7 @@ mod phase9_session_title_tests {
             knot_name: Option<String>,
             timeout: Option<std::time::Duration>,
         ) -> Result<AgentOutput, PortError> {
-            let mut cli_args = agent_config.build_cli_args();
+            let mut config = agent_config.clone();
             let strand_filename = strand_path.0
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -6689,14 +6672,13 @@ mod phase9_session_title_tests {
                 event_type,
                 strand_filename,
             );
-            cli_args.push("--name".to_string());
-            cli_args.push(session_title);
+            config.extra_args.push("--name".to_string());
+            config.extra_args.push(session_title);
             if let Some(ref file_path) = strand_file_ref {
-                cli_args.push(format!("@{}", file_path.0.display()));
+                config.extra_args.push(format!("@{}", file_path.0.display()));
             }
             let ctx = ExecutionContext {
-                cli_path: "pi".to_string(),
-                cli_args,
+                agent_config: config,
                 prompt,
                 profile_prompt,
                 strand_path,
@@ -6882,7 +6864,7 @@ mod phase9_session_title_tests {
         // Verify CLI args contain --name with correct title
         let contexts = captured_contexts.lock().unwrap();
         assert_eq!(contexts.len(), 1, "should have called execute once");
-        let args = &contexts[0].cli_args;
+        let args = &contexts[0].agent_config.extra_args;
         assert!(
             args.contains(&"--name".to_string()),
             "CLI args should contain --name flag: {:?}",
@@ -6935,7 +6917,7 @@ mod phase9_session_title_tests {
         use_case.execute(event).unwrap();
 
         let contexts = captured_contexts.lock().unwrap();
-        let args = &contexts[0].cli_args;
+        let args = &contexts[0].agent_config.extra_args;
         let name_value = find_name_value(args).expect("--name should have a value");
         assert_eq!(
             name_value,
@@ -6979,7 +6961,7 @@ mod phase9_session_title_tests {
         use_case.execute(event).unwrap();
 
         let contexts = captured_contexts.lock().unwrap();
-        let args = &contexts[0].cli_args;
+        let args = &contexts[0].agent_config.extra_args;
         let name_value = find_name_value(args).expect("--name should have a value");
         assert_eq!(
             name_value,
@@ -7040,9 +7022,9 @@ mod phase9_session_title_tests {
         let contexts = captured_contexts.lock().unwrap();
         assert_eq!(contexts.len(), 2);
 
-        let name1 = find_name_value(&contexts[0].cli_args)
+        let name1 = find_name_value(&contexts[0].agent_config.extra_args)
             .expect("first call should have --name");
-        let name2 = find_name_value(&contexts[1].cli_args)
+        let name2 = find_name_value(&contexts[1].agent_config.extra_args)
             .expect("second call should have --name");
 
         assert_eq!(name1, "reviewer triggered by Modified on file-a.md");
@@ -7119,7 +7101,7 @@ mod phase9_session_title_tests {
         assert_eq!(ctx.event_type, "Modified");
         assert_eq!(ctx.knot_name.as_deref(), Some("reviewer"));
         // --name is in CLI args, not in prompt content
-        assert!(ctx.cli_args.contains(&"--name".to_string()));
+        assert!(ctx.agent_config.extra_args.contains(&"--name".to_string()));
         assert!(!ctx.prompt.contains("--name"),
             "--name should not appear in prompt content");
         assert!(!ctx.profile_prompt.contains("--name"),

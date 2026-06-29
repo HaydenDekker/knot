@@ -12,9 +12,17 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Stub `pi` agent produces tie-off with correct output.
 #[test]
 fn agent_execution_produces_tie_off() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -48,6 +56,7 @@ fn agent_execution_produces_tie_off() {
 /// Agent output appears in state.json last_tie_off_path.
 #[test]
 fn agent_execution_updates_state_file() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -92,6 +101,7 @@ fn agent_execution_updates_state_file() {
 /// Multiple strands produce append-mode tie-off history.
 #[test]
 fn agent_execution_append_mode_tie_offs() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -124,6 +134,7 @@ fn agent_execution_append_mode_tie_offs() {
 /// Agent failure writes error tie-off and updates state to failed.
 #[test]
 fn agent_failure_records_error_in_state() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -182,6 +193,7 @@ fn agent_failure_records_error_in_state() {
 /// Agent failure writes KnotFailed to loom-log.
 #[test]
 fn agent_failure_records_loom_log_entry() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -220,6 +232,7 @@ fn agent_failure_records_loom_log_entry() {
 /// Agent processes Deleted strand events (no output produced).
 #[test]
 fn agent_handles_deleted_strand() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -248,6 +261,7 @@ fn agent_handles_deleted_strand() {
 /// Tie-off file contains the agent's stdout content.
 #[test]
 fn tie_off_contains_agent_output() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -274,6 +288,7 @@ fn tie_off_contains_agent_output() {
 /// Loom-log StrandProcessed event has no error on success.
 #[test]
 fn strand_processed_no_error_on_success() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -314,6 +329,7 @@ fn strand_processed_no_error_on_success() {
 /// Agent state transitions: idle → processing → completed.
 #[test]
 fn agent_state_transitions_through_processing() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -360,6 +376,7 @@ fn agent_state_transitions_through_processing() {
 /// Multiple looms process independently via the same agent.
 #[test]
 fn agent_handles_multiple_looms_independently() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();

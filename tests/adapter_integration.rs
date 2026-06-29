@@ -14,6 +14,14 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+// If a previous test panicked (poisoning the mutex), we recover and continue.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 // ── Mock pi helpers ────────────────────────────────────────────────────────
 
 /// Create a mock `pi` binary that outputs JSON-L (for the json adapter).
@@ -155,6 +163,8 @@ You are a reviewer.\n"
 /// tie-off contains the response text extracted from the JSON-L stream.
 #[test]
 fn test_json_invocation_full_pipeline() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -224,6 +234,8 @@ fn test_json_invocation_full_pipeline() {
 /// Verifies existing behavior is unchanged.
 #[test]
 fn test_stdio_invocation_full_pipeline() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -293,6 +305,8 @@ fn test_stdio_invocation_full_pipeline() {
 /// mentions timeout.
 #[test]
 fn test_json_invocation_timeout_captures_session_id() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -309,16 +323,19 @@ fn test_json_invocation_timeout_captures_session_id() {
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
+    // Start a timer BEFORE triggering processing, so the wait deadline
+    // accounts for the time the first attempt takes to timeout.
+    let start = std::time::Instant::now();
     // Trigger processing — agent will timeout
     create_strand(&rig_dir, "feature.md", "content that times out");
 
-    // Wait for KnotFailed in loom-log (ProcessStrand writes this after
-    // timeout). The loom-log is written synchronously during processing,
-    // so this is a reliable signal.
-    wait_for_loom_log_event(&rig_dir, "review-loom", "KnotFailed");
-
-    // Give the state writer time to pick up the new status
-    thread::sleep(Duration::from_secs(6));
+    // Wait for KnotFailed with extended deadline (1s timeout + buffer)
+    wait_for_loom_log_event_with_deadline(
+        &rig_dir,
+        "review-loom",
+        "KnotFailed",
+        start + Duration::from_secs(30),
+    );
 
     // Verify loom-log has KnotFailed
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -362,6 +379,9 @@ fn test_json_invocation_timeout_captures_session_id() {
     );
 
     // Verify state reflects failed status
+    // State writer is async — poll for the status update
+    wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "failed");
+
     let state = read_state_file(&rig_dir).unwrap();
     let knot = state
         .get("looms")

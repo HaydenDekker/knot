@@ -9,10 +9,22 @@ mod helpers;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use helpers::*;
+
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+// Each test acquires this at start and holds it until abort + assertions.
+// If a previous test panicked (poisoning the mutex), we recover and continue
+// — one test's failure shouldn't break all subsequent tests.
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Acquire the test mutex, recovering from poison if needed.
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 // ── Mock pi helpers ────────────────────────────────────────────────────────
 
@@ -254,6 +266,8 @@ fn wait_for_rig_log_event(
 /// Loom-log shows SessionResumed + KnotCompleted, no KnotFailed.
 #[test]
 fn test_session_resume_success() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -261,8 +275,10 @@ fn test_session_resume_success() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 120s timeout (enough budget for first attempt + retry)
-    create_profile_with_timeout(&rig_dir, "fast", 120);
+    // Profile with 60s timeout — enough budget for first attempt + retry.
+    // Each attempt takes ~5s due to wait_with_output() minimum deadline,
+    // so 60s comfortably covers both attempts.
+    create_profile_with_timeout(&rig_dir, "fast", 60);
 
     let counter_file = tmp.path().join("counter");
     create_mock_pi_fail_then_success(
@@ -280,6 +296,9 @@ fn test_session_resume_success() {
 
     // Wait for completion (retry should succeed)
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Abort before assertions so loom-log is fully flushed
+    handle.abort();
 
     // Verify loom-log has SessionResumed + KnotCompleted
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -340,14 +359,14 @@ fn test_session_resume_success() {
         "tie-off should contain resumed response. Got:\n{}",
         content
     );
-
-    handle.abort();
 }
 
 /// All retry attempts timeout within budget → KnotFailed in loom-log,
 /// TimeoutExceeded in rig-log.
 #[test]
 fn test_session_resume_exhausted() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -355,18 +374,16 @@ fn test_session_resume_exhausted() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 120s timeout.
-    // Mock fails 20 times, but budget + retry delay limits retries.
-    // Each retry has 10s delay (reduced via env var), so budget drains.
+    // Profile with 120s timeout — retries exhaust budget via delays.
     create_profile_with_timeout(&rig_dir, "fast", 120);
 
     // Mock pi that always fails — budget + delay should exhaust retries
     let counter_file = tmp.path().join("counter_exhausted");
     create_mock_pi_always_fail(&rig_dir, "sess-exhausted", 20, &counter_file);
 
-    // Fast retry delay for test (100ms instead of 10s)
+    // Fast retry delay for test (50ms instead of 10s)
     unsafe {
-        std::env::set_var("KNOT_RETRY_DELAY_MS", "100");
+        std::env::set_var("KNOT_RETRY_DELAY_MS", "50");
     }
 
     let handle = start_knot(rig_dir.clone());
@@ -376,6 +393,9 @@ fn test_session_resume_exhausted() {
 
     // Wait for KnotFailed (should happen after retries exhausted)
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotFailed");
+
+    // Abort before assertions
+    handle.abort();
 
     // Verify loom-log has KnotFailed
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -433,8 +453,6 @@ fn test_session_resume_exhausted() {
     unsafe {
         std::env::remove_var("KNOT_RETRY_DELAY_MS");
     }
-
-    handle.abort();
 }
 
 /// Profile timeout budget is consumed by the first attempt — no retries possible.
@@ -442,6 +460,8 @@ fn test_session_resume_exhausted() {
 /// entire budget, leaving no room for retry.
 #[test]
 fn test_session_resume_budget_expired() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -449,18 +469,29 @@ fn test_session_resume_budget_expired() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 15s timeout.
-    // First attempt: killed at 15s → remaining = 15 - 15 = 0 < 5 → no retry.
-    create_profile_with_timeout(&rig_dir, "fast", 15);
+    // Profile with 1s timeout.
+    // First attempt: killed at 1s → remaining = 1 - 1 = 0 < 5 → no retry.
+    create_profile_with_timeout(&rig_dir, "fast", 1);
     create_mock_pi_timeout_only(&rig_dir, "sess-budget");
 
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
+    // Start a timer BEFORE triggering processing, so the wait deadline
+    // accounts for the time the first attempt takes to timeout.
+    let start = std::time::Instant::now();
     create_strand(&rig_dir, "feature.md", "budget test content");
 
-    // Wait for KnotFailed
-    wait_for_loom_log_event(&rig_dir, "review-loom", "KnotFailed");
+    // Wait for KnotFailed — 1s timeout + processing overhead.
+    wait_for_loom_log_event_with_deadline(
+        &rig_dir,
+        "review-loom",
+        "KnotFailed",
+        start + Duration::from_secs(15),
+    );
+
+    // Abort before assertions
+    handle.abort();
 
     let events = read_loom_log(&rig_dir, "review-loom");
     let types: Vec<_> = events
@@ -501,14 +532,14 @@ fn test_session_resume_budget_expired() {
             error
         );
     }
-
-    handle.abort();
 }
 
 /// With `agent-adapter: pi-stdio`, failure → no retry because session_id
 /// is never captured (stdio adapter doesn't emit JSON-L).
 #[test]
 fn test_session_resume_stdio_no_retry() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -516,8 +547,8 @@ fn test_session_resume_stdio_no_retry() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 2s timeout
-    create_profile_with_timeout(&rig_dir, "fast", 2);
+    // Profile with 1s timeout
+    create_profile_with_timeout(&rig_dir, "fast", 1);
 
     // Stdio mock pi that sleeps (will timeout, but no session_id captured)
     let bin_dir = rig_dir.join("bin");
@@ -544,10 +575,20 @@ fn test_session_resume_stdio_no_retry() {
     let handle = start_knot(rig_dir.clone());
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
+    // Start a timer BEFORE triggering processing
+    let start = std::time::Instant::now();
     create_strand(&rig_dir, "feature.md", "stdio no retry content");
 
-    // Wait for KnotFailed (no retry should happen)
-    wait_for_loom_log_event(&rig_dir, "review-loom", "KnotFailed");
+    // Wait for KnotFailed — 1s timeout + generous buffer
+    wait_for_loom_log_event_with_deadline(
+        &rig_dir,
+        "review-loom",
+        "KnotFailed",
+        start + Duration::from_secs(10),
+    );
+
+    // Abort before assertions so loom-log is fully flushed
+    handle.abort();
 
     let events = read_loom_log(&rig_dir, "review-loom");
     let types: Vec<_> = events
@@ -568,15 +609,14 @@ fn test_session_resume_stdio_no_retry() {
         "should have 0 SessionResumed for stdio adapter, got {}",
         resumed_count
     );
-
-    // Should complete quickly (just 1 attempt, no retries)
-    handle.abort();
 }
 
 /// First fails, retry succeeds → loom-log has SessionResumed + KnotCompleted,
 /// no KnotFailed. Transparent to the outer flow.
 #[test]
 fn test_session_resume_transparent_on_success() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -584,7 +624,8 @@ fn test_session_resume_transparent_on_success() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    create_profile_with_timeout(&rig_dir, "fast", 120);
+    // Profile with 60s timeout — enough for first attempt + retry.
+    create_profile_with_timeout(&rig_dir, "fast", 60);
 
     let counter_file = tmp.path().join("counter2");
     create_mock_pi_fail_then_success(
@@ -600,6 +641,9 @@ fn test_session_resume_transparent_on_success() {
     create_strand(&rig_dir, "feature.md", "transparent test");
 
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Abort before assertions
+    handle.abort();
 
     // Verify loom-log sequence
     let events = read_loom_log(&rig_dir, "review-loom");
@@ -662,8 +706,6 @@ fn test_session_resume_transparent_on_success() {
         "tie-off should contain success output. Got:\n{}",
         content
     );
-
-    handle.abort();
 }
 
 /// 10s delay observed between retry attempts (wall-clock).
@@ -673,6 +715,8 @@ fn test_session_resume_transparent_on_success() {
 /// the per-attempt timeout by at least the configured delay.
 #[test]
 fn test_session_resume_delay_between_retries() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -680,8 +724,8 @@ fn test_session_resume_delay_between_retries() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
 
-    // Profile with 120s timeout (enough for 1 attempt + delay + retry)
-    create_profile_with_timeout(&rig_dir, "fast", 120);
+    // Profile with 60s timeout — enough for first attempt + delay + retry.
+    create_profile_with_timeout(&rig_dir, "fast", 60);
 
     let counter_file = tmp.path().join("counter3");
     create_mock_pi_fail_then_success(
@@ -691,10 +735,9 @@ fn test_session_resume_delay_between_retries() {
         &counter_file,
     );
 
-    // Set fast retry delay for test (100ms instead of 10s)
-    // The session_resume module reads KNOT_RETRY_DELAY_MS env var.
+    // Set fast retry delay for test (50ms instead of 10s)
     unsafe {
-        std::env::set_var("KNOT_RETRY_DELAY_MS", "100");
+        std::env::set_var("KNOT_RETRY_DELAY_MS", "50");
     }
 
     let handle = start_knot(rig_dir.clone());
@@ -708,20 +751,22 @@ fn test_session_resume_delay_between_retries() {
 
     let elapsed = start.elapsed();
 
+    // Abort and clear env var before assertions
+    handle.abort();
+
     // Clear the env var for other tests
     unsafe {
         std::env::remove_var("KNOT_RETRY_DELAY_MS");
     }
 
     // First attempt fails instantly (exit code 1), so ~0s.
-    // Plus 100ms retry delay.
+    // Plus 50ms retry delay.
     // Second attempt is instant.
-    // So total ≈ 100ms + small overhead.
-    // We verify elapsed >= 100ms, proving the retry delay occurred.
-    // We verify elapsed > 30s, proving the retry delay occurred.
+    // So total ≈ 50ms + small overhead.
+    // We verify elapsed >= 50ms, proving the retry delay occurred.
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "total elapsed should be >= retry delay (100ms), proving \
+        elapsed >= Duration::from_millis(50),
+        "total elapsed should be >= retry delay (50ms), proving \
          delay occurred. Got: {:?}",
         elapsed
     );
@@ -737,8 +782,6 @@ fn test_session_resume_delay_between_retries() {
         "should have SessionResumed (retry happened). Events: {:?}",
         types
     );
-
-    handle.abort();
 }
 
 // ── Regression: verify existing pipeline still works ──────────────────────
@@ -746,6 +789,8 @@ fn test_session_resume_delay_between_retries() {
 /// Regression: basic pipeline still works after session-resume integration.
 #[test]
 fn test_regression_basic_pipeline_still_works() {
+    let _lock = acquire_test_lock();
+
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -760,6 +805,9 @@ fn test_regression_basic_pipeline_still_works() {
 
     create_strand(&rig_dir, "feature.md", "regression content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
+
+    // Abort before assertions
+    handle.abort();
 
     let events = read_loom_log(&rig_dir, "review-loom");
     let types: Vec<_> = events
@@ -791,6 +839,4 @@ fn test_regression_basic_pipeline_still_works() {
         "tie-off should contain output. Got:\n{}",
         content
     );
-
-    handle.abort();
 }
