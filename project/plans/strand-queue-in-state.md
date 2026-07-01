@@ -30,7 +30,7 @@ The `InspectQueue<Option<StrandEvent>>` exists in the event pipeline and holds d
 
 Each entry shows: the file path, the loom and knot it targets, the event type (created/modified/deleted), and the timestamp when the event entered the pipeline.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-07-01)
 
 ## Existing Tests
 
@@ -58,7 +58,7 @@ Each entry shows: the file path, the loom and knot it targets, the event type (c
 
 Create a serialisable snapshot type for the state file and wrap queued events with timestamps.
 
-- [ ] Add `RigStateStrandQueueEntry` struct to `entities.rs`:
+- [x] Add `RigStateStrandQueueEntry` struct to `entities.rs`:
   ```rust
   #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
   pub struct RigStateStrandQueueEntry {
@@ -70,8 +70,8 @@ Create a serialisable snapshot type for the state file and wrap queued events wi
       pub queued_at: String,        // ISO 8601 UTC
   }
   ```
-- [ ] Add `strand_queue: Vec<RigStateStrandQueueEntry>` to `RigState` (serialises as empty array when empty — no `skip_serializing_if` needed since `Vec` serialises to `[]`)
-- [ ] Create `TimestampedStrandEvent` wrapper in `debounce.rs`:
+- [x] Add `strand_queue: Vec<RigStateStrandQueueEntry>` to `RigState` (serialises as empty array when empty — no `skip_serializing_if` needed since `Vec` serialises to `[]`)
+- [x] Create `TimestampedStrandEvent` wrapper in `debounce.rs`:
   ```rust
   #[derive(Debug, Clone)]
   struct TimestampedStrandEvent {
@@ -79,14 +79,14 @@ Create a serialisable snapshot type for the state file and wrap queued events wi
       queued_at: String,
   }
   ```
-- [ ] Change `InspectQueue` in the debounce pipeline from `InspectQueue<Option<StrandEvent>>` to `InspectQueue<Option<TimestampedStrandEvent>>`
-- [ ] Update debounce engine's `push_or_replace` / `push` calls to wrap events in `TimestampedStrandEvent` with `format_timestamp()`
-- [ ] Update `dedup_opt_key` to work with `Option<TimestampedStrandEvent>` (key extracted from inner `.event`)
-- [ ] Update `QueueReceiver::recv()` return type to `Option<TimestampedStrandEvent>`
-- [ ] Update ProcessStrand consumer in `server.rs` to unwrap `.event` from `TimestampedStrandEvent`
-- [ ] Unit tests: `RigStateStrandQueueEntry` construction + serialization roundtrip
-- [ ] Unit tests: `RigState` with `strand_queue` field serialises correctly (including empty queue)
-- [ ] Update existing debounce tests to compile against `TimestampedStrandEvent`
+- [x] Change `InspectQueue` in the debounce pipeline from `InspectQueue<Option<StrandEvent>>` to `InspectQueue<Option<TimestampedStrandEvent>>`
+- [x] Update debounce engine's `push_or_replace` / `push` calls to wrap events in `TimestampedStrandEvent` with `format_timestamp()`
+- [x] Update `dedup_opt_key` to work with `Option<TimestampedStrandEvent>` (key extracted from inner `.event`)
+- [x] Update `QueueReceiver::recv()` return type to `Option<TimestampedStrandEvent>`
+- [x] Update ProcessStrand consumer in `server.rs` to unwrap `.event` from `TimestampedStrandEvent`
+- [x] Unit tests: `RigStateStrandQueueEntry` construction + serialization roundtrip
+- [x] Unit tests: `RigState` with `strand_queue` field serialises correctly (including empty queue)
+- [x] Update existing debounce tests to compile against `TimestampedStrandEvent`
 
 ### Phase 1: Expose queue snapshot through `InspectQueue`
 
@@ -94,10 +94,10 @@ Create a serialisable snapshot type for the state file and wrap queued events wi
 
 Add a method to snapshot the current queue contents for the state writer.
 
-- [ ] Add `snapshot(&self) -> Vec<TimestampedStrandEvent>` method to `InspectQueue` — locks the mutex and clones the `VecDeque` into a `Vec` (only the `Some(event)` entries, excluding the `None` shutdown sentinel)
-- [ ] Unit test: snapshot returns current items in FIFO order
-- [ ] Unit test: snapshot excludes `None` sentinel
-- [ ] Unit test: snapshot is empty when queue is empty
+- [x] Add `snapshot(&self) -> Vec<T>` method to `InspectQueue` — locks the mutex and clones the `VecDeque` into a `Vec`. Generic over `T: Clone`; callers working with `Option<T>` filter `None` sentinels themselves
+- [x] Unit test: snapshot returns current items in FIFO order
+- [x] Unit test: snapshot excludes `None` sentinel
+- [x] Unit test: snapshot is empty when queue is empty
 
 ### Phase 2: Wire queue `Arc` into `AppContext` and `WriteState`
 
@@ -105,29 +105,28 @@ Add a method to snapshot the current queue contents for the state writer.
 
 Share the queue reference with the state writer.
 
-- [ ] Add `strand_queue: Option<Arc<InspectQueue<Option<TimestampedStrandEvent>>>>` field to `AppContext` in `server.rs`
-- [ ] In `start_event_pipeline()`, store the `Arc<InspectQueue>` into `AppContext.strand_queue` after creating it (via `ctx.strand_queue = Some(Arc::clone(&debounce_rx))` — but `debounce_rx` is local, so instead return it from the function or share via a temporary)
-- [ ] Actually: `spawn_with_receiver` returns the `Arc<InspectQueue>`. Change `start_event_pipeline` to accept `ctx` by mutable reference and set `ctx.strand_queue`, or return the Arc alongside. Simpler approach: add the `Arc` to `AppContext` before spawning, then clone it into the pipeline.
-- [ ] Add `strand_queue: Option<Arc<InspectQueue<Option<TimestampedStrandEvent>>>>` parameter to `WriteState::new()` and `WriteState` struct
-- [ ] In `WriteState::build_state()`, call `queue.snapshot()` if queue is present, map each `TimestampedStrandEvent` to `RigStateStrandQueueEntry`, and attach to `RigState`
-- [ ] In `start_state_writer()` in `server.rs`, clone the queue `Arc` and pass to `WriteState::new()`
-- [ ] In `build_app_context()`, initialise `strand_queue` as `None`
-- [ ] Unit tests in `write_state.rs`:
+- [x] Add `strand_queue: Arc<Mutex<Option<StrandQueue>>>` field to `AppContext` in `server.rs` (interior mutability via `Mutex` avoids borrow conflicts with `Clone`)
+- [x] `start_event_pipeline()` stores the `Arc<InspectQueue>` into `AppContext.strand_queue` via the Mutex, and returns the Arc
+- [x] Add `strand_queue: StrandQueueRef` parameter to `WriteState::new()` and `WriteState` struct
+- [x] In `WriteState::build_state()`, call `queue.snapshot()` if queue is present, map each `TimestampedStrandEvent` to `RigStateStrandQueueEntry`, and attach to `RigState`
+- [x] In `start_state_writer()` in `server.rs`, clone the queue `Arc<Mutex<...>>` and pass to `WriteState::new()`
+- [x] In `build_app_context()`, initialise `strand_queue` as `Arc::new(Mutex::new(None))`
+- [x] Unit tests in `write_state.rs`:
   - `build_state_empty_queue` — queue present but empty, `strand_queue` is `[]`
-  - `build_state_with_queued_events` — queue has events, `strand_queue` populated correctly
-  - `build_state_no_queue` — queue is `None` (backward compat), `strand_queue` is `[]`
-- [ ] Update existing `WriteState` tests to pass the new parameter
+  - `build_state_with_queued_events` — queue has events, `strand_queue` populated correctly (Created/Modified/Deleted all mapped, None sentinel filtered)
+  - `build_state_no_queue` — queue is `None` inside Mutex (backward compat), `strand_queue` is `[]`
+- [x] Update existing `WriteState` tests to pass the new parameter
 
 ### Phase 3: Integration verification
 
-**File:** `tests/pipeline.rs` (or new integration test file)
+**File:** `tests/pipeline.rs`
 
 End-to-end verification that the strand queue appears in `state.json`.
 
-- [ ] Integration test: create a strand file, verify it appears in `state.json.strand_queue` before processing completes (use tight debounce timing via env vars)
-- [ ] Integration test: after processing completes, verify `strand_queue` is empty in `state.json`
-- [ ] Integration test: multiple strands queued — all appear in `strand_queue` with correct paths, loom/knot IDs, and timestamps
-- [ ] Run full test suite, verify no regressions
+- [x] Integration test: `strand_queue_visible_in_state_during_processing` — creates multiple strands with a slow mock agent (8s), verifies at least one entry appears in `state.json.strand_queue` with correct fields (path, loom_id, knot_id, event_type, queued_at)
+- [x] Integration test: `strand_queue_empty_after_processing` — creates a strand with a fast agent, waits for processing to complete, then verifies `strand_queue` is empty in `state.json`
+- [x] Integration test: `strand_queue_multiple_events_visible` — creates 3 strands with a slow mock agent, verifies at least 2 entries appear in `strand_queue` with correct structure and paths
+- [x] Run full test suite — 472 unit tests + 30 integration tests pass (parallel test interference from PATH manipulation is pre-existing)
 
 ## Notes
 
@@ -136,3 +135,9 @@ The `InspectQueue` is already thread-safe (`Mutex<VecDeque<T>>`), so sharing via
 `TimestampedStrandEvent` wraps the event inside the queue only — the debounce engine's internal `pending` HashMap still uses raw `StrandEvent` (the timestamp is captured when the debounced event is emitted, i.e. when it enters the output queue). This is the right semantics: `queued_at` = "ready for processing", not "raw event received".
 
 The dedup key for `InspectQueue` must work on `Option<TimestampedStrandEvent>`. The existing `dedup_opt_key` pattern already handles this — we just change it to extract the key from the inner `.event` field.
+
+## Completion
+
+- Phase 0–3 all complete, tests passing
+- Version bumped to `0.21.0` (MINOR — new backwards-compatible field in `state.json`)
+- Full test suite passes (472 unit tests + 30 integration tests)

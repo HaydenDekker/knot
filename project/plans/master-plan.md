@@ -46,7 +46,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 50 | [Strand Queue Visibility in State](strand-queue-in-state.md) | ⬜ Planned | 2026-06-30 |
+| 51 | [Filter Final Response in Pi JSON Adapter](pi-json-final-response-filter.md) | ⬜ Planned | 2026-07-01 |
+| 50 | [Strand Queue Visibility in State](strand-queue-in-state.md) | ✅ Complete | 2026-06-30 |
 | 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ✅ Complete | 2026-06-29 |
 | 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ✅ Complete | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
@@ -230,9 +231,9 @@ Full details in [removal-of-http-interface.md](removal-of-http-interface.md).
 **Status:** ✅ Complete
 **Created:** 2026-06-18
 **Completed:** 2026-06-18
-**Goal:** Create user-facing documentation from existing project artifacts (skills, glossary, PRDs, completed plans) and package the extraction methodology into a reusable `project-documentation` skill.
+**Goal:** Create user-facing documentation from existing project artifacts (skills, glossary, PRDs, completed plans) and package the extraction methodology into a reusable `project-user-documentation` skill.
 
-**Result:** 11 user-facing docs created in `docs/`: getting-started, concepts, 3 configuration guides (profiles, knots, rig-structure), 2 workflow tutorials (review, file-generation), API reference, troubleshooting guide, design guide, and release notes. `project-documentation` skill (393 lines) created at `.agents/skills/project-documentation/SKILL.md` and published globally. README updated with documentation index. Documentation-only — no version bump needed.
+**Result:** 11 user-facing docs created in `docs/`: getting-started, concepts, 3 configuration guides (profiles, knots, rig-structure), 2 workflow tutorials (review, file-generation), API reference, troubleshooting guide, design guide, and release notes. `project-user-documentation` skill (393 lines) created at `.agents/skills/project-user-documentation/SKILL.md` and published globally. README updated with documentation index. Documentation-only — no version bump needed.
 
 Full details in [user-documentation.md](user-documentation.md).
 
