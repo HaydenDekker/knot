@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-06-29
+> **Last Updated:** 2026-07-01
 
 ## How to Add a Plan
 
@@ -46,8 +46,9 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 50 | [Strand Queue Visibility in State](strand-queue-in-state.md) | ⬜ Planned | 2026-06-30 |
 | 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ✅ Complete | 2026-06-29 |
-| 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ⬜ Planned | 2026-06-29 |
+| 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ✅ Complete | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
 | 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
@@ -74,7 +75,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
-| 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | ✅ Complete | 2026-06-08 |
+| 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | 🟡 In Progress | 2026-06-08 |
 | 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
 | 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
 | 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
@@ -98,6 +99,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 50. Strand Queue Visibility in State
+
+**Status:** ⬜ Planned
+**Created:** 2026-06-30
+**Goal:** Add `strand_queue` array to `rig/state.json` showing all pending strand events with file path, loom/knot IDs, event type, and queued timestamp.
+
+Full details in [strand-queue-in-state.md](strand-queue-in-state.md).
 
 ### 49. Split `process_strand.rs` Tests into Isolated Module
 
@@ -401,12 +410,12 @@ Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-
 
 ### 20. Knot Modification Observability and Path Resolution Consistency
 
-**Status:** ✅ Complete
+**Status:** 🟡 In Progress
 **Created:** 2026-06-08
-**Completed:** 2026-06-15
+**Completed (Phase 0):** 2026-06-15
 **Goal:** Make `KnotModified` filesystem changes observable via loom-log (`LoomEvent::KnotUpdated`), log parse failures to stderr, and ensure path resolution is consistent between initial load and file-watcher events.
 
-**Result:** Phase 0 (path resolution consistency) completed: `NotifyEventSource` now receives correct `project_root` (parent of rig directory) so relative `strand_dir` paths resolve identically to `FileSystemLoomRepository::scan()`. Full rename `base_dir` → `rig_dir` across all 7 source files + 17 test files to eliminate ambiguity between "rig directory" and "project root". Remaining phases (KnotUpdated loom-log, parse failure logging, integration test) remain Planned.
+**Result (Phase 0):** `NotifyEventSource` now receives correct `project_root` (parent of rig directory) so relative `strand_dir` paths resolve identically to `FileSystemLoomRepository::scan()`. Full rename `base_dir` → `rig_dir` across all 7 source files + 17 test files to eliminate ambiguity between "rig directory" and "project root". Remaining phases (KnotUpdated loom-log, parse failure logging, integration test) still pending.
 
 Full details in [plan-knot-modify-observability.md](plan-knot-modify-observability.md).
 

@@ -16,7 +16,7 @@ Two issues with knot configuration changes:
 2. Parse failures log to stderr so malformed frontmatter is not silently ignored.
 3. Path resolution in `NotifyEventSource` matches `FileSystemLoomRepository` (both resolve to absolute) — ensuring the in-memory knot is consistent whether loaded at startup or via file watcher.
 
-## Implementation Status: ✅ Complete (2026-06-15)
+## Implementation Status: 🟡 Phase 0 Complete (2026-06-15) — Phases 1–4 Remaining
 
 ## Existing Tests
 

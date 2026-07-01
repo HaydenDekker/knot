@@ -213,6 +213,16 @@ Consumer knots that listen for events set `strand-dir: "loom-box/"` relative to 
 - Existing tie-off entries without structured event data are parsed normally (no events extracted)
 - The tie-off parser gracefully skips malformed event entries
 
+### Benefit: Intent Awareness Enables Tie-Off Monitoring
+
+Because the agent declares its intent in the knot definition file, Knot knows what event data should appear in the tie-off after each run. This enables a monitoring loop:
+
+1. After a knot produces a tie-off, Knot checks whether the structured event metadata was populated.
+2. If the agent forgot to include the event data (e.g. omitted `event:`, `from:`, `to:` fields), Knot can detect this gap from the intent declaration alone.
+3. Knot can then inject an additional session-scoped message into the agent's next session, requesting it populate the missing event information.
+
+This is a form of lightweight agent supervision — the intent declaration serves not just as a routing contract but also as a completeness check. It reduces the burden on the agent to self-audit and ensures inter-agent events are reliably structured.
+
 ### What This Does NOT Cover
 - Cross-rig event routing (events stay within a single rig)
 - Event expiration or TTL (events persist until manually cleaned)
