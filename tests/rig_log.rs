@@ -12,9 +12,17 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// QueueIdle event is written to rig-log after processing.
 #[test]
 fn queue_idle_written_to_rig_log() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();

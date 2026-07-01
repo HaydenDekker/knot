@@ -212,6 +212,9 @@ pub struct RigState {
     pub looms: Vec<RigStateLoom>,
     /// All registered agent profiles.
     pub profiles: Vec<RigStateProfile>,
+    /// Pending strand events waiting in the processing queue.
+    /// Empty array when no events are queued.
+    pub strand_queue: Vec<RigStateStrandQueueEntry>,
     /// ISO 8601 UTC timestamp of the last state write.
     pub updated_at: String,
 }
@@ -258,6 +261,26 @@ pub struct RigStateProfile {
     /// Session timeout in seconds. `None` means use the runner's default (300s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+}
+
+/// A pending strand event as represented in the state snapshot.
+///
+/// Each entry shows a strand event waiting in the debounce/processing
+/// pipeline — useful for visibility during bursts or while knots are
+/// busy processing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RigStateStrandQueueEntry {
+    /// Path to the strand file.
+    pub strand_path: String,
+    /// The loom this event targets.
+    pub loom_id: String,
+    /// The knot this event targets.
+    pub knot_id: String,
+    /// The event type: `"created"`, `"modified"`, or `"deleted"`.
+    #[serde(rename = "event_type")]
+    pub event_kind: String,
+    /// ISO 8601 UTC timestamp when the event entered the processing queue.
+    pub queued_at: String,
 }
 
 // ── Strand File Check Results ────────────────────────────────────────────
@@ -666,6 +689,7 @@ mod tests {
                 model: "gpt-4o".to_string(),
                 timeout: None,
             }],
+            strand_queue: vec![],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         };
 
@@ -677,6 +701,7 @@ mod tests {
         assert_eq!(state.looms[0].knots[0].status, "idle");
         assert_eq!(state.profiles.len(), 1);
         assert_eq!(state.profiles[0].name, "fast");
+        assert!(state.strand_queue.is_empty());
     }
 
     #[test]
@@ -700,6 +725,7 @@ mod tests {
                 model: "gpt-4o".to_string(),
                 timeout: None,
             }],
+            strand_queue: vec![],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         };
 
@@ -724,6 +750,7 @@ mod tests {
                 }],
             }],
             profiles: vec![],
+            strand_queue: vec![],
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         };
 
@@ -738,6 +765,7 @@ mod tests {
             rig_path: "/empty/rig".to_string(),
             looms: vec![],
             profiles: vec![],
+            strand_queue: vec![],
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         };
 
@@ -746,6 +774,7 @@ mod tests {
         assert_eq!(deserialized, state);
         assert!(deserialized.looms.is_empty());
         assert!(deserialized.profiles.is_empty());
+        assert!(deserialized.strand_queue.is_empty());
     }
 
     #[test]
@@ -763,6 +792,116 @@ mod tests {
         let deserialized: RigStateKnot = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, knot);
         assert_eq!(deserialized.last_error, Some("timeout".to_string()));
+    }
+
+    // ── RigStateStrandQueueEntry Tests ─────────────────────────────
+
+    #[test]
+    fn strand_queue_entry_construction() {
+        let entry = RigStateStrandQueueEntry {
+            strand_path: "/project/src/main.rs".to_string(),
+            loom_id: "review-loom".to_string(),
+            knot_id: "review".to_string(),
+            event_kind: "created".to_string(),
+            queued_at: "2026-06-30T12:00:00Z".to_string(),
+        };
+
+        assert_eq!(entry.strand_path, "/project/src/main.rs");
+        assert_eq!(entry.loom_id, "review-loom");
+        assert_eq!(entry.knot_id, "review");
+        assert_eq!(entry.event_kind, "created");
+        assert_eq!(entry.queued_at, "2026-06-30T12:00:00Z");
+    }
+
+    #[test]
+    fn strand_queue_entry_serialization_roundtrip() {
+        let entry = RigStateStrandQueueEntry {
+            strand_path: "/project/src/main.rs".to_string(),
+            loom_id: "review-loom".to_string(),
+            knot_id: "review".to_string(),
+            event_kind: "modified".to_string(),
+            queued_at: "2026-06-30T12:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: RigStateStrandQueueEntry =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, entry);
+    }
+
+    #[test]
+    fn strand_queue_entry_serializes_event_kind_as_event_type() {
+        let entry = RigStateStrandQueueEntry {
+            strand_path: "file.md".to_string(),
+            loom_id: "loom".to_string(),
+            knot_id: "k1".to_string(),
+            event_kind: "deleted".to_string(),
+            queued_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        // field should be serialised as "event_type", not "event_kind"
+        assert!(
+            json.contains("\"event_type\":"),
+            "should contain event_type key: {}", json
+        );
+        assert!(
+            !json.contains("\"event_kind\":"),
+            "should NOT contain event_kind key: {}", json
+        );
+    }
+
+    #[test]
+    fn rig_state_with_strand_queue() {
+        let queue = vec![
+            RigStateStrandQueueEntry {
+                strand_path: "/project/a.md".to_string(),
+                loom_id: "loom-a".to_string(),
+                knot_id: "k1".to_string(),
+                event_kind: "created".to_string(),
+                queued_at: "2026-06-30T12:00:00Z".to_string(),
+            },
+            RigStateStrandQueueEntry {
+                strand_path: "/project/b.md".to_string(),
+                loom_id: "loom-a".to_string(),
+                knot_id: "k1".to_string(),
+                event_kind: "modified".to_string(),
+                queued_at: "2026-06-30T12:00:01Z".to_string(),
+            },
+        ];
+
+        let state = RigState {
+            rig_path: "/rig".to_string(),
+            looms: vec![],
+            profiles: vec![],
+            strand_queue: queue.clone(),
+            updated_at: "2026-06-30T12:01:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: RigState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, state);
+        assert_eq!(deserialized.strand_queue.len(), 2);
+        assert_eq!(deserialized.strand_queue[0].event_kind, "created");
+        assert_eq!(deserialized.strand_queue[1].event_kind, "modified");
+    }
+
+    #[test]
+    fn rig_state_empty_queue_serialises_as_empty_array() {
+        let state = RigState {
+            rig_path: "/rig".to_string(),
+            looms: vec![],
+            profiles: vec![],
+            strand_queue: vec![],
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        // Empty vec serialises as [], not omitted
+        assert!(
+            json.contains("\"strand_queue\":[]"),
+            "empty strand_queue should serialise as []: {}", json
+        );
     }
 
     #[test]
@@ -810,6 +949,7 @@ mod tests {
                     timeout: Some(600),
                 },
             ],
+            strand_queue: vec![],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         };
 

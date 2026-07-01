@@ -38,9 +38,8 @@ fn agent_execution_produces_tie_off() {
     create_strand(&rig_dir, "feature.md", "new feature");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    // Verify tie-off file exists
-    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
-    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    // Verify tie-off file exists (flat path)
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",
@@ -123,7 +122,7 @@ fn agent_execution_append_mode_tie_offs() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // Tie-off file should contain content from both runs (append mode)
-    let tie_off_file = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let content = fs::read_to_string(&tie_off_file).unwrap();
     // Should contain the agent output (at least once)
     assert!(content.contains("review v1"));
@@ -277,7 +276,7 @@ fn tie_off_contains_agent_output() {
     create_strand(&rig_dir, "feature.md", "content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    let tie_off_file = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let content = fs::read_to_string(&tie_off_file).unwrap();
     assert!(content.contains("line one"));
     assert!(content.contains("line two"));

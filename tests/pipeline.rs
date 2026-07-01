@@ -14,9 +14,17 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A strand file triggers the full pipeline: KnotProcessing → agent run → tie-off → KnotCompleted.
 #[test]
 fn pipeline_processes_strand_create() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -43,9 +51,8 @@ fn pipeline_processes_strand_create() {
     // Verify loom-log has KnotCompleted event
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
-    // Verify tie-off was written (status already confirmed, file should be ready)
-    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
-    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    // Verify tie-off was written (flat path)
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",
@@ -65,6 +72,7 @@ fn pipeline_processes_strand_create() {
 /// Modifying a strand file triggers reprocessing.
 #[test]
 fn pipeline_reprocesses_on_strand_modify() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -117,6 +125,7 @@ fn pipeline_reprocesses_on_strand_modify() {
 /// Deleting a strand file triggers the pipeline (Deleted event).
 #[test]
 fn pipeline_handles_strand_delete() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -165,6 +174,7 @@ fn pipeline_handles_strand_delete() {
 /// The debounce engine prevents rapid-fire events from causing duplicate processing.
 #[test]
 fn pipeline_debounces_rapid_strand_changes() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -217,6 +227,7 @@ fn pipeline_debounces_rapid_strand_changes() {
 /// State file reflects processing status changes during the pipeline.
 #[test]
 fn state_file_reflects_pipeline_progress() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -274,6 +285,7 @@ fn state_file_reflects_pipeline_progress() {
 /// Loom-log contains the full event sequence for a strand processing.
 #[test]
 fn loom_log_contains_full_event_sequence() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -334,6 +346,7 @@ fn loom_log_contains_full_event_sequence() {
 /// - Text file (`.txt`) in the same strand dir → normal processing
 #[test]
 fn pipeline_ignores_binary_files_and_processes_text_files() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -414,9 +427,8 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
-    // Verify tie-off was written
-    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
-    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    // Verify tie-off was written (flat path)
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist for text file at {}",
@@ -453,6 +465,7 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
 /// text extensions trigger full pipeline processing.
 #[test]
 fn pipeline_processes_non_md_text_files() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -476,9 +489,8 @@ fn pipeline_processes_non_md_text_files() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
     wait_for_loom_log_event(&rig_dir, "review-loom", "KnotCompleted");
 
-    // Verify tie-off was written
-    let tie_off_dir = rig_dir.join("tie-offs/review-loom/review");
-    let tie_off_file = tie_off_dir.join("review-tie-off.md");
+    // Verify tie-off was written (flat path)
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist for .rs file at {}",
@@ -514,6 +526,7 @@ fn pipeline_processes_non_md_text_files() {
 /// The pipeline handles agent execution errors gracefully.
 #[test]
 fn pipeline_handles_agent_failure() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -562,6 +575,7 @@ fn pipeline_handles_agent_failure() {
 /// notice and the previous processing history from the tie-off file.
 #[test]
 fn delete_event_agent_receives_context() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -588,7 +602,7 @@ fn delete_event_agent_receives_context() {
     // Wait for the delete event to be processed.
     // After delete, the tie-off will have grown (another section appended).
     let tie_off_path =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let first_size =
         fs::metadata(&tie_off_path).map(|m| m.len()).unwrap_or(0);
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -645,6 +659,7 @@ fn delete_event_agent_receives_context() {
 /// errors about missing files (no `@file` reference for deleted events).
 #[test]
 fn delete_event_agent_skips_missing_file() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -788,6 +803,7 @@ fn create_slow_mock_pi(
 /// check silently skips it.
 #[test]
 fn pipeline_silently_skips_known_temp_file() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -889,6 +905,7 @@ fn pipeline_silently_skips_known_temp_file() {
 /// path produces a StrandSkipped entry.
 #[test]
 fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -982,6 +999,7 @@ fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
 /// strand should only inject the last 5 entries for that strand (not all).
 #[test]
 fn delete_event_large_tieoff_bounded_context() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -1048,7 +1066,7 @@ fn delete_event_large_tieoff_bounded_context() {
 
     // Verify tie-off has many entries
     let tie_off_path =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let tie_off_before_delete = fs::read_to_string(&tie_off_path).unwrap();
     let target_entries_before = tie_off_before_delete
         .matches("target.md")
@@ -1142,6 +1160,7 @@ fn delete_event_large_tieoff_bounded_context() {
 ///    still process it, proving knot-a's unwatch didn't wipe knot-b's watch.
 #[test]
 fn multi_knot_shared_directory_unwatch_does_not_remove_other_watch() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     let project_root = tmp.path();

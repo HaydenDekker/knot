@@ -133,6 +133,7 @@ mod tests {
                 model: "gpt-4o".to_string(),
                 timeout: None,
             }],
+            strand_queue: vec![],
             updated_at: "2026-06-18T12:00:00Z".to_string(),
         }
     }
@@ -243,6 +244,7 @@ mod tests {
             rig_path: "/empty".to_string(),
             looms: vec![],
             profiles: vec![],
+            strand_queue: vec![],
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         };
 
@@ -311,6 +313,7 @@ mod tests {
                         model: "gpt-4o".to_string(),
                         timeout: None,
                     }],
+                    strand_queue: vec![],
                     updated_at: format!("2026-06-18T00:00:0{i}Z"),
                 };
                 writer.lock().unwrap().write_state(&state).unwrap();

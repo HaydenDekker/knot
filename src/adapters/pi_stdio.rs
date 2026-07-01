@@ -112,10 +112,13 @@ impl AgentRunner for PiStdioAgentRunner {
         // Build CLI args from agent_config.
         let cli_args = ctx.agent_config.build_cli_args();
 
+        // CLI path resolved once at construction time.
+        let cli_path = self.cli_path.clone();
+
         // Spawn the child process in its own process group so we can
         // kill the entire group (including child processes) on timeout.
         let child = unsafe {
-            std::process::Command::new(&self.cli_path)
+            std::process::Command::new(&cli_path)
                 .args(&cli_args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -136,14 +139,14 @@ impl AgentRunner for PiStdioAgentRunner {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(PortError::CommandNotFound(format!(
                     "'{}': {}",
-                    self.cli_path, e
+                    cli_path, e
                 )));
             }
             Err(e) => {
                 return Err(PortError::AgentExecutionFailed {
                     message: format!(
                         "failed to spawn '{}': {}",
-                        self.cli_path, e
+                        cli_path, e
                     ),
                     session_id: None,
                 });
@@ -151,7 +154,7 @@ impl AgentRunner for PiStdioAgentRunner {
         };
 
         let child_pid = child.id() as i32;
-        let cli_path = self.cli_path.clone();
+        let cli_path_clone = cli_path.clone();
         let strand_desc = ctx.strand_path.0.display().to_string();
         let strand_desc_warn = strand_desc.clone(); // for timeout thread closure
         let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
@@ -178,7 +181,7 @@ impl AgentRunner for PiStdioAgentRunner {
                 };
                 eprintln!(
                     "WARNING: killed '{}' after timeout of {:?} (strand: {})",
-                    cli_path, effective_timeout, strand_desc_warn
+                    cli_path_clone, effective_timeout, strand_desc_warn
                 );
             })
             .map_err(|e| {
@@ -248,7 +251,7 @@ impl AgentRunner for PiStdioAgentRunner {
             PortError::AgentExecutionFailed {
                 message: format!(
                     "failed to wait for '{}': {}",
-                    self.cli_path, e
+                    cli_path, e
                 ),
                 session_id: None,
             }
@@ -264,7 +267,7 @@ impl AgentRunner for PiStdioAgentRunner {
             return Err(PortError::Timeout {
                 message: format!(
                     "'{}' exceeded timeout of {:?} (strand: {})",
-                    self.cli_path, effective_timeout, strand_desc
+                    cli_path, effective_timeout, strand_desc
                 ),
                 session_id: None,
             });
@@ -278,7 +281,7 @@ impl AgentRunner for PiStdioAgentRunner {
             return Err(PortError::AgentExecutionFailed {
                 message: format!(
                     "'{}' exited with code {}: {}",
-                    self.cli_path,
+                    cli_path,
                     exit_code,
                     if stderr.is_empty() { stdout } else { stderr }
                 ),

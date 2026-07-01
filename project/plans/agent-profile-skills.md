@@ -35,7 +35,8 @@ system-prompt: |
   You are a code reviewer.
 skills:
   - rust-review
-  - project-planner
+  - project-planner-create
+  - project-planner-structure
 timeout: 300
 ---
 ```
@@ -43,7 +44,7 @@ timeout: 300
 ### CLI Invocation (when skills are specified)
 
 ```
-pi -p --model claude-sonnet --system-prompt "..." --no-skills --skill /home/user/.agents/skills/rust-review/SKILL.md --skill /home/user/.agents/skills/project-planner/SKILL.md
+pi -p --model claude-sonnet --system-prompt "..." --no-skills --skill /home/user/.agents/skills/rust-review/SKILL.md --skill /home/user/.agents/skills/project-planner-create/SKILL.md
 ```
 
 ### CLI Invocation (when no skills specified)

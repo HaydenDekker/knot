@@ -160,17 +160,17 @@ pub fn parse(
     ))
 }
 
-/// Derive the tie-off output directory for a knot.
+/// Derive the tie-off output directory for a loom.
 ///
-/// Returns `rig/tie-offs/{loom-id}/{knot-name}/`. Individual strand
-/// tie-off files (e.g. `{knot-name}-tie-off.md`) are placed inside this
-/// directory by `ProcessStrand`.
+/// Returns `rig/tie-offs/{loom-id}/`. Individual strand
+/// tie-off files (e.g. `{knot-name}-tie-off.md`) are placed flat
+/// inside this directory by `ProcessStrand`.
 pub fn derive_tieoff_path(
     loom_id: &str,
-    knot_name: &str,
+    _knot_name: &str,
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
-    rig.join("tie-offs").join(loom_id).join(knot_name)
+    rig.join("tie-offs").join(loom_id)
 }
 
 /// Derive the loom-log path for a loom.
@@ -470,7 +470,7 @@ Review the document
         let path = derive_tieoff_path("my-loom", "review-knot", Path::new("/workspace/rig"));
         assert_eq!(
             path,
-            PathBuf::from("/workspace/rig/tie-offs/my-loom/review-knot")
+            PathBuf::from("/workspace/rig/tie-offs/my-loom")
         );
     }
 

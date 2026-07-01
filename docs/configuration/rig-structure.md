@@ -16,8 +16,7 @@ rig/
 ├── tie-offs/                          ← Processing output (append-only)
 │   └── {loom-id}/
 │       ├── .loom-log                  ← Per-loom activity log
-│       └── {knot-name}/
-│           └── {knot-name}-tie-off.md ← Knot output (appended per event)
+│       └── {knot-name}-tie-off.md     ← Knot output (appended per event)
 ├── {name}-loom/                       ← Loom directory (must end in `-loom`)
 │   ├── {knot-name}.md                 ← Knot definition
 │   └── ...
@@ -52,14 +51,14 @@ Tie-off output paths are **statically derived** from the loom and knot
 names — no configuration is needed:
 
 ```
-rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md
+rig/tie-offs/{loom-id}/{knot-name}-tie-off.md
 ```
 
 For example, the knot `goals-review` in loom `prd-review-loom` writes
 its tie-off to:
 
 ```
-rig/tie-offs/prd-review-loom/goals-review/goals-review-tie-off.md
+rig/tie-offs/prd-review-loom/goals-review-tie-off.md
 ```
 
 Each processing event appends to this file. The file grows over time,

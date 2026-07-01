@@ -46,7 +46,7 @@ A configured artifact that brings everything together, ready for processing. Com
 
 1. **Agent Profile** — determines *which agent* runs.
 2. **Markdown Body** — task-specific instructions that supplement the profile's system prompt.
-3. **Directories** — the `strand_dir` (where strands to watch live, **required**). The tie-off output path is **statically derived** as `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md` — no `tie-off-dir` configuration is needed.
+3. **Directories** — the `strand_dir` (where strands to watch live, **required**). The tie-off output path is **statically derived** as `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` — no `tie-off-dir` configuration is needed.
 
 A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.
 
@@ -130,7 +130,7 @@ A file in a knot's strand directory. When a strand is created, modified, or dele
 
 ### Tie-off Directory
 
-Statically derived path under `rig/tie-offs/{loom-id}/{knot-name}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed). Each knot writes a single `{knot-name}-tie-off.md` file that appends all processing events; the event metadata in each section identifies which strand was processed. The directory may also contain **typed subdirectories** for tie-off events (see below).
+Statically derived path under `rig/tie-offs/{loom-id}/`. No longer configurable per-knot (the `tie-off-dir` YAML field has been removed). Each knot writes a single `{knot-name}-tie-off.md` file flat in the loom's tie-off directory that appends all processing events; the event metadata in each section identifies which strand was processed. The directory may also contain **typed subdirectories** for tie-off events (see below).
 
 ---
 
@@ -143,8 +143,9 @@ A producing knot writes event files into its own tie-off event subdirectory. A c
 **Layout:**
 
 ```
-rig/tie-offs/<loom-id>/<knot-name>/
+rig/tie-offs/<loom-id>/
 ├── <knot-name>-tie-off.md    ← append-only log (always present)
+├── <another-knot>-tie-off.md  ← another knot's tie-off (flat)
 ├── <event-type>/              ← typed event subdirectory
 │   └── <event-file>.md        ← static event strand for consumers
 └── <another-event-type>/      ← another event type (if needed)
@@ -156,7 +157,7 @@ rig/tie-offs/<loom-id>/<knot-name>/
 - Event file names follow the pattern `<plan-number>-<description>.md` or `<identifier>-<description>.md`
 - The subdirectory is created when the knot is created — it is part of the knot's output contract
 - Consumer knots reference the full path in their `strand-dir`:
-  `../../tie-offs/<loom-id>/<knot-name>/<event-type>`
+  `../../tie-offs/<loom-id>/<event-type>`
 
 **Why tie-off directories?** The PRDs define a clean separation: rig directories hold workflow definitions; tie-off directories hold derived state. Placing events in tie-off directories keeps the rig directory pure (only loom definitions) and places events in the correct output namespace.
 
@@ -176,7 +177,7 @@ A per-knot file that records processing events and status for that knot. Contain
 
 ### Tie-off
 
-The final response or error produced by a knot at the end of its session. Each processing event is appended to a single `{knot-name}-tie-off.md` file at `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`, so the document grows over time and tells the complete story of the knot's work. The event metadata in each section identifies which strand was processed. During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
+The final response or error produced by a knot at the end of its session. Each processing event is appended to a single `{knot-name}-tie-off.md` file at `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`, so the document grows over time and tells the complete story of the knot's work. The event metadata in each section identifies which strand was processed. During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
 
 ---
 
@@ -213,10 +214,9 @@ Rig (`./rig/`)
  ├── tie-offs/
  │     └── <loom-id>/
  │           ├── .loom-log (activity log)
- │           └── <knot-name>/
- │                 ├── <knot-name>-tie-off.md (tie-off output, appended per event)
- │                 └── <event-type>/ (typed event subdirectory — static a2a comms)
- │                       └── <event-file>.md (static event strand for consumers)
+ │           ├── <knot-name>-tie-off.md (tie-off output, appended per event)
+ │           └── <event-type>/ (typed event subdirectory — static a2a comms)
+ │                 └── <event-file>.md (static event strand for consumers)
  └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
       └── Knot definition files (first-level `.md` files)
             ├── Agent Profile

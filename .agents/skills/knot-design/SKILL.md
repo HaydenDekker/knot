@@ -4,8 +4,8 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.18.0+"
+  version: "1.0.1"
+  compatibility: "Knot 0.22.0+"
 ---
 
 # Knot Design Skill

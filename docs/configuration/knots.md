@@ -44,7 +44,7 @@ will reject such files.
   containing `rig/`.
 - Absolute paths are also accepted and used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`
+  `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
 
 ### Example Layout
 
@@ -57,8 +57,7 @@ project_root/
     ├── tie-offs/
     │   └── prd-review-loom/
     │       ├── .loom-log
-    │       └── goals-review/
-    │           └── goals-review-tie-off.md
+    │       └── goals-review-tie-off.md
     └── prd-review-loom/             ← loom directory
         └── goals-review.md          ← knot definition
 ```

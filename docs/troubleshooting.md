@@ -102,7 +102,7 @@ value in the knot file.
    details:
 
    ```bash
-   cat rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md
+   cat rig/tie-offs/{loom-id}/{knot-name}-tie-off.md
    ```
 
 3. Check the rig-log for timeout events:

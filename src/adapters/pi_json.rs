@@ -4,7 +4,7 @@
 //! Reads stdout line-by-line as newline-delimited JSON, extracting:
 //! - Session ID from the first `session` event
 //! - Token usage from `agent_end` usage data
-//! - Response text from `message_end` or `agent_end` message content
+//! - Response text from `agent_end` message content (filtered by `stopReason`)
 //!
 //! Falls back to raw stdout if JSON-L parsing fails.
 
@@ -137,16 +137,9 @@ impl PiJsonAgentRunner {
                 }
             }
             Some("message_end") => {
-                // Response text from message_end with role: "assistant"
-                if let Some(role) = value.get("role").and_then(|r| r.as_str()) {
-                    if role == "assistant" {
-                        if let Some(content) = value.get("content") {
-                            if let Some(text) = content.as_str() {
-                                response_text.push_str(text);
-                            }
-                        }
-                    }
-                }
+                // Ignored — agent_end has the complete message array with
+                // stopReason filtering. message_end cannot distinguish
+                // intermediate tool-use messages from final responses.
             }
             Some("agent_end") => {
                 // Extract token usage from usage object
@@ -184,19 +177,27 @@ impl PiJsonAgentRunner {
                                 msg.get("role").and_then(|r| r.as_str())
                             {
                                 if role == "assistant" {
-                                    if let Some(content) = msg.get("content") {
-                                        if let Some(carr) = content.as_array() {
-                                            for item in carr {
-                                                if let Some(text) =
-                                                    item.get("text").and_then(|t| t.as_str())
-                                                {
-                                                    response_text.push_str(text);
+                                    // Only include final responses, not intermediate
+                                    // tool-use messages (stopReason: "toolUse").
+                                    let is_final = msg.get("stopReason")
+                                        .and_then(|r| r.as_str())
+                                        .map(|r| r == "stop" || r == "length")
+                                        .unwrap_or(false);
+                                    if is_final {
+                                        if let Some(content) = msg.get("content") {
+                                            if let Some(carr) = content.as_array() {
+                                                for item in carr {
+                                                    if let Some(text) =
+                                                        item.get("text").and_then(|t| t.as_str())
+                                                    {
+                                                        response_text.push_str(text);
+                                                    }
                                                 }
+                                            } else if let Some(text) =
+                                                content.as_str()
+                                            {
+                                                response_text.push_str(text);
                                             }
-                                        } else if let Some(text) =
-                                            content.as_str()
-                                        {
-                                            response_text.push_str(text);
                                         }
                                     }
                                 }
@@ -250,10 +251,13 @@ impl AgentRunner for PiJsonAgentRunner {
         let base_args = ctx.agent_config.build_cli_args();
         let cli_args = Self::build_json_cli_args(&base_args);
 
+        // CLI path resolved once at construction time.
+        let cli_path = self.cli_path.clone();
+
         // Spawn the child process in its own process group so we can
         // kill the entire group (including child processes) on timeout.
         let child = unsafe {
-            std::process::Command::new(&self.cli_path)
+            std::process::Command::new(&cli_path)
                 .args(&cli_args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -272,14 +276,14 @@ impl AgentRunner for PiJsonAgentRunner {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(PortError::CommandNotFound(format!(
                     "'{}': {}",
-                    self.cli_path, e
+                    cli_path, e
                 )));
             }
             Err(e) => {
                 return Err(PortError::AgentExecutionFailed {
                     message: format!(
                         "failed to spawn '{}': {}",
-                        self.cli_path, e
+                        cli_path, e
                     ),
                     session_id: None,
                 });
@@ -287,7 +291,7 @@ impl AgentRunner for PiJsonAgentRunner {
         };
 
         let child_pid = child.id() as i32;
-        let cli_path = self.cli_path.clone();
+        let cli_path_clone = cli_path.clone();
         let strand_desc = ctx.strand_path.0.display().to_string();
         let strand_desc_warn = strand_desc.clone();
         let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
@@ -308,7 +312,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 let _ = unsafe { libc::kill(-child_pid, libc::SIGKILL) };
                 eprintln!(
                     "WARNING: killed '{}' after timeout of {:?} (strand: {})",
-                    cli_path, effective_timeout, strand_desc_warn
+                    cli_path_clone, effective_timeout, strand_desc_warn
                 );
             })
             .map_err(|e| {
@@ -380,7 +384,7 @@ impl AgentRunner for PiJsonAgentRunner {
             PortError::AgentExecutionFailed {
                 message: format!(
                     "failed to wait for '{}': {}",
-                    self.cli_path, e
+                    cli_path, e
                 ),
                 session_id: None,
             }
@@ -405,7 +409,7 @@ impl AgentRunner for PiJsonAgentRunner {
             return Err(PortError::Timeout {
                 message: format!(
                     "'{}' exceeded timeout of {:?} (strand: {})",
-                    self.cli_path, effective_timeout, strand_desc
+                    cli_path, effective_timeout, strand_desc
                 ),
                 session_id,
             });
@@ -423,7 +427,7 @@ impl AgentRunner for PiJsonAgentRunner {
             return Err(PortError::AgentExecutionFailed {
                 message: format!(
                     "'{}' exited with code {}: {}",
-                    self.cli_path,
+                    cli_path,
                     exit_code,
                     if stderr.is_empty() {
                         raw_stdout.clone()
@@ -620,7 +624,7 @@ sleep 300
     #[test]
     fn test_json_runner_parses_session_id() {
         let raw = r#"{"type":"session","id":"abc-123"}
-{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"hello"}]}]}"#;
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"hello"}]}]}"#;
         let (had_error, session_id, response_text, _usage) =
             run_parse_stdout(raw);
         assert!(!had_error, "should parse cleanly");
@@ -632,7 +636,7 @@ sleep 300
     #[test]
     fn test_json_runner_parses_token_usage() {
         let raw = r#"{"type":"session","id":"sess-1"}
-{"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}"#;
+{"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
         let (_had_error, _session_id, _response, usage) =
             run_parse_stdout(raw);
         let usage = usage.unwrap();
@@ -647,7 +651,7 @@ sleep 300
     #[test]
     fn test_json_runner_parses_response_text() {
         let raw = r#"{"type":"session","id":"sess-x"}
-{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"the response text"}]}]}"#;
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"the response text"}]}]}"#;
         let (_had_error, _session_id, response_text, _usage) =
             run_parse_stdout(raw);
         assert!(response_text.contains("the response text"));
@@ -727,14 +731,73 @@ sleep 300
         assert!(json_args.contains(&"gpt-4o".to_string()));
     }
 
-    /// Unit test: `message_end` events extract response text.
+    /// Unit test: `message_end` events are now ignored.
+    /// The message_end handler was removed — agent_end has the complete
+    /// message array with stopReason filtering.
     #[test]
     fn test_json_runner_parses_message_end_response() {
         let raw = r#"{"type":"session","id":"msg-sess"}
 {"type":"message_end","role":"assistant","content":"response from message_end"}"#;
         let (_had_error, _session_id, response, _usage) =
             run_parse_stdout(raw);
-        assert!(response.contains("response from message_end"));
+        // message_end no longer extracts text — response should be empty
+        assert!(response.is_empty());
+    }
+
+    /// Unit test: tool-use messages are excluded by stopReason filter.
+    /// agent_end with two assistant messages: one toolUse (intermediate)
+    /// and one stop (final). Only the final message text appears.
+    #[test]
+    fn test_json_runner_excludes_tool_use_messages() {
+        let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Let me check the file..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"The file contains 42 lines."}]}]}"#;
+        let (_had_error, _session_id, response, _usage) =
+            run_parse_stdout(raw);
+        assert!(response.contains("42 lines"), "should contain final response");
+        assert!(
+            !response.contains("Let me check"),
+            "should not contain intermediate tool-use message: {}",
+            response
+        );
+    }
+
+    /// Unit test: stopReason "length" (truncated) is included.
+    /// Truncated responses are still the agent's final output.
+    #[test]
+    fn test_json_runner_includes_length_stop_reason() {
+        let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"truncated response"}]}]}"#;
+        let (_had_error, _session_id, response, _usage) =
+            run_parse_stdout(raw);
+        assert!(response.contains("truncated response"));
+    }
+
+    /// Unit test: stopReason "error" is excluded.
+    /// Error conditions should not produce response text.
+    #[test]
+    fn test_json_runner_excludes_error_stop_reason() {
+        let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"error output"}]}]}"#;
+        let (_had_error, _session_id, response, _usage) =
+            run_parse_stdout(raw);
+        assert!(response.is_empty());
+    }
+
+    /// Unit test: multiple tool-use messages followed by a final stop.
+    /// Only the final (stop) message text appears in response.
+    #[test]
+    fn test_json_runner_multiple_tool_use_then_stop() {
+        let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Checking config..."}]},{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Reading database..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Config and database are in sync."}]}]}"#;
+        let (_had_error, _session_id, response, _usage) =
+            run_parse_stdout(raw);
+        assert!(response.contains("in sync"), "should contain final response");
+        assert!(
+            !response.contains("Checking config"),
+            "should not contain first tool-use message: {}",
+            response
+        );
+        assert!(
+            !response.contains("Reading database"),
+            "should not contain second tool-use message: {}",
+            response
+        );
     }
 
     /// Integration test: mock echoes stdin which contains the prompt.

@@ -61,7 +61,7 @@ fn create_mock_pi_json(
          # Mock pi — JSON-L output for Knot json adapter tests\n\
          cat > /dev/null\n\
          echo '{{\"type\":\"session\",\"id\":\"{session_id}\"}}'\n\
-         echo '{{\"type\":\"agent_end\",\"usage\":{{\"input\":{usage_input},\"output\":{usage_output},\"cache_read\":0,\"cache_write\":0,\"total\":{total}}},\"messages\":[{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{escaped_response}\"}}]}}]}}'\n\
+         echo '{{\"type\":\"agent_end\",\"usage\":{{\"input\":{usage_input},\"output\":{usage_output},\"cache_read\":0,\"cache_write\":0,\"total\":{total}}},\"messages\":[{{\"role\":\"assistant\",\"stopReason\":\"stop\",\"content\":[{{\"type\":\"text\",\"text\":\"{escaped_response}\"}}]}}]}}'\n\
          exit 0\n",
         total = usage_input + usage_output,
     );
@@ -194,7 +194,7 @@ fn test_json_invocation_full_pipeline() {
 
     // Verify tie-off was written
     let tie_off_file =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",
@@ -259,7 +259,7 @@ fn test_stdio_invocation_full_pipeline() {
 
     // Verify tie-off was written
     let tie_off_file =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",

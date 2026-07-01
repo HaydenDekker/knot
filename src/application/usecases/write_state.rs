@@ -3,12 +3,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::application::debounce::InspectQueue;
+use crate::application::debounce::TimestampedStrandEvent;
 use crate::application::ports::{
     AgentProfileRepository, LoomLogPort, PortError, StateWriterPort,
 };
 use crate::application::store::LoomStore;
-use crate::domain::entities::{KnotId, LoomId, RigState, RigStateKnot, RigStateLoom, RigStateProfile};
-use crate::domain::events::LoomEvent;
+use crate::domain::entities::{
+    KnotId, LoomId, RigState, RigStateKnot, RigStateLoom, RigStateProfile,
+    RigStateStrandQueueEntry,
+};
+use crate::domain::events::{LoomEvent, StrandEvent};
 
 use super::types::format_timestamp;
 
@@ -19,6 +24,11 @@ use super::types::format_timestamp;
 /// then serialises everything into a `RigState` and delegates to
 /// `StateWriterPort` for atomic write.
 ///
+/// Type alias for the strand queue held by WriteState.
+type StrandQueueRef = Arc<std::sync::Mutex<
+    Option<Arc<InspectQueue<Option<TimestampedStrandEvent>>>>,
+>>;
+
 /// This is the core logic called by the background state writer task.
 pub struct WriteState {
     store: LoomStore,
@@ -26,16 +36,22 @@ pub struct WriteState {
     profile_repo: Arc<dyn AgentProfileRepository>,
     state_writer: Arc<dyn StateWriterPort>,
     rig_dir: PathBuf,
+    strand_queue: Option<StrandQueueRef>,
 }
 
 impl WriteState {
     /// Create a new `WriteState` use case.
+    ///
+    /// `strand_queue` is an `Arc<Mutex<Option<Arc<InspectQueue<...>>>>>`
+    /// shared with the event pipeline. When `Some`, `build_state()` takes
+    /// a fresh snapshot of the queue on each call.
     pub fn new(
         store: LoomStore,
         log_port: Arc<dyn LoomLogPort>,
         profile_repo: Arc<dyn AgentProfileRepository>,
         state_writer: Arc<dyn StateWriterPort>,
         rig_dir: PathBuf,
+        strand_queue: StrandQueueRef,
     ) -> Self {
         Self {
             store,
@@ -43,6 +59,7 @@ impl WriteState {
             profile_repo,
             state_writer,
             rig_dir,
+            strand_queue: Some(strand_queue),
         }
     }
 
@@ -80,10 +97,13 @@ impl WriteState {
 
         let rig_path = self.rig_dir.to_string_lossy().to_string();
 
+        let strand_queue_entries = self.build_queue_entries();
+
         Ok(RigState {
             rig_path,
             looms: rig_state_looms,
             profiles: rig_state_profiles,
+            strand_queue: strand_queue_entries,
             updated_at: format_timestamp(),
         })
     }
@@ -92,6 +112,68 @@ impl WriteState {
     pub fn execute(&self) -> Result<(), PortError> {
         let state = self.build_state()?;
         self.state_writer.write_state(&state)
+    }
+
+    /// Build the strand queue entries from the current queue snapshot.
+    ///
+    /// Locks the outer mutex to get the inner `Arc<InspectQueue>`,
+    /// then takes a snapshot of the queue contents, filters out `None`
+    /// shutdown sentinels, and maps each `TimestampedStrandEvent` to a
+    /// `RigStateStrandQueueEntry`.
+    fn build_queue_entries(&self) -> Vec<RigStateStrandQueueEntry> {
+        let Some(queue_ref) = &self.strand_queue else {
+            return Vec::new();
+        };
+
+        let inner = queue_ref.lock().unwrap();
+        let Some(queue) = inner.as_ref() else {
+            return Vec::new();
+        };
+
+        queue
+            .snapshot()
+            .into_iter()
+            .flatten() // filter out None (shutdown sentinel)
+            .map(|ts_event| {
+                let event = &ts_event.event;
+                let (path, loom_id, knot_id, kind) = match event {
+                    StrandEvent::Created {
+                        strand_path,
+                        loom_id,
+                        knot_id,
+                    }
+                    | StrandEvent::Modified {
+                        strand_path,
+                        loom_id,
+                        knot_id,
+                    }
+                    | StrandEvent::Deleted {
+                        strand_path,
+                        loom_id,
+                        knot_id,
+                    } => {
+                        (
+                            strand_path.0.display().to_string(),
+                            loom_id.0.clone(),
+                            knot_id.0.clone(),
+                            match event {
+                                StrandEvent::Created { .. } => "created",
+                                StrandEvent::Modified { .. } => "modified",
+                                StrandEvent::Deleted { .. } => "deleted",
+                            },
+                        )
+                    }
+                };
+
+                RigStateStrandQueueEntry {
+                    strand_path: path,
+                    loom_id,
+                    knot_id,
+                    event_kind: kind.to_string(),
+                    queued_at: ts_event.queued_at,
+                }
+            })
+            .collect()
     }
 
     /// Derive the processing status for a knot from its loom-log.
@@ -333,12 +415,16 @@ mod write_state_tests {
         let state_writer = Arc::new(MockStateWriterForState::default());
         let rig_dir = PathBuf::from("/test/rig");
 
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(None));
+
         let use_case = WriteState::new(
             store.clone(),
             log_port.clone(),
             profile_repo.clone(),
             state_writer.clone(),
             rig_dir,
+            strand_queue,
         );
 
         (use_case, store, log_port, profile_repo, state_writer)
@@ -569,12 +655,16 @@ mod write_state_tests {
             Arc::new(MockStateWriterForState::default());
         let rig_dir = PathBuf::from("/test/rig");
 
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(None));
+
         let uc = WriteState::new(
             store.clone(),
             log_port,
             profile_repo,
             state_writer,
             rig_dir,
+            strand_queue,
         );
 
         // Even with no log events, the state should build (knots default to idle)
@@ -634,7 +724,12 @@ mod write_state_tests {
         assert!(value.get("rig_path").is_some());
         assert!(value.get("looms").is_some());
         assert!(value.get("profiles").is_some());
+        assert!(value.get("strand_queue").is_some());
         assert!(value.get("updated_at").is_some());
+
+        // strand_queue is an empty array
+        let queue = value["strand_queue"].as_array().unwrap();
+        assert!(queue.is_empty());
 
         // Loom structure
         let looms = value["looms"].as_array().unwrap();
@@ -648,5 +743,137 @@ mod write_state_tests {
         assert_eq!(profiles[0]["name"], "fast");
         assert_eq!(profiles[0]["provider"], "openai");
         assert_eq!(profiles[0]["model"], "gpt-4o");
+    }
+
+    // ── Strand Queue Tests ─────────────────────────────────────────
+
+    #[test]
+    fn build_state_no_queue() {
+        // strand_queue is None (backward compat) — strand_queue should be []
+        let (uc, _, _, _, _) = build_use_case();
+
+        let state = uc.build_state().unwrap();
+        assert!(
+            state.strand_queue.is_empty(),
+            "strand_queue should be empty when no queue is wired"
+        );
+    }
+
+    #[test]
+    fn build_state_empty_queue() {
+        // Queue is present but empty — strand_queue should be []
+        let store = LoomStore::new();
+        let log_port: Arc<dyn LoomLogPort> = Arc::new(MockLoomLogForState::default());
+        let profile_repo: Arc<dyn AgentProfileRepository> =
+            Arc::new(MockProfileRepoForState::default());
+        let state_writer: Arc<dyn StateWriterPort> =
+            Arc::new(MockStateWriterForState::default());
+        let rig_dir = PathBuf::from("/test/rig");
+
+        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
+            Arc::new(InspectQueue::new());
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(Some(queue)));
+
+        let uc = WriteState::new(
+            store.clone(),
+            log_port,
+            profile_repo,
+            state_writer,
+            rig_dir,
+            strand_queue,
+        );
+
+        let state = uc.build_state().unwrap();
+        assert!(
+            state.strand_queue.is_empty(),
+            "strand_queue should be empty when queue has no events"
+        );
+    }
+
+    #[test]
+    fn build_state_with_queued_events() {
+        // Queue has events — strand_queue should be populated
+        let store = LoomStore::new();
+        let log_port: Arc<dyn LoomLogPort> = Arc::new(MockLoomLogForState::default());
+        let profile_repo: Arc<dyn AgentProfileRepository> =
+            Arc::new(MockProfileRepoForState::default());
+        let state_writer: Arc<dyn StateWriterPort> =
+            Arc::new(MockStateWriterForState::default());
+        let rig_dir = PathBuf::from("/test/rig");
+
+        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
+            Arc::new(InspectQueue::new());
+
+        // Push two events and a None sentinel
+        queue.push(Some(TimestampedStrandEvent {
+            event: StrandEvent::Created {
+                loom_id: LoomId("review-loom".to_string()),
+                knot_id: KnotId("review".to_string()),
+                strand_path: StrandPath(PathBuf::from("src/main.rs")),
+            },
+            queued_at: "2026-06-30T12:00:00Z".to_string(),
+        }));
+        queue.push(Some(TimestampedStrandEvent {
+            event: StrandEvent::Modified {
+                loom_id: LoomId("review-loom".to_string()),
+                knot_id: KnotId("review".to_string()),
+                strand_path: StrandPath(PathBuf::from("src/lib.rs")),
+            },
+            queued_at: "2026-06-30T12:00:01Z".to_string(),
+        }));
+        queue.push(None); // shutdown sentinel — should be filtered out
+        queue.push(Some(TimestampedStrandEvent {
+            event: StrandEvent::Deleted {
+                loom_id: LoomId("docs-loom".to_string()),
+                knot_id: KnotId("docs".to_string()),
+                strand_path: StrandPath(PathBuf::from("docs/old.md")),
+            },
+            queued_at: "2026-06-30T12:00:02Z".to_string(),
+        }));
+
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(Some(queue)));
+
+        let uc = WriteState::new(
+            store.clone(),
+            log_port,
+            profile_repo,
+            state_writer,
+            rig_dir,
+            strand_queue,
+        );
+
+        let state = uc.build_state().unwrap();
+
+        // Should have 3 entries (None sentinel filtered out)
+        assert_eq!(state.strand_queue.len(), 3);
+
+        // First entry: Created
+        assert_eq!(
+            state.strand_queue[0].strand_path, "src/main.rs",
+        );
+        assert_eq!(state.strand_queue[0].loom_id, "review-loom");
+        assert_eq!(state.strand_queue[0].knot_id, "review");
+        assert_eq!(state.strand_queue[0].event_kind, "created");
+        assert_eq!(
+            state.strand_queue[0].queued_at, "2026-06-30T12:00:00Z"
+        );
+
+        // Second entry: Modified
+        assert_eq!(
+            state.strand_queue[1].strand_path, "src/lib.rs",
+        );
+        assert_eq!(state.strand_queue[1].loom_id, "review-loom");
+        assert_eq!(state.strand_queue[1].knot_id, "review");
+        assert_eq!(state.strand_queue[1].event_kind, "modified");
+
+        // Third entry: Deleted (sentinel was filtered)
+        assert_eq!(
+            state.strand_queue[2].strand_path, "docs/old.md",
+        );
+        assert_eq!(state.strand_queue[2].loom_id, "docs-loom");
+        assert_eq!(state.strand_queue[2].knot_id, "docs");
+        assert_eq!(state.strand_queue[2].event_kind, "deleted");
     }
 }

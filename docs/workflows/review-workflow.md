@@ -90,8 +90,8 @@ section and appends feedback to its tie-off file.
 Read the tie-off files:
 
 ```bash
-cat rig/tie-offs/prd-review-loom/goals-review/goals-review-tie-off.md
-cat rig/tie-offs/prd-review-loom/non-goals-review/non-goals-review-tie-off.md
+cat rig/tie-offs/prd-review-loom/goals-review-tie-off.md
+cat rig/tie-offs/prd-review-loom/non-goals-review-tie-off.md
 ```
 
 Or check via the API:

@@ -88,7 +88,7 @@ The knot reads this PRD and generates `project/plans/auth-redesign.md`.
 Check the tie-off to see what the agent did:
 
 ```bash
-cat rig/tie-offs/planning-loom/prd-planner/prd-planner-tie-off.md
+cat rig/tie-offs/planning-loom/prd-planner-tie-off.md
 ```
 
 ## Designing Idempotent Generation

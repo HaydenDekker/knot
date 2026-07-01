@@ -159,7 +159,7 @@ Example response:
       "loom_id": {"0": "prd-review-loom"},
       "knot_id": {"0": "goals-review"},
       "strand_path": {"0": "project/prds/goals.md"},
-      "tie_off_path": {"0": "rig/tie-offs/prd-review-loom/goals-review/goals-review-tie-off.md"},
+      "tie_off_path": {"0": "rig/tie-offs/prd-review-loom/goals-review-tie-off.md"},
       "timestamp": "2026-06-10T12:00:03Z"
     }
   }
@@ -182,7 +182,7 @@ Response:
   "loom_id": {"0": "prd-review-loom"},
   "status": "completed",
   "last_strand_path": {"0": "project/prds/goals.md"},
-  "last_tie_off_path": {"0": "rig/tie-offs/prd-review-loom/goals-review/goals-review-tie-off.md"},
+  "last_tie_off_path": {"0": "rig/tie-offs/prd-review-loom/goals-review-tie-off.md"},
   "last_error": null
 }
 ```

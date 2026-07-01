@@ -348,7 +348,7 @@ fn test_session_resume_success() {
 
     // Verify tie-off contains the resumed response
     let tie_off_file =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off should exist"
@@ -695,7 +695,7 @@ fn test_session_resume_transparent_on_success() {
 
     // Verify tie-off was written with success content
     let tie_off_file =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off should exist"
@@ -828,7 +828,7 @@ fn test_regression_basic_pipeline_still_works() {
     );
 
     let tie_off_file =
-        rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+        rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off_file.exists(),
         "tie-off should exist"

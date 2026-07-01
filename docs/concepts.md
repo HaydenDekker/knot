@@ -61,7 +61,7 @@ it. The strand is the raw input fed into the knot's agent session.
 
 The output produced by a knot after processing. Each processing event is
 appended to a single `{knot-name}-tie-off.md` file at
-`rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`. The file
+`rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`. The file
 grows over time, telling the complete story of the knot's work. Event
 metadata in each section identifies which strand was processed.
 

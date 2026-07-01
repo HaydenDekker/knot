@@ -483,8 +483,8 @@ impl ProcessStrand {
     }
 
     /// Compute the tie-off output path from knot + strand path.
-    /// Uses statically derived path: `rig/tie-offs/{loom-id}/{knot-name}/`
-    /// with a single per-knot file: `{knot-id}-tie-off.md`.
+    /// Uses statically derived path: `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`.
+    /// Tie-off files are placed flat under the loom's tie-off directory.
     fn compute_tie_off_path(
         &self,
         loom: &Loom,
@@ -1177,7 +1177,7 @@ mod execution_deleted_tests {
         {
             let mut content = tie_off_content.lock().unwrap();
             content.insert(
-                "/rig/tie-offs/test-loom/k1/k1-tie-off.md".to_string(),
+                "/rig/tie-offs/test-loom/k1-tie-off.md".to_string(),
                 concat!(
                     "## review triggered by Created input/strand.md\n",
                     "Timestamp: 2026-06-05T10:00:00Z\n",

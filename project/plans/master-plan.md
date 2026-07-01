@@ -46,7 +46,9 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 51 | [Filter Final Response in Pi JSON Adapter](pi-json-final-response-filter.md) | ⬜ Planned | 2026-07-01 |
+| 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ⬜ Planned | 2026-07-01 |
+| 52 | [Flatten Tie-Off Paths](052-flat-tie-off-paths/flat-tie-off-paths-plan.md) | ✅ Complete | 2026-07-01 |
+| 51 | [Filter Final Response in Pi JSON Adapter](051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md) | ✅ Complete | 2026-07-01 |
 | 50 | [Strand Queue Visibility in State](strand-queue-in-state.md) | ✅ Complete | 2026-06-30 |
 | 49 | [Split `process_strand.rs` Tests into Isolated Module](process-strand-test-extraction.md) | ✅ Complete | 2026-06-29 |
 | 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ✅ Complete | 2026-06-29 |
@@ -100,6 +102,36 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 53. Integration Test Strategy
+
+**Status:** ⬜ Planned
+**Created:** 2026-07-01
+**Goal:** Fix mock agent identity race (process-global PATH/env vars), update tie-off path assertions to flat structure, and reduce test suite duration from ~205s to under 60s.
+
+Full details in [053-integration-test-strategy/integration-test-strategy-plan.md](053-integration-test-strategy/integration-test-strategy-plan.md).
+
+### 52. Flatten Tie-Off Paths
+
+**Status:** ✅ Complete
+**Created:** 2026-07-01
+**Completed:** 2026-07-01
+**Goal:** Remove the intermediate `{knot-name}` subdirectory from tie-off paths, flattening them to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`, freeing subdirectories for event capture.
+
+**Result:** `derive_tieoff_path()` simplified from 3-level to 2-level nesting. All code paths, unit tests, integration tests, domain glossary, user docs, and agent skills updated to flat structure. Version bumped to 0.22.0. Migration entry added to knot-update skill. PATH race condition fix: serialisation locks added to 7 test suites (27 test functions). 199 integration tests pass, 475 unit tests pass.
+
+Full details in [052-flat-tie-off-paths/flat-tie-off-paths-plan.md](052-flat-tie-off-paths/flat-tie-off-paths-plan.md).
+
+### 51. Filter Final Response in Pi JSON Adapter
+
+**Status:** ✅ Complete
+**Created:** 2026-07-01
+**Completed:** 2026-07-01
+**Goal:** Fix `PiJsonAgentRunner` to extract only the agent's final response text, not intermediate tool-use messages. When Pi uses tools, multiple assistant messages are produced — intermediate ones with `stopReason: "toolUse"` and the final with `stopReason: "stop"` or `"length"`. Previously all assistant text was concatenated.
+
+**Result:** `message_end` handler removed (work fully covered by `agent_end` with complete message array). `agent_end` handler filters by `stopReason` — only `"stop"` and `"length"` produce response text; `"toolUse"`, `"error"`, `"aborted"` are excluded. 3 existing test fixtures updated with `stopReason: "stop"`. 1 existing test (`message_end`) changed to assert empty response. 4 new tests covering tool-use exclusion, length inclusion, error exclusion, and multi-turn filtering. All 476 tests pass, clippy clean. Bugfix — no version bump.
+
+Full details in [051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md](051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md).
 
 ### 50. Strand Queue Visibility in State
 

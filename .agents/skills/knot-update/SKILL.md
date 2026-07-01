@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.18.0+"
+  version: "1.1.0"
+  compatibility: "Knot 0.22.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,79 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### 0.22.0 — Tie-Off Paths Flattened (2026-07-01)
+
+Tie-off files moved from nested knot subdirectories to flat files directly
+under the loom's tie-off directory.
+
+**Why:** The intermediate `{knot-name}` subdirectory added no value — the
+tie-off filename already identifies the knot. Flattening frees the loom-level
+directory for event capture subdirectories.
+
+#### Affected Files
+
+| What Changed | Old Path | New Path |
+|---|---|---|
+| Tie-off files | `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md` | `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` |
+| Loom-log | `rig/tie-offs/{loom-id}/.loom-log` | `rig/tie-offs/{loom-id}/.loom-log` (unchanged) |
+
+#### Migration Steps
+
+Tie-off files are append-mode history. Existing files at the old nested
+location are harmless orphans — Knot will create new flat files on the next
+processing event. To consolidate:
+
+1. **Find old nested tie-off directories:**
+   ```bash
+   find rig/tie-offs/ -mindepth 2 -type d -name '*-tie-off.md' -prune -o -mindepth 2 -type d -print
+   ```
+   Or more simply, list knot-name subdirectories:
+   ```bash
+   find rig/tie-offs/ -mindepth 2 -maxdepth 2 -type d
+   ```
+
+2. **Move each tie-off file flat:**
+   ```bash
+   # For each loom:
+   for knot_dir in rig/tie-offs/{loom-id}/*/; do
+     knot_name=$(basename "$knot_dir")
+     mv "$knot_dir/${knot_name}-tie-off.md" "rig/tie-offs/{loom-id}/${knot_name}-tie-off.md" 2>/dev/null
+     rmdir "$knot_dir" 2>/dev/null
+   done
+   ```
+
+3. **Or bulk-move all at once:**
+   ```bash
+   find rig/tie-offs/ -mindepth 2 -maxdepth 2 -type d | while read dir; do
+     name=$(basename "$dir")
+     target="$dir/../${name}-tie-off.md"
+     if [ -f "${dir}/${name}-tie-off.md" ]; then
+       mv "${dir}/${name}-tie-off.md" "$target"
+       rmdir "$dir"
+     fi
+   done
+   ```
+
+4. **Verify** — Knot must be running:
+   ```bash
+   cat rig/state.json | python3 -m json.tool
+   ```
+   Check that knot `last_tie_off_path` values use the flat structure.
+
+#### If Not Migrated
+
+- Old nested files remain on disk (harmless orphan files)
+- New processing events create tie-off files at the new flat location
+- No data loss — append-mode means existing content in old files is preserved
+- Knot's `state.json` will reference the new flat paths
+
+#### Fields Unchanged by This Migration
+
+All profile and knot frontmatter fields are unchanged. Only the
+filesystem location of tie-off output files is affected.
 
 ---
 

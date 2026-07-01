@@ -11,6 +11,13 @@ use std::path::Path;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 // ── State File Schema Tests ────────────────────────────────────────────
 
 /// State file has `rig_path` field that skills use.
@@ -170,9 +177,10 @@ fn profile_file_naming_convention() {
     assert_eq!(profile.extension().unwrap(), "md");
 }
 
-/// Tie-off files are at `tie-offs/{loom-id}/{knot-name}/{knot-id}-tie-off.md`.
+/// Tie-off files are at `tie-offs/{loom-id}/{knot-id}-tie-off.md`.
 #[test]
 fn tie_off_path_convention() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -188,7 +196,7 @@ fn tie_off_path_convention() {
     create_strand(&rig_dir, "feature.md", "content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    let tie_off = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(tie_off.exists());
 
     handle.abort();

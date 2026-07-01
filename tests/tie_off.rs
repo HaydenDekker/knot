@@ -12,9 +12,17 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Tie-off is written to the correct path under tie-offs/.
 #[test]
 fn tie_off_written_to_correct_path() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -30,8 +38,8 @@ fn tie_off_written_to_correct_path() {
     create_strand(&rig_dir, "feature.md", "content");
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
-    // Verify tie-off at expected path: rig/tie-offs/{loom-id}/{knot-name}/{knot-id}-tie-off.md
-    let tie_off = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    // Verify tie-off at expected path: rig/tie-offs/{loom-id}/{knot-id}-tie-off.md
+    let tie_off = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     assert!(
         tie_off.exists(),
         "tie-off should exist at {}",
@@ -44,6 +52,7 @@ fn tie_off_written_to_correct_path() {
 /// Multiple runs append to the same tie-off file.
 #[test]
 fn tie_off_append_mode_history() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -65,7 +74,7 @@ fn tie_off_append_mode_history() {
     // use wait_for_knot_status_in_state to detect the second run.
     // Instead wait for the tie-off file to grow (second append).
     create_strand(&rig_dir, "feature2.md", "feature 2");
-    let tie_off_path = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off_path = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let first_size = fs::metadata(&tie_off_path)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -78,7 +87,7 @@ fn tie_off_append_mode_history() {
         }
     }
 
-    let tie_off = rig_dir.join("tie-offs/review-loom/review/review-tie-off.md");
+    let tie_off = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
     let content = fs::read_to_string(&tie_off).unwrap();
 
     // Should contain output from multiple runs

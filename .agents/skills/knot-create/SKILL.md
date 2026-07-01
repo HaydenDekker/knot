@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.0.0"
-  compatibility: "Knot 0.18.0+"
+  version: "5.1.0"
+  compatibility: "Knot 0.22.0+"
 ---
 
 # Knot Create Skill
@@ -70,10 +70,9 @@ Rig (`./rig/`, top-level container)
  ├── tie-offs/
  │     └── {loom-id}/
  │           ├── .loom-log   ← activity log
- │           └── {knot-name}/
- │                 ├── {knot-name}-tie-off.md  ← append-only log
- │                 └── {event-type}/           ← tie-off events
- │                       └── {event}.md        ← static event strand
+ │           ├── {knot-name}-tie-off.md  ← append-only log
+ │           └── {event-type}/           ← tie-off events
+ │                 └── {event}.md        ← static event strand
  └── {name}-loom/            ← loom directory (must end in `-loom`)
       ├── {knot-name}.md     ← knot definition files
       └── ...
@@ -235,7 +234,7 @@ A loom is created by making a directory (ending in `-loom`) and writing
    For each event type, create a typed subdirectory in the knot's
    tie-off directory:
    ```bash
-   mkdir -p rig/tie-offs/{loom-id}/{knot-name}/{event-type}
+   mkdir -p rig/tie-offs/{loom-id}/{event-type}
    ```
    These directories are part of the knot's output contract. Consumer
    knots will reference them in their `strand-dir`.
@@ -273,7 +272,7 @@ When asked to add a knot to an existing loom:
    "What events does this knot emit?" For each event type, create
    the typed subdirectory:
    ```bash
-   mkdir -p rig/tie-offs/{loom-id}/{knot-name}/{event-type}
+   mkdir -p rig/tie-offs/{loom-id}/{event-type}
    ```
 
 4. **Write the knot file** as `{knot-name}.md` inside the loom
@@ -390,7 +389,7 @@ will reject such files with a `KnotParseWarning`.
   (the directory containing the `rig/` folder).
 - Absolute paths are used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`
+  `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
 
 ### Tie-Off Events — Static Agent-to-Agent Communication
 
@@ -411,8 +410,9 @@ events** — the static routing mechanism for agent-to-agent communication
 **Layout:**
 
 ```
-rig/tie-offs/<loom-id>/<knot-name>/
+rig/tie-offs/<loom-id>/
 ├── <knot-name>-tie-off.md    ← append-only log (always present)
+├── <another-knot>-tie-off.md  ← another knot's tie-off (flat)
 ├── <event-type>/              ← typed event subdirectory
 │   └── <event-file>.md        ← static event strand for consumers
 └── <another-event-type>/      ← another event type (if needed)
@@ -423,7 +423,7 @@ event subdirectory:
 
 ```
 yaml
-strand-dir: "../../tie-offs/review-loom/implementation-review/reviews"
+strand-dir: "../../tie-offs/review-loom/reviews"
 ```
 
 This subscribes only to the `reviews` event type. Multiple consumers
@@ -440,10 +440,9 @@ project_root/              ← strand-dir resolves from here
     ├── tie-offs/          ← static tie-off directory
     │   └── prd-review-loom/
     │       ├── .loom-log
-    │       └── prd-goals-review/
-    │           ├── prd-goals-review-tie-off.md
-    │           └── findings/        ← event type: review findings
-    │               └── 001-goal-issue.md
+    │       ├── prd-goals-review-tie-off.md
+    │       └── findings/        ← event type: review findings
+    │           └── 001-goal-issue.md
     └── prd-review-loom/   ← loom directory
         └── prd-goals-review.md
 ```
@@ -603,7 +602,7 @@ EOF
 
 # Create event subdirectories for the knot's output
 # (other knots can strand from these directories)
-mkdir -p rig/tie-offs/prd-review-loom/goals-review/findings
+mkdir -p rig/tie-offs/prd-review-loom/findings
 
 # Verify Knot has discovered the changes
 # Wait up to 5 seconds, then:

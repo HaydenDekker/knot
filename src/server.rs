@@ -20,6 +20,11 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+/// Type alias for the strand event queue used throughout the pipeline.
+type StrandQueue = Arc<
+    application::debounce::InspectQueue<Option<application::debounce::TimestampedStrandEvent>>,
+>;
+
 // ── AppContext ────────────────────────────────────────────────────────────
 
 /// Application context passed to all layers.
@@ -54,6 +59,8 @@ pub struct AppContext {
     pub rig_dir: PathBuf,
     /// State writer port — writes rig/state.json.
     pub state_writer: Arc<dyn StateWriterPort>,
+    /// Strand event queue — shared with WriteState for queue visibility.
+    pub strand_queue: Arc<std::sync::Mutex<Option<StrandQueue>>>,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -238,6 +245,7 @@ pub fn build_app_context(
             loom_ids: Vec::new(),
             rig_dir: config.rig_dir.clone(),
             state_writer,
+            strand_queue: Arc::new(std::sync::Mutex::new(None)),
         },
         strand_rx,
         config_rx,
@@ -256,11 +264,15 @@ pub fn build_app_context(
 /// Spawns both the debounce engine and process strand into the provided
 /// `JoinSet`. This ensures the pipeline tasks are children of the server
 /// task and are aborted when the server stops.
+/// Returns the `Arc<InspectQueue>` so it can be shared with
+/// `start_state_writer` for queue visibility.
+/// Returns the `Arc<InspectQueue>` so it can be shared with
+/// `start_state_writer` for queue visibility.
 pub fn start_event_pipeline(
     ctx: &AppContext,
     event_rx: mpsc::Receiver<domain::events::StrandEvent>,
     join_set: &mut tokio::task::JoinSet<()>,
-) {
+) -> StrandQueue {
     // Wire event_rx into the debounce engine, spawned into the join set.
     //
     // `spawn_with_receiver` creates an InspectQueue<Option<StrandEvent>>
@@ -285,6 +297,12 @@ pub fn start_event_pipeline(
         event_rx, join_set, debounce_window, check_interval,
     );
 
+    // Store the queue Arc in AppContext so WriteState can snapshot it.
+    {
+        let mut guard = ctx.strand_queue.lock().unwrap();
+        *guard = Some(Arc::clone(&debounce_rx));
+    }
+
     // ProcessStrand loop: read debounced events and process them.
     let store = ctx.store.clone();
     let log_port = Arc::clone(&ctx.loom_log_port);
@@ -305,6 +323,9 @@ pub fn start_event_pipeline(
         crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
     );
 
+    // Clone debounce_rx before moving into the closure — we return
+    // the original Arc from this function for WriteState to use.
+    let debounce_rx_inner = Arc::clone(&debounce_rx);
     join_set.spawn(async move {
         let use_case = Arc::new(application::usecases::ProcessStrand::new(
             store,
@@ -330,26 +351,27 @@ pub fn start_event_pipeline(
         // (idle, wait for first event) or timed (drain check, detect end
         // of burst). This keeps a single flat loop with no nesting.
         //
-        // The queue holds `Option<StrandEvent>`: `Some(event)` for real
-        // events, `None` for the shutdown sentinel from the debounce
-        // engine. The inner pop+notified loop drains the queue; the
-        // outer match handles events vs. shutdown vs. timeout.
+        // The queue holds `Option<TimestampedStrandEvent>`:
+        // `Some(TimestampedStrandEvent)` for real events, `None` for the
+        // shutdown sentinel from the debounce engine. The inner
+        // pop+notified loop drains the queue; the outer match handles
+        // events vs. shutdown vs. timeout.
         let poll_window = Duration::from_millis(500);
         let mut is_burst_active = false;
 
         loop {
             // Read next item from the InspectQueue.
-            // queue.pop() returns Option<Option<StrandEvent>>:
-            //   Some(Some(event)) → real event
+            // queue.pop() returns Option<Option<TimestampedStrandEvent>>:
+            //   Some(Some(ts_event)) → real event
             //   Some(None) → shutdown sentinel
             //   None → queue empty, wait for notification
-            let next_event: Option<StrandEvent> = if is_burst_active {
+            let next_ts_event: Option<application::debounce::TimestampedStrandEvent> = if is_burst_active {
                 match tokio::time::timeout(poll_window, async {
                     loop {
-                        if let Some(item) = debounce_rx.pop() {
+                        if let Some(item) = debounce_rx_inner.pop() {
                             break item;
                         }
-                        debounce_rx.notified().await;
+                        debounce_rx_inner.notified().await;
                     }
                 }).await {
                     Ok(item) => item,
@@ -377,18 +399,20 @@ pub fn start_event_pipeline(
                 // Queue is idle; block until a fresh event arrives.
                 async {
                     loop {
-                        if let Some(item) = debounce_rx.pop() {
+                        if let Some(item) = debounce_rx_inner.pop() {
                             break item;
                         }
-                        debounce_rx.notified().await;
+                        debounce_rx_inner.notified().await;
                     }
                 }.await
             };
 
             // Handle the event (or shutdown sentinel).
-            match next_event {
-                Some(event) => {
+            match next_ts_event {
+                Some(ts_event) => {
                     is_burst_active = true;
+                    // Unwrap the inner StrandEvent from the timestamped wrapper.
+                    let event = ts_event.event;
                     // Run agent execution on a blocking thread so the tokio
                     // task yields. This allows the task to be aborted during
                     // shutdown — without this, the synchronous execute() call
@@ -416,6 +440,8 @@ pub fn start_event_pipeline(
             }
         }
     });
+
+    debounce_rx
 }
 
 /// Run the startup discovery and registration sequence.
@@ -520,7 +546,8 @@ pub fn start_config_pipeline(
 ///
 /// Spawns a `tokio::task` that polls every 5 seconds, builds a
 /// `RigState` snapshot from the current in-memory state, and writes
-/// it atomically to `{rig_dir}/state.json`.
+/// it atomically to `{rig_dir}/state.json`. Includes the current
+/// strand event queue contents in the snapshot.
 ///
 /// The task writes immediately on start (so `state.json` exists right
 /// away), then enters the 5-second poll cycle.
@@ -536,6 +563,7 @@ pub fn start_state_writer(
     let profile_repo = Arc::clone(&ctx.profile_repo);
     let state_writer = Arc::clone(&ctx.state_writer);
     let rig_dir = ctx.rig_dir.clone();
+    let strand_queue = Arc::clone(&ctx.strand_queue);
 
     join_set.spawn(async move {
         let use_case = application::usecases::WriteState::new(
@@ -544,6 +572,7 @@ pub fn start_state_writer(
             profile_repo,
             state_writer,
             rig_dir,
+            strand_queue,
         );
 
         // Write immediately on start so state.json exists right away
@@ -586,7 +615,8 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     start_config_pipeline(&ctx, config_rx, &mut join_set);
 
     // Start the strand event pipeline: debounce + ProcessStrand (child of this task)
-    start_event_pipeline(&ctx, strand_rx, &mut join_set);
+    // The queue Arc is stored in ctx.strand_queue via interior mutability.
+    let _ = start_event_pipeline(&ctx, strand_rx, &mut join_set);
 
     // Start the state writer: writes rig/state.json every 5 seconds
     start_state_writer(&ctx, &mut join_set);

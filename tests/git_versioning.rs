@@ -12,9 +12,17 @@ use std::time::Duration;
 
 use helpers::*;
 
+// Global mutex to serialize tests that modify process-global PATH / env vars.
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Git commit is created after successful processing (when git-versioned is true).
 #[test]
 fn git_commit_created_after_processing() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path();
     let rig_dir = project_root.join("rig");
@@ -52,6 +60,7 @@ fn git_commit_created_after_processing() {
 /// Git commit is NOT created when git-versioned is false.
 #[test]
 fn no_git_commit_when_not_versioned() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path();
     let rig_dir = project_root.join("rig");
@@ -85,6 +94,7 @@ fn no_git_commit_when_not_versioned() {
 /// State file is updated even when git versioning is disabled.
 #[test]
 fn state_updated_without_git_versioning() {
+    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path();
     let rig_dir = project_root.join("rig");
