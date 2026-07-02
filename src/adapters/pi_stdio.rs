@@ -371,14 +371,20 @@ echo ""
             .to_string()
     }
 
-    fn make_mock_path() -> PathBuf {
-        std::env::temp_dir().join("knot-test-mock-stdio")
+    /// Create a unique temp directory for mock scripts, returning the path
+    /// to the mock binary and the `TempDir` handle (caller must keep alive).
+    fn make_mock_path() -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock-pi");
+        (path, dir)
     }
 
     /// Create a runner configured with the passthrough mock (echoes stdin).
-    fn make_mock_runner() -> PiStdioAgentRunner {
+    /// Returns `(runner, tempdir)` — caller must keep `tempdir` alive for the
+    /// duration of the test.
+    fn make_mock_runner() -> (PiStdioAgentRunner, tempfile::TempDir) {
         let script = make_mock_script();
-        let path = make_mock_path();
+        let (path, dir) = make_mock_path();
         std::fs::write(&path, &script).ok();
         #[cfg(unix)]
         {
@@ -389,7 +395,10 @@ echo ""
             )
             .ok();
         }
-        PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string())
+        (
+            PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string()),
+            dir,
+        )
     }
 
     /// Blocking mock script: sleeps for a long time.
@@ -401,15 +410,20 @@ sleep 300
             .to_string()
     }
 
-    fn make_blocking_mock_path() -> PathBuf {
-        std::env::temp_dir().join("knot-test-mock-stdio-blocking")
+    /// Create a unique temp directory for the blocking mock, returning the
+    /// path and the `TempDir` handle (caller must keep alive).
+    fn make_blocking_mock_path() -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock-pi-blocking");
+        (path, dir)
     }
 
     /// Create a runner configured with the blocking mock.
     /// The process stays alive long enough for timeout tests to fire.
-    fn make_blocking_mock_runner() -> PiStdioAgentRunner {
+    /// Returns `(runner, tempdir)` — caller must keep `tempdir` alive.
+    fn make_blocking_mock_runner() -> (PiStdioAgentRunner, tempfile::TempDir) {
         let script = make_blocking_mock_script();
-        let path = make_blocking_mock_path();
+        let (path, dir) = make_blocking_mock_path();
         std::fs::write(&path, &script).ok();
         #[cfg(unix)]
         {
@@ -420,7 +434,10 @@ sleep 300
             )
             .ok();
         }
-        PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string())
+        (
+            PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string()),
+            dir,
+        )
     }
 
     fn make_context(args: &[&str]) -> ExecutionContext {
@@ -443,7 +460,7 @@ sleep 300
 
     #[test]
     fn execute_successful_command() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         // extra_args are individual CLI args — the mock echoes stdin.
         // We just verify the command succeeds (mock always exits 0).
         let ctx = make_context(&[]);
@@ -457,7 +474,7 @@ sleep 300
 
     #[test]
     fn execute_captures_stdout() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         // The mock echoes stdin, so stdout contains whatever we wrote.
         let ctx = make_context(&[]);
 
@@ -471,7 +488,7 @@ sleep 300
 
     #[test]
     fn execute_captures_stderr() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         // The mock doesn't produce stderr, but we verify the runner
         // captures it correctly when it exists (the port layer handles
         // this; here we just verify success).
@@ -504,7 +521,7 @@ sleep 300
 
     #[test]
     fn execute_nonzero_exit_error() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         let ctx = make_context(&[]);
 
         // The mock always exits 0, so this tests the port layer's
@@ -516,7 +533,7 @@ sleep 300
 
     #[test]
     fn execute_timeout() {
-        let runner = make_blocking_mock_runner();
+        let (runner, _dir) = make_blocking_mock_runner();
         // The blocking mock sleeps for 300s, so the 50ms timeout fires.
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_millis(50));
@@ -536,7 +553,7 @@ sleep 300
     /// The mock echoes stdin to stdout, so the prompt should appear.
     #[test]
     fn runner_passes_prompt_via_stdin() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.prompt = "hello from knot\n".to_string();
         ctx.profile_prompt = String::new();
@@ -556,7 +573,7 @@ sleep 300
     /// (the mock echoes stdin to stdout).
     #[test]
     fn runner_passes_strand_via_at_syntax() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.prompt = "strand content from file".to_string();
         ctx.profile_prompt = String::new();
@@ -578,7 +595,7 @@ sleep 300
     /// The mock echoes stdin, so the full prompt chain should appear.
     #[test]
     fn runner_passes_event_metadata() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.prompt = "Review this file.".to_string();
         ctx.profile_prompt = "You are a reviewer.".to_string();
@@ -612,7 +629,7 @@ sleep 300
     /// killing a long-running process quickly.
     #[test]
     fn execute_context_timeout_override() {
-        let runner = make_blocking_mock_runner();
+        let (runner, _dir) = make_blocking_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_millis(50));
 
@@ -635,7 +652,7 @@ sleep 300
     /// When context has a very short timeout override, it is respected.
     #[test]
     fn execute_context_timeout_fallback_to_runner_default() {
-        let runner = make_blocking_mock_runner();
+        let (runner, _dir) = make_blocking_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_millis(50));
 
@@ -658,7 +675,7 @@ sleep 300
     /// Context timeout of 3s allows a quick command to succeed.
     #[test]
     fn execute_context_timeout_larger_than_default() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         // The mock echoes stdin and exits. With a 3s timeout it succeeds.
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_secs(3));
@@ -675,7 +692,7 @@ sleep 300
     /// (regression guard — the timeout path works).
     #[test]
     fn execute_timeout_regression_no_context_override() {
-        let runner = make_blocking_mock_runner();
+        let (runner, _dir) = make_blocking_mock_runner();
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_millis(50));
 
@@ -695,7 +712,7 @@ sleep 300
     /// through to the subprocess in a way that's hard to inspect.
     #[test]
     fn runner_passes_name_flag_through_cli_args() {
-        let runner = make_mock_runner();
+        let (runner, _dir) = make_mock_runner();
         // extra_args are individual CLI args — the mock echoes stdin.
         // We verify success; the `execute_with_config` path is tested
         // in the session_title_tests module (TrackingAgentRunner).

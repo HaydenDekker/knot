@@ -548,14 +548,20 @@ echo ""
             .to_string()
     }
 
-    fn make_json_mock_path() -> PathBuf {
-        std::env::temp_dir().join("knot-test-mock-json")
+    /// Create a unique temp directory for mock scripts, returning the path
+    /// to the mock binary and the `TempDir` handle (caller must keep alive).
+    fn make_json_mock_path() -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock-pi-json");
+        (path, dir)
     }
 
     /// Create a PiJsonAgentRunner configured with the passthrough mock.
-    fn make_mock_json_runner() -> PiJsonAgentRunner {
+    /// Returns `(runner, tempdir)` — caller must keep `tempdir` alive for the
+    /// duration of the test.
+    fn make_mock_json_runner() -> (PiJsonAgentRunner, tempfile::TempDir) {
         let script = make_json_mock_script();
-        let path = make_json_mock_path();
+        let (path, dir) = make_json_mock_path();
         std::fs::write(&path, &script).ok();
         #[cfg(unix)]
         {
@@ -566,7 +572,10 @@ echo ""
             )
             .ok();
         }
-        PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string())
+        (
+            PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string()),
+            dir,
+        )
     }
 
     /// Blocking mock script: sleeps for a long time.
@@ -578,15 +587,20 @@ sleep 300
             .to_string()
     }
 
-    fn make_json_blocking_mock_path() -> PathBuf {
-        std::env::temp_dir().join("knot-test-mock-json-blocking")
+    /// Create a unique temp directory for the blocking mock, returning the
+    /// path and the `TempDir` handle (caller must keep alive).
+    fn make_json_blocking_mock_path() -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock-pi-json-blocking");
+        (path, dir)
     }
 
     /// Create a PiJsonAgentRunner configured with the blocking mock.
     /// The process stays alive long enough for timeout tests to fire.
-    fn make_blocking_json_runner() -> PiJsonAgentRunner {
+    /// Returns `(runner, tempdir)` — caller must keep `tempdir` alive.
+    fn make_blocking_json_runner() -> (PiJsonAgentRunner, tempfile::TempDir) {
         let script = make_json_blocking_mock_script();
-        let path = make_json_blocking_mock_path();
+        let (path, dir) = make_json_blocking_mock_path();
         std::fs::write(&path, &script).ok();
         #[cfg(unix)]
         {
@@ -597,7 +611,10 @@ sleep 300
             )
             .ok();
         }
-        PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string())
+        (
+            PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string()),
+            dir,
+        )
     }
 
     fn make_context(args: &[&str]) -> ExecutionContext {
@@ -811,7 +828,7 @@ sleep 300
     /// Integration test: mock echoes stdin which contains the prompt.
     #[test]
     fn test_json_runner_prompt_passthrough() {
-        let runner = make_mock_json_runner();
+        let (runner, _dir) = make_mock_json_runner();
         let mut ctx = make_context(&[]);
         ctx.prompt = "my knot instructions".to_string();
 
@@ -830,7 +847,7 @@ sleep 300
     /// Integration test: mock echoes stdin → timeout kills it.
     #[test]
     fn test_json_runner_context_timeout_override() {
-        let runner = make_blocking_json_runner();
+        let (runner, _dir) = make_blocking_json_runner();
         let mut ctx = make_context(&[]);
         ctx.timeout = Some(Duration::from_millis(50));
 
