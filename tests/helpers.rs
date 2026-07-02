@@ -2,12 +2,10 @@
 //!
 //! Provides file-based polling helpers to verify rig state via
 //! `rig/state.json`, replacing the previous HTTP-based verification.
-//! Also includes fixtures for creating knots, profiles, mock agents,
-//! and git repository setup.
+//! Also includes fixtures for creating knots, profiles, and mock agents.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -95,120 +93,7 @@ You are a reviewer.\n",
     });
 }
 
-/// Create an agent profile with custom settings.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-/// * `name` - Profile name (written as `profiles/{name}.md`)
-/// * `provider` - LLM provider identifier
-/// * `model` - Model name
-/// * `prompt` - Profile-level system prompt
-pub fn create_agent_profile(
-    rig_dir: &Path,
-    name: &str,
-    provider: &str,
-    model: &str,
-    prompt: &str,
-) {
-    let profiles_dir = rig_dir.join("profiles");
-    fs::create_dir_all(&profiles_dir).unwrap();
-    fs::write(
-        profiles_dir.join(format!("{name}.md")),
-        format!(
-            "---\nname: {name}\nprovider: {provider}\nmodel: {model}\n---\n\n\
-{prompt}\n"
-        ),
-    )
-    .unwrap();
-}
 
-// ── Git Repository Helpers ─────────────────────────────────────────────────
-
-/// Initialize a git repository in the given directory.
-///
-/// Creates `.git`, configures user.name and user.email, and creates
-/// an initial empty commit.
-///
-/// # Arguments
-///
-/// * `path` - Path to the directory to initialize as a git repo
-pub fn init_git_repo(path: &Path) {
-    run_git(path, &["init"]);
-    run_git(path, &["config", "user.name", "Test"]);
-    run_git(path, &["config", "user.email", "test@knot.local"]);
-
-    // Create an initial commit
-    let initial_file = path.join(".gitkeep");
-    fs::write(&initial_file, "").unwrap();
-    run_git(path, &["add", "."]);
-    run_git(path, &["commit", "-m", "Initial commit"]);
-}
-
-/// Get the hash of the latest commit in a git repository.
-///
-/// # Arguments
-///
-/// * `path` - Path to the git repository
-///
-/// # Returns
-///
-/// The full commit hash as a `String`.
-pub fn get_latest_commit(path: &Path) -> String {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .expect("should run git rev-parse")
-        .stdout;
-    String::from_utf8(output).expect("valid utf8").trim().to_string()
-}
-
-/// Count the number of commits in a git repository.
-///
-/// # Arguments
-///
-/// * `path` - Path to the git repository
-///
-/// # Returns
-///
-/// Number of commits as `usize`.
-pub fn count_commits(path: &Path) -> usize {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-list", "--count", "HEAD"])
-        .output()
-        .expect("should run git rev-list")
-        .stdout;
-    String::from_utf8(output)
-        .expect("valid utf8")
-        .trim()
-        .parse()
-        .expect("should parse commit count")
-}
-
-/// Run a git command in the given directory.
-///
-/// # Arguments
-///
-/// * `path` - Path to the git repository (used as current_dir)
-/// * `args` - Git subcommand and arguments (e.g. `["add", "."]`)
-fn run_git(path: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .output()
-        .expect("should run git command");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!(
-            "git {} failed: {}",
-            args.join(" "),
-            stderr.trim()
-        );
-    }
-}
 
 // ── Knot Server Helpers ───────────────────────────────────────────────────
 
@@ -361,93 +246,7 @@ pub fn read_state_file(rig_dir: &Path) -> Result<Value, std::io::Error> {
     })
 }
 
-/// Poll `rig/state.json` until a JSON field matches the expected value.
-///
-/// Uses dot-notation selectors to navigate the JSON structure.
-/// Array indices are supported (e.g. `"looms.0.id"` accesses
-/// the `id` field of the first loom).
-///
-/// Polls every 200ms with a 30-second timeout.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-/// * `selector` - Dot-notation JSON path (e.g. `"looms.0.id"`)
-/// * `expected` - Expected string value
-///
-/// # Panics
-///
-/// Panics if the field is not found within the timeout.
-pub fn wait_for_state_field(
-    rig_dir: &Path,
-    selector: &str,
-    expected: &str,
-) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
 
-    loop {
-        if std::time::Instant::now() > deadline {
-            panic!(
-                "timeout waiting for state field '{}' == '{}'\n\
-                 selector: {}\n\
-                 state_path: {}",
-                selector,
-                expected,
-                selector,
-                rig_dir.join("state.json").display()
-            );
-        }
-
-        match read_state_file(rig_dir) {
-            Ok(state) => {
-                let value = resolve_selector(&state, selector);
-                if let Some(val) = value {
-                    if let Some(str_val) = val.as_str() {
-                        if str_val == expected {
-                            return;
-                        }
-                    } else if let Some(num_val) = val.as_i64() {
-                        if num_val.to_string() == expected {
-                            return;
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                // File not ready yet, keep polling
-            }
-        }
-
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// Resolve a dot-notation selector against a JSON value.
-///
-/// Supports object keys and array indices (numeric strings).
-///
-/// # Arguments
-///
-/// * `root` - Root JSON value
-/// * `selector` - Dot-notation path (e.g. `"looms.0.knots.1.status"`)
-///
-/// # Returns
-///
-/// `Some(&Value)` if the path resolves, `None` otherwise.
-fn resolve_selector<'a>(
-    root: &'a Value,
-    selector: &str,
-) -> Option<&'a Value> {
-    let mut current = root;
-    for part in selector.split('.') {
-        current = if let Ok(idx) = part.parse::<usize>() {
-            current.get(idx)
-        } else {
-            current.get(part)
-        }?;
-    }
-    Some(current)
-}
 
 /// Poll `rig/state.json` until a loom with the given ID appears
 /// with the expected number of knots.
@@ -600,42 +399,6 @@ pub fn wait_for_knot_status_in_state(
     }
 }
 
-/// Poll `rig/state.json` until it exists and is valid JSON.
-///
-/// The state writer writes immediately on startup, so this typically
-/// returns within a few seconds.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-///
-/// # Returns
-///
-/// The parsed `serde_json::Value`.
-///
-/// # Panics
-///
-/// Panics if the state file is not found within 15 seconds.
-pub fn wait_for_state_file(rig_dir: &Path) -> Value {
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
-
-    loop {
-        if std::time::Instant::now() > deadline {
-            panic!(
-                "timeout waiting for state.json at {}",
-                rig_dir.join("state.json").display()
-            );
-        }
-
-        match read_state_file(rig_dir) {
-            Ok(state) => return state,
-            Err(_) => {
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
-}
-
 // ── Loom Directory Helpers ────────────────────────────────────────────────
 
 /// Create a loom directory inside a rig.
@@ -751,24 +514,6 @@ pub fn loom_log_event_type(event: &Value) -> Option<&str> {
     event.as_object().and_then(|obj| {
         obj.keys().next().map(|k| k.as_str())
     })
-}
-
-/// Extract the inner object from a loom-log JSON entry.
-///
-/// Loom-log entries are stored as externally tagged JSON with a single
-/// key that is the event variant name (e.g. `{"KnotCompleted":{...}}`).
-/// This returns the inner object containing the actual fields
-/// (`knot_id`, `strand_path`, etc.).
-///
-/// # Arguments
-///
-/// * `event` - Parsed JSON value from a loom-log line
-///
-/// # Returns
-///
-/// `Some(&Value)` of the inner object, or `None` if not an object.
-pub fn loom_log_event_inner<'a>(event: &'a Value) -> Option<&'a Value> {
-    event.as_object().and_then(|obj| obj.values().next())
 }
 
 /// Poll until a loom-log contains an event with a specific type.
@@ -893,73 +638,6 @@ mod tests {
         assert!(content.contains("name: fast"));
         assert!(content.contains("provider: openai"));
         assert!(content.contains("model: gpt-4o"));
-    }
-
-    #[test]
-    fn create_agent_profile_writes_custom_profile() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rig_dir = tmp.path();
-
-        create_agent_profile(
-            rig_dir, "detailed", "anthropic", "claude-sonnet",
-            "You are a detailed reviewer.",
-        );
-
-        let profile_path = rig_dir.join("profiles/detailed.md");
-        assert!(profile_path.exists());
-
-        let content = fs::read_to_string(&profile_path).unwrap();
-        assert!(content.contains("name: detailed"));
-        assert!(content.contains("provider: anthropic"));
-    }
-
-    #[test]
-    fn resolve_selector_nested_object() {
-        let json: Value = serde_json::json!({
-            "looms": [
-                {
-                    "id": "test",
-                    "knots": [
-                        {"id": "k1", "status": "idle"}
-                    ]
-                }
-            ]
-        });
-
-        assert_eq!(
-            resolve_selector(&json, "looms.0.id")
-                .and_then(|v| v.as_str()),
-            Some("test")
-        );
-        assert_eq!(
-            resolve_selector(&json, "looms.0.knots.0.status")
-                .and_then(|v| v.as_str()),
-            Some("idle")
-        );
-    }
-
-    #[test]
-    fn resolve_selector_missing_path_returns_none() {
-        let json: Value = serde_json::json!({
-            "looms": []
-        });
-
-        assert!(resolve_selector(&json, "looms.0.id").is_none());
-        assert!(resolve_selector(&json, "missing.field").is_none());
-    }
-
-    #[test]
-    fn resolve_selector_numeric_index() {
-        let json: Value = serde_json::json!([10, 20, 30]);
-
-        assert_eq!(
-            resolve_selector(&json, "0").and_then(|v| v.as_i64()),
-            Some(10)
-        );
-        assert_eq!(
-            resolve_selector(&json, "2").and_then(|v| v.as_i64()),
-            Some(30)
-        );
     }
 
     #[test]

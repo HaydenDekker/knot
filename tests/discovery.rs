@@ -1,15 +1,15 @@
-//! Integration tests for loom discovery.
+//! Adapter tests for loom discovery.
 //!
-//! Verifies that Knot discovers looms from the rig directory via
-//! file-watching and writes them to `rig/state.json`.
-
-#[path = "helpers.rs"]
-mod helpers;
+//! Verifies that Knot discovers looms from the rig directory at startup.
+//! Uses `run_startup()` directly against `AppContext` — no full runtime.
 
 use std::fs;
 
 use knot::AppConfig;
-use helpers::*;
+
+#[path = "helpers.rs"]
+mod helpers;
+use helpers::{create_fast_profile, create_knot_file, create_loom_dir};
 
 /// Knot discovers looms present at startup and writes them to state.json.
 #[test]
@@ -91,45 +91,4 @@ fn discovers_multiple_looms() {
     drop(config_rx);
 }
 
-/// Knot writes discovered looms to state.json via the state writer task.
-#[test]
-fn writes_discovered_looms_to_state_file() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rig_dir = tmp.path().join("rig");
-    fs::create_dir_all(&rig_dir).unwrap();
 
-    let loom_dir = create_loom_dir(&rig_dir, "review");
-    create_knot_file(&loom_dir, "review");
-    create_fast_profile(&rig_dir);
-
-    // Start Knot in background
-    let handle = start_knot(rig_dir.clone());
-
-    // Wait for state.json to be written
-    let state = wait_for_state_file(&rig_dir);
-
-    // Verify state contains the discovered loom
-    let looms = state.get("looms").and_then(|v| v.as_array());
-    assert!(looms.is_some(), "state should contain looms array");
-    let looms = looms.unwrap();
-    assert_eq!(looms.len(), 1);
-
-    let loom = &looms[0];
-    assert_eq!(
-        loom.get("id").and_then(|v| v.as_str()),
-        Some("review-loom")
-    );
-    assert_eq!(
-        loom.get("knots")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.len()),
-        Some(1)
-    );
-
-    // Verify profile is also in state
-    let profiles = state.get("profiles").and_then(|v| v.as_array());
-    assert!(profiles.is_some());
-    assert_eq!(profiles.unwrap().len(), 1);
-
-    handle.abort();
-}
