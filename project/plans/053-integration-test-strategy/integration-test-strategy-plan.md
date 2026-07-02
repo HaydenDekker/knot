@@ -247,11 +247,4 @@ Per ADR-011: "if every adapter satisfies its trait contract (Tier 2), and every 
 - Phase 11: Final verification — 626 tests pass (0 failures), ~1.5s lib wall clock, ~24.6s full suite.
 - Post-phase bugfix: flaky `execute_timeout_regression_no_context_override` under `--test-threads=4` (ETXTBSY from `std::fs::write` on exec'd mock binary) fixed with atomic write-to-temp + `rename()`.
 - Test count: 626 total (down from 746). Structure matches ADR-011 tiers.
-
-## Implementation Status: ✅ Complete (2026-07-03)
-
-## Notes
-- Phases 0-10: Hexagonal test architecture implemented, composition tests stripped, helper dead-code removed.
-- Phase 11: Final verification — 626 tests pass (0 failures), ~1.5s lib wall clock, ~24.6s full suite.
-- Post-phase bugfix: flaky `execute_timeout_regression_no_context_override` under `--test-threads=4` (ETXTBSY from `std::fs::write` on exec'd mock binary) fixed with atomic write-to-temp + `rename()`.
-- Test count: 626 total (down from 746). Structure matches ADR-011 tiers.
+- Version bumped to 0.22.1.
