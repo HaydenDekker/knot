@@ -197,23 +197,6 @@ pub fn start_knot_with_config(config: knot::AppConfig) -> KnotHandle {
     }
 }
 
-/// Start Knot in a background thread with a rig directory.
-///
-/// Convenience wrapper around `start_knot_with_config` that builds
-/// `AppConfig::with_rig_dir(rig_dir)`. For tests that need to inject
-/// a custom `cli_path`, use `start_knot_with_config` directly.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-///
-/// # Returns
-///
-/// A `KnotHandle` for cleanup.
-pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
-    start_knot_with_config(knot::AppConfig::with_rig_dir(rig_dir))
-}
-
 // ── State File Polling Helpers ────────────────────────────────────────────
 
 /// Read and parse `rig/state.json` from the given rig directory.
@@ -514,99 +497,6 @@ pub fn loom_log_event_type(event: &Value) -> Option<&str> {
     event.as_object().and_then(|obj| {
         obj.keys().next().map(|k| k.as_str())
     })
-}
-
-/// Poll until a loom-log contains an event with a specific type.
-///
-/// The loom-log stores events as JSON objects keyed by variant name
-/// (e.g. `{"KnotCompleted":{...}}`). This function checks the top-level
-/// key of each entry.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-/// * `loom_id` - The loom's ID
-/// * `event_type` - Expected event type string (e.g. "KnotCompleted")
-///
-/// # Panics
-///
-/// Panics if the event type is not found within 15 seconds.
-pub fn wait_for_loom_log_event(
-    rig_dir: &Path,
-    loom_id: &str,
-    event_type: &str,
-) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
-
-    loop {
-        if std::time::Instant::now() > deadline {
-            panic!(
-                "timeout waiting for loom-log event '{}' in loom '{}'",
-                event_type, loom_id
-            );
-        }
-
-        let events = read_loom_log(rig_dir, loom_id);
-        for event in &events {
-            if let Some(ty) = loom_log_event_type(event) {
-                if ty == event_type {
-                    return;
-                }
-            }
-        }
-
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// Poll until a loom-log contains an event with a specific type,
-/// using a caller-provided deadline.
-///
-/// This is useful when the event may not appear until after a long
-/// processing step (e.g. a timeout) — the caller can start a timer
-/// before triggering processing and pass the extended deadline here.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-/// * `loom_id` - The loom's ID
-/// * `event_type` - Expected event type string (e.g. "KnotCompleted")
-/// * `deadline` - Absolute instant at which to give up
-///
-/// # Panics
-///
-/// Panics if the event type is not found by the deadline.
-pub fn wait_for_loom_log_event_with_deadline(
-    rig_dir: &Path,
-    loom_id: &str,
-    event_type: &str,
-    deadline: std::time::Instant,
-) {
-    loop {
-        if std::time::Instant::now() > deadline {
-            let events = read_loom_log(rig_dir, loom_id);
-            let types: Vec<_> = events
-                .iter()
-                .filter_map(|e| loom_log_event_type(e))
-                .collect();
-            panic!(
-                "timeout waiting for loom-log event '{}' in loom '{}'. \
-                 Events found: {:?}",
-                event_type, loom_id, types
-            );
-        }
-
-        let events = read_loom_log(rig_dir, loom_id);
-        for event in &events {
-            if let Some(ty) = loom_log_event_type(event) {
-                if ty == event_type {
-                    return;
-                }
-            }
-        }
-
-        thread::sleep(Duration::from_millis(50));
-    }
 }
 
 #[cfg(test)]
