@@ -426,7 +426,7 @@ impl Drop for KnotHandle {
 const TEST_DEBOUNCE_MS: u64 = 20;
 const TEST_CHECK_MS: u64 = 2;
 
-/// Start Knot in a background thread.
+/// Start Knot in a background thread with a custom `AppConfig`.
 ///
 /// Spawns `knot::start_knot(config)` in its own `tokio::runtime::Runtime`
 /// on a dedicated OS thread. Returns a `KnotHandle` that signals the
@@ -441,12 +441,13 @@ const TEST_CHECK_MS: u64 = 2;
 ///
 /// # Arguments
 ///
-/// * `rig_dir` - Path to the rig directory
+/// * `config` - Full `AppConfig` (rig dir, rig config, agent timeout,
+///   and optionally `cli_path` for injecting a mock agent binary)
 ///
 /// # Returns
 ///
 /// A `KnotHandle` for cleanup.
-pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
+pub fn start_knot_with_config(config: knot::AppConfig) -> KnotHandle {
     // Set fast debounce timing — env vars are process-global and
     // read by the server at debounce engine startup. Only affects
     // this test binary (integration test), not unit tests.
@@ -461,9 +462,8 @@ pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
         let rt = tokio::runtime::Runtime::new()
             .expect("should create tokio runtime");
 
-                rt.block_on(async {
+        rt.block_on(async {
             let task = rt.spawn(async move {
-                let config = knot::AppConfig::with_rig_dir(rig_dir);
                 let _ = knot::start_knot(config).await;
             });
 
@@ -487,6 +487,23 @@ pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
         shutdown_tx: Some(shutdown_tx),
         thread: Some(thread),
     }
+}
+
+/// Start Knot in a background thread with a rig directory.
+///
+/// Convenience wrapper around `start_knot_with_config` that builds
+/// `AppConfig::with_rig_dir(rig_dir)`. For tests that need to inject
+/// a custom `cli_path`, use `start_knot_with_config` directly.
+///
+/// # Arguments
+///
+/// * `rig_dir` - Path to the rig directory
+///
+/// # Returns
+///
+/// A `KnotHandle` for cleanup.
+pub fn start_knot(rig_dir: PathBuf) -> KnotHandle {
+    start_knot_with_config(knot::AppConfig::with_rig_dir(rig_dir))
 }
 
 // ── State File Polling Helpers ────────────────────────────────────────────

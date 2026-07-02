@@ -1,11 +1,12 @@
 # Master ADR — Decision Index
 
-> **Last Updated:** 2026-06-29
+> **Last Updated:** 2026-07-02
 
 ## ADR Index
 
 | # | ADR | Status | Date |
 |---|-----|--------|------|
+| 11 | [ADR-011: Hexagonal Test Strategy](adr-011-hexagonal-test-strategy.md) | Accepted | 2026-07-02 |
 | 10 | [ADR-010: Domain Rule Extraction](adr-010-domain-rule-extraction.md) | Accepted | 2026-06-29 |
 | 9 | [ADR-009: Agent-Specific Adapters](adr-009-agent-specific-adapters.md) | Accepted | 2026-06-27 |
 | 8 | [ADR-008: Full File-First State](adr-008-full-file-first-state.md) | Accepted | 2026-06-19 |
@@ -15,9 +16,17 @@
 | 4 | [ADR-004: Shared Agent Profiles](adr-004-shared-agent-profiles.md) | Accepted | 2026-06-11 |
 | 3 | [ADR-003: Channel-Cascade Shutdown](adr-003-channel-cascade-shutdown.md) | Accepted | 2026-06-07 |
 | 2 | [ADR-002: Server Child Tasks](adr-002-server-child-tasks.md) | Accepted | 2026-06-07 |
-| 1 | [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) | Accepted | 2026-06-07 |
+| 1 | [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) | Superseded | 2026-06-07 |
 
 ## ADR Summaries
+
+### 11. Hexagonal Test Strategy
+
+**Status:** Accepted
+**Date:** 2026-07-02
+**Summary:** Test each hexagonal layer against its boundary: application logic against mock ports, each adapter's I/O contract in isolation, and composition wiring once via smoke tests with `cli_path` injection. Eliminates `TEST_MUTEX`, process-global env vars, and full-runtime-per-test patterns.
+
+Full details in [adr-011-hexagonal-test-strategy.md](adr-011-hexagonal-test-strategy.md).
 
 ### 10. Domain Rule Extraction
 
@@ -77,6 +86,8 @@ Full details in [adr-010-domain-rule-extraction.md](adr-010-domain-rule-extracti
 
 ### 1. Integration Test Server Pattern
 
-**Status:** Accepted
+**Status:** Superseded
 **Date:** 2026-06-07
-**Summary:** Integration tests spawn the Knot server as a child process and communicate via HTTP/file polling.
+**Summary:** Integration tests spawn the Knot server as a child process and communicate via HTTP/file polling. Superseded by ADR-011.
+
+**Superseded by:** [ADR-011: Hexagonal Test Strategy](adr-011-hexagonal-test-strategy.md)

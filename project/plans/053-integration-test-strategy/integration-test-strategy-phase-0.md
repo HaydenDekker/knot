@@ -1,26 +1,36 @@
-# Phase 0: Fix tie-off path assertions
+# Phase 0: Smoke tests and composition wiring
 
 **Plan:** [Integration Test Strategy](integration-test-strategy-plan.md)
 
 ## Checklist
-- [ ] Add `derive_tie_off_file(loom_id, knot_name, rig_dir)` helper to `tests/helpers.rs` that returns `rig_dir/tie-offs/{loom-id}/{knot-name}-tie-off.md`
-- [ ] Update `tests/agent_integration.rs`:
-  - [ ] `agent_execution_produces_tie_off` — replace `tie-offs/review-loom/review/review-tie-off.md` with helper
-  - [ ] `agent_execution_append_mode_tie_offs` — replace `tie-offs/review-loom/review/review-tie-off.md` with helper
-  - [ ] `tie_off_contains_agent_output` — replace `tie-offs/review-loom/review/review-tie-off.md` with helper
-- [ ] Update `tests/pipeline.rs`:
-  - [ ] `pipeline_processes_strand_create` — replace `tie-offs/review-loom/review/...` with helper
-  - [ ] `pipeline_ignores_binary_files_and_processes_text_files` — replace with helper
-  - [ ] `pipeline_processes_non_md_text_files` — replace with helper
-  - [ ] `delete_event_large_tieoff_bounded_context` — replace `tie-offs/review-loom/review/...` with helper
-- [ ] Check `tests/agent_integration.rs` line 42: `tie_off_dir = rig_dir.join("tie-offs/review-loom/review")` — this dir join is wrong, tie-offs are now flat. Replace with helper
-- [ ] Check `tests/pipeline.rs` lines 47, 418, 480: same `tie_off_dir` pattern — replace with helper
-- [ ] Run `cargo test --test agent_integration` — verify 3 previously failing tests now pass
-- [ ] Run `cargo test --test pipeline` — verify 4 previously failing tie-off-path tests now pass
-- [ ] Run full test suite — verify no regressions
+- [x] Add `cli_path: Option<PathBuf>` field to `AppConfig` struct in `src/server.rs`
+- [x] Add `AppConfig::with_cli_path(path)` convenience method
+- [x] Wire `cli_path` into `build_app_context()` — when `Some(path)`, create runner with explicit CLI path via `with_cli_path_and_timeout()`
+- [x] Create `tests/smoke.rs` test module
+- [x] `composition_smoke_stdio` test:
+  - [x] `tempfile::tempdir()` for rig + strands
+  - [x] Mock agent script at `{rig}/bin/pi` (echo "review complete", exit 0)
+  - [x] Write `.workspace-agent-config.yaml` with `agent-adapter: pi-stdio`
+  - [x] Write knot file + profile + strand file
+  - [x] `start_knot()` with `cli_path` pointing to mock
+  - [x] Wait for `state.json` loom knot status "completed"
+  - [x] Assert tie-off file exists with expected content
+- [x] `composition_smoke_json` test:
+  - [x] Same rig setup, `agent-adapter: pi-json`
+  - [x] Mock agent script that outputs JSON-L with session ID
+  - [x] Same assertions
+- [x] Run `cargo test --test smoke` — both tests pass (5.04s)
+- [x] Run `cargo test --test smoke --test-threads=4` — parallel execution passes (5.06s)
+- [x] Run full test suite — 476 passed, 0 failed, no regressions
 
 ## Deviations
 
+- `PiStdioAgentRunner` and `PiJsonAgentRunner` get `with_cli_path_and_timeout(cli_path, timeout)` instead of mutating a private `cli_path` field — this keeps the existing `#[cfg(test)] with_cli_path(String)` for unit tests while providing a clean public constructor for the composition root.
+
 ## Discoveries
+
+- `AppConfig::with_cli_path()` uses a builder pattern (`self` by value, returns `Self`) for chaining with `with_rig_dir()`.
+- `tests/helpers.rs` gets `start_knot_with_config(AppConfig)` as the primary helper; existing `start_knot(rig_dir)` delegates to it.
+- The smoke tests create the strand file *after* loom discovery (`wait_for_loom_in_state`) to ensure the notify watcher is active and picks up the file creation event.
 
 ## Notes

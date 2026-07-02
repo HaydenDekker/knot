@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-01
+> **Last Updated:** 2026-07-02
 
 ## How to Add a Plan
 
@@ -107,7 +107,9 @@ _Overview sections for active and recently completed plans go here._
 
 **Status:** ⬜ Planned
 **Created:** 2026-07-01
-**Goal:** Fix mock agent identity race (process-global PATH/env vars), update tie-off path assertions to flat structure, and reduce test suite duration from ~205s to under 60s.
+**Goal:** Adopt hexagonal test strategy: application tests against mock ports, one adapter test per adapter (real I/O + `tempfile`), two composition smoke tests (`cli_path` injection). Eliminate `TEST_MUTEX`, process-global env vars, and full-runtime-per-test patterns. Target: ~100 tests, <30s total, fully parallel.
+
+**ADR:** [ADR-011: Hexagonal Test Strategy](../adrs/adr-011-hexagonal-test-strategy.md)
 
 Full details in [053-integration-test-strategy/integration-test-strategy-plan.md](053-integration-test-strategy/integration-test-strategy-plan.md).
 

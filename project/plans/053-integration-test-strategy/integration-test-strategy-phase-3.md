@@ -1,29 +1,27 @@
-# Phase 3: Consolidate mock helpers and verify full suite
+# Phase 3: Application test migration — core use cases
 
 **Plan:** [Integration Test Strategy](integration-test-strategy-plan.md)
 
 ## Checklist
-- [ ] Audit `tests/helpers.rs` for unused/mock functions:
-  - [ ] `create_mock_agent()` — is it used anywhere? If not, remove
-  - [ ] `create_stub_pi_agent()` — is it used anywhere? If not, remove
-  - [ ] `create_mock_pi_capturing_stdin()` — is it used anywhere? If not, remove
-- [ ] Consolidate mock creation:
-  - [ ] Single `create_mock_pi(rig_dir, response) -> PathBuf` that returns path and writes config
-  - [ ] Optional: `create_mock_pi_with_stdin_capture(rig_dir, response, capture_path) -> PathBuf`
-  - [ ] Document that callers must pass returned path to `start_knot(rig_dir, Some(path))`
-- [ ] Verify all test files use consolidated helpers:
-  - [ ] `tests/adapter_integration.rs`
-  - [ ] `tests/agent_integration.rs`
-  - [ ] `tests/pipeline.rs`
-  - [ ] `tests/session_resume.rs`
-  - [ ] `tests/multi_loom.rs`
-  - [ ] `tests/profile_timeout.rs`
-- [ ] Remove any remaining `std::env::set_var("PATH", ...)` or `std::env::set_var("KNOT_TEST_CLI_PATH", ...)` from test files
-- [ ] Run `cargo test --test-threads=1` — verify serial execution passes
-- [ ] Run `cargo test` (default parallel) — verify all tests pass
-- [ ] Record total test suite duration — target <60s
-- [ ] Run `cargo clippy` — verify no new warnings
-- [ ] Verify `--test-threads=1` and default parallel produce identical results (same pass/fail)
+- [ ] Rewrite `tests/agent_integration.rs` against mock ports:
+  - [ ] `agent_execution_produces_tie_off` → `ProcessStrand` with `TrackingTieOffSink`
+  - [ ] `agent_execution_append_mode_tie_offs` → verify multiple append calls
+  - [ ] `agent_execution_updates_state_file` → verify state transitions
+  - [ ] `agent_failure_records_error_in_state` → `TrackingAgentRunner` returning `Err(AgentExecutionFailed)`
+  - [ ] `agent_failure_records_loom_log_entry` → `TrackingLoomLog` captures error event
+  - [ ] `tie_off_contains_agent_output` → verify tie-off content matches agent output
+  - [ ] `agent_handles_deleted_strand` → deleted event flow
+  - [ ] `agent_handles_multiple_looms_independently` → two ProcessStrand calls
+  - [ ] `agent_state_transitions_through_processing` → verify state progression
+  - [ ] `strand_processed_no_error_on_success` → happy path
+- [ ] Remove from `tests/agent_integration.rs`:
+  - [ ] `TEST_MUTEX` and `acquire_test_lock()`
+  - [ ] `start_knot()` calls
+  - [ ] `create_mock_pi()` / `create_stub_pi_agent()` calls
+  - [ ] `wait_for_state_field()` / `wait_for_knot_status_in_state()` calls
+  - [ ] `set_var("PATH")` calls
+- [ ] Verify: all 10 scenarios pass as mock-port tests, <1s total
+- [ ] Run full test suite — verify no regressions, old integration tests still pass alongside new ones
 
 ## Deviations
 

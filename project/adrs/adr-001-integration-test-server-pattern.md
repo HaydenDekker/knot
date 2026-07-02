@@ -1,7 +1,8 @@
 # ADR-001: Integration Test Server Pattern
 
 **Date**: 2026-06-07
-**Status**: Accepted
+**Status**: Superseded
+**Superseded by**: [ADR-011: Hexagonal Test Strategy](adr-011-hexagonal-test-strategy.md)
 
 ## Context
 

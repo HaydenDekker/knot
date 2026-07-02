@@ -74,6 +74,12 @@ pub struct AppConfig {
     pub rig_config: RigAgentConfig,
     /// Timeout for subprocess agent runner.
     pub agent_timeout: Duration,
+    /// Optional explicit path to the agent CLI binary.
+    ///
+    /// When `Some`, overrides the default PATH-based resolution of
+    /// the `pi` binary. Used by integration smoke tests to inject
+    /// a mock agent without manipulating process-global `PATH`.
+    pub cli_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -86,6 +92,7 @@ impl AppConfig {
             rig_dir,
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
+            cli_path: None,
         }
     }
 
@@ -98,7 +105,18 @@ impl AppConfig {
             rig_dir,
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
+            cli_path: None,
         }
+    }
+
+    /// Create configuration with an explicit agent CLI path.
+    ///
+    /// Clones all fields from the given config and overrides `cli_path`.
+    /// When set, the agent runner uses this path directly instead of
+    /// resolving `pi` from PATH or `KNOT_TEST_CLI_PATH`.
+    pub fn with_cli_path(mut self, cli_path: PathBuf) -> Self {
+        self.cli_path = Some(cli_path);
+        self
     }
 }
 
@@ -180,12 +198,30 @@ pub fn build_app_context(
         ));
     let agent_runner: Arc<dyn application::ports::AgentRunner> =
         match rig_config.agent_adapter {
-            AgentAdapter::PiJson => Arc::new(
-                PiJsonAgentRunner::with_timeout(config.agent_timeout),
-            ),
-            AgentAdapter::PiStdio => Arc::new(
-                PiStdioAgentRunner::with_timeout(config.agent_timeout),
-            ),
+            AgentAdapter::PiJson => {
+                if let Some(ref cli_path) = config.cli_path {
+                    Arc::new(PiJsonAgentRunner::with_cli_path_and_timeout(
+                        cli_path.to_string_lossy().to_string(),
+                        config.agent_timeout,
+                    ))
+                } else {
+                    Arc::new(PiJsonAgentRunner::with_timeout(
+                        config.agent_timeout,
+                    ))
+                }
+            }
+            AgentAdapter::PiStdio => {
+                if let Some(ref cli_path) = config.cli_path {
+                    Arc::new(PiStdioAgentRunner::with_cli_path_and_timeout(
+                        cli_path.to_string_lossy().to_string(),
+                        config.agent_timeout,
+                    ))
+                } else {
+                    Arc::new(PiStdioAgentRunner::with_timeout(
+                        config.agent_timeout,
+                    ))
+                }
+            }
         };
     let profile_repo: Arc<dyn application::ports::AgentProfileRepository> =
         Arc::new(

@@ -6,124 +6,156 @@ The integration test suite has three interconnected problems that make it unreli
 
 ### 1. Mock agent identity race (process-global PATH/env vars)
 
-`tests/helpers.rs` mock creation helpers (`create_mock_pi`, `create_mock_agent`) set `PATH` or `KNOT_TEST_CLI_PATH` via `std::env::set_var()`, which is process-global. When tests run in parallel (`--test-threads > 1`, the default), one test's PATH modification overwrites another's. The `PiStdioAgentRunner::resolve_cli_path()` reads the env var once at construction time, but by the time `execute()` runs on a worker thread, another test may have overwritten the env var for its own runner construction.
+`tests/helpers.rs` mock creation helpers (`create_mock_pi`, `create_mock_agent`) set `PATH` or `KNOT_TEST_CLI_PATH` via `std::env::set_var()`, which is process-global. When tests run in parallel (`--test-threads > 1`, the default), one test's PATH modification overwrites another's.
 
 This manifests as:
 - Tests picking up the wrong mock binary → unexpected behaviour (success instead of failure, hangs, wrong output)
 - Flaky failures that pass under `--test-threads=1`
-- The `acquire_test_lock()` mutex pattern in some test files mitigates this partially but is not consistently applied
+- `TEST_MUTEX` serialisation in 11 test files as a workaround
 
-### 2. Tie-off path assertions on old nested structure
-
-Plan 052 (Flatten Tie-Off Paths) changed tie-off paths from `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md` to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`. Several integration tests still assert on the old nested paths, causing deterministic failures:
-
-| File | Tests affected |
-|------|---------------|
-| `tests/agent_integration.rs` | `agent_execution_produces_tie_off`, `agent_execution_append_mode_tie_offs`, `tie_off_contains_agent_output` |
-| `tests/pipeline.rs` | `pipeline_processes_strand_create`, `pipeline_ignores_binary_files_and_processes_text_files`, `pipeline_processes_non_md_text_files`, `delete_event_large_tieoff_bounded_context` |
-
-### 3. Test suite too slow (~205s total)
+### 2. Test suite too slow (~205s total)
 
 | Test | Current duration | Why |
 |------|-----------------|-----|
 | `process_strand_retry_exhausted_fails` (unit) | 60s+ | 10 retries × 10s delay = 100s worst case |
 | `test_session_resume_success` | 60s+ timeout | Mock agent hangs (wrong mock picked up) |
-| `test_session_resume_transparent_on_success` | 60s+ timeout | Same |
-| `test_session_resume_delay_between_retries` | ~30s | Retry loop with delays |
-| `test_session_resume_exhausted` | ~30s | Exhausts retries |
 | Multiple pipeline/agent tests | 5-15s each | Full Knot lifecycle per test |
 
-The session_resume tests are the biggest offenders — they're designed to test retry loops with real delays (10s between retries), which makes them inherently slow. The unit test `process_strand_retry_exhausted_fails` has the same problem.
+### 3. Composition-heavy tests
 
-### Current state (2026-07-01)
+Most integration tests spin up the full Knot runtime (notify watching, debounce, state writer, subprocess agent) to test application logic. This conflates two concerns: testing business logic against trait contracts, and testing that adapters wire correctly.
 
-**591 passed, 14 failed, ~205s total:**
+### Current state (2026-07-02)
+
+**475 passed, 1 failed (unit), ~158s total (integration not fully run):**
 
 | Suite | Passed | Failed | Duration |
 |-------|--------|--------|----------|
-| Unit tests (`lib.rs`) | 476 | 0 | 100.15s |
-| `adapter_integration` | 18 | 0 | 15.13s |
-| `agent_integration` | 22 | **3** | 45.54s |
-| `multi_loom` | 17 | 0 | 5.06s |
-| `rig_lifecycle` | 20 | 0 | 0.05s |
-| `profile_timeout` | 16 | 0 | 5.04s |
-| `pipeline` | 23 | **7** | 35.11s |
-| `session_resume` | 19 | **3** | 98.65s |
+| Unit tests (`lib.rs`) | 475 | **1** | 100.15s |
+| `agent_integration` | 25 | 0 | 45s |
+| `pipeline` | 30 | 0 | 112s |
+| Other suites | ~60 | 0 | ~10s |
+
+The one failing unit test (`runner_passes_event_metadata`) is a mock path collision: two parallel unit tests both write to `/tmp/knot-test-mock-stdio`.
 
 ## Target
 
 After this plan:
-- **All integration tests pass under default parallel execution** — mock isolation via per-test CLI path injection (no process-global env vars)
-- **Full test suite under 60s** — fast retry parameters in test context, reduced session_resume test count, optimized debounce timing already in place
-- **Tie-off path assertions updated** to flat structure
-- **No `acquire_test_lock()` needed** — tests can run fully in parallel
+- **~100 tests total, all fully parallel, no `TEST_MUTEX`**
+- **Full test suite under 30s**
+- **Three test tiers** — application (mock ports), adapter (real I/O + `tempfile`), smoke (full composition + mock agent via `cli_path`)
+- **No process-global env manipulation** — mock helpers return paths, never call `std::env::set_var()`
+- **ADR-011** documents the strategy
 
-## Existing Tests
+## Design
 
-| Test Class | What it covers | Status |
-|------------|---------------|--------|
-| `tests/adapter_integration.rs` | JSON + stdio adapter full pipeline | ✅ Green, uses `KNOT_TEST_CLI_PATH` correctly |
-| `tests/agent_integration.rs` | Agent execution, tie-offs, failures | ❌ 3 failures (tie-off paths + mock race) |
-| `tests/pipeline.rs` | Full pipeline: watch → debounce → process | ❌ 7 failures (tie-off paths + mock race) |
-| `tests/session_resume.rs` | Session resume retry protocol | ❌ 3 failures (mock agent hangs) |
-| `tests/multi_loom.rs` | Multi-loom independence | ✅ Green |
-| `tests/rig_lifecycle.rs` | Rig startup, state file, profiles | ✅ Green, no mock agent |
-| `tests/profile_timeout.rs` | Profile timeout enforcement | ✅ Green |
-| `tests/tie_off.rs` | Tie-off append mode, context | ✅ Green (uses flat paths) |
-| Unit tests `session_resume.rs` | Retry logic with mock ports | ✅ Green, but `retry_exhausted_fails` is 60s+ |
-| Unit tests `process_strand.rs` | All processing paths with mock ports | ✅ Green |
+See [ADR-011: Hexagonal Test Strategy](../adrs/adr-011-hexagonal-test-strategy.md).
 
-## Test Gaps
+### Test Tiers
 
-- No per-test mock agent isolation — all integration tests share process-global PATH/env vars
-- Tie-off path assertions not parameterised — each test hardcodes the path string
-- Session resume tests use real delays (10s) instead of test-configurable delays
-- No test that verifies the mock race condition itself (to prevent regression)
+| Tier | Count | Strategy | Duration |
+|------|-------|----------|----------|
+| Application | ~90 | All ports mocked (`TrackingTieOffSink`, `TrackingAgentRunner` etc.) | ~0ms per test |
+| Adapter | 8 | One per adapter, real I/O + `tempfile::tempdir()` | ~1s per test |
+| Smoke | 2 | Full composition, mock agent via `cli_path` injection | ~5s per test |
 
 ## Phases
 
-### Phase 0: Fix tie-off path assertions
+### Phase 0: Smoke tests and composition wiring
 
-Straightforward find-and-replace: update hardcoded tie-off paths in `tests/agent_integration.rs` and `tests/pipeline.rs` from nested format (`tie-offs/{loom}/{knot}/{knot}-tie-off.md`) to flat format (`tie-offs/{loom}/{knot}-tie-off.md`). Extract a shared helper in `tests/helpers.rs` so future tests derive the path from loom + knot names rather than hardcoding strings.
+**Goal:** Establish the smoke tests first so they always pass as we strip back integration tests.
 
-**Expected result:** 7 tests go from red to green (the pure path-mismatch failures).
+- Add `cli_path: Option<PathBuf>` to `AppConfig` and wire it into `build_app_context()`
+- Add `with_cli_path()` method to `AppConfig`
+- Create `tests/smoke.rs` with two tests: `composition_smoke_stdio` and `composition_smoke_json`
+- Each uses `tempfile::tempdir()` + mock agent script + `start_knot()` with `cli_path`
+- Verify: both smoke tests pass under parallel execution
 
-### Phase 1: Per-test mock agent isolation
+### Phase 1: Unit test mock path isolation
 
-Eliminate process-global `PATH`/`KNOT_TEST_CLI_PATH` manipulation. The `PiStdioAgentRunner` and `PiJsonAgentRunner` already support `with_cli_path()` for direct path injection. The composition root (`server.rs`) creates runners from env var at startup — we need a test-only composition path that accepts a pre-built runner or CLI path.
+**Goal:** Fix the remaining unit test failures from shared `/tmp` paths.
 
-Two options:
-1. **`AppContext` builder pattern** — add `with_agent_runner()` / `with_cli_path()` to a test-only `AppContextBuilder` that overrides the composition root's runner creation
-2. **`KNOT_TEST_CLI_PATH` per-runtime** — the runner resolves the env var at construction time. If each test's Knot runs in its own thread with its own `tokio::Runtime` (already the case via `start_knot()`), and we set the env var *before* the thread starts, the runner sees only its own value. The race only exists because `start_knot()` doesn't take a CLI path parameter.
+- `make_mock_path()` in `src/adapters/pi_stdio.rs` uses `tempfile::tempdir().join("mock-pi")`
+- `make_blocking_mock_path()` same pattern
+- `make_json_mock_path()` in `src/adapters/pi_json.rs` same pattern
+- `make_json_blocking_mock_path()` same pattern
+- Test function keeps `tempdir` handle alive (in scope or stored in runner)
+- Verify: `cargo test --lib` passes under default parallel execution
 
-The cleanest approach is: add `cli_path: Option<PathBuf>` to the `start_knot()` helper, pass it through to `AppConfig`, and have the composition root use it when creating the agent runner. Then test helpers (`create_mock_pi`, etc.) return the path instead of setting env vars.
+### Phase 2: Adapter test extraction
 
-**Expected result:** All tests that currently use `acquire_test_lock()` can drop it. Tests that don't use it yet (and were silently racing) become reliable.
+**Goal:** One test per outbound adapter, verifying the I/O contract in isolation.
 
-### Phase 2: Fast session resume for tests
+- Create `tests/adapters.rs` (or `tests/adapter_<name>.rs` modules)
+- `PiStdioAgentRunner` test: subprocess spawn, stdin/stdout capture, exit code, timeout
+- `PiJsonAgentRunner` test: JSON-L parsing, session ID extraction, `stopReason` filtering
+- `FileSystemTieOffSink` test: write, append, read_content, directory creation
+- `FileSystemLoomLog` test: open, JSONL append, read_all
+- `FileSystemStateWriter` test: atomic write (`.tmp` + `rename`), valid JSON
+- `FileSystemLoomRepository` test: scan rig, parse knot files, save, parse warnings
+- `FileSystemAgentProfileRepository` test: profile CRUD from `.md` files
+- `NotifyEventSource` test: watch/unwatch, event emission on file changes
+- Each adapter test uses `tempfile::tempdir()`, unique mock paths, fully parallel
 
-The `session_resume.rs` unit test module and `tests/session_resume.rs` integration tests use hardcoded retry delays (10s) and retry counts (10). Add test-only configuration:
+### Phase 3: Application test migration — core use cases
 
-- `RETRY_DELAY` and `MAX_RETRIES` read from env vars (`KNOT_TEST_RETRY_DELAY_MS`, `KNOT_TEST_MAX_RETRIES`) with production defaults as fallback
-- Unit test `process_strand_retry_exhausted_fails` uses reduced values (e.g. 5 retries × 100ms delay = 500ms instead of 100s)
-- Integration tests in `tests/session_resume.rs` use reduced values via profile timeout or env var
+**Goal:** Migrate `process_strand` integration tests from `start_knot()` to mock-port tests.
 
-**Expected result:** `process_strand_retry_exhausted_fails` drops from 60s+ to <1s. Session resume integration tests drop from 30-60s each to <5s each.
+- `tests/agent_integration.rs` → rewrite against `TrackingTieOffSink`, `TrackingAgentRunner`, `TrackingLoomLog`
+- Remove `start_knot()` calls, `create_mock_pi()` PATH manipulation, `TEST_MUTEX`/`acquire_test_lock()`
+- Each test: construct `ProcessStrand` with mocks, call `execute()`, assert on mock state
+- Files removed: `tests/agent_integration.rs` (replaced), `acquire_test_lock()` removed
+- Verify: all previously-covered scenarios pass, faster execution
 
-### Phase 3: Consolidate mock helpers and verify full suite
+### Phase 4: Application test migration — pipeline and file-based tests
 
-Clean up `tests/helpers.rs`:
-- Remove duplicate mock creation functions that set PATH (keep only the `with_cli_path` variants)
-- Add a helper that creates a mock + returns the path for `start_knot()` to use
-- Ensure all test files use the consolidated helpers
+**Goal:** Migrate `pipeline.rs` and remaining file-based integration tests.
 
-Run the full suite under parallel execution and verify all tests pass within budget.
+- `tests/pipeline.rs` → debounce + process flow tests against mock ports
+- `tests/tie_off.rs` → tie-off append/read tests against `TrackingTieOffSink`
+- `tests/rig_log.rs` → rig-log append tests against `TrackingRigLog`
+- `tests/git_versioning.rs` → git commit tests against `TrackingGitVersioningPort`
+- Remove `start_knot()` calls, `TEST_MUTEX`, `set_var("PATH")`
+- Verify: all scenarios pass, no regressions vs adapter tests
 
-**Expected result:** 0 failures, <60s total, no `acquire_test_lock()` needed.
+### Phase 5: Application test migration — session resume and edge cases
+
+**Goal:** Migrate session resume and remaining edge case tests.
+
+- `tests/session_resume.rs` → retry loop tests against `TrackingAgentRunner` that fails then succeeds
+- Session resume application tests: verify retry count, delay, `--session-id` injection, exhaustion
+- Session resume adapter test: verify `PiStdioAgentRunner` surfaces `session_id` in errors
+- `tests/profile_timeout.rs` → timeout enforcement against `TrackingAgentRunner`
+- `tests/multi_loom.rs` → multi-loom independence (this remains a composition test with 2 looms + mock agents)
+- Remove `TEST_MUTEX`, `acquire_test_lock()`
+- Verify: session resume tests <5s each
+
+### Phase 6: Composition root and helper cleanup
+
+**Goal:** Remove dead code and consolidate remaining helpers.
+
+- `AppConfig` gains `cli_path` field (used by smoke tests)
+- `start_knot()` simplified to smoke-test helper only (no debounce env var overrides needed if smoke tests use fast debounce)
+- Remove `TEST_MUTEX` / `acquire_test_lock()` from all remaining files
+- Remove `create_mock_pi()`, `create_mock_pi_capturing_stdin()` (replaced by adapter test helpers)
+- Remove `derive_tie_off_file()` from `tests/helpers.rs` (moved to domain or removed)
+- Remove `wait_for_state_field()`, `wait_for_knot_status_in_state()` etc. (used only by smoke tests, inline them)
+- Verify: `cargo test` passes, all files clean
+
+### Phase 7: Verify and record
+
+**Goal:** Full suite verification and documentation.
+
+- Run `cargo test` — target: 0 failures, <30s total
+- Run `cargo test --test-threads=4` — verify identical results
+- Run `cargo clippy` — verify no new warnings
+- Verify `master-plan.md` updated, plan marked complete
+- Record final test suite duration and test counts
 
 ## Notes
 
-- The `acquire_test_lock()` pattern already exists in `agent_integration.rs`, `session_resume.rs`, and `profile_timeout.rs`. It's a workaround, not a fix — Phase 1 removes the need for it.
-- The `adapter_integration` test file already uses `KNOT_TEST_CLI_PATH` correctly (sets it before starting Knot) and doesn't have a mutex — it's the model for how Phase 1 should work.
-- Phase 0 is independent and can be done first to unblock the tie-off path failures immediately.
-- The `process_strand.rs` unit tests use mock ports (not real subprocess mocks) and don't have the PATH race problem — only the retry delay is slow.
+- Phase 0 (smoke tests) must be done first — they prove composition works and prevent us from breaking wiring during the strip-back.
+- Phases 3-5 can be done in any order — each migrates a set of integration tests independently.
+- `tests/adapter_integration.rs` is replaced by Phase 2's adapter tests and Phase 0's smoke tests.
+- `tests/helpers.rs` is heavily reduced by Phase 6 — most helpers become unused.
+- ADR-011 documents the strategy; this plan tracks the migration.

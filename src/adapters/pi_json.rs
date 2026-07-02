@@ -69,6 +69,14 @@ impl PiJsonAgentRunner {
         }
     }
 
+    /// Create a new runner with an explicit CLI path and timeout.
+    ///
+    /// Used by the composition root (`build_app_context`) when
+    /// `AppConfig::cli_path` is set.
+    pub fn with_cli_path_and_timeout(cli_path: String, timeout: Duration) -> Self {
+        Self { timeout, cli_path }
+    }
+
     /// Resolve the CLI path for the agent binary.
     ///
     /// Checks the `KNOT_TEST_CLI_PATH` environment variable first (set by
