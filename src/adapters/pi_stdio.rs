@@ -379,13 +379,24 @@ echo ""
         (path, dir)
     }
 
+    /// Atomically write a script to `path`.
+    ///
+    /// Writes to a temp file in the same directory, then `rename()`s it
+    /// into place. Avoids ETXTBSY ("Text file busy") on Linux when another
+    /// test's bash process has the script file mapped for exec.
+    fn write_script_atomic(path: &std::path::Path, script: &str) {
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, script).ok();
+        std::fs::rename(&tmp, path).ok();
+    }
+
     /// Create a runner configured with the passthrough mock (echoes stdin).
     /// Returns `(runner, tempdir)` — caller must keep `tempdir` alive for the
     /// duration of the test.
     fn make_mock_runner() -> (PiStdioAgentRunner, tempfile::TempDir) {
         let script = make_mock_script();
         let (path, dir) = make_mock_path();
-        std::fs::write(&path, &script).ok();
+        write_script_atomic(&path, &script);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -424,7 +435,7 @@ sleep 300
     fn make_blocking_mock_runner() -> (PiStdioAgentRunner, tempfile::TempDir) {
         let script = make_blocking_mock_script();
         let (path, dir) = make_blocking_mock_path();
-        std::fs::write(&path, &script).ok();
+        write_script_atomic(&path, &script);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
