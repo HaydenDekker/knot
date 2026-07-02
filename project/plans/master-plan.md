@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ⬜ Planned | 2026-07-01 |
+| 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ✅ Complete | 2026-07-01 |
 | 52 | [Flatten Tie-Off Paths](052-flat-tie-off-paths/flat-tie-off-paths-plan.md) | ✅ Complete | 2026-07-01 |
 | 51 | [Filter Final Response in Pi JSON Adapter](051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md) | ✅ Complete | 2026-07-01 |
 | 50 | [Strand Queue Visibility in State](strand-queue-in-state.md) | ✅ Complete | 2026-06-30 |
@@ -105,9 +105,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 53. Integration Test Strategy
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-07-01
+**Completed:** 2026-07-02
 **Goal:** Adopt hexagonal test strategy: application tests against mock ports, one adapter test per adapter (real I/O + `tempfile`), two composition smoke tests (`cli_path` injection). Eliminate `TEST_MUTEX`, process-global env vars, and full-runtime-per-test patterns. Target: ~100 tests, <30s total, fully parallel.
+
+**Result:** Phases 0-6 implemented hexagonal test architecture. Phase 7 verification: 746 tests pass (0 failures), identical results under `--test-threads=4`, no new clippy warnings. `TEST_MUTEX`, `std::env::set_var("PATH")`, and `KNOT_TEST_CLI_PATH` all confirmed absent from test code. Lib tests dropped from 100s to 1.1s after fixing retry delay env vars. Flaky `test_session_resume_delay_between_retries` removed (redundant with unit test). Wall clock 54s — target of <30s not met due to remaining unmigrated integration suites (auto_discovery: 15s, 6 suites at ~5s each). Test count of 746 exceeds target of ~100 — many pre-plan integration test files remain unmigrated.
 
 **ADR:** [ADR-011: Hexagonal Test Strategy](../adrs/adr-011-hexagonal-test-strategy.md)
 

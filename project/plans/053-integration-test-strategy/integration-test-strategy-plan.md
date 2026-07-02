@@ -152,10 +152,90 @@ See [ADR-011: Hexagonal Test Strategy](../adrs/adr-011-hexagonal-test-strategy.m
 - Verify `master-plan.md` updated, plan marked complete
 - Record final test suite duration and test counts
 
+### Phase 8: Application test migration — auto-discovery and CRUD
+
+**Goal:** Remove `auto_discovery_and_knot_crud.rs` (9 composition tests) whose scenarios are fully covered by ConfigEventHandler unit tests + NotifyEventSource adapter tests.
+
+The ConfigEventHandler already has 17 unit tests covering: `config_handler_loom_added`, `config_handler_loom_added_already_registered`, `config_handler_knot_added`, `config_handler_knot_added_duplicate`, `config_handler_knot_added_loom_not_found`, `config_handler_knot_modified`, `config_handler_knot_modified_same_strand_dir`, `config_handler_knot_modified_not_found`, `config_handler_knot_modified_new_knot_registers`, `config_handler_knot_modified_warns_on_recovery`, `config_handler_knot_deleted`, `config_handler_knot_deleted_not_found`, `config_handler_knot_deleted_loom_not_found`, `config_handler_knot_added_missing_strand_dir`, `config_handler_knot_modified_missing_strand_dir`, `config_handler_loom_added_scans_specific_dir`, `config_handler_loom_added_dir_missing`.
+
+The NotifyEventSource adapter tests in `adapters.rs` cover: `loom_dir_new_knot_emits_config_event`, `loom_dir_edit_knot_emits_config_event`, `loom_dir_delete_knot_emits_config_event`, `rig_dir_new_loom_emits_config_event`.
+
+Per ADR-011: "if every adapter satisfies its trait contract (Tier 2), and every use case works against mocks (Tier 1), the smoke test (Tier 3) only needs to prove the happy-path wiring."
+
+- Remove `tests/auto_discovery_and_knot_crud.rs`
+- Verify: no uncovered scenarios (all 9 tests map to existing unit/adapter tests)
+- Verify: `cargo test` passes, 0 regressions
+
+### Phase 9: Application test migration — startup, lifecycle and skill integration
+
+**Goal:** Remove remaining composition tests whose scenarios are fully covered by existing tiers.
+
+**`tests/discovery.rs`** (4 tests → 3):
+- Keep 3 adapter tests: `discovers_looms_at_startup`, `ignores_non_loom_directories`, `discovers_multiple_looms` — these use `build_app_context()` + `run_startup()` directly (adapter-level, no `start_knot()`)
+- Remove 1 composition test: `writes_discovered_looms_to_state_file` — uses `start_knot()` + `wait_for_state_file()`. State.json writing is covered by smoke tests + `write_state` unit tests.
+
+**`tests/rig_lifecycle.rs`** (5 tests → removed):
+- `rig_directory_auto_created` — covered by smoke test (rig created at startup)
+- `looms_scanned_on_startup` — covered by `discovery.rs` adapter tests + smoke test
+- `empty_rig_produces_valid_state` — covered by `build_state_empty_rig` unit test + smoke test
+- `profiles_loaded_into_state` — covered by smoke test
+- `state_file_has_required_schema` — covered by `build_state_*` unit tests (10 tests)
+
+**`tests/skill_integration.rs`** (10 tests → removed):
+- 5 state schema tests (`state_file_has_rig_path`, `state_file_looms_schema`, `state_file_profiles_schema`, `state_file_knot_has_status`, `state_file_updated_at_is_timestamp`) — covered by `write_state` unit tests
+- 3 file convention tests (`loom_directory_naming_convention`, `knot_file_naming_convention`, `profile_file_naming_convention`) — trivial assertions, no runtime needed
+- 1 tie-off path test (`tie_off_path_convention`) — covered by smoke test (tie-off exists at correct path)
+- 1 loom-log path test (`loom_log_path_convention`) — covered by smoke test + `loom_log` adapter tests
+
+**`tests/shutdown.rs`** (2 tests → removed):
+- `shutdown_writes_loom_stopped` — verifies LoomStarted written + clean abort. Covered by smoke test (full pipeline completes, loom-log has events).
+- `shutdown_drains_pipeline_before_loom_stopped` — verifies processing completes before abort. Covered by smoke test (waits for KnotCompleted before teardown).
+
+- Verify: `cargo test` passes, 0 regressions
+
+### Phase 10: Remove adapter integration tests and dead helpers
+
+**Goal:** Remove `adapter_integration.rs` (already superseded per plan notes) and clean up dead code.
+
+**`tests/adapter_integration.rs`** (3 tests → removed):
+- `test_json_invocation_full_pipeline` — covered by `smoke.rs` `composition_smoke_json` + `adapters.rs` PiJson adapter tests
+- `test_stdio_invocation_full_pipeline` — covered by `smoke.rs` `composition_smoke_stdio` + `adapters.rs` PiStdio adapter tests
+- `test_json_invocation_timeout_captures_session_id` — covered by `adapters.rs` PiJson adapter test `timeout_enforcement_returns_timeout`
+
+**Dead helpers in `tests/helpers.rs`:**
+- `start_knot(rig_dir: PathBuf)` — only used by removed files (smoke/multi_loom use `start_knot_with_config`)
+- `init_git_repo()`, `get_latest_commit()`, `count_commits()`, `run_git()` — dead code since git_versioning.rs uses mock ports
+- `build_profile_with_timeout()` — dead code (session_resume.rs has its own)
+- `wait_for_loom_log_event_with_deadline()` — only used by `adapter_integration.rs`
+
+**Helpers to KEEP (used by remaining files):**
+- `start_knot_with_config()` — used by `smoke.rs`, `multi_loom.rs`
+- `create_loom_dir()`, `create_knot_file()`, `create_fast_profile()`, `create_strand()` — used by `smoke.rs`, `multi_loom.rs`, `discovery.rs`
+- `wait_for_loom_in_state()`, `wait_for_knot_status_in_state()`, `wait_for_state_file()` — used by `smoke.rs`, `multi_loom.rs`
+- `read_loom_log()`, `loom_log_event_type()` — used by `smoke.rs`, `multi_loom.rs`
+
+- Verify: `cargo test` passes, `cargo clippy` clean
+
+### Phase 11: Final verification
+
+**Goal:** Confirm suite meets ADR-011 targets.
+
+- Run `cargo test` — target: 0 failures, <30s wall clock
+- Run `cargo test -- --test-threads=4` — verify identical results
+- Run `cargo clippy` — verify no new warnings
+- Verify remaining test structure:
+  - Tier 1: ~476 unit tests (lib.rs) + ~50 application tests (mock ports)
+  - Tier 2: 33 adapter tests (`adapters.rs`)
+  - Tier 3: 2 smoke tests (`smoke.rs`) + 2 multi-loom composition tests (`multi_loom.rs`)
+  - Adapter-level: 3 discovery tests (`discovery.rs`), 6 composition wiring tests (`composition.rs`)
+  - Total: ~570 tests (down from 746, removed 177 composition tests)
+- Record final test suite duration and test counts
+
 ## Notes
 
 - Phase 0 (smoke tests) must be done first — they prove composition works and prevent us from breaking wiring during the strip-back.
 - Phases 3-5 can be done in any order — each migrates a set of integration tests independently.
-- `tests/adapter_integration.rs` is replaced by Phase 2's adapter tests and Phase 0's smoke tests.
-- `tests/helpers.rs` is heavily reduced by Phase 6 — most helpers become unused.
+- `tests/adapter_integration.rs` is replaced by Phase 2's adapter tests and Phase 0's smoke tests (removed in Phase 10).
+- `tests/helpers.rs` is heavily reduced by Phase 6 — most helpers become unused. Final cleanup in Phase 10.
+- Phases 8-11 remove remaining composition tests superseded by the three-tier coverage. Per ADR-011: "if every adapter satisfies its trait contract (Tier 2), and every use case works against mocks (Tier 1), the smoke test (Tier 3) only needs to prove the happy-path wiring."
 - ADR-011 documents the strategy; this plan tracks the migration.

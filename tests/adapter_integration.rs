@@ -9,18 +9,9 @@ mod helpers;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::thread;
 use std::time::Duration;
 
 use helpers::*;
-
-// Global mutex to serialize tests that modify process-global PATH / env vars.
-// If a previous test panicked (poisoning the mutex), we recover and continue.
-static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 // ── Mock pi helpers ────────────────────────────────────────────────────────
 
@@ -76,61 +67,7 @@ fn create_mock_pi_json(
     )
     .unwrap();
 
-    unsafe {
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var(
-            "PATH",
-            format!("{}:{}", bin_dir.display(), existing),
-        );
-    }
-
     pi_path
-}
-
-/// Create a mock `pi` binary that sleeps (for timeout tests with json adapter).
-///
-/// Emits the session line immediately, then sleeps forever (killed on timeout).
-///
-/// Uses `exec sleep` so the sleep process replaces bash — no orphaned child
-/// process holding the pipe open (which would block `wait_with_output()`).
-///
-/// # Arguments
-///
-/// * `rig_dir` — path to the rig directory
-/// * `session_id` — session ID to emit before sleeping
-fn create_mock_pi_json_timeout(
-    rig_dir: &std::path::Path,
-    session_id: &str,
-) {
-    let bin_dir = rig_dir.join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let pi_path = bin_dir.join("pi");
-
-    let script = format!(
-        "#!/usr/bin/env bash\n\
-         # Mock pi — emits session then sleeps (for timeout capture)\n\
-         # exec replaces bash with sleep (no orphaned child holding pipe)\n\
-         cat > /dev/null\n\
-         echo '{{\"type\":\"session\",\"id\":\"{session_id}\"}}'\n\
-         exec sleep 3600\n",
-    );
-
-    fs::write(&pi_path, script).unwrap();
-    fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755)).unwrap();
-
-    fs::write(
-        rig_dir.join(".workspace-agent-config.yaml"),
-        "agent-adapter: pi-json\n",
-    )
-    .unwrap();
-
-    unsafe {
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var(
-            "PATH",
-            format!("{}:{}", bin_dir.display(), existing),
-        );
-    }
 }
 
 /// Create an agent profile with a custom timeout (in seconds).
@@ -163,8 +100,6 @@ You are a reviewer.\n"
 /// tie-off contains the response text extracted from the JSON-L stream.
 #[test]
 fn test_json_invocation_full_pipeline() {
-    let _lock = acquire_test_lock();
-
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -174,7 +109,7 @@ fn test_json_invocation_full_pipeline() {
     create_fast_profile(&rig_dir);
 
     // Mock pi that outputs JSON-L with session_id and token usage
-    create_mock_pi_json(
+    let pi_path = create_mock_pi_json(
         &rig_dir,
         "json-sess-abc123",
         "json adapter review output",
@@ -182,7 +117,9 @@ fn test_json_invocation_full_pipeline() {
         50,
     );
 
-    let handle = start_knot(rig_dir.clone());
+    let config = knot::AppConfig::with_rig_dir(rig_dir.clone())
+        .with_cli_path(pi_path);
+    let handle = start_knot_with_config(config);
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Trigger processing
@@ -234,8 +171,6 @@ fn test_json_invocation_full_pipeline() {
 /// Verifies existing behavior is unchanged.
 #[test]
 fn test_stdio_invocation_full_pipeline() {
-    let _lock = acquire_test_lock();
-
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -244,10 +179,26 @@ fn test_stdio_invocation_full_pipeline() {
     create_knot_file(&loom_dir, "review");
     create_fast_profile(&rig_dir);
 
-    // Standard mock pi (plain text output, pi-stdio adapter)
-    create_mock_pi(&rig_dir, "stdio review output");
+    // Mock pi (plain text output, pi-stdio adapter) — created inline
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    fs::write(
+        &pi_path,
+        "#!/usr/bin/env bash\n\
+         cat > /dev/null\n\
+         echo \"stdio review output\"\n\
+         exit 0\n",
+    ).unwrap();
+    fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        rig_dir.join(".workspace-agent-config.yaml"),
+        "agent-adapter: pi-stdio\n",
+    ).unwrap();
 
-    let handle = start_knot(rig_dir.clone());
+    let config = knot::AppConfig::with_rig_dir(rig_dir.clone())
+        .with_cli_path(pi_path);
+    let handle = start_knot_with_config(config);
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Trigger processing
@@ -305,8 +256,6 @@ fn test_stdio_invocation_full_pipeline() {
 /// mentions timeout.
 #[test]
 fn test_json_invocation_timeout_captures_session_id() {
-    let _lock = acquire_test_lock();
-
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -318,9 +267,25 @@ fn test_json_invocation_timeout_captures_session_id() {
     create_profile_with_timeout(&rig_dir, "fast", 1);
 
     // Mock pi that emits session_id then sleeps forever
-    create_mock_pi_json_timeout(&rig_dir, "timeout-sess-xyz789");
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    fs::write(
+        &pi_path,
+        "#!/usr/bin/env bash\n\
+         cat > /dev/null\n\
+         echo '{{\"type\":\"session\",\"id\":\"timeout-sess-xyz789\"}}'\n\
+         exec sleep 3600\n",
+    ).unwrap();
+    fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        rig_dir.join(".workspace-agent-config.yaml"),
+        "agent-adapter: pi-json\n",
+    ).unwrap();
 
-    let handle = start_knot(rig_dir.clone());
+    let config = knot::AppConfig::with_rig_dir(rig_dir.clone())
+        .with_cli_path(pi_path);
+    let handle = start_knot_with_config(config);
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     // Start a timer BEFORE triggering processing, so the wait deadline

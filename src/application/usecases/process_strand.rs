@@ -1395,7 +1395,10 @@ mod session_resume_tests {
             strand_path: StrandPath(strand_path.clone()),
         };
 
+        // Zero retry delay for fast test execution
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
         let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
         assert!(result.is_ok());
 
         // Loom-log: KnotProcessing, SessionResumed, KnotCompleted,
@@ -1468,7 +1471,10 @@ mod session_resume_tests {
             strand_path: StrandPath(strand_path.clone()),
         };
 
+        // Zero retry delay for fast test execution (10 retries × 10s default = 100s)
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
         let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
         assert!(result.is_ok()); // execute() always returns Ok
 
         // Loom-log: KnotProcessing, 10x SessionResumed, KnotFailed,

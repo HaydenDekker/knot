@@ -7,16 +7,8 @@
 mod helpers;
 
 use std::fs;
-use std::path::Path;
 
 use helpers::*;
-
-// Global mutex to serialize tests that modify process-global PATH / env vars.
-static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 // ── State File Schema Tests ────────────────────────────────────────────
 
@@ -180,7 +172,6 @@ fn profile_file_naming_convention() {
 /// Tie-off files are at `tie-offs/{loom-id}/{knot-id}-tie-off.md`.
 #[test]
 fn tie_off_path_convention() {
-    let _lock = acquire_test_lock();
     let tmp = tempfile::tempdir().unwrap();
     let rig_dir = tmp.path().join("rig");
     fs::create_dir_all(&rig_dir).unwrap();
@@ -188,9 +179,31 @@ fn tie_off_path_convention() {
     let loom_dir = create_loom_dir(&rig_dir, "review");
     create_knot_file(&loom_dir, "review");
     create_fast_profile(&rig_dir);
-    create_mock_pi(&rig_dir, "output");
 
-    let handle = start_knot(rig_dir.clone());
+    // Mock agent — created inline, injected via cli_path
+    let bin_dir = rig_dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pi_path = bin_dir.join("pi");
+    fs::write(
+        &pi_path,
+        "#!/usr/bin/env bash\n\
+         cat > /dev/null\n\
+         echo \"output\"\n\
+         exit 0\n",
+    ).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        rig_dir.join(".workspace-agent-config.yaml"),
+        "agent-adapter: pi-stdio\n",
+    ).unwrap();
+
+    let config = knot::AppConfig::with_rig_dir(rig_dir.clone())
+        .with_cli_path(pi_path);
+    let handle = start_knot_with_config(config);
     wait_for_loom_in_state(&rig_dir, "review-loom", 1);
 
     create_strand(&rig_dir, "feature.md", "content");

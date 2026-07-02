@@ -1,97 +1,381 @@
-//! Integration tests for agent timeout handling.
+//! Application-level tests for agent timeout handling.
 //!
 //! Verifies that profile-level timeout configuration is respected
-//! and timeout events are recorded.
+//! and timeout events are recorded. Uses mocked ports
+//! (\`MockAgentRunner\` returning \`PortError::Timeout\`) — no
+//! \`start_knot()\`, no \`TEST_MUTEX\`, no PATH manipulation.
 
-#[path = "helpers.rs"]
-mod helpers;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use std::fs;
-use std::thread;
-use std::time::Duration;
+use knot::application::ports::{AgentOutput, AgentRunner, PortError};
+use knot::application::store::LoomStore;
+use knot::application::usecases::test_fixtures::*;
+use knot::application::usecases::ProcessStrand;
+use knot::domain::entities::{KnotId, LoomId, StrandPath, TieOffStatus};
+use knot::domain::events::{LoomEvent, RigLogEvent};
+use knot::domain::value_objects::AgentProfile;
+use knot::RigAgentConfig;
 
-use helpers::*;
+// ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Profile timeout overrides the runner's default timeout.
+/// Build a knot with the given ID and "fast" profile ref.
+fn build_knot(id: &str) -> knot::domain::entities::Knot {
+    build_knot_with_profile(id, "fast")
+}
+
+/// Build a loom with the given ID and knots.
+fn build_loom(
+    id: &str,
+    knots: Vec<knot::domain::entities::Knot>,
+) -> knot::domain::entities::Loom {
+    knot::domain::entities::Loom {
+        id: LoomId(id.to_string()),
+        knots,
+    }
+}
+
+/// Build the ProcessStrand use case with all mocks wired up.
+///
+/// Returns (use_case, log_events, tie_off_appends, rig_events,
+/// tie_off_content, agent_runner).
+#[allow(clippy::type_complexity)]
+fn build_process_strand(
+    loom: knot::domain::entities::Loom,
+    agent_runner: Arc<MockAgentRunner>,
+    profile: AgentProfile,
+) -> (
+    ProcessStrand,
+    Arc<Mutex<Vec<LoomEvent>>>,
+    Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
+    Arc<Mutex<Vec<RigLogEvent>>>,
+    Arc<Mutex<HashMap<String, String>>>,
+    Arc<MockAgentRunner>,
+) {
+    let store = LoomStore::new();
+    store.register(loom);
+
+    let (log_port, log_events) = MockLoomLogPort::new();
+    let (tie_off_sink, tie_off_appends, tie_off_content) =
+        TrackingTieOffSink::new();
+    let (rig_log, rig_events) = MockRigLogPort::new();
+
+    let profile_repo = Arc::new(MockProfileRepository {
+        profiles: Arc::new(Mutex::new(HashMap::from_iter([
+            ("fast".to_string(), profile),
+        ]))),
+    });
+
+    let use_case = ProcessStrand::new(
+        store.clone(),
+        Arc::new(log_port),
+        agent_runner.clone() as Arc<dyn AgentRunner>,
+        Arc::new(tie_off_sink),
+        RigAgentConfig::default_config(),
+        PathBuf::from("/rig"),
+        profile_repo,
+        Arc::new(rig_log),
+        Arc::new(MockGitVersioningPort::default()),
+        Arc::new(MockStrandFileChecker::new()),
+    );
+
+    (
+        use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        tie_off_content,
+        agent_runner,
+    )
+}
+
+/// Build a StrandEvent::Created for the given loom/knot/strand.
+fn created_event(
+    loom_id: &str,
+    knot_id: &str,
+    strand_path: PathBuf,
+) -> knot::domain::events::StrandEvent {
+    knot::domain::events::StrandEvent::Created {
+        loom_id: LoomId(loom_id.to_string()),
+        knot_id: KnotId(knot_id.to_string()),
+        strand_path: StrandPath(strand_path),
+    }
+}
+
+/// Create a real strand file on disk (needed for Created events).
+fn create_strand_file(
+    dir: &tempfile::TempDir,
+    name: &str,
+    content: &str,
+) -> PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+/// Build a profile with a custom timeout (in seconds).
+fn build_profile_with_timeout(timeout_secs: u64) -> AgentProfile {
+    default_profile().with_timeout(Some(timeout_secs))
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+/// Profile timeout is passed through to the agent runner context.
+///
+/// Verifies that the profile's `timeout` field resolves to
+/// `session_timeout()` and is passed as `ctx.timeout` when the
+/// agent is invoked.
 #[test]
-fn profile_timeout_is_respected() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rig_dir = tmp.path().join("rig");
-    fs::create_dir_all(&rig_dir).unwrap();
+fn profile_timeout_is_passed_to_runner() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
 
-    let loom_dir = create_loom_dir(&rig_dir, "review");
-    create_knot_file(&loom_dir, "review");
+    // Profile with 60s timeout
+    let profile = build_profile_with_timeout(60);
 
-    // Profile with a 500ms timeout
-    let profiles_dir = rig_dir.join("profiles");
-    fs::create_dir_all(&profiles_dir).unwrap();
-    let profile_content = [
-        "---",
-        "name: fast",
-        "provider: openai",
-        "model: gpt-4o",
-        "timeout: 1",
-        "---",
-        "",
-        "You are a reviewer.",
-        "",
-    ].join("\n");
-    fs::write(profiles_dir.join("fast.md"), profile_content).unwrap();
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
 
-    // Mock pi that sleeps longer than the timeout
-    let bin_dir = rig_dir.join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let pi_path = bin_dir.join("pi");
-    let script = "#!/usr/bin/env bash\ncat > /dev/null\nsleep 10\nexit 0\n";
-    fs::write(&pi_path, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&pi_path, fs::Permissions::from_mode(0o755))
-            .unwrap();
-    }
-    let config = "agent-adapter: pi-stdio\n";
-    fs::write(rig_dir.join(".workspace-agent-config.yaml"), config).unwrap();
-    unsafe {
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), existing));
-    }
+    // TrackingAgentRunner captures the context but always succeeds
+    let (runner, runner_contexts) = TrackingAgentRunner::new();
+    let runner = Arc::new(runner);
 
-    let handle = start_knot(rig_dir.clone());
-    wait_for_loom_in_state(&rig_dir, "review-loom", 1);
+    let store = LoomStore::new();
+    store.register(loom);
 
-    create_strand(&rig_dir, "feature.md", "content");
+    let (log_port, _log_events) = MockLoomLogPort::new();
+    let (tie_off_sink, _tie_off_appends, _tie_off_content) =
+        TrackingTieOffSink::new();
+    let (rig_log, _rig_events) = MockRigLogPort::new();
 
-    // Wait for processing (should timeout)
-    // The runner's default is 300s but the profile timeout is 1s
-    // so it should complete much faster
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if std::time::Instant::now() > deadline {
-            break;
-        }
-        let state = match read_state_file(&rig_dir) {
-            Ok(s) => s,
-            Err(_) => {
-                thread::sleep(Duration::from_millis(50));
-                continue;
+    let profile_repo = Arc::new(MockProfileRepository {
+        profiles: Arc::new(Mutex::new(HashMap::from_iter([
+            ("fast".to_string(), profile),
+        ]))),
+    });
+
+    let use_case = ProcessStrand::new(
+        store.clone(),
+        Arc::new(log_port),
+        runner.clone() as Arc<dyn AgentRunner>,
+        Arc::new(tie_off_sink),
+        RigAgentConfig::default_config(),
+        PathBuf::from("/rig"),
+        profile_repo,
+        Arc::new(rig_log),
+        Arc::new(MockGitVersioningPort::default()),
+        Arc::new(MockStrandFileChecker::new()),
+    );
+
+    use_case
+        .execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // Verify the captured context has the correct timeout
+    let contexts = runner_contexts.lock().unwrap();
+    assert!(!contexts.is_empty(), "should have at least 1 context");
+    let ctx = &contexts[0];
+
+    // Profile timeout of 60s should be passed to the runner
+    assert!(
+        ctx.timeout.is_some(),
+        "profile timeout should be passed to runner context"
+    );
+    assert_eq!(
+        ctx.timeout.unwrap().as_secs(),
+        60,
+        "timeout should match profile's 60s timeout"
+    );
+}
+
+/// On timeout error (\`PortError::Timeout\`):
+/// - loom-log receives KnotProcessing → KnotFailed → StrandProcessed
+/// - rig-log receives TimeoutExceeded
+/// - tie-off is NOT appended (preserved unchanged)
+#[test]
+fn profile_timeout_results_in_timeout_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let profile = build_profile_with_timeout(30);
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+
+    // Agent runner that returns a timeout error
+    let timeout_err = PortError::Timeout {
+        message: "session exceeded timeout".to_string(),
+        session_id: None,
+    };
+    let runner = Arc::new(MockAgentRunner::new(Err(timeout_err)));
+
+    let (use_case, log_events, tie_off_appends, rig_events, _content,
+        _captured) = build_process_strand(loom, runner, profile);
+
+    use_case.execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // execute() always returns Ok (errors are logged, not propagated)
+
+    // Loom-log: KnotProcessing → KnotFailed → StrandProcessed
+    let events = log_events.lock().unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::KnotProcessing { .. })),
+        "should have KnotProcessing"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+        "should have KnotFailed"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::StrandProcessed { .. })),
+        "should have StrandProcessed"
+    );
+
+    // KnotFailed error should mention timeout
+    let failed = events.iter()
+        .find_map(|e| {
+            if let LoomEvent::KnotFailed { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
             }
-        };
-        let knot = state
-            .get("looms")
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.get(0))
-            .and_then(|l| l.get("knots"))
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.get(0));
-        if let Some(knot) = knot {
-            let status = knot.get("status").and_then(|v| v.as_str());
-            if status == Some("failed") || status == Some("completed") {
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
+        });
+    assert!(
+        failed.as_ref().map(|e| e.contains("timeout")).unwrap_or(false),
+        "KnotFailed should mention timeout"
+    );
 
-    handle.abort();
+    // StrandProcessed should have an error
+    let processed_error = events.iter()
+        .find_map(|e| {
+            if let LoomEvent::StrandProcessed { error, .. } = e {
+                error.clone()
+            } else {
+                None
+            }
+        });
+    assert!(
+        processed_error.as_ref().map(|e| !e.is_empty()).unwrap_or(false),
+        "StrandProcessed should have an error"
+    );
+
+    // Rig-log: TimeoutExceeded
+    let rig = rig_events.lock().unwrap();
+    assert!(
+        rig.iter().any(|e| matches!(e, RigLogEvent::TimeoutExceeded { .. })),
+        "should have TimeoutExceeded in rig-log"
+    );
+
+    // Tie-off: NOT appended (preserved unchanged)
+    let appends = tie_off_appends.lock().unwrap();
+    assert!(
+        appends.is_empty(),
+        "tie-off should NOT be appended on timeout"
+    );
+}
+
+/// On non-timeout error (e.g., AgentExecutionFailed):
+/// - loom-log receives KnotProcessing → KnotFailed → StrandProcessed
+/// - rig-log does NOT receive TimeoutExceeded
+/// - tie-off IS appended with error content
+#[test]
+fn profile_non_timeout_error_writes_tieoff() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let profile = build_profile_with_timeout(30);
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+
+    let agent_err = PortError::AgentExecutionFailed {
+        message: "agent crash".to_string(),
+        session_id: None,
+    };
+    let runner = Arc::new(MockAgentRunner::new(Err(agent_err)));
+
+    let (use_case, log_events, tie_off_appends, rig_events, _content,
+        _captured) = build_process_strand(loom, runner, profile);
+
+    use_case.execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // Loom-log: KnotFailed
+    let events = log_events.lock().unwrap();
+    let failed = events.iter()
+        .find_map(|e| {
+            if let LoomEvent::KnotFailed { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
+            }
+        });
+    assert!(
+        failed.as_ref().map(|e| e.contains("crash")).unwrap_or(false),
+        "KnotFailed should mention crash"
+    );
+
+    // Rig-log: NO TimeoutExceeded (only timeout writes to rig-log)
+    let rig = rig_events.lock().unwrap();
+    assert!(
+        rig.is_empty(),
+        "rig-log should NOT receive event for non-timeout errors"
+    );
+
+    // Tie-off: IS appended with error content
+    let appends = tie_off_appends.lock().unwrap();
+    assert_eq!(appends.len(), 1, "tie-off should be appended");
+    assert_eq!(appends[0].status, TieOffStatus::Failed);
+    assert!(
+        appends[0].content.contains("crash"),
+        "tie-off content should contain error detail"
+    );
+}
+
+/// On successful execution (within timeout):
+/// - loom-log receives KnotProcessing → KnotCompleted → StrandProcessed
+/// - rig-log receives NO events
+/// - tie-off IS appended with agent output
+#[test]
+fn profile_timeout_success_no_timeout_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let profile = build_profile_with_timeout(120);
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+
+    let output = Ok(AgentOutput {
+        stdout: "agent output".to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+        metadata: None,
+    });
+    let runner = Arc::new(MockAgentRunner::new(output));
+
+    let (use_case, log_events, tie_off_appends, rig_events, _content,
+        _captured) = build_process_strand(loom, runner, profile);
+
+    use_case.execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // Loom-log: KnotCompleted, no KnotFailed
+    let events = log_events.lock().unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::KnotCompleted { .. })),
+        "should have KnotCompleted"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+        "should NOT have KnotFailed"
+    );
+
+    // Rig-log: empty
+    let rig = rig_events.lock().unwrap();
+    assert!(rig.is_empty(), "rig-log should be empty on success");
+
+    // Tie-off: appended with success content
+    let appends = tie_off_appends.lock().unwrap();
+    assert_eq!(appends.len(), 1);
+    assert_eq!(appends[0].status, TieOffStatus::Produced);
+    assert_eq!(appends[0].content, "agent output");
 }
