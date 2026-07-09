@@ -120,7 +120,13 @@ The static routing pattern is a valid current solution. It can be used now to un
 
 No breaking changes — intent-based routing is backward compatible with static routing during transition.
 
-## Implementation Status: ⬜ Draft
+## Implementation Status: ✅ Complete (2026-07-09)
+
+## Notes
+- Phases 0-6 implemented: domain model (Intent, AgentEvent, EventMetadata), tie-off parser, intent matching, event dispatcher, context injection, processing pipeline integration, and observability
+- Full test suite passes (669 tests, 0 failures) in ~25s wall clock
+- Version bumped to 0.23.0
+- Skills updated: knot-create (listens-for documentation), knot-update (changelog), knot-design (compatibility)
 
 ## Existing Tests
 | Test Class | What it covers | Status |

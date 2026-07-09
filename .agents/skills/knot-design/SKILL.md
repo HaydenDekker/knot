@@ -5,7 +5,7 @@ license: MIT
 metadata:
   author: Knot Team
   version: "1.0.1"
-  compatibility: "Knot 0.22.0+"
+  compatibility: "Knot 0.23.0+"
 ---
 
 # Knot Design Skill

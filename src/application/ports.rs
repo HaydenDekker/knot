@@ -893,6 +893,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: crate::domain::entities::EventMetadata::default(),
         };
         let result = sink.write(tie_off);
         assert!(result.is_ok());

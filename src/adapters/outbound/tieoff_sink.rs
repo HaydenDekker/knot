@@ -73,8 +73,22 @@ impl TieOffSink for FileSystemTieOffSink {
 
         let mut new_content = String::new();
         new_content.push_str(&format!(
-            "## {knot_name} triggered by {event_label} {strand_label}\nTimestamp: {timestamp}\n---\n"
+            "## {knot_name} triggered by {event_label} {strand_label}\nTimestamp: {timestamp}\n"
         ));
+        // Append structured event metadata for a2a traceability.
+        // Present when this strand was triggered by an event file
+        // (intent-based routing consumer).
+        let metadata = &tie_off.event_metadata;
+        if let Some(ref event_id) = metadata.event_id {
+            new_content.push_str(&format!("event: {event_id}\n"));
+        }
+        if let Some(ref source) = metadata.source_knot {
+            new_content.push_str(&format!("source: {source}\n"));
+        }
+        if let Some(ref original_strand) = metadata.original_strand {
+            new_content.push_str(&format!("original_strand: {original_strand}\n"));
+        }
+        new_content.push_str("---\n");
         new_content.push_str(&tie_off.content);
 
         if file_exists {
@@ -141,7 +155,7 @@ impl FileSystemTieOffSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entities::TieOffStatus;
+    use crate::domain::entities::{EventMetadata, TieOffStatus};
 
     #[test]
     fn tieoff_write_new_file() {
@@ -157,6 +171,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         let result = sink.write(tie_off);
@@ -196,6 +211,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         })
         .unwrap();
 
@@ -209,6 +225,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         })
         .unwrap();
 
@@ -238,6 +255,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         let sub_dir = dir.path().join("sub/dir");
@@ -293,6 +311,7 @@ mod tests {
             strand_path: Some("strand1.md".to_string()),
             timestamp: Some("2026-06-05T00:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         assert!(
@@ -340,6 +359,7 @@ mod tests {
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
         sink.append(tie_off_1).unwrap();
 
@@ -353,6 +373,7 @@ mod tests {
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
         sink.append(tie_off_2).unwrap();
 
@@ -424,6 +445,7 @@ mod tests {
                 strand_path: Some("strand.md".to_string()),
                 timestamp: Some(ts.clone()),
                 agent_events: Vec::new(),
+                event_metadata: EventMetadata::default(),
             };
             sink.append(tie_off).unwrap();
         }

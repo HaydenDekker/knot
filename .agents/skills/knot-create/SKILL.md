@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.1.0"
-  compatibility: "Knot 0.22.0+"
+  version: "5.2.0"
+  compatibility: "Knot 0.23.0+"
 ---
 
 # Knot Create Skill
@@ -373,6 +373,8 @@ Review the goals section of this PRD. Check that:
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
 | `strand-dir` | **Yes** | Directory to watch for strand files. Resolved relative to the project root. |
+| `listens-for` | No | List of event intents this knot wants to consume (see Intent-Based Event Routing below). Defaults to empty. |
+| `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
 
 ### Markdown Body
 
@@ -428,6 +430,75 @@ strand-dir: "../../tie-offs/review-loom/reviews"
 
 This subscribes only to the `reviews` event type. Multiple consumers
 can strand from the same event subdirectory.
+
+### Intent-Based Event Routing
+
+Intent-based routing is the first-class mechanism for agent-to-agent
+events. Consumer knots declare `listens-for` intents in their
+frontmatter, producers emit structured events in their tie-offs, and
+Knot automatically dispatches matching events to consumers.
+
+**Consumer knot (declares what events it wants):**
+
+```markdown
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "project/reviews"
+listens-for:
+  - target-knot: quality-reviewer
+    event-id: ReviewCompleted
+    event-description: >
+      Emitted when a quality review is complete and findings are
+      ready for planning.
+---
+
+Create a refactor plan when a quality review is complete.
+```
+
+**Producer knot (no declaration needed — Knot injects instructions):**
+
+Before the producer knot runs, Knot scans all other knots' `listens-for`
+entries and injects event instructions at the **beginning** of its
+prompt. The producer writes structured events in its tie-off:
+
+```
+[2026-07-09T12:00:00Z] Quality review complete.
+  event: ReviewCompleted
+  target-knot: quality-reviewer
+  findings: "3 SOLID violations found"
+  scope: "file decomposition and hex architecture fix"
+```
+
+**How it works:**
+
+1. Consumer declares `listens-for` with `target-knot`, `event-id`,
+   and `event-description`.
+2. Before the target knot runs, Knot injects event instructions into
+   its prompt (grouped by `event-id`, deduplicated across consumers).
+3. Target knot emits a structured event block in its tie-off.
+4. Knot parses the tie-off, matches events to consumer intents, and
+   creates event files in each consumer's tie-off directory.
+5. The consumer's `strand-dir` should point to the event subdirectory:
+   `../../tie-offs/{loom-id}/{event-id}/`
+
+**Comparison with static routing:**
+
+| Aspect | Static (tie-off subdirectories) | Intent-based |
+|--------|--------------------------------|--------------|
+| Who defines events | Producer creates subdirectory | Consumer declares intent |
+| Routing | Fixed `strand-dir` path | Dynamic — Knot matches at runtime |
+| Fan-out | Consumer must know subdirectory | Multiple consumers declare independently |
+| Event payload | Full file content | Structured key-value pairs |
+
+**Migration from static to intent-based:**
+
+1. Add `listens-for` to consumer knot frontmatter.
+2. Update consumer's `strand-dir` to the intent event subdirectory:
+   `../../tie-offs/{loom-id}/{event-id}/`
+3. Producer tie-offs already contain structured event data (Knot
+   injects the format).
+4. Remove static event subdirectories (they become redundant).
 
 ### Example Project Layout
 

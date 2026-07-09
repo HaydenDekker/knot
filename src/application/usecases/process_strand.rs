@@ -11,8 +11,8 @@ use crate::application::ports::{
 use crate::application::session_resume;
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandCheckResult, StrandFileChecker,
-    StrandPath, TieOff, TieOffOutcome, TieOffPath,
+    EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
+    StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
 use crate::domain::events::{build_listener_context, matches_intent, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
@@ -20,6 +20,99 @@ use crate::domain::value_objects::{AgentConfig, RigAgentConfig};
 
 // Re-export shared types from types module
 use super::types::format_timestamp;
+
+// ── Event File Detection ─────────────────────────────────────────────
+
+/// Try to read event metadata from a strand file.
+///
+/// When a strand file is an event file dispatched by intent-based routing
+/// (filename starts with `event-` and has YAML frontmatter containing
+/// `event-id`), this parses the frontmatter and returns populated
+/// [`EventMetadata`] for a2a traceability in the consumer's tie-off.
+///
+/// Returns `None` when the file is not an event file or parsing fails.
+fn extract_event_metadata(
+    strand_path: &StrandPath,
+) -> Option<EventMetadata> {
+    // Quick check: only event files (filename starts with `event-`)
+    let filename = strand_path
+        .0
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())?
+    ;
+    if !filename.starts_with("event-") {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&strand_path.0).ok()?;
+    // Parse YAML frontmatter (--- delimited)
+    let frontmatter = parse_yaml_frontmatter(&content)?;
+
+    let event_id = frontmatter.get("event-id").cloned();
+    let source_knot = frontmatter.get("target-knot").cloned();
+
+    if event_id.is_none() && source_knot.is_none() {
+        return None;
+    }
+
+    Some(EventMetadata {
+        event_id,
+        source_knot,
+        original_strand: frontmatter.get("original-strand").cloned(),
+    })
+}
+
+/// Parse YAML frontmatter from a markdown file.
+///
+/// Expects `---` delimited frontmatter at the start of the file.
+/// Returns a simple key-value map (no nested YAML support needed
+/// for event files).
+fn parse_yaml_frontmatter(
+    content: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n")
+        && trimmed == "---"
+    {
+        return None;
+    }
+
+    // Find the opening delimiter
+    let after_open = if trimmed.starts_with("---\n") {
+        &trimmed[4..]
+    } else if trimmed.starts_with("---\r\n") {
+        &trimmed[6..]
+    } else {
+        return None;
+    };
+
+    // Find the closing delimiter
+    let close_pos = after_open.find("\n---").or_else(|| {
+        after_open.find("\r\n---")
+    })?;
+
+    let frontmatter_text = &after_open[..close_pos];
+    let mut map = std::collections::HashMap::new();
+
+    for line in frontmatter_text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            map.insert(
+                key.trim().to_string(),
+                value.trim().to_string(),
+            );
+        }
+    }
+
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
 
 // ── ProcessStrand ─────────────────────────────────────────────────────────
 
@@ -245,6 +338,7 @@ impl ProcessStrand {
                     strand_path: Some(strand_path.0.display().to_string()),
                     timestamp: None,
                     agent_events: Vec::new(),
+                    event_metadata: crate::domain::entities::EventMetadata::default(),
                 };
                 let _ = self.tie_off_sink.append(tie_off);
                 // Append KnotFailed to loom-log
@@ -365,6 +459,10 @@ impl ProcessStrand {
         // Derive outcome from execution result — domain rule.
         let outcome = TieOffOutcome::derive(result);
 
+        // Extract event metadata if this strand is an event file
+        // (dispatched by intent-based routing).
+        let event_metadata = extract_event_metadata(&strand_path);
+
         // Write tie-off (skipped for timeout).
         if outcome.should_write_tie_off() {
             let tie_off = TieOff {
@@ -378,6 +476,7 @@ impl ProcessStrand {
                 strand_path: Some(strand_path.0.display().to_string()),
                 timestamp: None,
                 agent_events: Vec::new(),
+                event_metadata: event_metadata.unwrap_or_default(),
             };
             let _ = self.tie_off_sink.append(tie_off);
         }
@@ -3481,5 +3580,353 @@ mod event_dispatch_tests {
         );
         // Prompt should just be the knot's instructions
         assert_eq!(prompt, "check it");
+    }
+}
+
+// ── Phase 6: Event Metadata Extraction Tests ──────────────────────────
+
+#[cfg(test)]
+mod event_metadata_tests {
+    use super::*;
+    use crate::domain::entities::StrandPath;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    // ── parse_yaml_frontmatter Tests ─────────────────────────────────
+
+    #[test]
+    fn parse_yaml_frontmatter_valid_basic() {
+        let content = "---\nevent-id: PlanCreated\ntarget-knot: plan-creator\ntimestamp: 2026-07-09T12:00:00Z\n---\n\nBody text";
+        let result = parse_yaml_frontmatter(content);
+        assert!(result.is_some());
+        let map = result.unwrap();
+        assert_eq!(map.get("event-id"), Some(&"PlanCreated".to_string()));
+        assert_eq!(map.get("target-knot"), Some(&"plan-creator".to_string()));
+        assert_eq!(
+            map.get("timestamp"),
+            Some(&"2026-07-09T12:00:00Z".to_string())
+        );
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn parse_yaml_frontmatter_with_payload_fields() {
+        let content = "---\nevent-id: PlanCreated\ntarget-knot: plan-creator\nplan: PLAN-001\ndescription: Test plan\n---\n\nBody";
+        let result = parse_yaml_frontmatter(content);
+        assert!(result.is_some());
+        let map = result.unwrap();
+        assert_eq!(map.get("event-id"), Some(&"PlanCreated".to_string()));
+        assert_eq!(map.get("plan"), Some(&"PLAN-001".to_string()));
+        assert_eq!(
+            map.get("description"),
+            Some(&"Test plan".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_yaml_frontmatter_no_frontmatter_returns_none() {
+        let content = "No frontmatter here\nJust body text";
+        assert!(parse_yaml_frontmatter(content).is_none());
+    }
+
+    #[test]
+    fn parse_yaml_frontmatter_empty_frontmatter_returns_none() {
+        let content = "---\n---\n\nBody text";
+        assert!(parse_yaml_frontmatter(content).is_none());
+    }
+
+    #[test]
+    fn parse_yaml_frontmatter_whitespace_trimming() {
+        let content = "---\nevent-id: PlanCreated \n target-knot: plan-creator \n---\n\nBody";
+        let result = parse_yaml_frontmatter(content);
+        assert!(result.is_some());
+        let map = result.unwrap();
+        // Values should be trimmed
+        assert_eq!(map.get("event-id"), Some(&"PlanCreated".to_string()));
+        assert_eq!(map.get("target-knot"), Some(&"plan-creator".to_string()));
+    }
+
+    #[test]
+    fn parse_yaml_frontmatter_skips_empty_lines() {
+        let content = "---\nevent-id: PlanCreated\n\ntarget-knot: plan-creator\n\n---\n\nBody";
+        let result = parse_yaml_frontmatter(content);
+        assert!(result.is_some());
+        let map = result.unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("event-id"), Some(&"PlanCreated".to_string()));
+        assert_eq!(map.get("target-knot"), Some(&"plan-creator".to_string()));
+    }
+
+    // ── extract_event_metadata Tests ─────────────────────────────────
+
+    fn write_event_file(
+        dir: &TempDir,
+        filename: &str,
+        content: &str,
+    ) -> PathBuf {
+        let path = dir.path().join(filename);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn extract_event_metadata_from_event_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "event-2026-07-09T12-00-00Z.md",
+            "---\nevent-id: PlanCreated\ntarget-knot: plan-creator\ntimestamp: 2026-07-09T12:00:00Z\n---\n\n## Event: PlanCreated from plan-creator\n\nPayload:\n\n- **plan**: PLAN-001",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+
+        assert!(result.is_some(), "should extract metadata from event file");
+        let meta = result.unwrap();
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert_eq!(meta.source_knot.as_deref(), Some("plan-creator"));
+        assert!(meta.original_strand.is_none());
+    }
+
+    #[test]
+    fn extract_event_metadata_returns_none_for_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "normal-strand.md",
+            "This is a normal file.",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+        assert!(
+            result.is_none(),
+            "should return None for non-event files"
+        );
+    }
+
+    #[test]
+    fn extract_event_metadata_returns_none_for_event_file_without_frontmatter() {
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "event-2026-07-09T12-00-00Z.md",
+            "No frontmatter, just body text.",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+        assert!(
+            result.is_none(),
+            "should return None when event file has no YAML frontmatter"
+        );
+    }
+
+    #[test]
+    fn extract_event_metadata_returns_none_for_missing_file() {
+        let path = StrandPath(PathBuf::from("/nonexistent/event-123.md"));
+        let result = extract_event_metadata(&path);
+        assert!(
+            result.is_none(),
+            "should return None for missing file"
+        );
+    }
+
+    #[test]
+    fn extract_event_metadata_returns_none_for_empty_event_id_and_target() {
+        // Event filename but frontmatter has no event-id or target-knot
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "event-2026-07-09T12-00-00Z.md",
+            "---\nsome-other-field: value\n---\n\nBody",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+        assert!(
+            result.is_none(),
+            "should return None when event-id and target-knot are both missing"
+        );
+    }
+
+    #[test]
+    fn extract_event_metadata_partial_fields() {
+        // Event file with only event-id, no target-knot
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "event-2026-07-09T12-00-00Z.md",
+            "---\nevent-id: PlanCreated\n---\n\nBody",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+
+        assert!(result.is_some());
+        let meta = result.unwrap();
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert!(meta.source_knot.is_none());
+    }
+
+    #[test]
+    fn extract_event_metadata_with_original_strand() {
+        // Event file that includes original-strand in frontmatter
+        let dir = TempDir::new().unwrap();
+        let path = write_event_file(
+            &dir,
+            "event-2026-07-09T12-00-00Z.md",
+            "---\nevent-id: PlanCreated\ntarget-knot: plan-creator\noriginal-strand: 001-feature.md\n---\n\nBody",
+        );
+        let result =
+            extract_event_metadata(&StrandPath(path.clone()));
+
+        assert!(result.is_some());
+        let meta = result.unwrap();
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert_eq!(meta.source_knot.as_deref(), Some("plan-creator"));
+        assert_eq!(meta.original_strand.as_deref(), Some("001-feature.md"));
+    }
+}
+
+// ── Phase 6: TieOff Event Metadata in Append Tests ─────────────────────
+
+#[cfg(test)]
+mod tieoff_event_metadata_tests {
+    use super::*;
+    use crate::adapters::outbound::tieoff_sink::FileSystemTieOffSink;
+    use crate::domain::entities::TieOffStatus;
+    use tempfile::TempDir;
+
+    #[test]
+    fn append_with_event_metadata_includes_structured_fields() {
+        let dir = TempDir::new().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("consumer-tie-off.md");
+
+        let tie_off = TieOff {
+            content: "Consumer agent response".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("event-consumer".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some(
+                "rig/tie-offs/consumer-loom/PlanCreated/event-2026-07-09T12-00-00Z.md"
+                    .to_string(),
+            ),
+            timestamp: Some("2026-07-09T12:05:00Z".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata {
+                event_id: Some("PlanCreated".to_string()),
+                source_knot: Some("plan-creator".to_string()),
+                original_strand: Some("001-feature.md".to_string()),
+            },
+        };
+
+        sink.append(tie_off).unwrap();
+        let content =
+            std::fs::read_to_string(&file_path).unwrap();
+
+        // Should contain the structured metadata fields
+        assert!(
+            content.contains("event: PlanCreated"),
+            "should contain event field: {}",
+            content
+        );
+        assert!(
+            content.contains("source: plan-creator"),
+            "should contain source field: {}",
+            content
+        );
+        assert!(
+            content.contains("original_strand: 001-feature.md"),
+            "should contain original_strand field: {}",
+            content
+        );
+        // Regular header fields still present
+        assert!(
+            content.contains("## event-consumer triggered by Created"),
+            "should contain standard header: {}",
+            content
+        );
+        assert!(
+            content.contains("Timestamp: 2026-07-09T12:05:00Z"),
+            "should contain timestamp: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn append_without_event_metadata_has_no_extra_fields() {
+        let dir = TempDir::new().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("normal-tie-off.md");
+
+        let tie_off = TieOff {
+            content: "Normal response".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("normal-knot".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some("strands/input.md".to_string()),
+            timestamp: Some("2026-07-09T12:00:00Z".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
+        };
+
+        sink.append(tie_off).unwrap();
+        let content =
+            std::fs::read_to_string(&file_path).unwrap();
+
+        // Should NOT contain event metadata fields
+        assert!(
+            !content.contains("event:"),
+            "should NOT contain event field for normal strand: {}",
+            content
+        );
+        assert!(
+            !content.contains("source:"),
+            "should NOT contain source field: {}",
+            content
+        );
+        // Standard header still present
+        assert!(
+            content.contains("## normal-knot triggered by Created"),
+            "should contain standard header"
+        );
+    }
+
+    #[test]
+    fn append_with_partial_event_metadata_only_shows_set_fields() {
+        let dir = TempDir::new().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("partial-tie-off.md");
+
+        let tie_off = TieOff {
+            content: "Response".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("consumer".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some("event-file.md".to_string()),
+            timestamp: Some("2026-07-09T12:00:00Z".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata {
+                event_id: Some("PlanCreated".to_string()),
+                source_knot: None,
+                original_strand: None,
+            },
+        };
+
+        sink.append(tie_off).unwrap();
+        let content =
+            std::fs::read_to_string(&file_path).unwrap();
+
+        // Only event_id should be present
+        assert!(
+            content.contains("event: PlanCreated"),
+            "should contain event field: {}",
+            content
+        );
+        assert!(
+            !content.contains("source:"),
+            "should NOT contain source when not set: {}",
+            content
+        );
     }
 }

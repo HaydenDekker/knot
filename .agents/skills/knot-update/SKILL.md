@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.22.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.23.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,82 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### 0.23.0 — Intent-Based Event Routing (2026-07-09)
+
+Intent-based event routing adds first-class agent-to-agent events.
+Consumer knots declare `listens-for` intents in their frontmatter;
+Knot injects event instructions into producer prompts and dispatches
+matching events to consumers at runtime.
+
+#### Affected Documents
+
+| Document Type | Location | Change |
+|---------------|----------|--------|
+| Knot | `rig/*-loom/*.md` | New optional field: `listens-for` |
+
+#### New Frontmatter Field: `listens-for`
+
+Knots can now declare event intents using the `listens-for` YAML list:
+
+```markdown
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "../../tie-offs/review-loom/ReviewCompleted/"
+listens-for:
+  - target-knot: quality-reviewer
+    event-id: ReviewCompleted
+    event-description: >
+      Emitted when a quality review is complete.
+---
+
+Create a refactor plan when a quality review is complete.
+```
+
+Each intent entry has three fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `target-knot` | Yes | Which knot may emit this event (knot name) |
+| `event-id` | Yes | Unique event identifier (e.g. `ReviewCompleted`, `PlanCreated`) |
+| `event-description` | Yes | When the event fires and what data it should contain |
+
+**Consumer `strand-dir`:** When using intent-based routing, the
+consumer's `strand-dir` should point to the event subdirectory:
+`../../tie-offs/{loom-id}/{event-id}/`. Knot creates event files
+at this location when matching events are dispatched.
+
+**Producer side:** Producers have no frontmatter changes. Knot
+automatically injects event instructions into the producer's prompt
+by scanning all consumers' `listens-for` declarations.
+
+#### Migration Steps
+
+No migration required for existing rigs. This is a new optional feature:
+
+1. Existing knots without `listens-for` behave exactly as before.
+2. To adopt intent-based routing, add `listens-for` to consumer knots.
+3. Update consumer `strand-dir` to the intent event subdirectory.
+4. Producers automatically receive event instructions (no config change).
+
+#### Fields Unchanged by This Migration
+
+All existing frontmatter fields keep the same meaning and location:
+
+| Document | Field | Unchanged |
+|----------|-------|-----------|
+| Profile | `name` | Yes |
+| Profile | `provider` | Yes |
+| Profile | `model` | Yes |
+| Profile | `tools` | Yes |
+| Profile | `timeout` | Yes |
+| Knot | `name` | Yes |
+| Knot | `agent-profile-ref` | Yes |
+| Knot | `strand-dir` | Yes |
+| Knot | `git-versioned` | Yes |
 
 ---
 

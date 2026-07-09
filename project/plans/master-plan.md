@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-02
+> **Last Updated:** 2026-07-09
 
 ## How to Add a Plan
 
@@ -54,7 +54,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 48 | [Split `usecases.rs` into Isolated Modules](usecases-refactor.md) | ✅ Complete | 2026-06-29 |
 | 47 | [Session Resume on Invocation Failure](session-resume-on-invocation-failure.md) | ✅ Complete | 2026-06-28 |
 | 46 | [JSON-based Agent Adapter](agent-json-adapter.md) | ✅ Complete | 2026-06-27 |
-| 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ⬜ Planned | 2026-06-25 |
+| 45 | [Intent-based Event Routing](intent-based-event-routing.md) | ✅ Complete | 2026-06-25 | (completed 2026-07-09)
 | 44 | [Fix `unwatch()` Removing Watchers for Other Knots](bugfix-unwatch-removes-wrong-watchers.md) | ✅ Complete | 2026-06-24 |
 | 43 | [Simplify Prompts — Move Prompt Text to Markdown Body](simplify-prompt-in-body.md) | ✅ Complete | 2026-06-24 |
 | 42 | [Strand Missing File Handling](strand-missing-file-handling.md) | ✅ Complete | 2026-06-24 |
@@ -74,30 +74,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
 | 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
 | 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
-| 24 | [Tie-Off Output Rename and Knot File Cleanup](tieoff-output-rename-and-knot-cleanup.md) | ✅ Complete | 2026-06-12 |
-| 23 | [Shared Agent Profiles](shared-agent-profiles.md) | ✅ Complete | 2026-06-11 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
-| 21 | [Static Output Paths and Log Timestamps](static-output-paths-and-timestamps.md) | ✅ Complete | 2026-06-10 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | 🟡 In Progress | 2026-06-08 |
-| 19 | [Fix KnotModified race and GET knot-status hang](plan-bugfix-knot-race-and-status-hang.md) | ✅ Complete | 2026-06-08 |
-| 18 | [Sync Integration Tests to Async Layer](test-api-sync-async-layer.md) | ✅ Complete | 2026-06-08 |
-| 17 | [lib.rs Composition Root and Inbound Adapter Tidy](lib-inbound-tidy.md) | ✅ Complete | 2026-06-08 |
-| 16 | [Generic Task Management Tests](generic-task-management.md) | ✅ Complete | 2026-06-07 |
-| 15 | [Integration Test Refactor](integration-test-refactor.md) | ✅ Complete | 2026-06-06 |
-| 14 | [Loom/Knot Auto-Discovery and Knot CRUD API](loom-knot-auto-discovery-and-knot-crud.md) | ✅ Complete | 2026-06-07 |
-| 13 | [Loom Naming Convention, Knot Definition Rules, and Discovery Fix](loom-knot-definition-and-discovery.md) | ✅ Complete | 2026-06-06 |
-| 12 | [Tie-Off Append and Event Context](tie-off-append-and-event-context.md) | ✅ Complete | 2026-06-05 |
-| 11 | [Loom Lifecycle Watching](loom-lifecycle-watching.md) | ✅ Complete | 2026-06-05 |
-| 10 | [Knot-Per-Strand Config and Loom-Log State](knot-per-strand-and-loom-log-state.md) | ✅ Complete | 2026-06-04 |
-| 9 | [Knot Skills and Swagger UI](knot-skills-and-swagger.md) | ✅ Complete | 2026-06-04 |
-| 8 | [Rename Workspace → Rig](rename-workspace-to-rig.md) | ✅ Complete | 2026-06-04 |
-| 7 | [pi Agent Integration](pi-agent-integration.md) | ✅ Complete | 2026-06-04 |
-| 6 | [Loom Config, Path Resolution and Agent Error Logging](loom-config-and-path-resolve.md) | ✅ Complete | 2026-06-04 |
-| 5 | [System Integration and Wiring](system-integration.md) | ✅ Complete | 2026-06-03 |
-| 4 | [Loom HTTP Interface](loom-http-interface-handler.md) | ✅ Complete | 2026-06-03 |
-| 3 | [Outbound Adapters](file-watcher.md) | ✅ Complete | 2026-06-03 (bugfix 2026-06-14) |
-| 2 | [Application Layer — Ports and Use Cases](loom-discovery-and-state.md) | ✅ Complete | 2026-06-03 |
-| 1 | [Knot Domain Models](knot-domain-models.md) | ✅ Complete | 2026-06-03 |
 
 ---
 
@@ -195,6 +173,17 @@ Full details in [bugfix-unwatch-removes-wrong-watchers.md](bugfix-unwatch-remove
 **PRD:** [Demand Control — Concurrency, Throughput and Service Tuning](../prds/prd-demand-control.md)
 
 Full details in [agent-json-adapter.md](agent-json-adapter.md).
+
+### 45. Intent-Based Event Routing
+
+**Status:** ✅ Complete
+**Created:** 2026-06-25
+**Completed:** 2026-07-09
+**Goal:** Add first-class agent-to-agent events: consumer knots declare `listens-for` intents in frontmatter, Knot injects event instructions into producer prompts, and dispatches matching structured events to consumer tie-off directories.
+
+**Result:** `Intent` struct (`target_knot`, `event_id`, `event_description`) on `KnotFile`/`Knot`. `AgentEvent` struct with payload map on `TieOff`. `EventMetadata` struct (`event_id`, `source_knot`, `original_strand`) for observability. `EventDispatcherPort` trait + `FileSystemEventDispatcher` adapter. `build_listener_context()` injects event instructions per-invocation. `extract_agent_events()` parses structured events from tie-off content. `matches_intent()` matches by `event-id` + `target-knot`. Wired into `ProcessStrand::execute()` — after successful completion, events are parsed, matched, and dispatched to consumers. `EventsDispatched` loom-log variant for traceability. 669 tests pass, 0 failures. Version bumped to 0.23.0.
+
+Full details in [intent-based-event-routing.md](intent-based-event-routing.md).
 
 ### 43. Simplify Prompts — Move Prompt Text to Markdown Body
 
@@ -404,29 +393,6 @@ Full details in [git-versioning.md](git-versioning.md).
 
 Full details in [http-observability-only.md](http-observability-only.md).
 
-### 24. Tie-Off Output Rename and Knot File Cleanup
-
-**Status:** ✅ Complete
-**Created:** 2026-06-12
-**Completed:** 2026-06-12
-**Goal:** Rename `rig/output/` → `rig/tie-offs/`, tie-off filenames from `{strand}.output` → `{knot}-tie-off.md`, remove dead `tie-off-dir` from knot YAML parser, and add non-identified property detection with `.loom-log` warnings.
-
-**Result:** `rig/output/` → `rig/tie-offs/`. Tie-off filenames: `{knot}-tie-off.md` (one per knot, append-mode). `RawFrontmatter` no longer accepts `tie-off-dir`. Unknown YAML properties emit `LoomEvent::KnotParseWarning` entries. `LoomRepository::scan()` now returns `(Vec<Loom>, Vec<String>)` with warnings. Domain glossary, agent skills, and all 48+ test path references updated. 331 tests pass.
-
-Full details in [tieoff-output-rename-and-knot-cleanup.md](tieoff-output-rename-and-knot-cleanup.md).
-
-### 23. Shared Agent Profiles
-
-**Status:** ✅ Complete
-**Created:** 2026-06-11
-**Completed:** 2026-06-11
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-**Goal:** Allow multiple knots to reference shared agent profiles stored as `rig/profiles/{name}.md` files, with profile resolution at processing time so updates are picked up dynamically.
-
-**Result:** 331 tests pass (262 unit + 61 integration). `AgentProfile` entity + parser, `KnotFile` extends with `agent-profile-ref` + mutual exclusivity validation, `AgentProfileRepository` port + file-system impl, `ProcessStrand` resolves profiles at processing time with inline overrides, CRUD endpoints for `/profiles`, knot handlers accept `agent_profile_ref`, 9 integration tests.
-
-Full details in [shared-agent-profiles.md](shared-agent-profiles.md).
-
 ### 22. Notify Sender Leak Fix — Immediate Cascade Drain
 
 **Status:** ⬜ Planned
@@ -434,17 +400,6 @@ Full details in [shared-agent-profiles.md](shared-agent-profiles.md).
 **Goal:** Split `NotifyEventSource` senders from callback state so channels close immediately on drop, removing the 5-second timeout safety net.
 
 Full details in [notify-sender-leak-fix.md](notify-sender-leak-fix.md).
-
-### 21. Static Output Paths and Log Timestamps
-
-**Status:** ✅ Complete
-**Created:** 2026-06-10
-**Completed:** 2026-06-11
-**Goal:** Make tie-off output paths and loom-log paths static (derived from loom/knot names under `rig/output/`), remove `tie-off-dir` from knot YAML, and add ISO 8601 timestamps to console logs and loom-log events.
-
-**Result:** `tie_off_dir` removed from domain and KnotFile. Paths statically derived: `rig/output/{loom-id}/{knot-name}/{strand}.output` and `rig/output/{loom-id}/.loom-log`. ISO 8601 timestamps on all console logs and LoomEvent variants. 278 tests pass (196 lib + 82 integration, 1 ignored).
-
-Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-timestamps.md).
 
 ### 20. Knot Modification Observability and Path Resolution Consistency
 
@@ -456,181 +411,3 @@ Full details in [static-output-paths-and-timestamps.md](static-output-paths-and-
 **Result (Phase 0):** `NotifyEventSource` now receives correct `project_root` (parent of rig directory) so relative `strand_dir` paths resolve identically to `FileSystemLoomRepository::scan()`. Full rename `base_dir` → `rig_dir` across all 7 source files + 17 test files to eliminate ambiguity between "rig directory" and "project root". Remaining phases (KnotUpdated loom-log, parse failure logging, integration test) still pending.
 
 Full details in [plan-knot-modify-observability.md](plan-knot-modify-observability.md).
-
-### 19. Fix KnotModified race and GET knot-status hang
-
-**Status:** ✅ Complete
-**Created:** 2026-06-08
-**Completed:** 2026-06-08
-**Goal:** Fix `KnotModified` recovery when `LoomAdded` fires before knot file is fully written (loom registered with 0 knots), and wrap `GET /looms/{id}/knots/{name}` in `spawn_blocking` to prevent blocking the axum worker thread.
-
-**Result:** `handle_knot_modified` now recovers by registering missing knots. `get_knot_status` uses `tokio::task::spawn_blocking`. 5 new tests (3 unit, 2 integration), all passing.
-
-Full details in [plan-bugfix-knot-race-and-status-hang.md](plan-bugfix-knot-race-and-status-hang.md).
-
-### 18. Sync Integration Tests to Async Layer
-
-**Status:** ✅ Complete
-**Created:** 2026-06-08
-**Completed:** 2026-06-08
-**Goal:** Fix 8 test files that use stale spawn_server/wait_for_port/HTTP helper signatures, bringing them up to the async layer API defined in ADR-002/003.
-
-**Result:** 241 tests pass (0 failed, 1 ignored), full suite in 11s.
-
-Full details in [test-api-sync-async-layer.md](test-api-sync-async-layer.md).
-
-### 17. lib.rs Composition Root and Inbound Adapter Tidy
-
-**Status:** ✅ Complete
-**Created:** 2026-06-08
-**Completed:** 2026-06-08
-**Goal:** Remove dead `graceful_shutdown` from `lib.rs`, extract composition root into `src/server.rs`, split `inbound/mod.rs` (2211 lines) into `types.rs` + `loom.rs` + `system.rs` + `router.rs`, and move `health`/`list_agents` handlers into `inbound/system.rs`.
-
-**Result:** `lib.rs` reduced from 440→18 lines, `inbound/mod.rs` from 2211→18 lines, all 224 tests pass.
-
-Full details in [lib-inbound-tidy.md](lib-inbound-tidy.md).
-
-### 16. Generic Task Management Tests
-
-**Status:** ✅ Complete
-**Created:** 2026-06-07
-**Completed:** 2026-06-07
-**Goal:** Create `tests/generic_task_management.rs` — 10 tokio-only tests validating the channel-cascade shutdown pattern (JoinSet ownership, cooperative drain, abort safety net) with zero Knot domain types.
-
-Full details in [generic-task-management.md](generic-task-management.md).
-
-### 15. Integration Test Refactor
-
-**Status:** ✅ Complete
-**Created:** 2026-06-06
-**Completed:** 2026-06-06
-**Goal:** Split 3272-line `tests/integration.rs` into 10 feature-focused modules with shared infrastructure, reducing ~31 tests to ~25 through consolidation of duplicate pipeline variants.
-
-Full details in [integration-test-refactor.md](integration-test-refactor.md).
-
-### 14. Loom/Knot Auto-Discovery and Knot CRUD API
-
-**Status:** ✅ Complete
-**Created:** 2026-06-07
-**Completed:** 2026-06-08
-**Goal:** Watch the rig and loom directories for filesystem events so new looms, new knots, edited knots, and deleted knots are active in real time without restart. Add HTTP CRUD endpoints for individual knots. Remove `POST /looms/discover`.
-
-**Result:** `ConfigEvent` type and `ConfigEventHandler` use case process filesystem changes. `NotifyEventSource` watches rig and loom directories. `ManageKnot` use case and 3 new HTTP endpoints (POST/PATCH/DELETE `/looms/{id}/knots/{name}`). `POST /looms/discover` removed. 9 new integration tests in `tests/auto_discovery_and_knot_crud.rs`. 191/192 tests pass (1 pre-existing subprocess flake).
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-Full details in [loom-knot-auto-discovery-and-knot-crud.md](loom-knot-auto-discovery-and-knot-crud.md).
-
-### 13. Loom Naming Convention, Knot Definition Rules, and Discovery Fix
-
-**Status:** ✅ Complete
-**Created:** 2026-06-06
-**Completed:** 2026-06-06
-**Goal:** Fix loom discovery to use `-loom` suffix filter, make `strand_dir` and `tie_off_dir` required per-knot fields, remove ambiguous `Loom.source_dir`, and rewrite `POST /looms` to create loom directories with knot files.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-Full details in [loom-knot-definition-and-discovery.md](loom-knot-definition-and-discovery.md).
-
-### 12. Tie-Off Append and Event Context
-
-**Status:** ✅ Complete
-**Created:** 2026-06-05
-**Completed:** 2026-06-05
-**Goal:** Tie-off files append new agent responses as `---`-separated sections with event metadata headers. Delete events trigger the agent with context about the deletion. The agent receives event type and previous tie-off content.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 11. Loom Lifecycle Watching
-
-**Status:** ✅ Complete
-**Created:** 2026-06-05
-**Completed:** 2026-06-05
-**Goal:** Wire `EventSource` into `RegisterLoom`, `UnregisterLoom`, and implement `POST /looms/discover` so looms can be added, discovered, and removed at runtime without restart.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 10. Knot-Per-Strand Config and Loom-Log State
-
-**Status:** ✅ Complete
-**Created:** 2026-06-04
-**Completed:** 2026-06-04
-**Goal:** Move source/tie-off config into each knot (removing loom-level `.loom-config.yaml`), and consolidate knot-state events into the loom-log.
-
-### 9. Knot Skills and Swagger UI
-
-**Status:** ✅ Complete
-**Created:** 2026-06-04
-**Completed:** 2026-06-04
-**Goal:** Add utoipa-generated Swagger UI to Knot, create three AI skills (knot-init, knots-and-looms, knot-inspect) and verify them with integration tests.
-
-**PRD:** [Knot Skills — AI-Driven Configuration via Skills](../prds/prd-knot-skills.md)
-
-### 1. Knot Domain Models
-
-**Status:** ✅ Complete
-**Created:** 2026-06-03
-**Completed:** 2026-06-03
-**Hex Layer:** Domain
-**Goal:** Domain entities, value objects, domain events, knot file format validation — zero IO, zero framework.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 2. Application Layer — Ports and Use Cases
-
-**Status:** ✅ Complete
-**Created:** 2026-06-03
-**Completed:** 2026-06-03
-**Hex Layer:** Application
-**Goal:** Port traits, use cases, debounce engine, processing state machine — all tests use mock ports.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 3. Outbound Adapters
-
-**Status:** ✅ Complete
-**Created:** 2026-06-03
-**Completed:** 2026-06-03
-**Bugfix:** 2026-06-14 — multi-knot shared directory fanout (see [dpr-001](../dprs/dpr-001-multi-knot-watch-fanout.md))
-**Hex Layer:** Outbound Adapters
-**Goal:** Concrete adapters for filesystem IO, notify watching, subprocess execution — all tests use `tempfile`.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 4. Loom HTTP Interface
-
-**Status:** ✅ Complete
-**Created:** 2026-06-03
-**Completed:** 2026-06-03
-**Hex Layer:** Inbound Adapter
-**Goal:** Axum handlers and routes that call use cases — never touch adapters directly.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 5. System Integration and Wiring
-
-**Status:** ✅ Complete
-**Created:** 2026-06-03
-**Completed:** 2026-06-04
-**Hex Layer:** Composition Root
-**Goal:** Bootstrap all layers, wire event pipeline, full end-to-end integration tests.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-### 6. Loom Config, Path Resolution and Agent Error Logging
-
-**Status:** ✅ Complete
-**Created:** 2026-06-04
-**Completed:** 2026-06-04
-**Hex Layer:** Outbound Adapters + Application
-**Goal:** Canonical path resolution, `.loom-config.yaml` for external source/tie-off directories, and agent error logging in knot-state and loom-log.
-
-### 7. pi Agent Integration
-
-**Status:** ✅ Complete
-**Created:** 2026-06-04
-**Completed:** 2026-06-04
-**Hex Layer:** Domain → Application → Outbound Adapters
-**Goal:** Extend AgentConfig with provider/model/tools, construct `pi` CLI invocation from knot config, and pass strand content to the agent.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)

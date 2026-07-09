@@ -23,8 +23,8 @@ use knot::application::ports::{
     LoomRepository, PortError, StateWriterPort, TieOffSink,
 };
 use knot::domain::entities::{
-    KnotId, LoomId, RigState, RigStateKnot, RigStateLoom, RigStateProfile,
-    StrandPath, TieOff, TieOffPath, TieOffStatus,
+    EventMetadata, KnotId, LoomId, RigState, RigStateKnot, RigStateLoom,
+    RigStateProfile, StrandPath, TieOff, TieOffPath, TieOffStatus,
 };
 use knot::domain::events::LoomEvent;
 use tokio::sync::mpsc;
@@ -366,6 +366,7 @@ mod tieoff_sink_adapter {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         assert!(sink.write(tie_off).is_ok());
@@ -393,6 +394,7 @@ mod tieoff_sink_adapter {
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         })
         .unwrap();
 
@@ -406,6 +408,7 @@ mod tieoff_sink_adapter {
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         })
         .unwrap();
 
@@ -446,6 +449,7 @@ mod tieoff_sink_adapter {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         assert!(sink.write(tie_off).is_ok());

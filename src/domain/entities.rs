@@ -190,6 +190,40 @@ pub struct Strand {
     pub path: StrandPath,
 }
 
+/// Metadata about the event that triggered this tie-off entry.
+///
+/// When a consumer knot is triggered by an event file (dispatched by
+/// intent-based routing), this captures the event origin so the tie-off
+/// can be inspected for a2a message tracing without needing the loom-log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EventMetadata {
+    /// The event identifier (e.g. `"PlanCreated"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    /// Name of the producer knot that emitted the event.
+    #[serde(rename = "source-knot")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_knot: Option<String>,
+    /// Path of the original strand that triggered the producer knot.
+    #[serde(rename = "original-strand")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_strand: Option<String>,
+}
+
+impl EventMetadata {
+    /// Return `true` if any metadata fields are set.
+    pub fn is_some(&self) -> bool {
+        self.event_id.is_some()
+            || self.source_knot.is_some()
+            || self.original_strand.is_some()
+    }
+
+    /// Return `true` if all metadata fields are empty.
+    pub fn is_none(&self) -> bool {
+        !self.is_some()
+    }
+}
+
 /// A TieOff is the output produced from processing a Strand with a Knot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TieOff {
@@ -211,6 +245,14 @@ pub struct TieOff {
     /// event ID, target knot name, and arbitrary payload data.
     #[serde(default)]
     pub agent_events: Vec<crate::domain::events::AgentEvent>,
+    /// Metadata about the event that triggered this strand (for consumer
+    /// knots triggered by intent-based routing event files).
+    ///
+    /// When present, the tie-off section includes structured metadata
+    /// (`event:`, `source:`, `original_strand:`) so a2a messages can be
+    /// traced from tie-off content alone.
+    #[serde(default, skip_serializing_if = "EventMetadata::is_none")]
+    pub event_metadata: EventMetadata,
 }
 
 // ── RigState — File-first state snapshot ─────────────────────────────
@@ -521,6 +563,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         assert_eq!(tieoff.content, content);
@@ -530,6 +573,7 @@ mod tests {
         assert!(tieoff.strand_path.is_none());
         assert!(tieoff.timestamp.is_none());
         assert!(tieoff.agent_events.is_empty());
+        assert!(tieoff.event_metadata.is_none());
     }
 
     #[test]
@@ -666,6 +710,7 @@ mod tests {
             strand_path: Some("in.md".to_string()),
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -684,6 +729,7 @@ mod tests {
             strand_path: None,
             timestamp: None,
             agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
         };
 
         assert_eq!(tieoff.status, TieOffStatus::Failed);
@@ -716,6 +762,7 @@ mod tests {
             strand_path: Some("input.md".to_string()),
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             agent_events: vec![event],
+            event_metadata: EventMetadata::default(),
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -735,6 +782,101 @@ mod tests {
         let tieoff: TieOff = serde_json::from_str(json).unwrap();
         assert_eq!(tieoff.content, "hello");
         assert!(tieoff.agent_events.is_empty());
+    }
+
+    // ── EventMetadata Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn event_metadata_default_is_none() {
+        let meta = EventMetadata::default();
+        assert!(meta.is_none());
+        assert!(!meta.is_some());
+        assert!(meta.event_id.is_none());
+        assert!(meta.source_knot.is_none());
+        assert!(meta.original_strand.is_none());
+    }
+
+    #[test]
+    fn event_metadata_is_some_when_any_field_set() {
+        let meta = EventMetadata {
+            event_id: Some("PlanCreated".to_string()),
+            source_knot: None,
+            original_strand: None,
+        };
+        assert!(meta.is_some());
+        assert!(!meta.is_none());
+    }
+
+    #[test]
+    fn event_metadata_is_some_with_all_fields() {
+        let meta = EventMetadata {
+            event_id: Some("PlanCreated".to_string()),
+            source_knot: Some("plan-creator".to_string()),
+            original_strand: Some("001-feature.md".to_string()),
+        };
+        assert!(meta.is_some());
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert_eq!(meta.source_knot.as_deref(), Some("plan-creator"));
+        assert_eq!(meta.original_strand.as_deref(), Some("001-feature.md"));
+    }
+
+    #[test]
+    fn event_metadata_serialization_roundtrip() {
+        let meta = EventMetadata {
+            event_id: Some("PlanCreated".to_string()),
+            source_knot: Some("plan-creator".to_string()),
+            original_strand: Some("001-feature.md".to_string()),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: EventMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, meta);
+    }
+
+    #[test]
+    fn event_metadata_serialization_omits_null_fields() {
+        let meta = EventMetadata {
+            event_id: Some("PlanCreated".to_string()),
+            source_knot: None,
+            original_strand: None,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        // Should contain event_id but not the null fields
+        assert!(json.contains("event_id"));
+        assert!(!json.contains("null"));
+        // source-knot uses rename
+        assert!(!json.contains("source-knot"));
+    }
+
+    #[test]
+    fn event_metadata_serialization_uses_renamed_keys() {
+        let meta = EventMetadata {
+            event_id: Some("PlanCreated".to_string()),
+            source_knot: Some("plan-creator".to_string()),
+            original_strand: Some("001-feature.md".to_string()),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"event_id\""));
+        assert!(json.contains("\"source-knot\""));
+        assert!(json.contains("\"original-strand\""));
+    }
+
+    #[test]
+    fn event_metadata_deserialization_from_json_missing_fields() {
+        // JSON with only event_id — other fields default to None
+        let json = r#"{"event_id":"PlanCreated"}"#;
+        let meta: EventMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert!(meta.source_knot.is_none());
+        assert!(meta.original_strand.is_none());
+    }
+
+    #[test]
+    fn event_metadata_full_deserialization() {
+        let json = r#"{"event_id":"PlanCreated","source-knot":"plan-creator","original-strand":"001.md"}"#;
+        let meta: EventMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.event_id.as_deref(), Some("PlanCreated"));
+        assert_eq!(meta.source_knot.as_deref(), Some("plan-creator"));
+        assert_eq!(meta.original_strand.as_deref(), Some("001.md"));
     }
 
     // ── RigState Tests ──────────────────────────────────────────────────
