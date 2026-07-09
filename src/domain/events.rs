@@ -45,6 +45,33 @@ pub struct AgentEvent {
     pub payload: HashMap<String, String>,
 }
 
+// ── Intent Matching ────────────────────────────────────────────────────────
+
+/// Check whether an [`AgentEvent`] satisfies an [`Intent`] declaration.
+///
+/// An intent is satisfied when **both** of the following hold:
+/// 1. `event.event_id == intent.event_id` (exact match)
+/// 2. `event.target_knot == intent.target_knot` (exact match)
+///
+/// The event's payload is **not** used for matching — it carries data the
+/// consumer will read after the match succeeds.
+///
+/// ## Example
+///
+/// A consumer knot declares:
+/// ```yaml
+/// listens-for:
+///   - target-knot: plan-creator
+///     event-id: PlanCreated
+///     event-description: "Emit when a plan is created"
+/// ```
+///
+/// An event emitted by `plan-creator` with `event: PlanCreated` matches.
+/// An event from a different knot, or a different event-id, does not.
+pub fn matches_intent(event: &AgentEvent, intent: &Intent) -> bool {
+    event.event_id == intent.event_id && event.target_knot == intent.target_knot
+}
+
 // ── Domain Events ──────────────────────────────────────────────────────────
 
 /// An event that describes the lifecycle of a Strand.
@@ -333,6 +360,185 @@ mod tests {
         let json = serde_json::to_string(&intent).unwrap();
         let deserialized: Intent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, intent);
+    }
+
+    // ── Intent Matching Tests ────────────────────────────────────
+
+    #[test]
+    fn matches_intent_exact_match_on_event_id_and_target_knot() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_no_match_when_event_id_differs() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "PlanApproved".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(!matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_no_match_when_target_knot_differs() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "other-knot".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(!matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_no_match_when_both_differ() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "ReviewDone".to_string(),
+            target_knot: "reviewer".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(!matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_payload_does_not_affect_matching() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+
+        // Event with rich payload — should still match
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-001".to_string());
+        payload.insert("scope".to_string(), "event routing".to_string());
+        let event_with_payload = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload,
+        };
+
+        // Event with empty payload — should also match
+        let event_empty = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(matches_intent(&event_with_payload, &intent));
+        assert!(matches_intent(&event_empty, &intent));
+    }
+
+    #[test]
+    fn matches_intent_case_sensitive_event_id() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "plancreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        // event_id match is exact (case-sensitive)
+        assert!(!matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_case_sensitive_target_knot() {
+        let intent = Intent {
+            target_knot: "Plan-Creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        // target_knot match is exact (case-sensitive)
+        assert!(!matches_intent(&event, &intent));
+    }
+
+    #[test]
+    fn matches_intent_multiple_intents_different_events() {
+        // Two intents on the same target knot but different event-ids.
+        // Only the matching intent should return true.
+        let intent_created = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created.".to_string(),
+        };
+        let intent_approved = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanApproved".to_string(),
+            event_description: "Emit when a plan is approved.".to_string(),
+        };
+
+        let created_event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(matches_intent(&created_event, &intent_created));
+        assert!(!matches_intent(&created_event, &intent_approved));
+    }
+
+    #[test]
+    fn matches_intent_same_event_id_different_producers() {
+        // Two intents for the same event-id but from different knots.
+        // Only the intent whose target_knot matches should return true.
+        let intent_from_creator = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when plan-creator makes a plan.".to_string(),
+        };
+        let intent_from_reviewer = Intent {
+            target_knot: "reviewer".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when reviewer creates a plan.".to_string(),
+        };
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload: HashMap::new(),
+        };
+
+        assert!(matches_intent(&event, &intent_from_creator));
+        assert!(!matches_intent(&event, &intent_from_reviewer));
     }
 
     // ── AgentEvent Tests ─────────────────────────────────────────
