@@ -52,6 +52,5 @@ Full documentation is available at **[knot.hdekker.com](https://knot.hdekker.com
 - [Configuration](https://knot.hdekker.com/configuration) — rig structure, knot definitions, and agent profiles
 - [Design Guide](https://knot.hdekker.com/design-guide) — idempotency, naming, responsibility, and feedback loops
 - [Workflows](https://knot.hdekker.com/workflows) — review and file-generation patterns with examples
-- [API Reference](https://knot.hdekker.com/api-reference) — HTTP endpoints and schemas
 - [Troubleshooting](https://knot.hdekker.com/troubleshooting) — common issues and fixes
 - [Release Notes](https://knot.hdekker.com/release-notes) — feature history and version notes

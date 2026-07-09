@@ -14,11 +14,16 @@ Currently, Knot has no first-class primitive for agent-to-agent events. Strands 
 
 ## Target
 Knot will support **intent-based event routing**:
-1. Consumer knots declare `listens-for` intents in their frontmatter
-2. Producer knots declare `publishes` capabilities in their frontmatter
-3. When a producer writes a structured event to its tie-off, Knot parses it, matches against declared intents, and creates a synthetic event strand in the consumer's loom-box
-4. The consumer knot fires as if a real strand was placed in its `strand-dir`
-5. The producer's prompt is injected with context about which knots are listening, so it can add relevant detail to the event
+1. Consumer knots declare `listens-for` entries in their frontmatter, each specifying:
+   - `target-knot` — which knot may emit the event
+   - `event-id` — unique identifier for the event
+   - `event-description` — when the event should be emitted and what data it should contain
+2. Before a target knot runs, Knot collects all `listens-for` entries that target it and injects them at the **beginning** of its prompt with instructions to emit a structured event object in its tie-off if the event occurred
+3. The target knot writes structured events to its tie-off using the format Knot told it about
+4. Knot parses tie-off events, matches by `event-id` + `target-knot`, and creates an event file in each matching consumer's loom tie-off directory under a `{event-id}/` subdirectory
+5. The consumer knot fires because its `strand-dir` watches its loom's tie-off directory (event subdirectories included)
+
+Producers (target knots) have no declarations of their own — they are fully decoupled. The subscriber defines what event it needs, from whom, and under what conditions. Knot bridges the gap by injecting event instructions into the target knot's prompt.
 
 ## Current Capability: Static Routing via Tie-Off Directories
 
@@ -97,8 +102,8 @@ implementer → project/progress/016-*.md
 | **Fan-out (one producer → many consumers)** | Subdirectories provide natural event-type filtering: `strand-dir: "../../tie-offs/.../reviews"` subscribes only to reviews, not other event types. But the subdirectory must exist before the consumer can strand from it. | Native: multiple consumers declare different intents on the same event type. Knot dispatches only matching consumers. |
 | **Event payload** | Entire file content. Consumer must parse the full file to find relevant data. | Structured key-value pairs in tie-off. Consumer receives only the event payload it needs. |
 | **Deduplication** | None. Re-running a producer that writes the same file re-triggers all consumers. | Built-in: event ID = hash of `(source_knot, event_type, payload_hash)`. Dispatcher skips already-dispatched pairs. |
-| **Producer context** | Producer has no knowledge of which knots are watching its directory. | Producer prompt is injected with listener context — can tailor event detail to what consumers need. |
-| **Workspace cleanliness** | Communication files live in tie-off directories — already the derived-state namespace. Visible in the rig but excluded from sharing packages. | Synthetic strands created in consumer's loom-box. No persistent comms files needed if consumers process immediately. |
+| **Producer context** | Producer has no knowledge of which knots are watching its directory. | Knot injects event instructions at the start of the target knot's prompt — each event has an ID, description of when to emit it, and the exact format to use in the tie-off. Target knot has no `publishes` declaration. |
+| **Workspace cleanliness** | Communication files live in tie-off directories — already the derived-state namespace. Visible in the rig but excluded from sharing packages. | Event files live in consumer's tie-off directory — derived-state namespace. One copy per consumer, enabling selective replay. |
 | **Idempotency burden** | On the consumer: must detect whether it already processed the message file. | Shared: dispatcher deduplicates at delivery; consumer still idempotent for re-runs. |
 | **Operational complexity** | Simple. Standard filesystem watches, no new Knot code needed. | Requires Knot runtime changes: intent parsing, event extraction from tie-offs, dispatch logic. |
 | **Debugging** | Easy: inspect the typed subdirectory. Directory name is the event type, files are persistent artifacts. | Traceable via tie-off entries with `source:` and `original_strand:` metadata. Dispatch log in `rig/events/dispatched.jsonl`. |
@@ -110,7 +115,7 @@ The static routing pattern is a valid current solution. It can be used now to un
 
 1. Remove `strand-dir` paths that point at other knots' tie-off directories.
 2. Add `listens-for` declarations to consumer knot frontmatter.
-3. Add `publishes` declarations and structured event entries to producer tie-offs.
+3. Add structured event entries to producer tie-offs.
 4. Remove static event subdirectories from tie-off directories (they become redundant).
 
 No breaking changes — intent-based routing is backward compatible with static routing during transition.
@@ -121,26 +126,29 @@ No breaking changes — intent-based routing is backward compatible with static 
 | Test Class | What it covers | Status |
 |------------|---------------|--------|
 | `tie_off_parser` | Parses tie-off sections with header/timestamp/body | ✅ Green — current format only |
-| `knot_file` | Parses knot frontmatter (name, profile-ref, strand-dir, git-versioned) | ✅ Green — no listens-for/publishes support |
+| `knot_file` | Parses knot frontmatter (name, profile-ref, strand-dir, git-versioned) | ✅ Green — no listens-for support |
 | `events` | Domain event types (StrandEvent, LoomEvent, ConfigEvent) | ✅ Green — no AgentEvent type yet |
 | `usecases` | In-memory use case tests with mock ports | ✅ Green — no event dispatch logic |
 
 ## Test Gaps
-- No tests for parsing `listens-for` / `publishes` YAML in knot files
+- No tests for parsing `listens-for` YAML list (`target-knot`, `event-id`, `event-description`) in knot files
 - No tests for detecting structured event entries in tie-off content
-- No tests for matching event payloads against declared intents
-- No tests for synthetic event strand creation in loom-box
-- No integration test for the full producer → event → consumer flow
+- No tests for matching events by `event-id` + `target-knot` against consumer intents
+- No tests for prompt context injection (grouping by target, deduplication)
+- No tests for event file creation in consumer tie-off directory
+- No integration test for the full target → event → consumer flow
 
 ## Phases
 
 ### Phase 0: Domain Model — Extend KnotFile and TieOff entities
-- [ ] Add `listens_for: Vec<Intent>` and `publishes: Vec<EventCapability>` to `KnotFile`
-- [ ] Define `Intent` struct (event type, optional from/to filters, optional required payload fields)
-- [ ] Define `EventCapability` struct (event type, description of when emitted)
-- [ ] Define `AgentEvent` struct (event type, payload map, emitted-by, emitted-at, source strand)
+- [ ] Add `listens_for: Vec<Intent>` to `KnotFile`
+- [ ] Define `Intent` struct:
+  - `target_knot: String` — which knot may emit this event
+  - `event_id: String` — unique event identifier (e.g. `PlanCreated`)
+  - `event_description: String` — when the event fires and what data it contains
+- [ ] Define `AgentEvent` struct (event_id, target_knot, payload map, emitted-at, source strand)
 - [ ] Add `agent_events: Vec<AgentEvent>` to `TieOff` entity
-- [ ] Update `KnotFile::parse()` to accept and validate new YAML keys (unknown keys still warn, not error)
+- [ ] Update `KnotFile::parse()` to accept `listens-for` as a YAML list of `{target-knot, event-id, event-description}` objects (unknown keys still warn, not error)
 - [ ] Update `TieOff` serialization to include agent events
 - [ ] **Tests**: Unit tests for parsing new frontmatter fields, serialization round-trips
 
@@ -148,12 +156,12 @@ No breaking changes — intent-based routing is backward compatible with static 
 - [ ] Add `extract_agent_events(content: &str) -> Vec<AgentEvent>` to `tieoff_parser`
 - [ ] Define structured event format in tie-off entries:
   ```markdown
-  [2026-06-25T10:00:00Z] Plan PLAN-001 promoted to review.
-    event: plan-status-change
+  [2026-06-25T10:00:00Z] Plan PLAN-001 created.
+    event: PlanCreated
+    target-knot: plan-creator
     plan: PLAN-001
-    from: drafted
-    to: review
-    triggered: plan-reviewer
+    description: "Implementation plan for knot event routing"
+    scope: "Add intent-based routing for agent-to-agent communication"
   ```
 - [ ] Parse YAML-like key-value pairs from tie-off body lines (indented under the timestamp)
 - [ ] Detect `event:` key as the signal that this entry contains structured event data
@@ -161,36 +169,47 @@ No breaking changes — intent-based routing is backward compatible with static 
 
 ### Phase 2: Intent Matching — Match events to consumer declarations
 - [ ] Add `matches_intent(event: &AgentEvent, intent: &Intent) -> bool` function
-- [ ] Match on `event_type` (required)
-- [ ] Match on `from`/`to` filters when present in intent (optional)
-- [ ] Match on required payload fields when present in intent (optional)
+- [ ] Match on `event_id` (required) — must match exactly
+- [ ] Match on `target_knot` (required) — event must come from the knot specified in the intent
 - [ ] **Tests**: Unit tests for various match/no-match scenarios
 
-### Phase 3: Event Dispatch — Create synthetic event strands
+### Phase 3: Event Dispatch — Create event files in consumer's loom tie-off directory
 - [ ] Add `EventDispatcher` port trait (or extend existing ports)
-  - `dispatch(event: AgentEvent, consumer: &Knot) -> Result<TieOffPath, PortError>`
-- [ ] Implement filesystem adapter: create event file in consumer's `strand-dir` (loom-box)
-  - Filename: `{source-knot}-{event-type}-{timestamp}.md`
+  - `dispatch(event: AgentEvent, consumer: &Knot) -> Result<PathBuf, PortError>`
+- [ ] Implement filesystem adapter: create event file in consumer's loom tie-off directory under `{event-id}/` subdirectory
+  - Path: `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
   - Content: YAML frontmatter with event payload + markdown body with context
-- [ ] Implement deduplication: track processed event IDs per consumer (event ID = hash of event content + consumer ID)
-- [ ] **Tests**: Unit tests for synthetic file creation, deduplication, filename generation
+  - If multiple consumers listen for the same event, each loom gets its own copy
+- [ ] Implement deduplication: track `(target_knot, event_id, consumer_knot)` triples in `rig/events/dispatched.jsonl`
+- [ ] **Tests**: Unit tests for event file creation, deduplication, fan-out (two consumers, same event)
 
-### Phase 4: Context Injection — Inform producer of listening knots
+### Phase 4: Context Injection — Inform target knot of listening consumers
 - [ ] Add `build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String` function
-- [ ] When a producer knot runs, prepend to its prompt:
-  > Note: The following knots are listening for events you may emit:
-  > - `plan-reviewer` — listens for `plan-status-change` (drafted → review/approved)
-  > - `adr-planner` — listens for `plan-status-change` (any transition)
-- [ ] Only inject context for knots that declare `publishes` matching the producer's capabilities (or inject all if producer has no `publishes` declared — conservative)
-- [ ] **Tests**: Unit tests for context generation, filtering, formatting
+- [ ] Before a knot runs, scan all knots' `listens-for` entries and collect those where `target-knot` matches this knot's name
+- [ ] Inject at the **beginning** of the target knot's prompt:
+  > Before undertaking your task, note that other knots are listening for events you may emit.
+  > If an event occurs during your work, include an explicit event object in your final response using the format shown.
+  >
+  > Events you may emit:
+  > - `PlanCreated` — The event is emitted if a plan is created for the first time, with description of the plan and its scope.
+  >   Emit in your tie-off:
+  >   ```
+  >   event: PlanCreated
+  >   target-knot: plan-creator
+  >   plan: <plan-id>
+  >   description: <description>
+  >   scope: <scope>
+  >   ```
+- [ ] One block per `event-id`; if multiple consumers listen for the same event from the same knot, they are merged (one event block, not duplicated)
+- [ ] **Tests**: Unit tests for context generation, deduplication of duplicate events, formatting
 
 ### Phase 5: Integration — Wire into processing pipeline
 - [ ] After a knot produces a tie-off, invoke the event dispatcher
 - [ ] Parse the tie-off for agent events
 - [ ] For each event, find all consumer knots with matching intents
-- [ ] Create synthetic event strands in each consumer's loom-box
+- [ ] Create event files in each consumer's loom tie-off directory under `{event-id}/` subdirectory
 - [ ] Log event dispatch to loom-log (new `LoomEvent` variant or reuse existing)
-- [ ] **Tests**: Integration test with mock ports covering full flow: producer runs → event detected → consumer strand created → consumer fires
+- [ ] **Tests**: Integration test with mock ports covering full flow: target runs → event detected → consumer event file created → consumer fires
 
 ### Phase 6: Observability — Structured tie-off entries for events
 - [ ] Ensure synthetic event strands produce tie-off entries that include:
@@ -203,25 +222,27 @@ No breaking changes — intent-based routing is backward compatible with static 
 ## Notes
 
 ### Event ID and Deduplication Strategy
-Each `AgentEvent` gets a deterministic ID: `{source_knot}:{event_type}:{payload_hash}`. The dispatcher tracks `(event_id, consumer_knot_id)` pairs in a simple on-disk file (`rig/events/dispatched.jsonl`). Before dispatching, the dispatcher checks if the pair already exists. This prevents duplicate firing when a producer re-runs without changes.
+Each dispatch is uniquely identified by `{target_knot}:{event_id}:{consumer_knot}`. The dispatcher tracks these triples in a simple on-disk file (`rig/events/dispatched.jsonl`). Before dispatching, the dispatcher checks if the triple already exists. This prevents duplicate firing when a target knot re-runs without changes.
 
-### Loom-Box Convention
-Consumer knots that listen for events set `strand-dir: "loom-box/"` relative to their loom directory. The loom directory is owned by the loom, so the loom-box is namespaced per-loom. This avoids cross-loom coupling while keeping event files co-located with the consumer.
+### Event Directory Layout
+Event files are created at `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md` — scoped per loom, not per knot. The consumer's `strand-dir` watches the loom's tie-off directory, which contains both the knot's own tie-off file and all event subdirectories. The filesystem watcher fires for new event files but must exclude tie-off log files (`*-tie-off.md`) from being processed as strands.
 
-### Backward Compatibility
-- Knots without `listens-for` or `publishes` fields behave exactly as before (no events, no injection)
-- Existing tie-off entries without structured event data are parsed normally (no events extracted)
-- The tie-off parser gracefully skips malformed event entries
+This enables selective replay: touching or modifying a file in one loom's event subdirectory re-triggers only that loom's consumers, not other looms' consumers of the same event.
 
 ### Benefit: Intent Awareness Enables Tie-Off Monitoring
 
-Because the agent declares its intent in the knot definition file, Knot knows what event data should appear in the tie-off after each run. This enables a monitoring loop:
+Because consumers declare their `listens-for` intents with explicit `event-id` and `target-knot`, Knot knows exactly which events should appear in which tie-offs. This enables a monitoring loop:
 
-1. After a knot produces a tie-off, Knot checks whether the structured event metadata was populated.
-2. If the agent forgot to include the event data (e.g. omitted `event:`, `from:`, `to:` fields), Knot can detect this gap from the intent declaration alone.
+1. After a target knot produces a tie-off, Knot checks whether the structured event metadata was populated for any `event-id` that matching consumers are listening for.
+2. If the agent was instructed to emit an event but omitted the `event:` block in the tie-off, Knot can detect this gap from the intent declarations alone.
 3. Knot can then inject an additional session-scoped message into the agent's next session, requesting it populate the missing event information.
 
-This is a form of lightweight agent supervision — the intent declaration serves not just as a routing contract but also as a completeness check. It reduces the burden on the agent to self-audit and ensures inter-agent events are reliably structured.
+This is a form of lightweight agent supervision — the consumer's `listens-for` declaration serves not just as a routing contract but also as a completeness check. It reduces the burden on the target knot to self-audit and ensures inter-agent events are reliably structured.
+
+### Backward Compatibility
+- Knots without `listens-for` fields behave exactly as before (no event subscription)
+- Existing tie-off entries without structured event data are parsed normally (no events extracted)
+- The tie-off parser gracefully skips malformed event entries
 
 ### What This Does NOT Cover
 - Cross-rig event routing (events stay within a single rig)

@@ -94,10 +94,10 @@ cat rig/tie-offs/prd-review-loom/goals-review-tie-off.md
 cat rig/tie-offs/prd-review-loom/non-goals-review-tie-off.md
 ```
 
-Or check via the API:
+Or check the rig state:
 
 ```bash
-curl http://localhost:3000/looms/prd-review-loom/knots/goals-review
+cat rig/state.json | python3 -m json.tool
 ```
 
 ## Idempotent Reviews

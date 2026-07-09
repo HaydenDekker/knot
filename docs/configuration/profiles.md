@@ -74,7 +74,7 @@ When a strand event triggers a knot:
    `rig/profiles/{name}.md` — **read fresh from disk each time**.
 2. The profile provides: `provider`, `model`, and `tools`.
 3. The profile's markdown body is merged with the knot's markdown
-   body to form the full system prompt:
+   body to form the full prompt:
 
    ```
    {profile body}
@@ -92,14 +92,10 @@ Knot is needed.
 
 ### List All Profiles
 
-```bash
-curl http://localhost:3000/profiles
-```
-
-### Get a Specific Profile
+Read `rig/state.json` to see all registered profiles:
 
 ```bash
-curl http://localhost:3000/profiles/reviewer
+cat rig/state.json | python3 -m json.tool
 ```
 
 ### Create a New Profile
@@ -137,8 +133,17 @@ Knot discovers the removal automatically. Note: any knots referencing
 the deleted profile will fail on their next processing run with a
 `ProfileNotFound` error.
 
-## API Note
+## Session Resume
 
-The `timeout` field is not included in API responses. To check a
-profile's timeout, read the file directly from `rig/profiles/{name}.md`
-and inspect the YAML frontmatter.
+If an agent invocation fails (timeout, network error, process crash),
+Knot automatically attempts to resume the session:
+
+- Up to **10 retries** per strand event
+- **10-second delay** between retries (for network recovery)
+- Retries stop when the profile's **timeout budget** is nearly
+  exhausted (minimum 5 seconds remaining)
+- Each retry appends "please continue" to the session
+- Session resume events are logged as `SessionResumed` in the loom-log
+
+This makes Knot resilient to transient failures without losing agent
+context.

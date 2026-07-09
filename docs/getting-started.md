@@ -27,9 +27,7 @@ Ensure the following are available before you begin:
   install it via [rustup](https://rustup.rs/) if not already present.
 - **An AI agent CLI** — Knot orchestrates external agents. For the
   `pi` CLI, Knot ships with built-in integration and adapts
-  out of the box. For other agent CLIs (e.g. `claude`, `cursor`),
-  your agent will need to configure its own adapter to communicate
-  with Knot's HTTP interface.
+  out of the box.
 - **An LLM provider** — Any provider supported by your agent CLI
   (OpenAI, Anthropic, local models, etc.).
 
@@ -53,6 +51,7 @@ its skill discovery path. For `pi`, copy them to `~/.agents/skills/`:
 cp -r knot/.agents/skills/knot-init     ~/.agents/skills/
 cp -r knot/.agents/skills/knot-create   ~/.agents/skills/
 cp -r knot/.agents/skills/knot-inspect  ~/.agents/skills/
+cp -r knot/.agents/skills/knot-design   ~/.agents/skills/
 ```
 
 For other agent CLIs, your agent will need to place these skills
@@ -65,22 +64,44 @@ proceed with the remaining steps using them directly.
 
 Ask your agent to run the `knot-init` skill. This will:
 
-1. Start the Knot server (if not already running) and confirm it
-   is reachable via `GET /health`
-2. Read the rig configuration from `GET /config/rig`
-3. Create the `rig/profiles/` directory structure
-4. If no profiles exist, read available models from
+1. Create the `rig/` directory and `rig/profiles/` subdirectory
+2. If no profiles exist, read available models from
    `~/.pi/agent/models.json` and create a default profile at
    `rig/profiles/default.md`
-5. Verify everything via `GET /profiles` and `GET /looms`
-6. Report the current state back to you
+3. Verify setup by reading `rig/state.json`
+4. Report the current state back to you
 
 The `knot-init` skill is idempotent — safe to run multiple times.
 
 Watch in your IDE as the agent creates `rig/`, `rig/profiles/`, and
 the default profile file.
 
-## Step 3: Create the "Hello Knot" Loom
+## Step 3: Start Knot
+
+Run the Knot binary from your project directory:
+
+```bash
+knot
+```
+
+Knot will:
+
+1. Auto-discover the `rig/` directory
+2. Scan for looms (any `*-loom/` subdirectory inside `rig/`)
+3. Parse knot definition files and agent profiles
+4. Start watching strand directories for file changes
+5. Begin writing `rig/state.json` every 5 seconds
+
+To verify Knot is running, check that `rig/state.json` exists and
+is being updated:
+
+```bash
+watch -n 2 'cat rig/state.json | python3 -m json.tool'
+```
+
+You should see the file contain loom and profile information.
+
+## Step 4: Create the "Hello Knot" Loom
 
 A **loom** is a directory ending in `-loom` inside `rig/`. It contains
 **knot** definition files (`.md` files with YAML frontmatter).
@@ -97,9 +118,9 @@ your IDE's file tree, containing the knot definition file.
 
 **Can't see the file?** Ask your agent to run `knot-inspect` to
 debug the rig state — it will report registered looms, knots, and
-any issues.
+any issues by reading `rig/state.json`.
 
-## Step 4: Run "Hello Knot"
+## Step 5: Run "Hello Knot"
 
 To trigger the knot, create a file in the strand directory. For
 example:
@@ -109,6 +130,9 @@ mkdir -p greeting
 echo "Alice" > greeting/alice.md
 ```
 
+Knot accepts **any text file** as a strand — `.md`, `.rs`, `.json`,
+`.py`, `.txt`, etc. Binary files are silently ignored.
+
 Watch for two things:
 
 1. **The tie-off file appears** — Knot's file watcher detects the
@@ -117,21 +141,23 @@ Watch for two things:
    file appear in your IDE, containing the agent's greeting for
    Alice.
 
-2. **A git commit appears** — The agent commits the tie-off to git.
-   Check your git viewer (Source Control panel in VS Code) — you
-   should see a new commit with the result file.
+2. **A git commit appears** — By default, Knot creates a git commit
+   after each successful tie-off write. Check your git viewer
+   (Source Control panel in VS Code) — you should see a new commit
+   with the result file. To opt out per-knot, set `git-versioned: false`
+   in the knot's frontmatter.
 
 That's it. Hello Knot is working.
 
 In your agent of choice, open the session history and explore how your
 input was bundled and passed to your agent and how the response was
-routed to the knots tie-off.
+routed to the knot's tie-off.
 
 ## Next Steps
 
 - **[Concepts](concepts.md)** — Understand Knot's architecture
 - **[Configuration: Profiles](configuration/profiles.md)** — Configure agents
 - **[Configuration: Knots](configuration/knots.md)** — Define processing knots
+- **[Configuration: Rig Structure](configuration/rig-structure.md)** — Rig layout and state
 - **[Design Guide](design-guide.md)** — Best practices for knot design
-- **[API Reference](api-reference.md)** — Complete endpoint documentation
 - **[Troubleshooting](troubleshooting.md)** — Common issues and fixes

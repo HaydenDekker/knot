@@ -1,8 +1,8 @@
 # Concepts
 
 Knot is a file-first agent orchestration system. It watches directories for
-file changes, and triggers AI agent sessions in response. The entire workflow, 
-the rig, is stored as plain text on disk, making it easy to review, share, 
+file changes, and triggers AI agent sessions in response. The entire workflow,
+the rig, is stored as plain text on disk, making it easy to review, share,
 and version-control.
 
 This page explains Knot's mental model — the hierarchy of objects and
@@ -13,6 +13,7 @@ how they relate to each other.
 ```
 Rig
  ├── Profiles (shared agent configurations)
+ ├── State (rig/state.json — live observability)
  └── Looms (processing namespaces)
       └── Knots (individual processing tasks)
            ├── reads from a Strand Directory
@@ -25,6 +26,10 @@ The top-level container. A rig lives at `./rig/` in your project and
 aggregates all looms, profiles, and processing output. It is the ship's
 complete interconnected system — the place where looms live and knots
 are defined.
+
+Knot supports **rig switching** — multiple rigs in the same project
+(directory names like `myproject-rig/`). Run `knot <rig-name>` to
+target a specific rig, or just `knot` to auto-discover.
 
 ### Loom
 
@@ -44,8 +49,7 @@ brings everything together for a single processing task:
 
 1. **Agent Profile** — which agent runs (provider, model, tools, system
    prompt).
-2. **Prompt Template** — how input files are processed (goal description
-   and bundling rules).
+2. **Markdown body** — task-specific instructions (the prompt text).
 3. **Strand Directory** — which directory to watch for input files.
 
 One loom can contain multiple knot files, each defining a different
@@ -53,9 +57,14 @@ processing task.
 
 ### Strand
 
-A file in a knot's strand directory. When a strand is created, modified,
-or deleted, the knot that watches that directory is triggered to process
-it. The strand is the raw input fed into the knot's agent session.
+A **text file** in a knot's strand directory. Any text file is accepted
+(`.md`, `.rs`, `.json`, `.py`, `.txt`, etc.) — not just Markdown.
+Binary files are detected and silently skipped (logged as
+`StrandIgnored` in the loom-log).
+
+When a strand is created, modified, or deleted, the knot that watches
+that directory is triggered to process it. The strand is the raw input
+fed into the knot's agent session.
 
 ### Tie-off
 
@@ -71,6 +80,16 @@ The directory a knot watches for strand events, configured as `strand-dir`
 in the knot's YAML frontmatter. It is resolved relative to the project
 root (the directory containing `rig/`).
 
+### Rig State
+
+`rig/state.json` is written every 5 seconds and contains the complete
+live state of the rig: registered looms, their knots with processing
+status, agent profiles, and the pending strand queue. This is Knot's
+primary observability interface — no HTTP API is used.
+
+The **strand queue** (`strand_queue` array) shows all pending strand
+events with file path, loom/knot IDs, event type, and queued timestamp.
+
 ## The Processing Flow
 
 ```
@@ -80,11 +99,14 @@ File change in strand-dir
   Knot's file watcher detects event
         │
         ▼
+  Event debounced (avoids partial writes)
+        │
+        ▼
   Knot loads its agent profile from disk
         │
         ▼
   Agent session starts:
-    ├── system prompt = profile.system-prompt + knot.instructions
+    ├── prompt = profile body + knot body + trigger line
     ├── input = strand file(s)
     └── tools = profile.tools
         │
@@ -93,7 +115,27 @@ File change in strand-dir
         │
         ▼
   Output appended to tie-off file
+        │
+        ▼
+  Git commit created (if git-versioned: true)
 ```
+
+### Session Resume
+
+If an agent invocation fails (timeout, network error), Knot automatically
+attempts to resume the session using the session ID, up to 10 retries
+with 10-second delays between attempts. The profile's overall timeout
+budget is respected — retries stop when insufficient time remains.
+
+## Git Versioning
+
+By default, Knot creates a git commit after each successful tie-off write.
+The commit message includes the knot ID, event type, and strand filename.
+Tie-off content forms the commit body.
+
+Per-knot opt-out: set `git-versioned: false` in the knot's YAML
+frontmatter. If the project is not a git repo, commits are silently
+skipped.
 
 ## Logs
 
@@ -102,7 +144,6 @@ Knot maintains several log files for observability:
 | Log | Location | Purpose |
 |-----|----------|---------|
 | **Loom-log** | `rig/tie-offs/{loom-id}/.loom-log` | Per-loom activity: knot registration, processing events, errors |
-| **Knot-state** | Inside loom-log | Per-knot processing status and last event details |
 | **Rig-log** | `rig/.rig-log` | Append-only JSONL of serious events: timeouts (`TimeoutExceeded`) and idle periods (`QueueIdle`) |
 
 The rig-log survives server restarts and supports multiple consumers
@@ -114,13 +155,13 @@ The rig-log survives server restarts and supports multiple consumers
 
 All configuration lives as `.md` files with YAML frontmatter. Write files
 directly to disk — Knot's file watcher picks up changes automatically.
-No HTTP registration is needed. Changes are visible through git diffs.
+Observation is through `rig/state.json`, written every 5 seconds.
 
 ### Version-Controllable
 
 Everything is plain text. Your entire rig configuration — profiles, looms,
 knots, and tie-offs — can be tracked in git and reviewed through standard
-diff tools.
+diff tools. Knot itself creates git commits for tie-off output.
 
 ### Auto-Discovery
 

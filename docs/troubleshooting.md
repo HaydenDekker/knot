@@ -6,10 +6,7 @@ Common issues and how to resolve them.
 
 ### Symptom
 
-```bash
-curl http://localhost:3000/health
-# curl: (7) Connection refused
-```
+`rig/state.json` does not exist or is not being updated.
 
 ### Fix
 
@@ -21,11 +18,17 @@ cargo run
 knot
 ```
 
+Verify by watching the state file:
+
+```bash
+watch -n 2 'cat rig/state.json | python3 -m json.tool'
+```
+
 ## Loom Not Discovered
 
 ### Symptom
 
-`GET /looms` does not return your loom.
+`rig/state.json` does not contain your loom.
 
 ### Common Causes
 
@@ -45,18 +48,14 @@ knot
 
 ### Fix
 
-Verify the directory name and file locations, then trigger a manual
-rescan:
-
-```bash
-curl -X POST http://localhost:3000/config/reload
-```
+Verify the directory name and file locations, then restart Knot so it
+re-scans the rig directory.
 
 ## Profile Not Found
 
 ### Symptom
 
-Knot processing fails with `ProfileNotFound` error. The activity log
+Knot processing fails with `ProfileNotFound` error. The loom-log
 shows a failure for the affected knot.
 
 ### Common Causes
@@ -74,32 +73,27 @@ Check the profile file exists and is valid:
 cat rig/profiles/{name}.md
 ```
 
-Verify the `name` field matches:
+Verify the `name` field matches the filename stem.
 
-```bash
-curl http://localhost:3000/profiles/{name}
-```
-
-If the profile is returned, the issue is likely the `agent-profile-ref`
+If the profile is correct, the issue is likely the `agent-profile-ref`
 value in the knot file.
 
 ## Knot Processing Fails
 
 ### Symptom
 
-`GET /looms/{id}/knots/{name}` returns status `failed` with a
+`rig/state.json` shows the knot with status `failed` and a
 `last_error` message.
 
 ### Diagnostics
 
-1. Check the activity log for details:
+1. Check the loom-log for details:
 
    ```bash
-   curl http://localhost:3000/looms/{id}/activity
+   cat rig/tie-offs/{loom-id}/.loom-log
    ```
 
-2. Check the tie-off file — it may contain partial output or error
-   details:
+2. Check the tie-off file — it may contain partial output:
 
    ```bash
    cat rig/tie-offs/{loom-id}/{knot-name}-tie-off.md
@@ -128,17 +122,13 @@ You created or modified a file, but the knot did not trigger.
 
 ### Fix
 
-Manually re-scan the rig:
-
-```bash
-curl -X POST http://localhost:3000/config/reload
-```
-
-Or touch the strand file to generate a fresh filesystem event:
+Touch the strand file to generate a fresh filesystem event:
 
 ```bash
 touch project/prds/my-prd.md
 ```
+
+Or restart Knot to trigger a full re-scan of the rig directory.
 
 ## Knot Oscillates (Keeps Re-running)
 
@@ -162,30 +152,60 @@ Apply loop-breaking patterns from the [Design Guide](design-guide.md):
 3. **Strand acknowledgement** — the knot skips already-processed
    strand content.
 
-## API Returns 404 for Loom or Knot
+## Agent Session Fails Repeatedly
 
 ### Symptom
 
-```bash
-curl http://localhost:3000/looms/my-loom
-# 404 Not Found
-```
+The loom-log shows multiple `SessionResumed` entries for the same
+strand, eventually followed by a failure.
+
+### Cause
+
+The agent invocation keeps failing (network error, provider outage,
+model error). Knot retries up to 10 times with 10-second delays.
 
 ### Fix
 
-1. List available looms to verify names:
+- Check the rig-log for `TimeoutExceeded` — if the session is too
+  slow, increase the profile's `timeout` value.
+- Check your LLM provider's status page for outages.
+- Verify the agent CLI (`pi`) is working independently:
+  `pi --help`
 
-   ```bash
-   curl http://localhost:3000/looms
-   ```
+## Strand Not Being Processed (Binary File)
 
-2. The loom ID includes the `-loom` suffix. Use the full name:
+### Symptom
 
-   ```bash
-   # If the directory is rig/my-loom/
-   # The loom ID is "my-loom" (not "my")
-   curl http://localhost:3000/looms/my-loom
-   ```
+A file change in the strand directory is not triggering the knot. The
+loom-log shows `StrandIgnored`.
+
+### Cause
+
+The file is detected as binary (contains null bytes in the first 8KB).
+Knot only processes text files.
+
+### Fix
+
+Use a text-based file format, or change the knot's `strand-dir` to
+watch a directory containing only text files.
+
+## Strand Skipped (File Missing)
+
+### Symptom
+
+The loom-log shows `StrandSkipped` for a file that should exist.
+
+### Cause
+
+The file was temporarily missing when Knot tried to read it. This can
+happen with editors that use atomic writes (write to temp file, then
+rename). Known temp files (e.g. macOS `sed -i` temp files) are skipped
+silently — unknown missing files produce `StrandSkipped` events.
+
+### Fix
+
+Usually resolves on the next file modification. If persistent, check
+that no other process is competing for the file.
 
 ## Rig-Log or Loom-Log Is Missing
 
@@ -200,3 +220,19 @@ processing activity will not have log files yet. This is normal.
 
 The rig-log is created on the first `TimeoutExceeded` or `QueueIdle`
 event. The loom-log is created when the loom starts processing.
+
+## State File Shows Stale Data
+
+### Symptom
+
+`rig/state.json` shows outdated processing status.
+
+### Explanation
+
+The state file is written every 5 seconds. There is up to a 5-second
+delay between an event and its reflection in the state file.
+
+### Fix
+
+Wait a few seconds and check again, or read the loom-log directly for
+real-time events.

@@ -91,6 +91,12 @@ Check the tie-off to see what the agent did:
 cat rig/tie-offs/planning-loom/prd-planner-tie-off.md
 ```
 
+Check the git history — Knot created a commit automatically:
+
+```bash
+git log --oneline -3
+```
+
 ## Designing Idempotent Generation
 
 File generation knots must be **idempotent** — running them twice on

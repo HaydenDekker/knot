@@ -1,11 +1,12 @@
 # Master ADR — Decision Index
 
-> **Last Updated:** 2026-07-02
+> **Last Updated:** 2026-07-09
 
 ## ADR Index
 
 | # | ADR | Status | Date |
 |---|-----|--------|------|
+| 12 | [ADR-012: Event Files Placed Per Consumer](adr-012-event-placement-per-consumer.md) | Accepted | 2026-07-09 |
 | 11 | [ADR-011: Hexagonal Test Strategy](adr-011-hexagonal-test-strategy.md) | Accepted | 2026-07-02 |
 | 10 | [ADR-010: Domain Rule Extraction](adr-010-domain-rule-extraction.md) | Accepted | 2026-06-29 |
 | 9 | [ADR-009: Agent-Specific Adapters](adr-009-agent-specific-adapters.md) | Accepted | 2026-06-27 |
@@ -19,6 +20,14 @@
 | 1 | [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) | Superseded | 2026-06-07 |
 
 ## ADR Summaries
+
+### 12. Event Files Placed Per Consumer
+
+**Status:** Accepted
+**Date:** 2026-07-09
+**Summary:** Dispatched event files are placed in the consumer knot's tie-off directory under an event-named subdirectory (e.g. `{knot-name}/PlanCreated/event-*.md`). Each consumer gets its own copy — enables selective replay per consumer without triggering all downstream knots.
+
+Full details in [adr-012-event-placement-per-consumer.md](adr-012-event-placement-per-consumer.md).
 
 ### 11. Hexagonal Test Strategy
 

@@ -221,23 +221,30 @@ The loom matches the knot's output domain:
 - Writes plans → `planning-loom/`
 - Writes ADRs → `architecture-loom/`
 
-### Step 5: Write Goal-Focused Instructions
+### Step 5: Write the Knot File
 
-```yaml
-prompt-template:
-  instructions: |
-    You are a <role>. <Goal statement>.
+```markdown
+---
+name: <source-domain>-<target-action>
+agent-profile-ref: <profile-name>
+strand-dir: "<source-directory>"
+---
 
-    1. Read the strand (provided).
-    2. Inspect current state of <target domain>.
-    3. Determine if the goal is already met.
-    4. If yes, report "no changes needed" with explanation.
-    5. If no, apply minimal changes to achieve the goal.
+You are a <role>. <Goal statement>.
 
-    ## Constraints
-    - Never overwrite work in <other domain> — only append observations.
-    - Re-running on the same strand must produce no additional changes.
+1. Read the strand (provided).
+2. Inspect current state of <target domain>.
+3. Determine if the goal is already met.
+4. If yes, report "no changes needed" with explanation.
+5. If no, apply minimal changes to achieve the goal.
+
+## Constraints
+- Never overwrite work in <other domain> — only append observations.
+- Re-running on the same strand must produce no additional changes.
 ```
+
+The markdown body **is** the prompt instructions. There is no separate
+`prompt-template` or `instructions` field in frontmatter.
 
 ### Step 6: Check for Loops
 

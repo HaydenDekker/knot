@@ -9,6 +9,8 @@ processing output.
 ```
 rig/
 ├── .rig-log                           ← Operational event log (JSONL)
+├── .workspace-agent-config.yaml       ← Agent adapter selection
+├── state.json                         ← Live rig state (written every 5s)
 ├── profiles/                          ← Shared agent profiles
 │   ├── default.md
 │   ├── reviewer.md
@@ -64,6 +66,60 @@ rig/tie-offs/prd-review-loom/goals-review-tie-off.md
 Each processing event appends to this file. The file grows over time,
 with event metadata identifying which strand was processed.
 
+## Rig State File
+
+`rig/state.json` is the primary observability interface. It is written
+atomically every 5 seconds and contains:
+
+- **Looms** — all registered looms with their knots, each showing
+  processing status (`idle`, `processing`, `completed`, `failed`)
+- **Profiles** — all registered agent profiles
+- **Strand queue** — pending strand events with file path, loom/knot
+  IDs, event type, and queued timestamp
+
+```json
+{
+  "rig_path": "/absolute/path/to/rig",
+  "looms": [
+    {
+      "id": "prd-review-loom",
+      "knots": [
+        {
+          "id": "goals-review",
+          "status": "completed",
+          "last_strand_path": "project/prds/goals.md",
+          "last_tie_off_path": "rig/tie-offs/prd-review-loom/goals-review-tie-off.md",
+          "last_error": null
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "name": "reviewer",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "tools": ["fs"]
+    }
+  ],
+  "strand_queue": [
+    {
+      "strand_path": "project/prds/new-feature.md",
+      "loom_id": "prd-review-loom",
+      "knot_id": "goals-review",
+      "event_type": "Created",
+      "queued_at": "2026-07-01T10:30:00Z"
+    }
+  ]
+}
+```
+
+Monitor live state:
+
+```bash
+watch -n 2 'cat rig/state.json | python3 -m json.tool'
+```
+
 ## Log Locations
 
 ### Rig-Log
@@ -84,38 +140,57 @@ safely.
 - `LoomStarted` / `LoomStopped`
 - `KnotRegistered` / `KnotDeregistered`
 - `KnotProcessing` / `KnotCompleted` / `KnotFailed`
-- `StrandProcessed`
+- `KnotUpdated` — knot file modified and reloaded
+- `SessionResumed` — agent session resumed after failure
+- `StrandProcessed` / `StrandSkipped` / `StrandIgnored`
 - `KnotParseWarning` (unknown YAML properties)
+- `DirectoryCreated` — strand directory auto-created
 
-### Knot-State
+## Rig Agent Configuration
 
-Embedded within the loom-log. Each knot's processing status is sourced
-from this data and exposed via the API endpoint
-`GET /looms/{id}/knots/{name}`.
-
-## Rig Configuration
-
-Knot reads its rig configuration from `.workspace-agent-config.yaml` in
-the rig directory. This file specifies the agent CLI to use:
+Knot reads its agent configuration from `.workspace-agent-config.yaml` in
+the rig directory. This file specifies which adapter to use for agent
+invocations:
 
 ```yaml
-cli_path: "pi"
-cli_args: []
+agent-adapter: pi-stdio
 ```
 
-If the file does not exist, Knot uses sensible defaults (`cli_path: "pi"`).
+Supported adapters:
 
-View the loaded configuration:
+| Adapter | Description |
+|---------|-------------|
+| `pi-stdio` | Default. Reads agent output from stdout. |
+| `pi-json` | Parses JSON-L output for session IDs and token usage. |
+
+If the file does not exist, Knot creates it with sensible defaults
+(`agent-adapter: pi-stdio`) on first boot.
+
+## Rig Switching and Sharing
+
+### Multiple Rigs
+
+Knot supports multiple rigs in the same project. Directories named
+`<name>-rig/` are treated as separate rigs.
 
 ```bash
-curl http://localhost:3000/config/rig
+knot              # auto-discover: creates rig/ if none, uses it if one exists
+knot myproject    # use myproject-rig/
+knot staging      # use staging-rig/
 ```
 
-Reload configuration after editing:
+If multiple rigs exist and no name is given, Knot refuses to start
+with a usage hint.
+
+### Sharing a Rig
+
+Package a rig for sharing (excludes tie-offs, logs, and config):
 
 ```bash
-curl -X POST http://localhost:3000/config/reload
+knot share myproject
 ```
+
+This creates a `.zip` containing loom definitions and profiles only.
 
 ## Git-Friendly
 
@@ -124,12 +199,16 @@ entries depend on your workflow:
 
 ```gitignore
 # Tie-offs are generated output — typically committed for audit trail
+# (Knot creates git commits for these by default)
 # Uncomment if you prefer to exclude them:
 # rig/tie-offs/**/*.md
 
 # Logs can grow large — often excluded
 rig/.rig-log
 rig/tie-offs/**/.loom-log
+
+# State file is generated — typically excluded
+rig/state.json
 ```
 
 Profiles, looms, and knot definitions are typically committed to git,

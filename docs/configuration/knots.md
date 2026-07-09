@@ -28,6 +28,7 @@ Review the goals section of this PRD. Check that:
 | `name` | Yes | Unique knot identifier within its loom. Becomes the `KnotId`. |
 | `agent-profile-ref` | Yes | Name of the agent profile to use. Must match a profile in `rig/profiles/{name}.md`. |
 | `strand-dir` | Yes | Directory to watch for strand files. Resolved relative to the project root. |
+| `git-versioned` | No | Whether to create a git commit after each tie-off write. Defaults to `true`. Set to `false` to opt out. |
 
 ## Markdown Body
 
@@ -37,6 +38,17 @@ at processing time to form the full prompt sent to the agent.
 
 The body must not be empty or contain only whitespace — the parser
 will reject such files.
+
+## Strand Input
+
+Knots accept **any text file** as strand input — not just `.md` files.
+Supported extensions include `.rs`, `.json`, `.py`, `.txt`, `.yaml`,
+and any other text file. Binary files (detected by null bytes in the
+first 8KB) are silently skipped and logged as `StrandIgnored` in the
+loom-log.
+
+This means a knot can process source code, configuration files, or any
+text-based document.
 
 ## Directory Resolution
 
@@ -64,30 +76,17 @@ project_root/
 
 ## Managing Knots
 
-### List Knots in a Loom
+### Check a Knot's Status
+
+Read `rig/state.json` to see all looms and their knots:
 
 ```bash
-curl http://localhost:3000/looms/prd-review-loom/knots
+cat rig/state.json | python3 -m json.tool
 ```
 
-Returns: `["goals-review", "non-goals-review"]`
-
-### Get Loom Details (Includes All Knots)
-
-```bash
-curl http://localhost:3000/looms/prd-review-loom
-```
-
-Returns full loom configuration including all knot definitions.
-
-### Check a Knot's Processing Status
-
-```bash
-curl http://localhost:3000/looms/prd-review-loom/knots/goals-review
-```
-
-Returns the knot's current status (`idle`, `processing`, `completed`,
-or `failed`), last processed strand, and tie-off path.
+Each knot entry shows its current processing status (`idle`,
+`processing`, `completed`, or `failed`), last processed strand, and
+tie-off path.
 
 ### Create a New Knot
 
@@ -105,12 +104,12 @@ Review the non-goals section for clarity.
 EOF
 ```
 
-Knot discovers the new file automatically.
+Knot discovers the new file automatically via its file watcher.
 
 ### Modify a Knot
 
-Edit the `.md` file directly. Changes are picked up on the next
-processing cycle.
+Edit the `.md` file directly. Changes are picked up by the file watcher
+and logged in the loom-log.
 
 ### Delete a Knot
 
@@ -144,11 +143,12 @@ all produce or maintain plans.
 |----------|---------|-----|
 | Profile not found | Knot fails with `ProfileNotFound` | Create the profile at `rig/profiles/{name}.md` |
 | Strand dir missing | Knot registers but finds no files | Create the directory or fix the path |
-| Invalid frontmatter | Knot is skipped; `KnotParseWarning` in activity log | Check YAML syntax in the `.md` file |
+| Invalid frontmatter | Knot is skipped; `KnotParseWarning` in loom-log | Check YAML syntax in the `.md` file |
 | Duplicate knot name | Second knot overwrites first in the loom | Use unique names within each loom |
+| Binary file as strand | `StrandIgnored` in loom-log | Use a text file, or change the strand-dir |
 
 Check the loom activity log to diagnose issues:
 
 ```bash
-curl http://localhost:3000/looms/prd-review-loom/activity
+cat rig/tie-offs/prd-review-loom/.loom-log
 ```
