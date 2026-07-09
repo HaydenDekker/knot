@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::domain::events::Intent;
+
 // Re-export value objects for convenient access through the entities module
 pub use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
 pub use crate::domain::value_objects::AgentProfile;
@@ -140,11 +142,11 @@ fn default_git_versioned() -> bool {
     true
 }
 
-/// A Knot is the core unit of work: an agent goal paired with a prompt template.
-///
-/// All agent configuration comes from a shared profile referenced by
-/// `agent_profile_ref`. The knot's `prompt_template.instructions` provides
-/// task-specific direction appended to the profile's system prompt.
+/// Default value for `listens_for`: empty (no event subscriptions).
+fn default_listens_for() -> Vec<crate::domain::events::Intent> {
+    Vec::new()
+}
+
 /// A Knot is the core unit of work: an agent goal paired with a prompt template.
 ///
 /// All agent configuration comes from a shared profile referenced by
@@ -163,6 +165,13 @@ pub struct Knot {
     /// opt out of automatic versioning for this knot.
     #[serde(default = "default_git_versioned")]
     pub git_versioned: bool,
+    /// List of event intents this knot listens for.
+    ///
+    /// Each intent declares interest in a specific event from a specific
+    /// target knot. Populated from `listens-for` frontmatter via
+    /// `KnotFile::listens_for`.
+    #[serde(default = "default_listens_for")]
+    pub listens_for: Vec<Intent>,
 }
 
 /// A Loom orchestrates a collection of Knots.
@@ -437,6 +446,7 @@ mod tests {
             prompt_template: prompt_template.clone(),
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
 
         assert_eq!(knot.id, id);
@@ -456,6 +466,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("../custom-source"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
 
         assert_eq!(
@@ -475,6 +486,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("project/prds"),
             git_versioned: true,
+            listens_for: Vec::new(),
         }];
 
         let loom = Loom {
@@ -560,6 +572,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
 
         let json = serde_json::to_string(&knot).unwrap();
@@ -578,6 +591,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
         let json = serde_json::to_string(&knot_true).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
@@ -593,6 +607,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: false,
+            listens_for: Vec::new(),
         };
         let json = serde_json::to_string(&knot_false).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
@@ -608,6 +623,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
         // Build JSON without the git_versioned field
         let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_dir":"strands"}"#;
@@ -1164,6 +1180,7 @@ mod tests {
             },
             strand_dir: std::path::PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         }
     }
 

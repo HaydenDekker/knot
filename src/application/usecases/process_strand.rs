@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::adapters::logging;
 use crate::application::ports::{
-    AgentProfileRepository, AgentRunner, GitVersioningPort, KnotEventType,
-    LoomLogPort, PortError, RigLogPort, TieOffSink,
+    AgentProfileRepository, AgentRunner, EventDispatcherPort, GitVersioningPort,
+    KnotEventType, LoomLogPort, PortError, RigLogPort, TieOffSink,
 };
 use crate::application::session_resume;
 use crate::application::store::LoomStore;
@@ -14,7 +14,7 @@ use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandCheckResult, StrandFileChecker,
     StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
-use crate::domain::events::{LoomEvent, StrandEvent};
+use crate::domain::events::{build_listener_context, matches_intent, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{AgentConfig, RigAgentConfig};
 
@@ -49,6 +49,8 @@ pub struct ProcessStrand {
     git_versioning_port: Arc<dyn GitVersioningPort>,
     /// Strand file checker for text/binary/temp detection.
     file_checker: Arc<dyn StrandFileChecker>,
+    /// Event dispatcher for intent-based agent-to-agent routing.
+    event_dispatcher: Arc<dyn EventDispatcherPort>,
 }
 
 impl ProcessStrand {
@@ -64,6 +66,7 @@ impl ProcessStrand {
         rig_log: Arc<dyn RigLogPort>,
         git_versioning_port: Arc<dyn GitVersioningPort>,
         file_checker: Arc<dyn StrandFileChecker>,
+        event_dispatcher: Arc<dyn EventDispatcherPort>,
     ) -> Self {
         Self {
             store,
@@ -76,6 +79,7 @@ impl ProcessStrand {
             rig_log,
             git_versioning_port,
             file_checker,
+            event_dispatcher,
         }
     }
 
@@ -313,13 +317,24 @@ impl ProcessStrand {
         // Build the prompt. For Deleted events, use domain method
         // Knot::deleted_prompt() which composes the deletion notice
         // and scoped strand history.
-        let prompt = if is_deleted {
+        let base_prompt = if is_deleted {
             let sections = strand_history
                 .as_deref()
                 .unwrap_or_default();
             knot.deleted_prompt(&strand_filename, sections)
         } else {
             knot.prompt_template.instructions.clone()
+        };
+
+        // Build listener context (per-invocation, not cached).
+        // Scans all knots' listens-for entries and injects event
+        // instructions at the beginning of the prompt.
+        let all_knots = Self::collect_all_knots(&self.store);
+        let listener_context = build_listener_context(knot, &all_knots);
+        let prompt = if listener_context.is_empty() {
+            base_prompt
+        } else {
+            format!("{}\n\n{}", listener_context, base_prompt)
         };
 
         // 3. Execute agent with session-resume retry logic.
@@ -404,6 +419,19 @@ impl ProcessStrand {
                                 &strand_path.0,
                             );
                         }
+                    }
+                }
+
+                // Dispatch agent events to matching consumer knots
+                // (best-effort — dispatch failures are non-fatal).
+                if let Some(ref content) = outcome.tie_off_content() {
+                    if let Ok(Some(dispatch_event)) = self.dispatch_agent_events(
+                        content,
+                        knot,
+                        &loom_id,
+                        &strand_path,
+                    ) {
+                        let _ = self.log_port.append(dispatch_event);
                     }
                 }
 
@@ -498,6 +526,75 @@ impl ProcessStrand {
         TieOffPath(base.join(filename))
     }
 
+    /// Collect all knots from all registered looms in the store.
+    ///
+    /// Used to build listener context — scanning all knots' listens-for
+    /// declarations to find which ones target a specific knot.
+    fn collect_all_knots(store: &LoomStore) -> Vec<Knot> {
+        store.list().into_iter().flat_map(|loom| loom.knots).collect()
+    }
+
+    /// Dispatch agent events from a tie-off to matching consumer knots.
+    ///
+    /// After a knot completes successfully, this extracts any structured
+    /// agent events from the tie-off content, matches them against consumer
+    /// intents, and dispatches event files to each matching consumer.
+    ///
+    /// Returns a `LoomEvent::EventsDispatched` log entry if any events
+    /// were dispatched, or `None` if no events were found.
+    fn dispatch_agent_events(
+        &self,
+        tie_off_content: &str,
+        knot: &Knot,
+        loom_id: &LoomId,
+        strand_path: &StrandPath,
+    ) -> Result<Option<LoomEvent>, PortError> {
+        // Parse tie-off for agent events
+        let events =
+            crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
+
+        if events.is_empty() {
+            return Ok(None);
+        }
+
+        // Iterate by loom to track consumer_loom_id for dispatch
+        let all_looms = self.store.list();
+        let mut dispatches: Vec<(String, String)> = Vec::new();
+        for event in &events {
+            for loom in &all_looms {
+                for consumer_knot in &loom.knots {
+                    for intent in &consumer_knot.listens_for {
+                        if matches_intent(event, intent) {
+                            // Dispatch event file to consumer's tie-off dir
+                            let _path = self.event_dispatcher.dispatch(
+                                event,
+                                consumer_knot,
+                                &loom.id,
+                                &self.rig_dir,
+                            )?;
+                            dispatches.push((
+                                event.event_id.clone(),
+                                loom.id.0.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if dispatches.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(LoomEvent::EventsDispatched {
+            loom_id: loom_id.clone(),
+            knot_id: knot.id.clone(),
+            strand_path: strand_path.clone(),
+            dispatches,
+            timestamp: super::types::format_timestamp(),
+        }))
+    }
+
 }
 
 
@@ -516,7 +613,7 @@ mod profile_resolution_tests {
     use super::super::test_fixtures::{
         build_knot_with_profile, default_profile, MockAgentRunner,
         MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
     };
 
     /// Build a knot with the given profile ref.
@@ -567,6 +664,7 @@ mod profile_resolution_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
@@ -604,6 +702,7 @@ mod profile_resolution_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "nonexistent");
@@ -651,6 +750,7 @@ mod profile_resolution_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let knot1 = build_profile_knot("k1", "detailed");
@@ -692,6 +792,7 @@ mod profile_resolution_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         // Profile doesn't exist yet — should error
@@ -757,6 +858,7 @@ mod profile_resolution_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
@@ -788,9 +890,9 @@ mod execution_test_shared {
 
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, default_profile,
-        MockAgentRunner, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        TrackingTieOffSink,
+        MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
+        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Re-export build_knot with profile parameter for execution tests.
@@ -837,6 +939,7 @@ mod execution_test_shared {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         (
@@ -1576,7 +1679,7 @@ mod profile_timeout_tests {
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, MockAgentRunner,
         MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
         TrackingAgentRunner,
     };
 
@@ -1618,6 +1721,7 @@ mod profile_timeout_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let knot = build_knot("k1", "slow");
@@ -1659,6 +1763,7 @@ mod profile_timeout_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let knot = build_knot("k1", "fast");
@@ -1711,6 +1816,7 @@ mod profile_timeout_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Created {
@@ -1773,6 +1879,7 @@ mod profile_timeout_tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Created {
@@ -1809,7 +1916,7 @@ mod git_versioning_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
         MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
     };
 
     /// Build a knot with configurable git_versioned flag.
@@ -1843,6 +1950,7 @@ mod git_versioning_tests {
             Arc::new(MockRigLogPort::default()),
             git_port,
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         )
     }
 
@@ -1966,7 +2074,7 @@ mod session_title_tests {
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, default_profile,
         MockGitVersioningPort, MockLoomLogPort, MockTieOffSink,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher, MockStrandFileChecker,
         TrackingAgentRunner,
     };
 
@@ -2013,6 +2121,7 @@ mod session_title_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Modified {
@@ -2070,6 +2179,7 @@ mod session_title_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Created {
@@ -2115,6 +2225,7 @@ mod session_title_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Deleted {
@@ -2167,6 +2278,7 @@ mod session_title_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         // Process first strand
@@ -2230,6 +2342,7 @@ mod session_title_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
         let loom = build_loom("test-loom", vec![knot]);
         store.register(loom);
@@ -2247,6 +2360,7 @@ mod session_title_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         let event = StrandEvent::Modified {
@@ -2292,7 +2406,7 @@ mod text_check_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
         MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
         TrackingTieOffSink,
     };
 
@@ -2337,6 +2451,7 @@ mod text_check_tests {
             Arc::new(
                 crate::adapters::outbound::ContentInspectorChecker,
             ),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         (use_case, log_events, tie_off_appends)
@@ -2611,7 +2726,7 @@ mod file_existence_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
         MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockStrandFileChecker, TrackingTieOffSink,
+        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Build a knot with git_versioned: false.
@@ -2655,6 +2770,7 @@ mod file_existence_tests {
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
         );
 
         (use_case, log_events, tie_off_appends, agent_runner)
@@ -2928,5 +3044,442 @@ mod file_existence_tests {
         // Tie-off IS written
         let appends = tie_off_appends.lock().unwrap();
         assert_eq!(appends.len(), 1, "tie-off should be appended");
+    }
+}
+
+// ── Phase 5: Event Dispatch Integration Tests ──────────────────────────
+
+#[cfg(test)]
+mod event_dispatch_tests {
+    use super::*;
+    use crate::domain::entities::{KnotId, LoomId, PromptTemplate};
+    use crate::domain::events::Intent;
+    use crate::application::ports::AgentOutput;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    use super::super::test_fixtures::{
+        build_knot, build_knot_with_profile, build_loom, default_profile,
+        MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
+        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
+    };
+
+    /// Build a knot that listens for events from another knot.
+    fn build_consumer_knot(
+        id: &str,
+        target_knot: &str,
+        event_id: &str,
+        event_desc: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            strand_dir: PathBuf::from("strands"),
+            git_versioned: true,
+            listens_for: vec![Intent {
+                target_knot: target_knot.to_string(),
+                event_id: event_id.to_string(),
+                event_description: event_desc.to_string(),
+            }],
+        }
+    }
+
+    /// Build a producer knot with no listens-for.
+    fn build_producer_knot(id: &str) -> Knot {
+        build_knot(id)
+    }
+
+    /// Build ProcessStrand with a tracking event dispatcher so we can
+    /// inspect dispatch calls.
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand_with_dispatcher(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        LoomStore,
+    ) {
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(event_dispatcher),
+        );
+
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store)
+    }
+
+    /// Full flow: producer knot emits an event in tie-off, consumer knot
+    /// has matching intent, event file is dispatched.
+    #[test]
+    fn event_dispatch_full_flow() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        // Producer loom with a producer knot
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        // Consumer loom with a consumer knot that listens for PlanCreated
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // Agent output contains a structured event in the tie-off body
+        let event_content = concat!(
+            "Plan created successfully.\n",
+            "\n",
+            "  event: PlanCreated\n",
+            "  target-knot: plan-creator\n",
+            "  plan: PLAN-001\n",
+            "  description: Test plan\n",
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify dispatch was called
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            1,
+            "should have dispatched exactly 1 event, got {}",
+            dispatched.len()
+        );
+        let (evt, consumer_knot_name, consumer_loom, _rig_dir) = &dispatched[0];
+        assert_eq!(evt.event_id, "PlanCreated");
+        assert_eq!(*consumer_knot_name, "plan-watcher");
+        assert_eq!(*consumer_loom, "consumer-loom");
+
+        // Verify loom-log has EventsDispatched entry
+        let events = log_events.lock().unwrap();
+        let dispatch_log = events.iter().find(|e| {
+            matches!(e, LoomEvent::EventsDispatched { .. })
+        });
+        assert!(
+            dispatch_log.is_some(),
+            "loom-log should contain EventsDispatched event"
+        );
+        if let LoomEvent::EventsDispatched { dispatches: d, .. } = dispatch_log.unwrap() {
+            assert_eq!(d.len(), 1);
+            assert_eq!(d[0].0, "PlanCreated");
+            assert_eq!(d[0].1, "consumer-loom");
+        }
+    }
+
+    /// No events in tie-off: successful processing produces no dispatch.
+    #[test]
+    fn no_events_no_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // No dispatch
+        let dispatched = dispatches.lock().unwrap();
+        assert!(dispatched.is_empty(), "should have no dispatches");
+
+        // No EventsDispatched in loom-log
+        let events = log_events.lock().unwrap();
+        let dispatch_log = events.iter().any(|e| {
+            matches!(e, LoomEvent::EventsDispatched { .. })
+        });
+        assert!(
+            !dispatch_log,
+            "loom-log should NOT contain EventsDispatched when no events"
+        );
+    }
+
+    /// Fan-out: one event matches consumers in two different looms.
+    #[test]
+    fn event_dispatch_fan_out_two_looms() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        // Two consumer looms, each listening for the same event
+        let consumer_loom_a = build_loom(
+            "consumer-loom-a",
+            vec![build_consumer_knot(
+                "watcher-a",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+        let consumer_loom_b = build_loom(
+            "consumer-loom-b",
+            vec![build_consumer_knot(
+                "watcher-b",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let event_content = concat!(
+            "Plan created.\n",
+            "  event: PlanCreated\n",
+            "  target-knot: plan-creator\n",
+            "  plan: PLAN-002\n",
+        );
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(
+                vec![producer_loom, consumer_loom_a, consumer_loom_b],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Two dispatches — one per consumer loom
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            2,
+            "should have dispatched to 2 consumers"
+        );
+
+        // Collect the loom IDs
+        let looms: Vec<String> = dispatched
+            .iter()
+            .map(|(_, _, loom, _)| loom.clone())
+            .collect();
+        assert!(looms.contains(&"consumer-loom-a".to_string()));
+        assert!(looms.contains(&"consumer-loom-b".to_string()));
+    }
+
+    /// Listener context is injected into the prompt when consumers exist.
+    #[test]
+    fn listener_context_injected_in_prompt() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner.clone());
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Inspect captured context for listener context
+        let contexts = runner.get_captured_contexts();
+        assert!(!contexts.is_empty(), "agent should have been called");
+        let prompt = &contexts[0].prompt;
+
+        // Prompt should contain listener context preamble
+        assert!(
+            prompt.contains("Before undertaking your task"),
+            "prompt should contain listener context preamble: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Events you may emit:"),
+            "prompt should contain event header: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("`PlanCreated`"),
+            "prompt should contain event-id: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("target-knot: plan-creator"),
+            "prompt should show target-knot in emit format: {}",
+            prompt
+        );
+        // Listener context is at the beginning, before the knot's instructions
+        assert!(
+            prompt.starts_with("Before undertaking your task"),
+            "listener context should be at the start of the prompt: {}",
+            prompt
+        );
+    }
+
+    /// When no consumers listen for a knot's events, no context is injected.
+    #[test]
+    fn no_listeners_no_context_injection() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        // Producer with no consumers
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom], runner.clone());
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let contexts = runner.get_captured_contexts();
+        let prompt = &contexts[0].prompt;
+
+        // Prompt should NOT contain listener context
+        assert!(
+            !prompt.contains("Before undertaking your task"),
+            "prompt should NOT contain listener context when no listeners: {}",
+            prompt
+        );
+        // Prompt should just be the knot's instructions
+        assert_eq!(prompt, "check it");
     }
 }

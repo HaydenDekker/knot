@@ -185,9 +185,9 @@ No breaking changes — intent-based routing is backward compatible with static 
 - [x] **Tests**: Event file creation, fan-out (two consumers in different looms), same loom different event-ids, empty payload, filename safety
 
 ### Phase 4: Context Injection — Inform target knot of listening consumers
-- [ ] Add `build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String` function
-- [ ] Before a knot runs, scan all knots' `listens-for` entries and collect those where `target-knot` matches this knot's name
-- [ ] Inject at the **beginning** of the target knot's prompt:
+- [x] Add `build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String` function
+- [x] Before a knot runs, scan all knots' `listens-for` entries and collect those where `target-knot` matches this knot's name
+- [x] Inject at the **beginning** of the target knot's prompt:
   > Before undertaking your task, note that other knots are listening for events you may emit.
   > If an event occurs during your work, include an explicit event object in your final response using the format shown.
   >
@@ -201,8 +201,9 @@ No breaking changes — intent-based routing is backward compatible with static 
   >   description: <description>
   >   scope: <scope>
   >   ```
-- [ ] One block per `event-id`; if multiple consumers listen for the same event from the same knot, they are merged (one event block, not duplicated)
-- [ ] **Tests**: Unit tests for context generation, formatting
+- [x] One block per `event-id`; if multiple consumers listen for the same event from the same knot, they are merged (one event block, not duplicated)
+- [x] **Tests**: Unit tests for context generation, formatting (8 tests)
+- [x] Add `listens_for: Vec<Intent>` to `Knot` entity (propagated from `KnotFile`)
 
 ### Phase 5: Integration — Wire into processing pipeline
 - [ ] After a knot produces a tie-off, invoke the event dispatcher

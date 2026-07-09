@@ -846,6 +846,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
+            listens_for: Vec::new(),
         };
 
         let config = profile.resolve_for_knot(&knot);
@@ -878,6 +879,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("input"),
             git_versioned: false,
+            listens_for: Vec::new(),
         };
 
         let config = profile.resolve_for_knot(&knot);

@@ -150,6 +150,7 @@ mod tests {
             },
             strand_dir: PathBuf::from("../../tie-offs/review-loom/PlanCreated"),
             git_versioned: true,
+            listens_for: Vec::new(),
         }
     }
 

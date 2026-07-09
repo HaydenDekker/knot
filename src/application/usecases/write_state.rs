@@ -397,6 +397,7 @@ mod write_state_tests {
                     },
                     strand_dir: PathBuf::from("strands"),
                     git_versioned: true,
+                    listens_for: Vec::new(),
                 },
             ],
         }

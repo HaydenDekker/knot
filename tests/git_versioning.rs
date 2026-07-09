@@ -93,6 +93,7 @@ fn build_process_strand(
         Arc::new(rig_log),
         git_port.clone(),
         Arc::new(MockStrandFileChecker::new()),
+        Arc::new(MockEventDispatcher::default()),
     );
 
     (

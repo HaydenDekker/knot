@@ -551,7 +551,8 @@ impl Default for MockStrandFileChecker {
 /// Build a knot with the given ID and default values.
 ///
 /// Defaults: `agent_profile_ref: "fast"`, `prompt_template.instructions:
-/// "check it"`, `strand_dir: "strands"`, `git_versioned: true`.
+/// "check it"`, `strand_dir: "strands"`, `git_versioned: true`,
+/// `listens_for: vec![]`.
 pub fn build_knot(id: impl Into<String>) -> Knot {
     Knot {
         id: KnotId(id.into()),
@@ -561,6 +562,7 @@ pub fn build_knot(id: impl Into<String>) -> Knot {
         },
         strand_dir: PathBuf::from("strands"),
         git_versioned: true,
+        listens_for: Vec::new(),
     }
 }
 

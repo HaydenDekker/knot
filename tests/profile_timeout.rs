@@ -78,6 +78,7 @@ fn build_process_strand(
         Arc::new(rig_log),
         Arc::new(MockGitVersioningPort::default()),
         Arc::new(MockStrandFileChecker::new()),
+        Arc::new(MockEventDispatcher::default()),
     );
 
     (
@@ -165,6 +166,7 @@ fn profile_timeout_is_passed_to_runner() {
         Arc::new(rig_log),
         Arc::new(MockGitVersioningPort::default()),
         Arc::new(MockStrandFileChecker::new()),
+        Arc::new(MockEventDispatcher::default()),
     );
 
     use_case

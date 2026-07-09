@@ -376,6 +376,9 @@ pub fn start_event_pipeline(
             Arc::new(
                 crate::adapters::outbound::ContentInspectorChecker,
             ),
+            Arc::new(
+                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+            ),
         ));
 
         // Process strand events with queue idle detection.

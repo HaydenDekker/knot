@@ -69,6 +69,7 @@ fn build_process_strand(
     let (git_port, _git_commits) = MockGitVersioningPort::new();
     let git_port = Arc::new(git_port);
     let file_checker = Arc::new(MockStrandFileChecker::new());
+    let event_dispatcher = Arc::new(MockEventDispatcher::default());
 
     let profile_repo = Arc::new(MockProfileRepository {
         profiles: Arc::new(Mutex::new(HashMap::from_iter([
@@ -87,6 +88,7 @@ fn build_process_strand(
         Arc::new(rig_log),
         git_port.clone(),
         file_checker.clone(),
+        event_dispatcher,
     );
 
     (
