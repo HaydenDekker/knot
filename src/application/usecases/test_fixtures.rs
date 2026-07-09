@@ -10,14 +10,14 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::application::ports::{
     AgentOutput, AgentProfileRepository, AgentRunner,
-    ExecutionContext, EventSource, GitVersioningPort, LoomLogPort,
-    LoomRepository, PortError, RigLogPort, TieOffSink,
+    ExecutionContext, EventDispatcherPort, EventSource, GitVersioningPort,
+    LoomLogPort, LoomRepository, PortError, RigLogPort, TieOffSink,
 };
 use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandFileChecker, StrandPath, TieOff,
     TieOffPath,
 };
-use crate::domain::events::{LoomEvent, RigLogEvent};
+use crate::domain::events::{AgentEvent, LoomEvent, RigLogEvent};
 use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
 
 // ── Tracking EventSource ───────────────────────────────────────────────────
@@ -730,5 +730,58 @@ impl AgentRunner for TrackingAgentRunner {
             timeout,
         };
         self.execute(ctx)
+    }
+}
+
+// ── Mock EventDispatcherPort ───────────────────────────────────────────
+
+/// A mock [`EventDispatcherPort`] that records all dispatch calls.
+///
+/// Returns a synthetic path so the application layer can verify the
+/// dispatch was invoked without touching the filesystem.
+pub struct MockEventDispatcher {
+    dispatches:
+        Arc<Mutex<Vec<(AgentEvent, String, String, String)>>>,
+}
+
+impl MockEventDispatcher {
+    pub fn new() -> (Self, Arc<Mutex<Vec<(AgentEvent, String, String, String)>>>) {
+        let dispatches = Arc::new(Mutex::new(vec![]));
+        (
+            Self {
+                dispatches: dispatches.clone(),
+            },
+            dispatches,
+        )
+    }
+}
+
+impl Default for MockEventDispatcher {
+    fn default() -> Self {
+        let (self_, _dispatches) = Self::new();
+        self_
+    }
+}
+
+impl EventDispatcherPort for MockEventDispatcher {
+    fn dispatch(
+        &self,
+        event: &AgentEvent,
+        consumer_knot: &Knot,
+        consumer_loom_id: &LoomId,
+        rig_dir: &Path,
+    ) -> Result<std::path::PathBuf, PortError> {
+        self.dispatches.lock().unwrap().push((
+            event.clone(),
+            consumer_knot.id.0.clone(),
+            consumer_loom_id.0.clone(),
+            rig_dir.display().to_string(),
+        ));
+        // Return a synthetic path so callers can verify dispatch happened
+        Ok(rig_dir
+            .join("tie-offs")
+            .join(&consumer_loom_id.0)
+            .join(&event.event_id)
+            .join("event-mock.md"))
     }
 }

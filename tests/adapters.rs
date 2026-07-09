@@ -365,6 +365,7 @@ mod tieoff_sink_adapter {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         assert!(sink.write(tie_off).is_ok());
@@ -391,6 +392,7 @@ mod tieoff_sink_adapter {
             event_type: Some("Created".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
+            agent_events: Vec::new(),
         })
         .unwrap();
 
@@ -403,6 +405,7 @@ mod tieoff_sink_adapter {
             event_type: Some("Modified".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
+            agent_events: Vec::new(),
         })
         .unwrap();
 
@@ -442,6 +445,7 @@ mod tieoff_sink_adapter {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         assert!(sink.write(tie_off).is_ok());

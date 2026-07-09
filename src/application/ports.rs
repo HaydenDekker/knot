@@ -66,6 +66,8 @@ pub enum PortError {
     StateWriteFailed(String),
     /// Failed to check strand file validity.
     StrandCheckFailed(String),
+    /// Failed to dispatch an agent event to a consumer.
+    EventDispatchFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -133,6 +135,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::StrandCheckFailed(msg) => {
                 write!(f, "strand check failed: {msg}")
+            }
+            PortError::EventDispatchFailed(msg) => {
+                write!(f, "event dispatch failed: {msg}")
             }
         }
     }
@@ -542,6 +547,28 @@ pub trait GitVersioningPort: Send + Sync {
 pub trait StateWriterPort: Send + Sync {
     /// Write the given `RigState` to disk atomically.
     fn write_state(&self, state: &RigState) -> Result<(), PortError>;
+}
+
+/// Port for dispatching agent events to consumer knots.
+///
+/// An event is dispatched by creating a file in the consumer's loom
+/// tie-off directory under an `{event-id}/` subdirectory.
+pub trait EventDispatcherPort: Send + Sync {
+    /// Dispatch a single agent event to a consumer knot.
+    ///
+    /// Creates an event file at:
+    /// `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
+    /// Content: YAML frontmatter with event payload + markdown body with context.
+    /// If multiple consumers listen for the same event, each loom gets its own copy.
+    ///
+    /// Returns the path of the created event file.
+    fn dispatch(
+        &self,
+        event: &crate::domain::events::AgentEvent,
+        consumer_knot: &Knot,
+        consumer_loom_id: &LoomId,
+        rig_dir: &Path,
+    ) -> Result<std::path::PathBuf, PortError>;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

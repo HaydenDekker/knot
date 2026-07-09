@@ -101,10 +101,10 @@ implementer → project/progress/016-*.md
 | **Routing flexibility** | Fixed at rig configuration time. Adding a new consumer requires changing its `strand-dir` or creating a new directory. | Dynamic at runtime. New consumers declare intent in frontmatter; no directory changes needed. |
 | **Fan-out (one producer → many consumers)** | Subdirectories provide natural event-type filtering: `strand-dir: "../../tie-offs/.../reviews"` subscribes only to reviews, not other event types. But the subdirectory must exist before the consumer can strand from it. | Native: multiple consumers declare different intents on the same event type. Knot dispatches only matching consumers. |
 | **Event payload** | Entire file content. Consumer must parse the full file to find relevant data. | Structured key-value pairs in tie-off. Consumer receives only the event payload it needs. |
-| **Deduplication** | None. Re-running a producer that writes the same file re-triggers all consumers. | Built-in: event ID = hash of `(source_knot, event_type, payload_hash)`. Dispatcher skips already-dispatched pairs. |
+| **Deduplication** | None. Re-running a producer that writes the same file re-triggers all consumers. | None — consumer knot must be idempotent for re-runs. |
 | **Producer context** | Producer has no knowledge of which knots are watching its directory. | Knot injects event instructions at the start of the target knot's prompt — each event has an ID, description of when to emit it, and the exact format to use in the tie-off. Target knot has no `publishes` declaration. |
 | **Workspace cleanliness** | Communication files live in tie-off directories — already the derived-state namespace. Visible in the rig but excluded from sharing packages. | Event files live in consumer's tie-off directory — derived-state namespace. One copy per consumer, enabling selective replay. |
-| **Idempotency burden** | On the consumer: must detect whether it already processed the message file. | Shared: dispatcher deduplicates at delivery; consumer still idempotent for re-runs. |
+| **Idempotency burden** | On the consumer: must detect whether it already processed the message file. | On the consumer: must detect whether it already processed the event file. |
 | **Operational complexity** | Simple. Standard filesystem watches, no new Knot code needed. | Requires Knot runtime changes: intent parsing, event extraction from tie-offs, dispatch logic. |
 | **Debugging** | Easy: inspect the typed subdirectory. Directory name is the event type, files are persistent artifacts. | Traceable via tie-off entries with `source:` and `original_strand:` metadata. Dispatch log in `rig/events/dispatched.jsonl`. |
 | **When to use** | Immediate need for a2a comms; small number of fixed routes; prototype or simple workflow. | Growing rig with multiple producer-consumer pairs; dynamic consumer discovery; events that need conditional dispatch. |
@@ -134,7 +134,7 @@ No breaking changes — intent-based routing is backward compatible with static 
 - No tests for parsing `listens-for` YAML list (`target-knot`, `event-id`, `event-description`) in knot files
 - No tests for detecting structured event entries in tie-off content
 - No tests for matching events by `event-id` + `target-knot` against consumer intents
-- No tests for prompt context injection (grouping by target, deduplication)
+- No tests for prompt context injection (grouping by target)
 - No tests for event file creation in consumer tie-off directory
 - No integration test for the full target → event → consumer flow
 
@@ -174,14 +174,15 @@ No breaking changes — intent-based routing is backward compatible with static 
 - [ ] **Tests**: Unit tests for various match/no-match scenarios
 
 ### Phase 3: Event Dispatch — Create event files in consumer's loom tie-off directory
-- [ ] Add `EventDispatcher` port trait (or extend existing ports)
-  - `dispatch(event: AgentEvent, consumer: &Knot) -> Result<PathBuf, PortError>`
-- [ ] Implement filesystem adapter: create event file in consumer's loom tie-off directory under `{event-id}/` subdirectory
-  - Path: `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
+- [x] Add `EventDispatcherPort` port trait in `application/ports.rs`
+  - `dispatch(event: &AgentEvent, consumer_knot: &Knot, consumer_loom_id: &LoomId, rig_dir: &Path) -> Result<PathBuf, PortError>`
+- [x] Implement `FileSystemEventDispatcher` in `adapters/outbound/event_dispatcher.rs`
+  - Creates event file at `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
   - Content: YAML frontmatter with event payload + markdown body with context
   - If multiple consumers listen for the same event, each loom gets its own copy
-- [ ] Implement deduplication: track `(target_knot, event_id, consumer_knot)` triples in `rig/events/dispatched.jsonl`
-- [ ] **Tests**: Unit tests for event file creation, deduplication, fan-out (two consumers, same event)
+  - The consumer knot's `strand-dir` is set to the `{event-id}/` subdirectory (e.g. `../../tie-offs/review-loom/PlanCreated/`), so the filesystem watch fires the consumer when a new event file appears
+- [x] Add `MockEventDispatcher` in `test_fixtures.rs` for unit tests
+- [x] **Tests**: Event file creation, fan-out (two consumers in different looms), same loom different event-ids, empty payload, filename safety
 
 ### Phase 4: Context Injection — Inform target knot of listening consumers
 - [ ] Add `build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String` function
@@ -201,7 +202,7 @@ No breaking changes — intent-based routing is backward compatible with static 
   >   scope: <scope>
   >   ```
 - [ ] One block per `event-id`; if multiple consumers listen for the same event from the same knot, they are merged (one event block, not duplicated)
-- [ ] **Tests**: Unit tests for context generation, deduplication of duplicate events, formatting
+- [ ] **Tests**: Unit tests for context generation, formatting
 
 ### Phase 5: Integration — Wire into processing pipeline
 - [ ] After a knot produces a tie-off, invoke the event dispatcher
@@ -221,11 +222,8 @@ No breaking changes — intent-based routing is backward compatible with static 
 
 ## Notes
 
-### Event ID and Deduplication Strategy
-Each dispatch is uniquely identified by `{target_knot}:{event_id}:{consumer_knot}`. The dispatcher tracks these triples in a simple on-disk file (`rig/events/dispatched.jsonl`). Before dispatching, the dispatcher checks if the triple already exists. This prevents duplicate firing when a target knot re-runs without changes.
-
 ### Event Directory Layout
-Event files are created at `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md` — scoped per loom, not per knot. The consumer's `strand-dir` watches the loom's tie-off directory, which contains both the knot's own tie-off file and all event subdirectories. The filesystem watcher fires for new event files but must exclude tie-off log files (`*-tie-off.md`) from being processed as strands.
+Event files are created at `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md` — scoped per loom, not per knot. The consumer's `strand-dir` is set to the `{event-id}/` subdirectory, so the filesystem watch fires the consumer when a new event file appears. The watcher must exclude tie-off log files (`*-tie-off.md`) from being processed as strands.
 
 This enables selective replay: touching or modifying a file in one loom's event subdirectory re-triggers only that loom's consumers, not other looms' consumers of the same event.
 
