@@ -4,6 +4,47 @@ use crate::domain::entities::{
     Knot, KnotId, LoomId, StrandPath, TieOffPath,
 };
 
+// ── Agent Events (Intent-Based Routing) ────────────────────────────────────
+
+use std::collections::HashMap;
+
+/// A consumer knot's declaration of interest in a specific event.
+///
+/// Each intent says: "I want to hear about `event_id` when `target_knot`
+/// emits it." The `event_description` tells the producer *when* to emit
+/// the event and *what data* to include.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intent {
+    /// Which knot may emit this event (the producer/target).
+    #[serde(rename = "target-knot")]
+    pub target_knot: String,
+    /// Unique event identifier (e.g. `PlanCreated`).
+    #[serde(rename = "event-id")]
+    pub event_id: String,
+    /// Human-readable description — when the event fires and what data it
+    /// should contain. Injected into the target knot's prompt as instructions.
+    #[serde(rename = "event-description")]
+    pub event_description: String,
+}
+
+/// A structured agent-to-agent event emitted in a tie-off.
+///
+/// When a target knot is instructed to emit an event (via intent-based routing
+/// context injection), it writes a structured block in its tie-off body. The
+/// `event:` key signals that the block contains event data. The `target-knot`
+/// field identifies which knot emitted it. All other keys become the payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEvent {
+    /// Unique event identifier (e.g. `PlanCreated`).
+    pub event_id: String,
+    /// Name of the knot that emitted this event.
+    pub target_knot: String,
+    /// Arbitrary key-value pairs carrying event data.
+    /// Includes fields like `plan`, `description`, `source`, etc.
+    #[serde(default)]
+    pub payload: HashMap<String, String>,
+}
+
 // ── Domain Events ──────────────────────────────────────────────────────────
 
 /// An event that describes the lifecycle of a Strand.
@@ -261,6 +302,105 @@ mod tests {
     use super::*;
     use crate::domain::entities::PromptTemplate;
     use std::path::PathBuf;
+
+    // ── Intent Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn intent_construction() {
+        let intent = Intent {
+            target_knot: "plan-creator".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a new plan is created.".to_string(),
+        };
+
+        assert_eq!(intent.target_knot, "plan-creator");
+        assert_eq!(intent.event_id, "PlanCreated");
+        assert_eq!(
+            intent.event_description,
+            "Emit when a new plan is created."
+        );
+    }
+
+    #[test]
+    fn intent_serialisation_roundtrip() {
+        let intent = Intent {
+            target_knot: "implementation-planner".to_string(),
+            event_id: "PlanCreated".to_string(),
+            event_description: "Emit when a plan is created for the first time."
+                .to_string(),
+        };
+
+        let json = serde_json::to_string(&intent).unwrap();
+        let deserialized: Intent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, intent);
+    }
+
+    // ── AgentEvent Tests ─────────────────────────────────────────
+
+    #[test]
+    fn agent_event_construction() {
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-001".to_string());
+        payload.insert(
+            "description".to_string(),
+            "Implementation plan".to_string(),
+        );
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "plan-creator".to_string(),
+            payload,
+        };
+
+        assert_eq!(event.event_id, "PlanCreated");
+        assert_eq!(event.target_knot, "plan-creator");
+        assert_eq!(event.payload.len(), 2);
+        assert_eq!(
+            event.payload.get("plan"),
+            Some(&"PLAN-001".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_event_serialisation_roundtrip() {
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-007".to_string());
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "implementation-planner".to_string(),
+            payload,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn agent_event_empty_payload_defaults() {
+        let event = AgentEvent {
+            event_id: "Something".to_string(),
+            target_knot: "knot-a".to_string(),
+            payload: HashMap::new(),
+        };
+
+        // Serialize and deserialize — empty payload should survive
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        assert!(deserialized.payload.is_empty());
+    }
+
+    #[test]
+    fn agent_event_missing_payload_in_json_defaults_to_empty() {
+        // JSON without a payload field should deserialize with empty HashMap
+        let json = r#"{"event_id":"Test","target_knot":"k1"}"#;
+        let event: AgentEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_id, "Test");
+        assert_eq!(event.target_knot, "k1");
+        assert!(event.payload.is_empty());
+    }
 
     #[test]
     fn strand_event_types() {

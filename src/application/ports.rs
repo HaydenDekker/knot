@@ -865,6 +865,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
         let result = sink.write(tie_off);
         assert!(result.is_ok());

@@ -195,6 +195,13 @@ pub struct TieOff {
     pub strand_path: Option<String>,
     /// Optional timestamp for append-mode sections.
     pub timestamp: Option<String>,
+    /// Structured agent events extracted from the tie-off body.
+    ///
+    /// Populated after parsing the tie-off content for indented key-value
+    /// blocks containing an `event:` key. Each `AgentEvent` carries the
+    /// event ID, target knot name, and arbitrary payload data.
+    #[serde(default)]
+    pub agent_events: Vec<crate::domain::events::AgentEvent>,
 }
 
 // ── RigState — File-first state snapshot ─────────────────────────────
@@ -501,6 +508,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         assert_eq!(tieoff.content, content);
@@ -509,6 +517,7 @@ mod tests {
         assert!(tieoff.event_type.is_none());
         assert!(tieoff.strand_path.is_none());
         assert!(tieoff.timestamp.is_none());
+        assert!(tieoff.agent_events.is_empty());
     }
 
     #[test]
@@ -640,6 +649,7 @@ mod tests {
             event_type: Some("created".to_string()),
             strand_path: Some("in.md".to_string()),
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
+            agent_events: Vec::new(),
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -657,6 +667,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         assert_eq!(tieoff.status, TieOffStatus::Failed);
@@ -664,6 +675,50 @@ mod tests {
         let json = serde_json::to_string(&tieoff).unwrap();
         let deserialized: TieOff = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.status, TieOffStatus::Failed);
+    }
+
+    #[test]
+    fn tieoff_with_agent_events_serialization() {
+        use crate::domain::events::AgentEvent;
+        use std::collections::HashMap;
+
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-007".to_string());
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            target_knot: "implementation-planner".to_string(),
+            payload,
+        };
+
+        let tieoff = TieOff {
+            content: "Plan created.".to_string(),
+            path: TieOffPath(PathBuf::from("out.md")),
+            status: TieOffStatus::Produced,
+            knot_name: Some("planner".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some("input.md".to_string()),
+            timestamp: Some("2026-01-01T00:00:00Z".to_string()),
+            agent_events: vec![event],
+        };
+
+        let json = serde_json::to_string(&tieoff).unwrap();
+        let deserialized: TieOff = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, tieoff);
+        assert_eq!(deserialized.agent_events.len(), 1);
+        assert_eq!(
+            deserialized.agent_events[0].event_id,
+            "PlanCreated"
+        );
+    }
+
+    #[test]
+    fn tieoff_missing_agent_events_in_json_defaults_to_empty() {
+        // JSON without agent_events field should deserialize with empty vec
+        let json = r#"{"content":"hello","path":"out.md","status":"produced"}"#;
+        let tieoff: TieOff = serde_json::from_str(json).unwrap();
+        assert_eq!(tieoff.content, "hello");
+        assert!(tieoff.agent_events.is_empty());
     }
 
     // ── RigState Tests ──────────────────────────────────────────────────

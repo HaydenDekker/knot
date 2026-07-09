@@ -240,6 +240,7 @@ impl ProcessStrand {
                     event_type: Some(event_label.clone()),
                     strand_path: Some(strand_path.0.display().to_string()),
                     timestamp: None,
+                    agent_events: Vec::new(),
                 };
                 let _ = self.tie_off_sink.append(tie_off);
                 // Append KnotFailed to loom-log
@@ -361,6 +362,7 @@ impl ProcessStrand {
                 event_type: Some(event_label.clone()),
                 strand_path: Some(strand_path.0.display().to_string()),
                 timestamp: None,
+                agent_events: Vec::new(),
             };
             let _ = self.tie_off_sink.append(tie_off);
         }

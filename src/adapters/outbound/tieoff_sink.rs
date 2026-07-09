@@ -156,6 +156,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         let result = sink.write(tie_off);
@@ -194,6 +195,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         })
         .unwrap();
 
@@ -206,6 +208,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         })
         .unwrap();
 
@@ -234,6 +237,7 @@ mod tests {
             event_type: None,
             strand_path: None,
             timestamp: None,
+            agent_events: Vec::new(),
         };
 
         let sub_dir = dir.path().join("sub/dir");
@@ -288,6 +292,7 @@ mod tests {
             event_type: Some("Created".to_string()),
             strand_path: Some("strand1.md".to_string()),
             timestamp: Some("2026-06-05T00:00:00Z".to_string()),
+            agent_events: Vec::new(),
         };
 
         assert!(
@@ -334,6 +339,7 @@ mod tests {
             event_type: Some("Created".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
+            agent_events: Vec::new(),
         };
         sink.append(tie_off_1).unwrap();
 
@@ -346,6 +352,7 @@ mod tests {
             event_type: Some("Modified".to_string()),
             strand_path: Some("strand.md".to_string()),
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
+            agent_events: Vec::new(),
         };
         sink.append(tie_off_2).unwrap();
 
@@ -416,6 +423,7 @@ mod tests {
                 event_type: Some(event_type.clone()),
                 strand_path: Some("strand.md".to_string()),
                 timestamp: Some(ts.clone()),
+                agent_events: Vec::new(),
             };
             sink.append(tie_off).unwrap();
         }
