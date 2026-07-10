@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 56 | [Strand Event URI](056-strand-event-uri/strand-event-uri-plan.md) | ⬜ Planned | 2026-07-10 |
+| 56 | [Strand Event URI](056-strand-event-uri/strand-event-uri-plan.md) | ✅ Complete | 2026-07-10 |
 | 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ✅ Complete | 2026-07-01 | (completed 2026-07-03)
 | 52 | [Flatten Tie-Off Paths](052-flat-tie-off-paths/flat-tie-off-paths-plan.md) | ✅ Complete | 2026-07-01 |
 | 51 | [Filter Final Response in Pi JSON Adapter](051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md) | ✅ Complete | 2026-07-01 |
@@ -84,9 +84,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 56. Strand Event URI
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-07-10
+**Completed:** 2026-07-10
 **Goal:** Replace `listens-for` array with `strand-dir: "event:<producer>:<EventId>"` URI scheme so each knot has exactly one input direction, eliminating fan-in and the `Intent` struct.
+
+**Result:** `StrandSource` enum (`Filesystem`/`EventUri`) replaces `listens_for: Vec<Intent>`. `strand-dir` now accepts plain paths or `event:<producer>:<EventId>` URIs. `event-description` field added for producer prompt injection. `build_listener_context()` produces improved format with markdown heading, per-event-type blocks, and `event: None` signal. Tie-off parser returns `Vec<AgentEvent>` — multiple event types per tie-off. `Intent`, `matches_intent()`, `default_listens_for()` fully removed. Unified `ensure_strand_source_watch()` replaces separate watcher functions. `From<KnotFile> for Knot` canonical factory, `KnotBuilder` test helper. 598 tests pass, clippy clean. Version bumped to 0.24.0.
 
 Full details in [056-strand-event-uri/strand-event-uri-plan.md](056-strand-event-uri/strand-event-uri-plan.md).
 

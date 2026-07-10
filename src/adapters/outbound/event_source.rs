@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::adapters::logging;
 use crate::application::ports::{EventSource, PortError};
-use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath};
+use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::domain::knot_file;
 
@@ -229,20 +229,12 @@ impl InnerState {
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
                         Ok((knot_file, _warnings)) => {
-                            // Resolve strand_source filesystem path to absolute.
-                            let resolved_source = knot_file.strand_source.clone().with_resolved_path(
-                                knot_file.strand_source.path()
-                                    .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
-                                    .unwrap_or_default(),
-                            );
-                            let knot = Knot {
-                                id: KnotId(knot_file.name.clone()),
-                                agent_profile_ref: knot_file.agent_profile_ref,
-                                prompt_template: knot_file.prompt_template,
-                                git_versioned: knot_file.git_versioned,
-                                strand_source: resolved_source,
-                                event_description: knot_file.event_description,
-                            };
+                            // Resolve strand path before consuming the file.
+                            let resolved_path = knot_file.strand_source.path()
+                                .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
+                                .unwrap_or_default();
+                            let knot = crate::domain::entities::Knot::from_file(knot_file)
+                                .with_strand_dir(resolved_path);
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
                                     loom_id,
@@ -297,20 +289,12 @@ impl InnerState {
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
                         Ok((knot_file, _warnings)) => {
-                            // Resolve strand_source filesystem path to absolute.
-                            let resolved_source = knot_file.strand_source.clone().with_resolved_path(
-                                knot_file.strand_source.path()
-                                    .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
-                                    .unwrap_or_default(),
-                            );
-                            let knot = Knot {
-                                id: KnotId(knot_file.name.clone()),
-                                agent_profile_ref: knot_file.agent_profile_ref,
-                                prompt_template: knot_file.prompt_template,
-                                git_versioned: knot_file.git_versioned,
-                                strand_source: resolved_source,
-                                event_description: knot_file.event_description,
-                            };
+                            // Resolve strand path before consuming the file.
+                            let resolved_path = knot_file.strand_source.path()
+                                .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
+                                .unwrap_or_default();
+                            let knot = crate::domain::entities::Knot::from_file(knot_file)
+                                .with_strand_dir(resolved_path);
                             if matches!(event.kind, EventKind::Create(_)) {
                                 Some(ConfigEvent::KnotAdded {
                                     loom_id: loom_id.clone(),

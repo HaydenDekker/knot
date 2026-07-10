@@ -151,23 +151,16 @@ impl ManageKnot {
 #[cfg(test)]
 mod manage_knot_tests {
     use super::*;
-    use crate::domain::value_objects::{PromptTemplate, StrandSource};
+    use crate::domain::value_objects::StrandSource;
     use std::path::PathBuf;
 
-    use super::super::test_fixtures::build_loom;
+    use super::super::test_fixtures::{build_loom, KnotBuilder};
 
     /// Build a knot with the given ID (uses "default" profile).
     fn build_knot(id: impl Into<String>) -> Knot {
-        Knot {
-            id: KnotId(id.into()),
-            agent_profile_ref: "default".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "check it".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        }
+        KnotBuilder::new(id)
+            .with_profile("default")
+            .build()
     }
 
     /// `ManageKnot` with `KnotAction::Create` adds a new knot to the

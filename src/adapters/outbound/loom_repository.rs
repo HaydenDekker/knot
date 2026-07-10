@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::ports::{LoomRepository, PortError};
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
-use crate::domain::knot_file::{self as knot_file_parser, KnotFile};
+use crate::domain::knot_file as knot_file_parser;
 
 /// Filesystem-backed implementation of `LoomRepository`.
 ///
@@ -125,16 +125,12 @@ impl LoomRepository for FileSystemLoomRepository {
             // (parent of the rig directory).
             // For Filesystem strand sources, resolve the path to absolute.
             // For EventUri sources, no filesystem path to resolve.
-            for knot in &mut knots {
-                knot.strand_source = knot.strand_source.clone().with_resolved_path(
-                    if let Some(path) = knot.strand_source.path() {
-                        Self::resolve_path(project_root, &path.to_path_buf())
-                    } else {
-                        // EventUri — no path to resolve
-                        std::path::PathBuf::new()
-                    },
-                );
-            }
+            knots = knots.into_iter().map(|knot| {
+                let resolved = knot.strand_source.path()
+                    .map(|p| Self::resolve_path(project_root, &p.to_path_buf()))
+                    .unwrap_or_default();
+                knot.with_strand_dir(resolved)
+            }).collect();
 
             let loom = Loom {
                 id: loom_id,
@@ -220,7 +216,7 @@ impl FileSystemLoomRepository {
             match parsed {
                 Ok((knot_file, file_warnings)) => {
                     warnings.extend(file_warnings);
-                    let knot = Self::knot_from_file(knot_file);
+                    let knot = crate::domain::entities::Knot::from_file(knot_file);
                     knots.push(knot);
                 }
                 Err(e) => {
@@ -234,22 +230,6 @@ impl FileSystemLoomRepository {
         }
 
         Ok((knots, warnings))
-    }
-
-    /// Convert a parsed `KnotFile` into a domain `Knot`.
-    ///
-    /// The `strand_source` field carries a raw path or event URI
-    /// from the frontmatter. Resolution of Filesystem paths to
-    /// absolute is performed by the caller in `scan()`.
-    fn knot_from_file(file: KnotFile) -> Knot {
-        Knot {
-            id: KnotId(file.name.clone()),
-            agent_profile_ref: file.agent_profile_ref,
-            prompt_template: file.prompt_template,
-            git_versioned: file.git_versioned,
-            strand_source: file.strand_source,
-            event_description: file.event_description,
-        }
     }
 
     /// Resolve a path value relative to a base directory.

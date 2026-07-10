@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::domain::entities::{Loom, LoomId};
-use crate::domain::value_objects::StrandSource;
 
 // ── LoomStore ──────────────────────────────────────────────────────────────
 
@@ -73,8 +72,8 @@ impl LoomStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::value_objects::{AgentProfile, PromptTemplate};
-    use std::path::PathBuf;
+    use crate::application::usecases::test_fixtures::KnotBuilder;
+    use crate::domain::value_objects::AgentProfile;
 
     /// Build a loom for testing with the given ID.
     fn build_loom(id: LoomId) -> Loom {
@@ -87,17 +86,10 @@ mod tests {
         Loom {
             id,
             knots: vec![
-                crate::domain::entities::Knot {
-                    id: crate::domain::entities::KnotId("k1".to_string()),
-                    agent_profile_ref: "default".to_string(),
-                    prompt_template: PromptTemplate::new(
-                        "check it".to_string(),
-                    )
-                    .unwrap(),
-                    git_versioned: true,
-                    strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-                    event_description: None,
-                },
+                KnotBuilder::new("k1")
+                    .with_profile("default")
+                    .with_instructions("check it")
+                    .build(),
             ],
         }
     }

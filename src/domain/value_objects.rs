@@ -999,8 +999,7 @@ mod tests {
 
     #[test]
     fn agent_profile_resolve_for_knot_maps_fields() {
-        use crate::domain::entities::{Knot, KnotId};
-        use std::path::PathBuf;
+        use crate::application::usecases::test_fixtures::KnotBuilder;
 
         let profile = AgentProfile::with_tools(
             "fast".to_string(),
@@ -1011,16 +1010,9 @@ mod tests {
         )
         .unwrap();
 
-        let knot = Knot {
-            id: KnotId("reviewer".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Review the document.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot = KnotBuilder::new("reviewer")
+            .with_instructions("Review the document.")
+            .build();
 
         let config = profile.resolve_for_knot(&knot);
 
@@ -1033,8 +1025,7 @@ mod tests {
 
     #[test]
     fn agent_profile_resolve_for_knot_no_tools() {
-        use crate::domain::entities::{Knot, KnotId};
-        use std::path::PathBuf;
+        use crate::application::usecases::test_fixtures::KnotBuilder;
 
         let profile = AgentProfile::new(
             "minimal".to_string(),
@@ -1044,16 +1035,11 @@ mod tests {
         )
         .unwrap();
 
-        let knot = Knot {
-            id: KnotId("k1".to_string()),
-            agent_profile_ref: "minimal".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Check the code.".to_string(),
-            },
-            git_versioned: false,
-            strand_source: StrandSource::Filesystem(PathBuf::from("input")),
-            event_description: None,
-        };
+        let knot = KnotBuilder::new("k1")
+            .with_profile("minimal")
+            .with_instructions("Check the code.")
+            .with_git_versioned(false)
+            .build();
 
         let config = profile.resolve_for_knot(&knot);
         assert_eq!(config.provider, "anthropic");

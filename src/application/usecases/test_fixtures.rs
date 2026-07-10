@@ -603,6 +603,100 @@ pub fn default_profile() -> AgentProfile {
     .unwrap()
 }
 
+// ── Knot Builder ───────────────────────────────────────────────────────────
+
+/// Builder for constructing [`Knot`] instances in tests.
+///
+/// Provides default values for all fields except `id` (which is
+/// required). Use the fluent setter methods to override any default.
+///
+/// # Example
+///
+/// ```ignore
+/// let knot = KnotBuilder::new("my-knot")
+///     .with_profile("detailed")
+///     .with_strand_source(StrandSource::EventUri {
+///         producer_knot: "plan-creator".to_string(),
+///         event_id: "PlanCreated".to_string(),
+///     })
+///     .with_event_description(Some("When a plan is created".to_string()))
+///     .build();
+/// ```
+pub struct KnotBuilder {
+    id: KnotId,
+    agent_profile_ref: String,
+    prompt_template: PromptTemplate,
+    git_versioned: bool,
+    strand_source: StrandSource,
+    event_description: Option<String>,
+}
+
+impl KnotBuilder {
+    /// Create a new builder with the given knot ID.
+    ///
+    /// All other fields are set to their default values:
+    /// `agent_profile_ref: "fast"`, `prompt_template.instructions: "check it"`,
+    /// `strand_source: Filesystem("strands")`, `git_versioned: true`,
+    /// `event_description: None`.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: KnotId(id.into()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "check it".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
+        }
+    }
+
+    /// Set the agent profile reference.
+    pub fn with_profile(mut self, profile: &str) -> Self {
+        self.agent_profile_ref = profile.to_string();
+        self
+    }
+
+    /// Set the prompt template instructions.
+    pub fn with_instructions(mut self, instructions: &str) -> Self {
+        self.prompt_template.instructions = instructions.to_string();
+        self
+    }
+
+    /// Set whether the knot is git-versioned.
+    pub fn with_git_versioned(mut self, git_versioned: bool) -> Self {
+        self.git_versioned = git_versioned;
+        self
+    }
+
+    /// Set the strand source.
+    pub fn with_strand_source(mut self, strand_source: StrandSource) -> Self {
+        self.strand_source = strand_source;
+        self
+    }
+
+    /// Set the event description.
+    pub fn with_event_description(
+        mut self,
+        description: Option<String>,
+    ) -> Self {
+        self.event_description = description;
+        self
+    }
+
+    /// Build the [`Knot`].
+    pub fn build(self) -> Knot {
+        Knot {
+            id: self.id,
+            agent_profile_ref: self.agent_profile_ref,
+            prompt_template: self.prompt_template,
+            git_versioned: self.git_versioned,
+            strand_source: self.strand_source,
+            event_description: self.event_description,
+        }
+    }
+}
+
 // ── Tracking TieOffSink ───────────────────────────────────────────────────
 
 /// A mock [`TieOffSink`] that tracks both append calls and content by path.
@@ -790,5 +884,83 @@ impl EventDispatcherPort for MockEventDispatcher {
             .join(&consumer_loom_id.0)
             .join(&event.event_id)
             .join("event-mock.md"))
+    }
+}
+
+// ── KnotBuilder Tests (Phase 9) ───────────────────────────────────────
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+    use crate::domain::entities::KnotId;
+    use crate::domain::value_objects::StrandSource;
+
+    #[test]
+    fn knotbuilder_defaults_are_correct() {
+        let knot = KnotBuilder::new("k1").build();
+
+        assert_eq!(knot.id, KnotId("k1".to_string()));
+        assert_eq!(knot.agent_profile_ref, "fast");
+        assert_eq!(knot.prompt_template.instructions, "check it");
+        assert!(knot.git_versioned);
+        assert!(matches!(
+            knot.strand_source,
+            StrandSource::Filesystem(ref p) if p == "strands"
+        ));
+        assert!(knot.event_description.is_none());
+    }
+
+    #[test]
+    fn knotbuilder_fluent_setters() {
+        let knot = KnotBuilder::new("k1")
+            .with_profile("detailed")
+            .with_instructions("Do thorough review.")
+            .with_git_versioned(false)
+            .with_strand_source(StrandSource::EventUri {
+                producer_knot: "plan-creator".to_string(),
+                event_id: "PlanCreated".to_string(),
+            })
+            .with_event_description(Some("When a plan is created".to_string()))
+            .build();
+
+        assert_eq!(knot.id, KnotId("k1".to_string()));
+        assert_eq!(knot.agent_profile_ref, "detailed");
+        assert_eq!(knot.prompt_template.instructions, "Do thorough review.");
+        assert!(!knot.git_versioned);
+        match &knot.strand_source {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            _ => panic!("expected EventUri"),
+        }
+        assert_eq!(
+            knot.event_description,
+            Some("When a plan is created".to_string())
+        );
+    }
+
+    #[test]
+    fn knotbuilder_roundtrips_all_fields() {
+        let original = KnotBuilder::new("k1")
+            .with_profile("fast")
+            .with_instructions("check it")
+            .with_git_versioned(true)
+            .with_strand_source(StrandSource::Filesystem(PathBuf::from("custom-strands")))
+            .with_event_description(Some("A description".to_string()))
+            .build();
+
+        let rebuilt = KnotBuilder::new(original.id.0.clone())
+            .with_profile(&original.agent_profile_ref)
+            .with_instructions(&original.prompt_template.instructions)
+            .with_git_versioned(original.git_versioned)
+            .with_strand_source(original.strand_source.clone())
+            .with_event_description(original.event_description.clone())
+            .build();
+
+        assert_eq!(rebuilt, original);
     }
 }

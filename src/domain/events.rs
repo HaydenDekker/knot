@@ -399,22 +399,17 @@ pub enum ConfigEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entities::PromptTemplate;
+    use crate::domain::value_objects::StrandSource;
     use std::path::PathBuf;
+
+    use crate::application::usecases::test_fixtures::KnotBuilder;
 
     // ── build_listener_context Tests (Phase 2) ────────────────────────
 
     fn make_test_knot(id: &str) -> Knot {
-        Knot {
-            id: KnotId(id.to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "test".to_string(),
-            },
-            git_versioned: true,
-            strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        }
+        KnotBuilder::new(id)
+            .with_instructions("test")
+            .build()
     }
 
     fn make_event_knot(
@@ -423,19 +418,14 @@ mod tests {
         event_id: &str,
         event_description: Option<String>,
     ) -> Knot {
-        Knot {
-            id: KnotId(id.to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "test".to_string(),
-            },
-            git_versioned: true,
-            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+        KnotBuilder::new(id)
+            .with_instructions("test")
+            .with_strand_source(StrandSource::EventUri {
                 producer_knot: producer_knot.to_string(),
                 event_id: event_id.to_string(),
-            },
-            event_description,
-        }
+            })
+            .with_event_description(event_description)
+            .build()
     }
 
     /// No consumers listening for events — returns empty string.
@@ -1167,16 +1157,9 @@ mod tests {
     }
 
     fn make_knot(id: &str) -> Knot {
-        Knot {
-            id: KnotId(id.to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Test instructions.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        }
+        KnotBuilder::new(id)
+            .with_instructions("Test instructions.")
+            .build()
     }
 
     /// `ConfigEvent::LoomAdded` carries both `loom_id` and `loom_dir`.

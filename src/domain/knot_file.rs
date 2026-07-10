@@ -1135,4 +1135,77 @@ React to plan creation.
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("listens-for"));
     }
+
+    // ── Phase 9: From<KnotFile> tests ─────────────────────────────────
+
+    #[test]
+    fn knot_from_file_produces_identical_knot_to_manual_mapping() {
+        use crate::domain::entities::{Knot, KnotId, PromptTemplate};
+        use std::path::PathBuf;
+
+        let content = "---
+name: my-knot
+agent-profile-ref: detailed
+strand-dir: \"project/prds\"
+git-versioned: false
+event-description: When a PRD is updated
+---
+
+Review the PRD.
+";
+        let (file, _warnings) = parse(content).unwrap();
+
+        // Build Knot via From<KnotFile>.
+        let via_from = Knot::from_file(file.clone());
+
+        // Build Knot via manual field mapping (the old way).
+        let manual = Knot {
+            id: KnotId(file.name.clone()),
+            agent_profile_ref: file.agent_profile_ref.clone(),
+            prompt_template: file.prompt_template.clone(),
+            git_versioned: file.git_versioned,
+            strand_source: file.strand_source.clone(),
+            event_description: file.event_description.clone(),
+        };
+
+        // They should be identical.
+        assert_eq!(
+            via_from, manual,
+            "From<KnotFile> should produce identical Knot to manual mapping"
+        );
+    }
+
+    #[test]
+    fn knot_from_file_with_event_uri() {
+        use crate::domain::entities::{Knot, KnotId};
+
+        let content = "---
+name: validator
+agent-profile-ref: fast
+strand-dir: \"event:plan-creator:PlanCreated\"
+event-description: When a plan is created
+---
+
+Validate the plan.
+";
+        let (file, _warnings) = parse(content).unwrap();
+        let knot = Knot::from_file(file);
+
+        assert_eq!(knot.id, KnotId("validator".to_string()));
+        assert_eq!(knot.agent_profile_ref, "fast");
+        assert_eq!(
+            knot.event_description,
+            Some("When a plan is created".to_string())
+        );
+        match &knot.strand_source {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            _ => panic!("expected EventUri"),
+        }
+    }
 }

@@ -143,20 +143,16 @@ mod tests {
     }
 
     fn build_consumer_knot() -> Knot {
-        use crate::domain::entities::{KnotId, PromptTemplate};
+        use crate::application::usecases::test_fixtures::KnotBuilder;
         use crate::domain::value_objects::StrandSource;
         use std::path::PathBuf;
 
-        Knot {
-            id: KnotId("consumer".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "React to events.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("../../tie-offs/review-loom/PlanCreated")),
-            event_description: None,
-        }
+        KnotBuilder::new("consumer")
+            .with_instructions("React to events.")
+            .with_strand_source(StrandSource::Filesystem(
+                PathBuf::from("../../tie-offs/review-loom/PlanCreated"),
+            ))
+            .build()
     }
 
     #[test]

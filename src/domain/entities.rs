@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::domain::value_objects::StrandSource;
 
 // Re-export value objects for convenient access through the entities module
+pub use crate::domain::knot_file::KnotFile;
 pub use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
 pub use crate::domain::value_objects::AgentProfile;
 
@@ -430,6 +431,46 @@ impl Knot {
     }
 }
 
+impl Knot {
+    /// Create a [`Knot`] from a parsed [`KnotFile`].
+    ///
+    /// This is the canonical mapping from the file format to the
+    /// domain entity. All production code that constructs a `Knot`
+    /// from a parsed file should use this instead of manual field
+    /// copying.
+    pub fn from_file(file: KnotFile) -> Self {
+        Knot {
+            id: KnotId(file.name),
+            agent_profile_ref: file.agent_profile_ref,
+            prompt_template: file.prompt_template,
+            git_versioned: file.git_versioned,
+            strand_source: file.strand_source,
+            event_description: file.event_description,
+        }
+    }
+
+    /// Return a new `Knot` with the strand source path resolved.
+    ///
+    /// For `StrandSource::Filesystem`, replaces the path with `resolved_path`.
+    /// For `StrandSource::EventUri`, returns a clone unchanged.
+    ///
+    /// Used by `FileSystemLoomRepository::scan()` to convert relative
+    /// `strand-dir` paths to absolute after parsing.
+    pub fn with_strand_dir(mut self, resolved_path: PathBuf) -> Self {
+        self.strand_source = self.strand_source.with_resolved_path(resolved_path);
+        self
+    }
+
+    /// Return a new `Knot` with a custom `strand_source`.
+    ///
+    /// Used by builders and tests to override the default strand source.
+    #[allow(dead_code)]
+    pub fn with_strand_source(mut self, strand_source: StrandSource) -> Self {
+        self.strand_source = strand_source;
+        self
+    }
+}
+
 impl StrandPath {
     /// Determine whether this strand file should be processed.
     ///
@@ -475,6 +516,7 @@ impl StrandPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::usecases::test_fixtures::KnotBuilder;
 
     #[test]
     fn knot_construction() {
@@ -483,14 +525,9 @@ mod tests {
             instructions: "Review the goals section.".to_string(),
         };
 
-        let knot = Knot {
-            id: id.clone(),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: prompt_template.clone(),
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot = KnotBuilder::new(&id.0)
+            .with_instructions("Review the goals section.")
+            .build();
 
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_profile_ref, "fast");
@@ -501,16 +538,13 @@ mod tests {
 
     #[test]
     fn knot_construction_with_strand_dir() {
-        let knot = Knot {
-            id: KnotId("custom-dirs".to_string()),
-            agent_profile_ref: "detailed".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Check it.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("../custom-source")),
-            event_description: None,
-        };
+        let knot = KnotBuilder::new("custom-dirs")
+            .with_profile("detailed")
+            .with_instructions("Check it.")
+            .with_strand_source(StrandSource::Filesystem(
+                PathBuf::from("../custom-source"),
+            ))
+            .build();
 
         assert_eq!(
             knot.strand_source,
@@ -521,16 +555,12 @@ mod tests {
     #[test]
     fn loom_construction() {
         let id = LoomId("prds-loom".to_string());
-        let knots = vec![Knot {
-            id: KnotId("review".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Check it.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("project/prds")),
-            event_description: None,
-        }];
+        let knots = vec![KnotBuilder::new("review")
+            .with_instructions("Check it.")
+            .with_strand_source(StrandSource::Filesystem(
+                PathBuf::from("project/prds"),
+            ))
+            .build()];
 
         let loom = Loom {
             id: id.clone(),
@@ -609,16 +639,9 @@ mod tests {
 
     #[test]
     fn knot_serialization() {
-        let knot = Knot {
-            id: KnotId("test".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "do it".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot = KnotBuilder::new("test")
+            .with_instructions("do it")
+            .build();
 
         let json = serde_json::to_string(&knot).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
@@ -628,48 +651,28 @@ mod tests {
     #[test]
     fn knot_serialization_roundtrip_with_git_versioned() {
         // git_versioned: true
-        let knot_true = Knot {
-            id: KnotId("git-on".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "do it".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot_true = KnotBuilder::new("git-on")
+            .with_instructions("do it")
+            .build();
         let json = serde_json::to_string(&knot_true).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, knot_true);
         assert!(deserialized.git_versioned);
 
         // git_versioned: false
-        let knot_false = Knot {
-            id: KnotId("git-off".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "do it".to_string(),
-            },
-            git_versioned: false,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot_false = KnotBuilder::new("git-off")
+            .with_instructions("do it")
+            .with_git_versioned(false)
+            .build();
         let json = serde_json::to_string(&knot_false).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, knot_false);
         assert!(!deserialized.git_versioned);
 
         // Missing field in JSON defaults to true
-        let knot_no_field = Knot {
-            id: KnotId("git-default".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "do it".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
-            event_description: None,
-        };
+        let knot_no_field = KnotBuilder::new("git-default")
+            .with_instructions("do it")
+            .build();
         // Build JSON without the git_versioned field
         let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_source":"strands"}"#;
         let deserialized: Knot = serde_json::from_str(json_minimal).unwrap();
@@ -1314,16 +1317,9 @@ mod tests {
     use crate::domain::tieoff_parser::TieOffSection;
 
     fn make_knot(instructions: &str) -> Knot {
-        Knot {
-            id: KnotId("test-knot".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: instructions.to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(std::path::PathBuf::from("strands")),
-            event_description: None,
-        }
+        KnotBuilder::new("test-knot")
+            .with_instructions(instructions)
+            .build()
     }
 
     #[test]
@@ -1520,5 +1516,61 @@ mod tests {
         assert!(!outcome.should_write_tie_off());
         assert!(outcome.is_timeout());
         assert!(outcome.error_message().is_some());
+    }
+
+    // ── Phase 9: Knot::with_strand_dir() Tests ──────────────────────
+
+    #[test]
+    fn with_strand_dir_resolves_filesystem_path() {
+        let knot = Knot {
+            id: KnotId("test-knot".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "check it".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
+        };
+
+        let resolved = knot.with_strand_dir(PathBuf::from("/absolute/strands"));
+
+        match &resolved.strand_source {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(path, &PathBuf::from("/absolute/strands"));
+            }
+            _ => panic!("expected Filesystem"),
+        }
+        // Original knot is unchanged (knot was moved)
+    }
+
+    #[test]
+    fn with_strand_dir_unchanged_for_event_uri() {
+        let knot = Knot {
+            id: KnotId("event-knot".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "check it".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "PlanCreated".to_string(),
+            },
+            event_description: Some("When a plan is created".to_string()),
+        };
+
+        let resolved = knot.with_strand_dir(PathBuf::from("/ignored"));
+
+        match &resolved.strand_source {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "producer");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            _ => panic!("expected EventUri, got {:?}", resolved.strand_source),
+        }
     }
 }

@@ -105,6 +105,10 @@ event: None
 - No tests for unified watcher (event directory creation + watch in one function)
 - No test verifying `listens-for` becomes an unknown property warning after removal
 
+## Implementation Status: ✅ Complete (2026-07-10)
+
+**Result:** Phase 0: `StrandSource` enum (`Filesystem`/`EventUri`) replaces `listens_for: Vec<Intent>`. Phase 1: `strand-dir` parsed as plain path or `event:<producer>:<EventId>` URI; `strand_dir: PathBuf` removed from `KnotFile`/`Knot`; `event-description` added as optional field. Phase 2: `build_listener_context()` scans `strand_source` for event consumers, produces improved format with markdown heading, event-per-type blocks, `event: None` signal, and `description` field. Phase 3: Tie-off parser returns `Vec<AgentEvent>` instead of `Option<AgentEvent>` — multiple event types per tie-off; `matches_intent`/`Intent` removed; dispatch iterates event vec independently. Phase 4: Unified `ensure_strand_source_watch()` replaces separate `ensure_strand_dir_and_watch` + `ensure_event_watches`. Phase 5: `Intent` removed from `FileSystemLoomRepository`, `ConfigEventHandler`, and event source mapping. Phase 6: `AgentEvent.target_knot` derived from producing knot context. Phase 7: Skills, glossary, and plans updated. Phase 8: `Intent` struct, `matches_intent()`, `default_listens_for()` fully removed. Phase 9: `From<KnotFile> for Knot` canonical factory, `KnotBuilder` test helper. 598 tests pass, clippy clean.
+
 ## Phases
 
 ### Phase 0: Domain — StrandSource enum, Intent removal from Knot/KnotFile

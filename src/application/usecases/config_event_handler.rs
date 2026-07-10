@@ -461,7 +461,8 @@ mod config_handler_tests {
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
         build_knot, build_knot_with_strand_source, build_loom,
-        MockLoomLogPort, MockLoomRepository, TrackingEventSource,
+        KnotBuilder, MockLoomLogPort, MockLoomRepository,
+        TrackingEventSource,
     };
 
     // ── Tests ──────────────────────────────────────────────────────────
@@ -1491,7 +1492,7 @@ mod phase2_tests {
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
         build_knot, build_knot_with_strand_source, build_loom,
-        MockLoomLogPort, TrackingEventSource,
+        KnotBuilder, MockLoomLogPort, TrackingEventSource,
     };
 
     // ── Mock LoomRepository for ConfigEventHandler tests ───────────────
@@ -1712,19 +1713,13 @@ mod phase2_tests {
         );
 
         // Build an EventUri knot (the same way map_loom_event would).
-        let event_knot = Knot {
-            id: KnotId("plan-validator".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Validate the plan.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::EventUri {
+        let event_knot = KnotBuilder::new("plan-validator")
+            .with_strand_source(StrandSource::EventUri {
                 producer_knot: "plan-creator".to_string(),
                 event_id: "PlanCreated".to_string(),
-            },
-            event_description: Some("When a plan is created".to_string()),
-        };
+            })
+            .with_event_description(Some("When a plan is created".to_string()))
+            .build();
 
         let result = handler.execute(ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
@@ -1833,16 +1828,9 @@ mod phase2_tests {
         );
 
         // Build a Filesystem knot (the same way map_loom_event would).
-        let fs_knot = Knot {
-            id: KnotId("reviewer".to_string()),
-            agent_profile_ref: "fast".to_string(),
-            prompt_template: PromptTemplate {
-                instructions: "Review the document.".to_string(),
-            },
-            git_versioned: true,
-            strand_source: StrandSource::Filesystem(strand_dir.clone()),
-            event_description: None,
-        };
+        let fs_knot = KnotBuilder::new("reviewer")
+            .with_strand_source(StrandSource::Filesystem(strand_dir.clone()))
+            .build();
 
         let result = handler.execute(ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
