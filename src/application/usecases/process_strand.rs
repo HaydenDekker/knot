@@ -14,7 +14,7 @@ use crate::domain::entities::{
     EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
     StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
-use crate::domain::events::{build_listener_context, matches_intent, LoomEvent, StrandEvent};
+use crate::domain::events::{build_listener_context, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{AgentConfig, RigAgentConfig, StrandSource};
 
@@ -3510,10 +3510,10 @@ mod event_dispatch_tests {
         assert!(!contexts.is_empty(), "agent should have been called");
         let prompt = &contexts[0].prompt;
 
-        // Prompt should contain listener context preamble
+        // Prompt should contain listener context heading
         assert!(
-            prompt.contains("Before undertaking your task"),
-            "prompt should contain listener context preamble: {}",
+            prompt.contains("## Agent Events"),
+            "prompt should contain Agent Events heading: {}",
             prompt
         );
         assert!(
@@ -3526,9 +3526,19 @@ mod event_dispatch_tests {
             "prompt should contain event-id: {}",
             prompt
         );
+        assert!(
+            prompt.contains("Emit when a plan is created."),
+            "prompt should contain event description: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("event: None"),
+            "prompt should instruct to emit event: None: {}",
+            prompt
+        );
         // Listener context is at the beginning, before the knot's instructions
         assert!(
-            prompt.starts_with("Before undertaking your task"),
+            prompt.starts_with("## Agent Events"),
             "listener context should be at the start of the prompt: {}",
             prompt
         );

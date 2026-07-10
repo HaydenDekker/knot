@@ -77,10 +77,14 @@ pub fn matches_intent(event: &AgentEvent, intent: &Intent) -> bool {
 /// Build the listener context block to inject at the start of a target
 /// knot's prompt.
 ///
-/// Scans all knots' `listens-for` declarations and collects those where
-/// `target-knot` matches `knot.id.0`. Groups by `event-id` — if multiple
-/// consumers listen for the same event from the same knot, they are merged
-/// into one event block (not duplicated).
+/// Scans all knots' `strand_source` entries for `EventUri` subscriptions
+/// where the current knot is the producer. Groups by `event-id` — if
+/// multiple consumers listen for the same event from the same knot,
+/// they are merged into one event block (not duplicated).
+///
+/// Uses the `event_description` from the first consumer knot declaring
+/// each event. When `event_description` is absent, a generic message
+/// is injected.
 ///
 /// Returns an empty string when no consumers are listening (no injection
 /// needed).
@@ -88,87 +92,76 @@ pub fn matches_intent(event: &AgentEvent, intent: &Intent) -> bool {
 /// The returned markdown is designed to be prepended to the knot's
 /// instructions before execution.
 ///
-/// ## Example output
-///
-/// ```markdown
-/// Before undertaking your task, note that other knots are listening
-/// for events you may emit. If an event occurs during your work,
-/// include an explicit event object in your tie-off using the format
-/// shown.
-///
-/// Events you may emit:
-/// - `PlanCreated` — Emitted when a new plan is created for the first time.
-///   Emit in your tie-off:
-///   ```
-///   event: PlanCreated
-///   target-knot: plan-creator
-///   plan: <plan-id>
-///   description: <description>
-///   scope: <scope>
-///   ```
-/// ```
-///
 pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
     use crate::domain::value_objects::StrandSource;
 
     // Collect all event subscriptions where this knot is the producer.
-    let mut matching_sources: Vec<&StrandSource> = Vec::new();
+    let mut matching_knots: Vec<&Knot> = Vec::new();
     for other in all_knots {
         if let StrandSource::EventUri {
             producer_knot,
-            event_id: _,
+            ..
         } = &other.strand_source
         {
             if producer_knot == &knot.id.0 {
-                matching_sources.push(&other.strand_source);
+                matching_knots.push(other);
             }
         }
     }
 
     // No listeners — no injection needed.
-    if matching_sources.is_empty() {
+    if matching_knots.is_empty() {
         return String::new();
     }
 
-    // Group by event-id, preserving insertion order (first seen wins).
-    let mut seen_ids = std::collections::HashSet::new();
-    let mut unique_sources: Vec<&StrandSource> = Vec::new();
-    for source in matching_sources {
+    // Group by event-id, preserving insertion order (first seen wins for
+    // the description). Only keep the first consumer knot for each event.
+    let mut seen_ids: std::collections::HashMap<String, &Knot> =
+        std::collections::HashMap::new();
+    for consumer in &matching_knots {
         if let StrandSource::EventUri {
             producer_knot: _,
             event_id,
-        } = source
+        } = &consumer.strand_source
         {
-            if seen_ids.insert(event_id.clone()) {
-                unique_sources.push(source);
+            if !seen_ids.contains_key(event_id) {
+                seen_ids.insert(event_id.clone(), consumer);
             }
         }
     }
 
     let mut output = String::from(
-        "Before undertaking your task, note that other knots are \
-         listening for events you may emit. If an event occurs \
-         during your work, include an explicit event object in \
-         your tie-off using the format shown.\n\n",
+        "## Agent Events\n\n\
+         Other knots are listening for events you may emit. If an event occurs\n\
+         during your work, include an explicit event block in your tie-off using\n\
+         the format shown.\n\n\
+         Events you may emit:\n",
     );
-    output.push_str("Events you may emit:\n");
 
-    for source in &unique_sources {
-        if let StrandSource::EventUri {
-            producer_knot: _,
-            event_id,
-        } = source
-        {
-            output.push_str(&format!(
-                "- `{}`\n",
-                event_id
-            ));
-            output.push_str("  Emit in your tie-off:\n");
-            output.push_str("  ```\n");
-            output.push_str(&format!("  event: {}\n", event_id));
-            output.push_str("  ```\n");
-        }
+    for (event_id, consumer) in &seen_ids {
+        let description = if let Some(desc) = &consumer.event_description {
+            desc.as_str()
+        } else {
+            "If this event occurs, emit a structured event block in your tie-off."
+        };
+
+        output.push_str(&format!(
+            "- `{}` — {}\n",
+            event_id, description
+        ));
     }
+
+    output.push_str("\nIf an event occurred, emit in your tie-off:\n");
+    output.push_str("```\n");
+    output.push_str("event: <EventId>\n");
+    output.push_str("description: <short summary of what happened>\n");
+    output.push_str("<additional fields as relevant>\n");
+    output.push_str("```\n");
+
+    output.push_str("\nIf no events occurred, emit:\n");
+    output.push_str("```\n");
+    output.push_str("event: None\n");
+    output.push_str("```\n");
 
     output
 }
@@ -445,11 +438,7 @@ mod tests {
     use crate::domain::entities::PromptTemplate;
     use std::path::PathBuf;
 
-    // ── Intent / matches_intent / build_listener_context Tests ─
-    // All removed in Phase 0 — Intent, matches_intent, and the
-    // listens_for-based build_listener_context are refactored in
-    // Phases 3 (context injection) and 8 (cleanup).
-    // New tests will be added in those phases.
+    // ── build_listener_context Tests (Phase 2) ────────────────────────
 
     fn make_test_knot(id: &str) -> Knot {
         Knot {
@@ -462,6 +451,274 @@ mod tests {
             strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
         }
+    }
+
+    fn make_event_knot(
+        id: &str,
+        producer_knot: &str,
+        event_id: &str,
+        event_description: Option<String>,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "test".to_string(),
+            },
+            git_versioned: true,
+            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot: producer_knot.to_string(),
+                event_id: event_id.to_string(),
+            },
+            event_description,
+        }
+    }
+
+    /// No consumers listening for events — returns empty string.
+    #[test]
+    fn build_listener_context_no_consumers_returns_empty() {
+        let producer = make_test_knot("plan-creator");
+        let context = build_listener_context(&producer, &[]);
+        assert!(
+            context.is_empty(),
+            "no consumers should produce empty context: '{}'",
+            context
+        );
+    }
+
+    /// No consumers listening — only filesystem knots — returns empty.
+    #[test]
+    fn build_listener_context_only_filesystem_knots_returns_empty() {
+        let producer = make_test_knot("plan-creator");
+        let filesystem_knot = make_test_knot("reviewer");
+        let context = build_listener_context(&producer, &[filesystem_knot]);
+        assert!(
+            context.is_empty(),
+            "only filesystem knots should produce empty context: '{}'",
+            context
+        );
+    }
+
+    /// Output starts with the `## Agent Events` heading.
+    #[test]
+    fn build_listener_context_output_has_heading() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.starts_with("## Agent Events\n"),
+            "context should start with heading: {}",
+            context
+        );
+    }
+
+    /// Output contains the event description from the consumer knot.
+    #[test]
+    fn build_listener_context_output_contains_event_description() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created for the first time".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("When a plan is created for the first time"),
+            "context should contain event description: {}",
+            context
+        );
+    }
+
+    /// Output does NOT contain consumer knot names in the event list.
+    /// Only the event ID and description are visible to the producer.
+    #[test]
+    fn build_listener_context_output_does_not_contain_consumer_knot_names() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "secret-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        // The consumer knot ID should NOT appear in the output
+        assert!(
+            !context.contains("secret-validator"),
+            "context should NOT contain consumer knot name: {}",
+            context
+        );
+    }
+
+    /// Output contains instructions for emitting `event: None`.
+    #[test]
+    fn build_listener_context_output_instructs_event_none() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("event: None"),
+            "context should instruct to emit 'event: None': {}",
+            context
+        );
+    }
+
+    /// Output instructs the producer to include a `description` field.
+    #[test]
+    fn build_listener_context_output_requires_description_field() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("description:")
+                && context.contains("<short summary"),
+            "context should require description field: {}",
+            context
+        );
+    }
+
+    /// Single consumer triggers context with its event description.
+    #[test]
+    fn build_listener_context_single_consumer_triggers_context() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(!context.is_empty());
+        assert!(context.contains("## Agent Events"));
+        assert!(context.contains("PlanCreated"));
+        assert!(context.contains("When a plan is created"));
+        assert!(context.contains("event: None"));
+        assert!(context.contains("description:"));
+    }
+
+    /// Multiple consumers listening for the same event deduplicate
+    /// — only one entry appears in the output.
+    #[test]
+    fn build_listener_context_multiple_consumers_same_event_deduplicates() {
+        let producer = make_test_knot("plan-creator");
+        let consumer1 = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let consumer2 = make_event_knot(
+            "plan-auditor",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created for audit".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer1, consumer2]);
+        // Count occurrences of "PlanCreated" in the event list (should appear
+        // only once as a bullet point)
+        let count = context.matches("- `PlanCreated`").count();
+        assert_eq!(count, 1, "same event from multiple consumers should deduplicate: {}", context);
+    }
+
+    /// Multiple different events from the same producer each appear.
+    #[test]
+    fn build_listener_context_multiple_different_events() {
+        let producer = make_test_knot("plan-creator");
+        let consumer1 = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let consumer2 = make_event_knot(
+            "plan-fixer",
+            "plan-creator",
+            "ValidationFailed",
+            Some("When validation fails".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer1, consumer2]);
+        assert!(context.contains("PlanCreated"));
+        assert!(context.contains("ValidationFailed"));
+        assert!(context.contains("When a plan is created"));
+        assert!(context.contains("When validation fails"));
+    }
+
+    /// When event-description is None, a generic message is used.
+    #[test]
+    fn build_listener_context_generic_message_when_event_description_none() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            None, // no event-description
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("If this event occurs, emit a structured event block in your tie-off."),
+            "should use generic message when event-description is None: {}",
+            context
+        );
+        // Consumer knot name should not appear even in generic message
+        assert!(
+            !context.contains("plan-validator"),
+            "generic message should not contain consumer knot name: {}",
+            context
+        );
+    }
+
+    /// Consumers for a different producer knot do not affect output.
+    #[test]
+    fn build_listener_context_other_producer_no_effect() {
+        let producer = make_test_knot("plan-creator");
+        let other_consumer = make_event_knot(
+            "other-validator",
+            "other-producer", // different producer
+            "OtherEvent",
+            Some("Some event".to_string()),
+        );
+        let context = build_listener_context(&producer, &[other_consumer]);
+        assert!(context.is_empty());
+    }
+
+    /// Mixed: one consumer for this producer, one for another.
+    /// Only the matching consumer appears.
+    #[test]
+    fn build_listener_context_mixed_consumers_only_matching() {
+        let producer = make_test_knot("plan-creator");
+        let matching = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let non_matching = make_event_knot(
+            "other-validator",
+            "other-producer",
+            "OtherEvent",
+            Some("Some event".to_string()),
+        );
+        let context = build_listener_context(&producer, &[matching, non_matching]);
+        assert!(!context.is_empty());
+        assert!(context.contains("PlanCreated"));
+        assert!(context.contains("When a plan is created"));
+        assert!(!context.contains("OtherEvent"));
+        assert!(!context.contains("other-validator"));
     }
 
     // ── AgentEvent Tests ─────────────────────────────────────────
