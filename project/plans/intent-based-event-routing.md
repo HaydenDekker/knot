@@ -254,3 +254,9 @@ This is a form of lightweight agent supervision — the consumer's `listens-for`
 - Event expiration or TTL (events persist until manually cleaned)
 - Priority or ordering of event delivery (FIFO by creation time)
 - Retry on dispatch failure (failed dispatch is logged, not retried)
+
+### Bugfix: Event dispatch directories not watched (2026-07-10)
+
+When a knot has `listens_for` configured, event files dispatched to `rig/tie-offs/{loom-id}/{event-id}/` were never seen by the notify file watcher, so consumer knots were never triggered by dispatched events. Only `strand_dir` was watched — the event dispatch directories were created by `FileSystemEventDispatcher` but no watcher was ever registered on them.
+
+Fixed by adding `ensure_event_watches()` which creates and watches each event dispatch directory during knot registration (`DiscoverLooms`, `RegisterLoom`, and all `ConfigEventHandler` paths). Watchers are (re-)started on `KnotModified` so config updates are picked up dynamically. Deduplicates event-IDs so shared dispatch directories are only registered once.

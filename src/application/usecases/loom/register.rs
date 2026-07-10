@@ -1,13 +1,12 @@
 //! `RegisterLoom` use case — register a single loom.
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::adapters::logging;
 use crate::application::ports::{EventSource, LoomLogPort, PortError};
 use crate::application::store::LoomStore;
-use crate::domain::entities::{KnotId, Loom, LoomId};
+use crate::domain::entities::Loom;
 use crate::domain::events::LoomEvent;
 
 use super::super::types::format_timestamp;
@@ -27,6 +26,8 @@ pub struct RegisterLoom {
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
     event_source: Arc<dyn EventSource>,
+    /// Rig directory, used to resolve event dispatch paths.
+    rig_dir: PathBuf,
 }
 
 impl RegisterLoom {
@@ -35,11 +36,13 @@ impl RegisterLoom {
         log_port: Arc<dyn LoomLogPort>,
         store: LoomStore,
         event_source: Arc<dyn EventSource>,
+        rig_dir: PathBuf,
     ) -> Self {
         Self {
             log_port,
             store,
             event_source,
+            rig_dir,
         }
     }
 
@@ -81,11 +84,21 @@ impl RegisterLoom {
         self.store.register(loom.clone());
 
         // Start file watchers for each knot's strand directory
+        // and event dispatch directories (from listens_for)
         for knot in &loom.knots {
             super::ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
                 &knot.strand_dir,
+                &*self.log_port,
+                &*self.event_source,
+            )?;
+
+            super::ensure_event_watches(
+                &self.rig_dir,
+                &loom.id,
+                &knot.id,
+                &knot.listens_for,
                 &*self.log_port,
                 &*self.event_source,
             )?;
@@ -105,6 +118,10 @@ impl RegisterLoom {
 #[cfg(test)]
 mod register_tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    use crate::domain::entities::{KnotId, LoomId};
 
     use super::super::super::test_fixtures::{
         build_knot, build_loom, MockLoomLogPort, TrackingEventSource,
@@ -131,6 +148,7 @@ mod register_tests {
             Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
+            PathBuf::from("/workspace/rig"),
         );
         let result = use_case.execute(loom);
 
@@ -164,6 +182,7 @@ mod register_tests {
             Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es,
+            PathBuf::from("/workspace/rig"),
         );
         let result = use_case.execute(loom);
 
@@ -193,6 +212,7 @@ mod register_tests {
             Arc::new(MockLoomLogPort::default()),
             store.clone(),
             Arc::clone(&es),
+            PathBuf::from("/workspace/rig"),
         );
         assert!(use_case.execute(loom1).is_ok());
 
@@ -209,6 +229,7 @@ mod register_tests {
             Arc::new(MockLoomLogPort::default()),
             store.clone(),
             es2,
+            PathBuf::from("/workspace/rig"),
         );
         let result = use_case.execute(loom2);
 

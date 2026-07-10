@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-09
+> **Last Updated:** 2026-07-10
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 56 | [Strand Event URI](056-strand-event-uri/strand-event-uri-plan.md) | ⬜ Planned | 2026-07-10 |
 | 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ✅ Complete | 2026-07-01 | (completed 2026-07-03)
 | 52 | [Flatten Tie-Off Paths](052-flat-tie-off-paths/flat-tie-off-paths-plan.md) | ✅ Complete | 2026-07-01 |
 | 51 | [Filter Final Response in Pi JSON Adapter](051-pi-json-final-response-filter/pi-json-final-response-filter-plan.md) | ✅ Complete | 2026-07-01 |
@@ -80,6 +81,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 56. Strand Event URI
+
+**Status:** ⬜ Planned
+**Created:** 2026-07-10
+**Goal:** Replace `listens-for` array with `strand-dir: "event:<producer>:<EventId>"` URI scheme so each knot has exactly one input direction, eliminating fan-in and the `Intent` struct.
+
+Full details in [056-strand-event-uri/strand-event-uri-plan.md](056-strand-event-uri/strand-event-uri-plan.md).
 
 ### 53. Integration Test Strategy
 

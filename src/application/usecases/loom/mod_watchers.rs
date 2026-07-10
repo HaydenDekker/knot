@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::adapters::logging;
 use crate::application::ports::{EventSource, LoomLogPort, PortError};
 use crate::domain::entities::{KnotId, LoomId};
-use crate::domain::events::LoomEvent;
+use crate::domain::events::{Intent, LoomEvent};
 
 use super::super::types::format_timestamp;
 
@@ -66,6 +66,88 @@ pub(crate) fn ensure_strand_dir_and_watch(
             &knot_id.0,
             "watcher started on newly created dir",
         );
+    }
+
+    Ok(())
+}
+
+/// Ensure event dispatch directories exist and are watched for a knot's
+/// `listens_for` intents.
+///
+/// When a knot has `listens_for` configured, the event dispatcher writes
+/// event files to `{rig_dir}/tie-offs/{loom-id}/{event-id}/`. Without
+/// a file watcher on these directories, dispatched events are invisible
+/// to the consumer knot. This function creates each dispatch directory
+/// and registers a strand watcher so dispatched event files trigger
+/// `StrandEvent::Created` for the consumer knot.
+///
+/// If `listens_for` is empty, this is a no-op.
+pub(crate) fn ensure_event_watches(
+    rig_dir: &Path,
+    loom_id: &LoomId,
+    knot_id: &KnotId,
+    listens_for: &[Intent],
+    log_port: &dyn LoomLogPort,
+    event_source: &dyn EventSource,
+) -> Result<(), PortError> {
+    if listens_for.is_empty() {
+        return Ok(());
+    }
+
+    // Collect unique event-ids (deduplicated — same event from
+    // multiple target knots shares one dispatch directory).
+    let mut seen = std::collections::HashSet::new();
+    for intent in listens_for {
+        let event_dir = rig_dir.join("tie-offs").join(&loom_id.0).join(&intent.event_id);
+        let event_id = intent.event_id.clone();
+
+        let dir_created = if !event_dir.exists() {
+            std::fs::create_dir_all(&event_dir).map_err(|e| {
+                PortError::LoomSaveFailed(format!(
+                    "failed to create event dir '{}': {}",
+                    event_dir.display(),
+                    e,
+                ))
+            })?;
+            log_port.append(LoomEvent::DirectoryCreated {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                directory: event_dir.display().to_string(),
+                timestamp: format_timestamp(),
+            })?;
+            logging::log_knot_event(
+                "dir-created",
+                &loom_id.0,
+                &knot_id.0,
+                &format!("auto-created event dir: {} (event={})", event_dir.display(), event_id),
+            );
+            true
+        } else {
+            false
+        };
+
+        event_source.set_loom_ids(&event_dir, loom_id, knot_id);
+        event_source.watch(&event_dir).map_err(|e| {
+            PortError::LoomSaveFailed(format!(
+                "failed to watch event dir '{}': {}",
+                event_dir.display(),
+                e,
+            ))
+        })?;
+
+        if dir_created {
+            logging::log_knot_event(
+                "watch-started",
+                &loom_id.0,
+                &knot_id.0,
+                &format!("event watcher started on {} (event={})", event_dir.display(), event_id),
+            );
+        }
+
+        // Skip duplicate event-ids
+        if !seen.insert(event_id) {
+            continue;
+        }
     }
 
     Ok(())

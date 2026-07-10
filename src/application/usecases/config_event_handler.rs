@@ -39,6 +39,8 @@ pub struct ConfigEventHandler {
     event_source: Arc<dyn EventSource>,
     /// Project root (parent of rig_dir), used to resolve relative paths.
     project_root: PathBuf,
+    /// Rig directory, used to resolve event dispatch paths.
+    rig_dir: PathBuf,
 }
 
 impl ConfigEventHandler {
@@ -62,6 +64,7 @@ impl ConfigEventHandler {
             store,
             event_source,
             project_root,
+            rig_dir: rig_path,
         }
     }
 
@@ -152,7 +155,8 @@ impl ConfigEventHandler {
     /// Handle `ConfigEvent::KnotAdded`.
     ///
     /// Adds the knot to the loom in the store, logs `KnotRegistered`,
-    /// and starts a watcher for its `strand_dir`.
+    /// and starts watchers for `strand_dir` and event dispatch
+    /// directories (from `listens_for`).
     fn handle_knot_added(
         &self,
         loom_id: &LoomId,
@@ -174,6 +178,7 @@ impl ConfigEventHandler {
         }
 
         let knot_strand_dir = knot.strand_dir.clone();
+        let knot_listens_for = knot.listens_for.clone();
         let knot_id = knot.id.clone();
         loom.knots.push(knot);
         self.store.register(loom);
@@ -194,6 +199,16 @@ impl ConfigEventHandler {
             &*self.event_source,
         )?;
 
+        // Start watchers for event dispatch directories (listens_for)
+        super::loom::ensure_event_watches(
+            &self.rig_dir,
+            loom_id,
+            &knot_id,
+            &knot_listens_for,
+            &*self.log_port,
+            &*self.event_source,
+        )?;
+
         logging::log_knot_event(
             "added",
             &loom_id.0,
@@ -207,12 +222,13 @@ impl ConfigEventHandler {
     ///
     /// Updates the knot in the store, stops the old watcher if
     /// `strand_dir` changed, and starts a new watcher for the
-    /// updated `strand_dir`.
+    /// updated `strand_dir`. Also (re-)starts watchers for event
+    /// dispatch directories from `listens_for`.
     ///
     /// If the knot is not found in the loom (e.g., due to a race between
     /// `LoomAdded` scanning a partially-written directory and a later
     /// `KnotModified` with valid data), treats it as a new registration:
-    /// appends the knot, logs `KnotRegistered`, starts a watcher, and
+    /// appends the knot, logs `KnotRegistered`, starts watchers, and
     /// emits a warning.
     fn handle_knot_modified(
         &self,
@@ -229,6 +245,7 @@ impl ConfigEventHandler {
                 // Existing knot — update in place
                 let old_strand_dir = loom.knots[index].strand_dir.clone();
                 let new_strand_dir = knot.strand_dir.clone();
+                let knot_listens_for = knot.listens_for.clone();
                 let knot_id = knot.id.clone();
                 loom.knots[index] = knot;
                 self.store.register(loom);
@@ -269,18 +286,29 @@ impl ConfigEventHandler {
                         "config updated (strand_dir unchanged)",
                     );
                 }
+
+                // (Re-)start watchers for event dispatch directories
+                super::loom::ensure_event_watches(
+                    &self.rig_dir,
+                    loom_id,
+                    &knot_id,
+                    &knot_listens_for,
+                    &*self.log_port,
+                    &*self.event_source,
+                )?;
             }
             None => {
                 // Knot not found — recover by registering as new.
                 // This handles the race where LoomAdded scanned before
                 // the knot file was fully written.
                 let knot_strand_dir = knot.strand_dir.clone();
+                let knot_listens_for = knot.listens_for.clone();
                 let knot_id = knot.id.clone();
                 loom.knots.push(knot);
                 self.store.register(loom);
 
                 logging::log_knot_event(
-                    "warn:modified",  
+                    "warn:modified",
                     &loom_id.0,
                     &knot_id.0,
                     "knot not found, recovered by registering",
@@ -298,6 +326,16 @@ impl ConfigEventHandler {
                     loom_id,
                     &knot_id,
                     &knot_strand_dir,
+                    &*self.log_port,
+                    &*self.event_source,
+                )?;
+
+                // Start watchers for event dispatch directories
+                super::loom::ensure_event_watches(
+                    &self.rig_dir,
+                    loom_id,
+                    &knot_id,
+                    &knot_listens_for,
                     &*self.log_port,
                     &*self.event_source,
                 )?;
@@ -409,11 +447,21 @@ impl ConfigEventHandler {
         self.store.register(loom.clone());
 
         // Start file watchers for each knot's strand directory
+        // and event dispatch directories (from listens_for)
         for knot in &loom.knots {
             super::loom::ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
                 &knot.strand_dir,
+                &*self.log_port,
+                &*self.event_source,
+            )?;
+
+            super::loom::ensure_event_watches(
+                &self.rig_dir,
+                &loom.id,
+                &knot.id,
+                &knot.listens_for,
                 &*self.log_port,
                 &*self.event_source,
             )?;

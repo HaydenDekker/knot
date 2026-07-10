@@ -68,7 +68,7 @@ impl DiscoverLooms {
                 &loom.id.0,
                 &format!("new loom found, {} knots", loom.knots.len()),
             );
-            self.register_single(loom, &warnings)?;
+            self.register_single(loom, &warnings, workspace)?;
             new_looms.push(loom.clone());
         }
 
@@ -80,6 +80,7 @@ impl DiscoverLooms {
         &self,
         loom: &Loom,
         warnings: &[String],
+        rig_dir: &Path,
     ) -> Result<(), PortError> {
         // Open the loom activity log
         self.log_port.open(&loom.id)?;
@@ -113,11 +114,21 @@ impl DiscoverLooms {
         self.store.register(loom.clone());
 
         // Start file watchers for each knot's strand directory
+        // and event dispatch directories (from listens_for)
         for knot in &loom.knots {
             super::ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
                 &knot.strand_dir,
+                &*self.log_port,
+                &*self.event_source,
+            )?;
+
+            super::ensure_event_watches(
+                rig_dir,
+                &loom.id,
+                &knot.id,
+                &knot.listens_for,
                 &*self.log_port,
                 &*self.event_source,
             )?;

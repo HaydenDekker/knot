@@ -13,4 +13,4 @@ pub use discover::DiscoverLooms;
 pub use register::RegisterLoom;
 pub use reload::ReloadConfig;
 pub use unregister::UnregisterLoom;
-pub(crate) use mod_watchers::ensure_strand_dir_and_watch;
+pub(crate) use mod_watchers::{ensure_event_watches, ensure_strand_dir_and_watch};
