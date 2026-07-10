@@ -111,15 +111,29 @@ impl LoomLogPort for FileSystemLoomLog {
         let reader = BufReader::new(file);
 
         let mut events = Vec::new();
+        let mut line_num = 0u64;
         for line_result in reader.lines() {
+            line_num += 1;
             let line = line_result
                 .map_err(|e| PortError::LoomLogReadFailed(e.to_string()))?;
             if line.is_empty() {
                 continue;
             }
-            let event: LoomEvent = serde_json::from_str(&line)
-                .map_err(|e| PortError::LoomLogReadFailed(e.to_string()))?;
-            events.push(event);
+            match serde_json::from_str::<LoomEvent>(&line) {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    // Skip non-JSONL lines (e.g. agent-written text that
+                    // accidentally ended up in the log file) instead of
+                    // aborting the entire read. Log a warning so the issue
+                    // is visible in output.
+                    eprintln!(
+                        "WARN: loom-log {} line {}: skipping non-JSONL content: {}",
+                        loom_id.0,
+                        line_num,
+                        e,
+                    );
+                }
+            }
         }
 
         Ok(events)
@@ -452,6 +466,47 @@ mod tests {
                 assert_eq!(*attempt, 2);
             }
             _ => panic!("Expected KnotEmptyResponse event"),
+        }
+    }
+
+    /// Non-JSONL lines in the log file are skipped gracefully instead
+    /// of aborting the entire read.
+    #[test]
+    fn loom_log_read_all_skips_non_jsonl_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let loom_id = LoomId("dirty-loom".to_string());
+
+        // Create a log file with mixed content: valid JSONL lines
+        // interleaved with non-JSON text (e.g. agent accident).
+        let log_path =
+            dir.path().join("tie-offs/dirty-loom/.loom-log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        let content = concat!(
+            "# Tie-off: agent wrote markdown here\n",
+            "\n",
+            "**This is not JSON**\n",
+            "{\"KnotRegistered\":{\"loom_id\":\"dirty-loom\",\"knot_id\":\"k1\",\"timestamp\":\"2026-07-10T10:00:00Z\"}}\n",
+            "More non-json text\n",
+            "{\"KnotCompleted\":{\"loom_id\":\"dirty-loom\",\"knot_id\":\"k1\",\"strand_path\":\"input.md\",\"tie_off_path\":\"out.md\",\"timestamp\":\"2026-07-10T10:05:00Z\"}}\n",
+        );
+        fs::write(&log_path, content).unwrap();
+
+        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let events = log.read_all(&loom_id).unwrap();
+
+        // Should have 2 valid events, non-JSON lines skipped
+        assert_eq!(events.len(), 2, "should skip non-JSONL lines");
+        match &events[0] {
+            LoomEvent::KnotRegistered { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            _ => panic!("first event should be KnotRegistered"),
+        }
+        match &events[1] {
+            LoomEvent::KnotCompleted { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            _ => panic!("second event should be KnotCompleted"),
         }
     }
 }

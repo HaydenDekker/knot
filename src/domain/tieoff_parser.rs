@@ -127,34 +127,44 @@ pub fn extract_last_n(
 
 /// Extract structured agent events from tie-off content.
 ///
-/// Scans the tie-off body for indented key-value blocks that contain an
-/// `event:` key. Each such block represents one `AgentEvent` emitted by the
-/// producer knot. A single tie-off may contain **zero, one, or many** event
-/// blocks — each is independently parsed and dispatched.
+/// Scans the tie-off body for key-value blocks that contain an `event:` key.
+/// Each such block represents one `AgentEvent` emitted by the producer knot.
+/// A single tie-off may contain **zero, one, or many** event blocks — each is
+/// independently parsed and dispatched.
 ///
-/// ## Format
+/// ## Supported formats
 ///
-/// The structured event block appears in the body of a tie-off section.
-/// Lines are indented with whitespace. The first key must be `event:` (the
-/// event identifier). The `target-knot:` key is no longer emitted by the
-/// producer — it is derived from context at dispatch time. All other keys
-/// (including `description`) become the payload.
+/// Events can be emitted in two formats:
+///
+/// 1. **Indented key-value block** (original format):
+///    Lines are indented with whitespace.
+///
+/// 2. **Code block** (```` ``` ```` delimited):
+///    Key-value lines appear between triple-backtick fences.
+///    This format is used when the agent wraps the event in a markdown code
+///    block for readability.
+///
+/// In both formats, the first key must be `event:` (the event identifier).
+/// The `target-knot:` key is no longer emitted by the producer — it is derived
+/// from context at dispatch time. All other keys (including `description`)
+/// become the payload.
+///
+/// ### Indented format example
 ///
 /// ```text
-/// ## review triggered by Created input.md
-/// Timestamp: 2026-06-25T10:00:00Z
-/// ---
-/// Plan PLAN-001 created. Scope changed.
-///
 ///   event: PlanCreated
 ///   plan: PLAN-001
 ///   description: Implementation plan for knot event routing
+/// ```
 ///
-///   event: ScopeChanged
-///   plan: PLAN-001
-///   description: Scope reduced to core features only
+/// ### Code block format example
 ///
-/// Some follow-up text.
+/// ```text
+/// ```
+/// event: PlanCreated
+/// plan: PLAN-001
+/// description: Implementation plan for knot event routing
+/// ```
 /// ```
 ///
 /// ## Graceful handling
@@ -162,7 +172,6 @@ pub fn extract_last_n(
 /// - Blocks without `event:` are skipped (just indented metadata).
 /// - `event: None` produces no `AgentEvent` for that block (skipped).
 /// - Malformed lines (no `:` separator) are skipped.
-/// - Non-indented lines are skipped.
 /// - `target-knot:` in the event block is ignored (not emitted by the
 ///   producer).
 /// - Multiple event blocks: **all** events are collected and returned.
@@ -174,6 +183,10 @@ pub fn extract_agent_events(
     let mut payload: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut in_block = false;
+    // Whether we are inside a ``` delimited code block.
+    // Lines inside a code block are treated as event-block lines
+    // (same as indented lines), even though they start at column 0.
+    let mut in_code_block = false;
 
     fn flush(
         events: &mut Vec<crate::domain::events::AgentEvent>,
@@ -195,7 +208,24 @@ pub fn extract_agent_events(
     for line in content.lines() {
         let trimmed = line.trim();
 
-        if !trimmed.is_empty() && line.starts_with([' ', '\t']) {
+        // Detect ``` fence — toggles code block mode.
+        // A line that is exactly ``` (optionally with leading/trailing
+        // whitespace) opens or closes a code block.
+        if trimmed == "```" {
+            in_code_block = !in_code_block;
+            // Closing a code block also flushes the current event block.
+            if !in_code_block {
+                flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
+            }
+            continue;
+        }
+
+        // Treat indented lines AND lines inside a code block as
+        // potential event-block content.
+        let is_event_line =
+            !trimmed.is_empty() && (line.starts_with([' ', '\t']) || in_code_block);
+
+        if is_event_line {
             if let Some((key, value)) = parse_kv_line(trimmed) {
                 if key == "event" {
                     // Flush previous event block if any
@@ -219,7 +249,7 @@ pub fn extract_agent_events(
             }
             // Invalid key-value lines inside blocks are silently skipped
         } else {
-            // Non-indented line — flush current block
+            // Non-indented, non-code-block line — flush current block
             flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
         }
     }
@@ -794,5 +824,112 @@ mod tests {
         assert_eq!(events.len(), 2, "event: None should be skipped");
         assert_eq!(events[0].event_id, "FirstEvent");
         assert_eq!(events[1].event_id, "SecondEvent");
+    }
+
+    // ── Code Block Format Tests ──────────────────────────────────
+
+    #[test]
+    fn extract_agent_events_code_block_single_event() {
+        // Event emitted inside a ``` code block (lines not indented).
+        let content = concat!(
+            "```
+",
+            "event: NonConformance\n",
+            "plan: 013 (tauri-frontend-resources)\n",
+            "ci_job: frontend\n",
+            "description: 4 of 6 delivered scenarios are NOT RUN\n",
+            "```\n",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "NonConformance");
+        assert_eq!(
+            events[0].payload.get("plan"),
+            Some(&"013 (tauri-frontend-resources)".to_string())
+        );
+        assert_eq!(events[0].payload.get("ci_job"), Some(&"frontend".to_string()));
+        assert_eq!(
+            events[0].payload.get("description"),
+            Some(&"4 of 6 delivered scenarios are NOT RUN".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_agent_events_code_block_with_surrounding_text() {
+        // Code block event surrounded by non-event text.
+        let content = concat!(
+            "Validation complete. Here's the summary:\n",
+            "\n",
+            "Some analysis text.\n",
+            "\n",
+            "```\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "```\n",
+            "\n",
+            "Additional notes follow.\n",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert_eq!(
+            events[0].payload.get("plan"),
+            Some(&"PLAN-001".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_agent_events_mixed_indented_and_code_block() {
+        // Both formats in the same content.
+        let content = concat!(
+            "First event (indented format):\n",
+            "  event: FirstEvent\n",
+            "  data: one\n",
+            "\n",
+            "Second event (code block format):\n",
+            "```\n",
+            "event: SecondEvent\n",
+            "data: two\n",
+            "```\n",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_id, "FirstEvent");
+        assert_eq!(events[1].event_id, "SecondEvent");
+    }
+
+    #[test]
+    fn extract_agent_events_code_block_none_skipped() {
+        // `event: None` inside a code block is still skipped.
+        let content = concat!(
+            "```\n",
+            "event: None\n",
+            "```\n",
+        );
+        let events = extract_agent_events(content);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn extract_agent_events_code_block_with_lang_tag() {
+        // ``` with a language tag (e.g. ```yaml) — the opening
+        // fence line is NOT exactly ``` so it does NOT toggle the
+        // code block flag. Lines inside are not indented, so they
+        // are treated as non-event lines. This is expected — the
+        // canonical format is ``` without a language tag.
+        let content = concat!(
+            "```yaml\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "```\n",
+        );
+        let events = extract_agent_events(content);
+        // ```yaml is not exactly ```, so the block is NOT entered.
+        // Lines inside are not indented, so they are skipped.
+        // The closing ``` would toggle (but there's no event anyway).
+        assert!(
+            events.is_empty(),
+            "code block with language tag is not recognized as event block"
+        );
     }
 }

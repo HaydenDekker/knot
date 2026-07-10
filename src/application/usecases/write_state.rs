@@ -184,14 +184,20 @@ impl WriteState {
     fn derive_knot_state(&self, loom_id: &LoomId, knot_id: &KnotId) -> RigStateKnot {
         let events = match self.log_port.read_all(loom_id) {
             Ok(e) => e,
-            Err(_) => return RigStateKnot {
-                id: knot_id.0.clone(),
-                status: "idle".to_string(),
-                last_strand_path: None,
-                last_tie_off_path: None,
-                last_error: None,
-                last_event_at: None,
-            },
+            Err(e) => {
+                eprintln!(
+                    "WARN: could not read loom-log for {} (knot {}): {}",
+                    loom_id.0, knot_id.0, e,
+                );
+                return RigStateKnot {
+                    id: knot_id.0.clone(),
+                    status: "idle".to_string(),
+                    last_strand_path: None,
+                    last_tie_off_path: None,
+                    last_error: None,
+                    last_event_at: None,
+                };
+            }
         };
 
         // Find the latest event referencing this knot

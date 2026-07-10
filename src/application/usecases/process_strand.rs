@@ -657,6 +657,13 @@ impl ProcessStrand {
         let events =
             crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
 
+        let event_count = events.len();
+        let event_ids: Vec<&str> = events.iter().map(|e| e.event_id.as_str()).collect();
+        eprintln!(
+            "event parse (knot={}): {} event(s) found — {:?}",
+            knot.id.0, event_count, event_ids,
+        );
+
         if events.is_empty() {
             return Ok(None);
         }
