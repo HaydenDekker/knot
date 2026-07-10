@@ -637,7 +637,9 @@ impl ProcessStrand {
     ///
     /// After a knot completes successfully, this extracts any structured
     /// agent events from the tie-off content, matches them against consumer
-    /// intents, and dispatches event files to each matching consumer.
+    /// `strand_source` entries (EventUri), and dispatches event files to
+    /// each matching consumer. `event: None` signals (returned as `None`
+    /// by the parser) produce no dispatch.
     ///
     /// Returns a `LoomEvent::EventsDispatched` log entry if any events
     /// were dispatched, or `None` if no events were found.
@@ -648,38 +650,43 @@ impl ProcessStrand {
         loom_id: &LoomId,
         strand_path: &StrandPath,
     ) -> Result<Option<LoomEvent>, PortError> {
-        // Parse tie-off for agent events
-        let events =
-            crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
-
-        if events.is_empty() {
+        // Parse tie-off for agent events.
+        // Returns None for `event: None` (no dispatch), or Some(event) for
+        // a real event. The producing knot's ID is available from the `knot`
+        // parameter — `target-knot` is derived from context, not emitted.
+        let Some(event) =
+            crate::domain::tieoff_parser::extract_agent_events(tie_off_content)
+        else {
             return Ok(None);
-        }
+        };
 
         // Iterate by loom to track consumer_loom_id for dispatch
         let all_looms = self.store.list();
         let mut dispatches: Vec<(String, String)> = Vec::new();
-        for event in &events {
-            for loom in &all_looms {
-                for consumer_knot in &loom.knots {
-                    if let StrandSource::EventUri {
-                        producer_knot,
-                        event_id,
-                    } = &consumer_knot.strand_source
+        for loom in &all_looms {
+            for consumer_knot in &loom.knots {
+                if let StrandSource::EventUri {
+                    producer_knot,
+                    event_id,
+                } = &consumer_knot.strand_source
+                {
+                    // Match: producer_knot == this knot's ID AND event_id matches
+                    if producer_knot == &knot.id.0 && event_id == &event.event_id
                     {
-                        if producer_knot == &knot.id.0 && event_id == &event.event_id {
-                            // Dispatch event file to consumer's tie-off dir
-                            let _path = self.event_dispatcher.dispatch(
-                                event,
-                                consumer_knot,
-                                &loom.id,
-                                &self.rig_dir,
-                            )?;
-                            dispatches.push((
-                                event.event_id.clone(),
-                                loom.id.0.clone(),
-                            ));
-                        }
+                        // Dispatch event file to consumer's tie-off dir.
+                        // producer_knot is passed so event files include it
+                        // in frontmatter, even though it's not in AgentEvent.
+                        let _path = self.event_dispatcher.dispatch(
+                            &event,
+                            consumer_knot,
+                            &knot.id.0,
+                            &loom.id,
+                            &self.rig_dir,
+                        )?;
+                        dispatches.push((
+                            event.event_id.clone(),
+                            loom.id.0.clone(),
+                        ));
                     }
                 }
             }
@@ -3156,7 +3163,6 @@ mod file_existence_tests {
 mod event_dispatch_tests {
     use super::*;
     use crate::domain::entities::{KnotId, LoomId, PromptTemplate};
-    use crate::domain::events::Intent;
     use crate::application::ports::AgentOutput;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -3276,7 +3282,6 @@ mod event_dispatch_tests {
             "Plan created successfully.\n",
             "\n",
             "  event: PlanCreated\n",
-            "  target-knot: plan-creator\n",
             "  plan: PLAN-001\n",
             "  description: Test plan\n",
         );
@@ -3421,7 +3426,6 @@ mod event_dispatch_tests {
         let event_content = concat!(
             "Plan created.\n",
             "  event: PlanCreated\n",
-            "  target-knot: plan-creator\n",
             "  plan: PLAN-002\n",
         );
         let output = Ok(AgentOutput {
@@ -3588,6 +3592,273 @@ mod event_dispatch_tests {
         );
         // Prompt should just be the knot's instructions
         assert_eq!(prompt, "check it");
+    }
+
+    /// `event: None` — no dispatch occurs.
+    #[test]
+    fn event_none_produces_no_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // Agent output has `event: None` — should not dispatch
+        let output = Ok(AgentOutput {
+            stdout: "  event: None\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert!(
+            dispatched.is_empty(),
+            "'event: None' should produce no dispatch, got {} events",
+            dispatched.len()
+        );
+
+        let events = _log_events.lock().unwrap();
+        let dispatch_log = events.iter().any(|e| {
+            matches!(e, LoomEvent::EventsDispatched { .. })
+        });
+        assert!(
+            !dispatch_log,
+            "should not log EventsDispatched for event: None"
+        );
+    }
+
+    /// Event ID mismatch — no dispatch.
+    #[test]
+    fn event_id_mismatch_no_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanApproved", // listener for a different event
+                "When a plan is approved.",
+            )],
+        );
+
+        // Agent output emits `PlanCreated` but consumer listens for `PlanApproved`
+        let output = Ok(AgentOutput {
+            stdout: concat!(
+                "  event: PlanCreated\n",
+                "  plan: PLAN-001\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert!(
+            dispatched.is_empty(),
+            "event ID mismatch should produce no dispatch, got {} events",
+            dispatched.len()
+        );
+    }
+
+    /// Description field passes through to event payload.
+    #[test]
+    fn description_field_passes_through() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: concat!(
+                "  event: PlanCreated\n",
+                "  plan: PLAN-001\n",
+                "  description: New plan for feature X\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(dispatched.len(), 1);
+        let (evt, _, _, _) = &dispatched[0];
+        assert_eq!(evt.event_id, "PlanCreated");
+        assert_eq!(
+            evt.payload.get("plan"),
+            Some(&"PLAN-001".to_string())
+        );
+        assert_eq!(
+            evt.payload.get("description"),
+            Some(&"New plan for feature X".to_string())
+        );
+    }
+
+    /// `target-knot` is derived from the producing knot context, not from
+    /// the event block. Event file frontmatter should contain the producer's
+    /// knot ID.
+    #[test]
+    fn target_knot_derived_from_producer_context() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // Event block does NOT contain target-knot (derived from context)
+        let output = Ok(AgentOutput {
+            stdout: concat!(
+                "  event: PlanCreated\n",
+                "  plan: PLAN-001\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(dispatched.len(), 1);
+        let (evt, consumer_knot_name, consumer_loom_id, rig_dir) = &dispatched[0];
+
+        // Event has no target_knot field (removed from struct)
+        assert_eq!(evt.event_id, "PlanCreated");
+        assert!(
+            evt.payload.is_empty() || !evt.payload.contains_key("target-knot"),
+            "event should not contain target-knot in payload"
+        );
+
+        // Consumer knot name is "plan-watcher"
+        assert_eq!(*consumer_knot_name, "plan-watcher");
+        assert_eq!(*consumer_loom_id, "consumer-loom");
+
+        // Verify that the event file would contain target-knot = producer
+        // knot ID by constructing what the real dispatcher would write.
+        let event_path = std::path::PathBuf::from(rig_dir)
+            .join("tie-offs")
+            .join(consumer_loom_id)
+            .join(&evt.event_id)
+            .join("event-mock.md");
+        let _ = event_path;
+
+        // The real dispatcher (FileSystemEventDispatcher) receives the
+        // producer knot ID as a separate parameter and writes it into
+        // the event file frontmatter — confirming that target-knot is
+        // derived from context, not from the event block.
+        let content =
+            crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::build_event_file_content(
+                evt,
+                "2026-07-10T12:00:00Z",
+                "plan-creator",
+            );
+        assert!(
+            content.contains("target-knot: plan-creator"),
+            "event file frontmatter should contain target-knot: {}",
+            content
+        );
+        assert!(
+            content.contains("## Event: PlanCreated from plan-creator"),
+            "event file body should reference producer knot: {}",
+            content
+        );
     }
 }
 

@@ -750,7 +750,6 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
-            target_knot: "implementation-planner".to_string(),
             payload,
         };
 

@@ -8,69 +8,25 @@ use crate::domain::entities::{
 
 use std::collections::HashMap;
 
-/// A consumer knot's declaration of interest in a specific event.
-///
-/// Each intent says: "I want to hear about `event_id` when `target_knot`
-/// emits it." The `event_description` tells the producer *when* to emit
-/// the event and *what data* to include.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Intent {
-    /// Which knot may emit this event (the producer/target).
-    #[serde(rename = "target-knot")]
-    pub target_knot: String,
-    /// Unique event identifier (e.g. `PlanCreated`).
-    #[serde(rename = "event-id")]
-    pub event_id: String,
-    /// Human-readable description — when the event fires and what data it
-    /// should contain. Injected into the target knot's prompt as instructions.
-    #[serde(rename = "event-description")]
-    pub event_description: String,
-}
+
 
 /// A structured agent-to-agent event emitted in a tie-off.
 ///
 /// When a target knot is instructed to emit an event (via intent-based routing
 /// context injection), it writes a structured block in its tie-off body. The
-/// `event:` key signals that the block contains event data. The `target-knot`
-/// field identifies which knot emitted it. All other keys become the payload.
+/// `event:` key signals that the block contains event data. All other keys
+/// (except `target-knot`, which is derived from context) become the payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentEvent {
     /// Unique event identifier (e.g. `PlanCreated`).
     pub event_id: String,
-    /// Name of the knot that emitted this event.
-    pub target_knot: String,
     /// Arbitrary key-value pairs carrying event data.
     /// Includes fields like `plan`, `description`, `source`, etc.
     #[serde(default)]
     pub payload: HashMap<String, String>,
 }
 
-// ── Intent Matching ────────────────────────────────────────────────────────
 
-/// Check whether an [`AgentEvent`] satisfies an [`Intent`] declaration.
-///
-/// An intent is satisfied when **both** of the following hold:
-/// 1. `event.event_id == intent.event_id` (exact match)
-/// 2. `event.target_knot == intent.target_knot` (exact match)
-///
-/// The event's payload is **not** used for matching — it carries data the
-/// consumer will read after the match succeeds.
-///
-/// ## Example
-///
-/// A consumer knot declares:
-/// ```yaml
-/// listens-for:
-///   - target-knot: plan-creator
-///     event-id: PlanCreated
-///     event-description: "Emit when a plan is created"
-/// ```
-///
-/// An event emitted by `plan-creator` with `event: PlanCreated` matches.
-/// An event from a different knot, or a different event-id, does not.
-pub fn matches_intent(event: &AgentEvent, intent: &Intent) -> bool {
-    event.event_id == intent.event_id && event.target_knot == intent.target_knot
-}
 
 // ── Context Injection ──────────────────────────────────────────────────────
 
@@ -734,12 +690,10 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
             payload,
         };
 
         assert_eq!(event.event_id, "PlanCreated");
-        assert_eq!(event.target_knot, "plan-creator");
         assert_eq!(event.payload.len(), 2);
         assert_eq!(
             event.payload.get("plan"),
@@ -754,7 +708,6 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
-            target_knot: "implementation-planner".to_string(),
             payload,
         };
 
@@ -767,7 +720,6 @@ mod tests {
     fn agent_event_empty_payload_defaults() {
         let event = AgentEvent {
             event_id: "Something".to_string(),
-            target_knot: "knot-a".to_string(),
             payload: HashMap::new(),
         };
 
@@ -781,10 +733,9 @@ mod tests {
     #[test]
     fn agent_event_missing_payload_in_json_defaults_to_empty() {
         // JSON without a payload field should deserialize with empty HashMap
-        let json = r#"{"event_id":"Test","target_knot":"k1"}"#;
+        let json = r#"{"event_id":"Test"}"#;
         let event: AgentEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_id, "Test");
-        assert_eq!(event.target_knot, "k1");
         assert!(event.payload.is_empty());
     }
 

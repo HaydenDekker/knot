@@ -774,6 +774,7 @@ impl EventDispatcherPort for MockEventDispatcher {
         &self,
         event: &AgentEvent,
         consumer_knot: &Knot,
+        _producer_knot: &str,
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
     ) -> Result<std::path::PathBuf, PortError> {

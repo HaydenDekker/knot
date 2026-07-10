@@ -37,6 +37,7 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         &self,
         event: &AgentEvent,
         _consumer_knot: &Knot,
+        producer_knot: &str,
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
     ) -> Result<std::path::PathBuf, PortError> {
@@ -59,7 +60,7 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         let event_path = event_dir.join(&filename);
 
         // Build the event file content: YAML frontmatter + markdown body
-        let content = Self::build_event_file_content(event, &timestamp);
+        let content = Self::build_event_file_content(event, &timestamp, producer_knot);
 
         std::fs::write(&event_path, &content).map_err(|e| {
             PortError::EventDispatchFailed(format!(
@@ -77,13 +78,17 @@ impl FileSystemEventDispatcher {
     ///
     /// YAML frontmatter with event payload fields + markdown body with
     /// context about the source knot and event.
-    fn build_event_file_content(event: &AgentEvent, timestamp: &str) -> String {
+    pub(crate) fn build_event_file_content(
+        event: &AgentEvent,
+        timestamp: &str,
+        producer_knot: &str,
+    ) -> String {
         let mut lines = Vec::new();
 
         // Frontmatter opening
         lines.push("---".to_string());
         lines.push(format!("event-id: {}", event.event_id));
-        lines.push(format!("target-knot: {}", event.target_knot));
+        lines.push(format!("target-knot: {}", producer_knot));
         lines.push(format!("timestamp: {}", timestamp));
 
         // Payload fields into frontmatter
@@ -98,7 +103,7 @@ impl FileSystemEventDispatcher {
         lines.push(String::new());
         lines.push(format!(
             "## Event: {} from {}",
-            event.event_id, event.target_knot
+            event.event_id, producer_knot
         ));
         lines.push(String::new());
 
@@ -133,7 +138,6 @@ mod tests {
 
         AgentEvent {
             event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
             payload,
         }
     }
@@ -166,7 +170,7 @@ mod tests {
         let loom_id = LoomId("consumer-loom".to_string());
 
         let dispatcher = FileSystemEventDispatcher::new();
-        let result = dispatcher.dispatch(&event, &consumer, &loom_id, &rig_dir);
+        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir);
 
         assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
         let path = result.unwrap();
@@ -202,7 +206,7 @@ mod tests {
         let loom_id = LoomId("new-loom".to_string());
 
         let dispatcher = FileSystemEventDispatcher::new();
-        let result = dispatcher.dispatch(&event, &consumer, &loom_id, &rig_dir);
+        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir);
 
         assert!(result.is_ok(), "should create parent dirs: {:?}", result);
 
@@ -227,7 +231,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, &loom_id, &rig_dir)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -284,7 +288,6 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "EmptyEvent".to_string(),
-            target_knot: "source-knot".to_string(),
             payload: HashMap::new(),
         };
         let consumer = build_consumer_knot();
@@ -292,7 +295,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, &loom_id, &rig_dir)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -324,10 +327,10 @@ mod tests {
         let dispatcher = FileSystemEventDispatcher::new();
 
         let path1 = dispatcher
-            .dispatch(&event, &consumer1, &loom1, &rig_dir)
+            .dispatch(&event, &consumer1, "plan-creator", &loom1, &rig_dir)
             .unwrap();
         let path2 = dispatcher
-            .dispatch(&event, &consumer2, &loom2, &rig_dir)
+            .dispatch(&event, &consumer2, "plan-creator", &loom2, &rig_dir)
             .unwrap();
 
         // Each consumer gets its own file in its own loom directory
@@ -361,12 +364,10 @@ mod tests {
 
         let event1 = AgentEvent {
             event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
             payload: HashMap::new(),
         };
         let event2 = AgentEvent {
             event_id: "PlanApproved".to_string(),
-            target_knot: "plan-creator".to_string(),
             payload: HashMap::new(),
         };
         let consumer = build_consumer_knot();
@@ -375,10 +376,10 @@ mod tests {
         let dispatcher = FileSystemEventDispatcher::new();
 
         let path1 = dispatcher
-            .dispatch(&event1, &consumer, &loom_id, &rig_dir)
+            .dispatch(&event1, &consumer, "plan-creator", &loom_id, &rig_dir)
             .unwrap();
         let path2 = dispatcher
-            .dispatch(&event2, &consumer, &loom_id, &rig_dir)
+            .dispatch(&event2, &consumer, "plan-creator", &loom_id, &rig_dir)
             .unwrap();
 
         // Different event-id subdirectories
@@ -404,7 +405,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, &loom_id, &rig_dir)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir)
             .unwrap();
 
         let filename = path.file_name().unwrap().to_string_lossy();
@@ -427,6 +428,7 @@ mod tests {
         let content = FileSystemEventDispatcher::build_event_file_content(
             &event,
             &timestamp,
+            "plan-creator",
         );
 
         let lines: Vec<&str> = content.lines().collect();
