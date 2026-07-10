@@ -164,7 +164,6 @@ mod manage_knot_tests {
             prompt_template: PromptTemplate {
                 instructions: "check it".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -200,7 +199,7 @@ mod manage_knot_tests {
         assert!(found.is_some());
         let k = found.unwrap();
         assert_eq!(k.agent_profile_ref, "default");
-        assert_eq!(k.strand_dir, PathBuf::from("strands"));
+        assert_eq!(k.strand_source, StrandSource::Filesystem(PathBuf::from("strands")));
     }
 
     /// `ManageKnot` with `KnotAction::Create` returns error when loom

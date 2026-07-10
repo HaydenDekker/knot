@@ -149,7 +149,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "React to events.".to_string(),
             },
-            strand_dir: PathBuf::from("../../tie-offs/review-loom/PlanCreated"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("../../tie-offs/review-loom/PlanCreated")),
             event_description: None,

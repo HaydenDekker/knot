@@ -396,7 +396,6 @@ mod write_state_tests {
                     prompt_template: crate::domain::value_objects::PromptTemplate {
                         instructions: "Review.".to_string(),
                     },
-                    strand_dir: PathBuf::from("strands"),
                     git_versioned: true,
                     strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
                     event_description: None,

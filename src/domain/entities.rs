@@ -155,8 +155,6 @@ pub struct Knot {
     /// Reference to a named agent profile stored in `profiles/{name}.md`.
     pub agent_profile_ref: String,
     pub prompt_template: PromptTemplate,
-    /// Directory to watch for strand files (required).
-    pub strand_dir: PathBuf,
     /// When `true` (default), a git commit is created after each successful
     /// knot run. Set to `false` in frontmatter via `git-versioned: false` to
     /// opt out of automatic versioning for this knot.
@@ -167,7 +165,6 @@ pub struct Knot {
     /// Either a filesystem directory to watch or an event URI
     /// (`event:<producer-knot-id>:<EventId>`). Populated from
     /// `strand-dir` frontmatter via `KnotFile::strand_source`.
-    #[serde(default)]
     pub strand_source: StrandSource,
     /// Semantic description of events this knot subscribes to.
     ///
@@ -490,7 +487,6 @@ mod tests {
             id: id.clone(),
             agent_profile_ref: "fast".to_string(),
             prompt_template: prompt_template.clone(),
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -499,7 +495,7 @@ mod tests {
         assert_eq!(knot.id, id);
         assert_eq!(knot.agent_profile_ref, "fast");
         assert_eq!(knot.prompt_template, prompt_template);
-        assert_eq!(knot.strand_dir, PathBuf::from("strands"));
+        assert_eq!(knot.strand_source, StrandSource::Filesystem(PathBuf::from("strands")));
         assert!(knot.git_versioned);
     }
 
@@ -511,15 +507,14 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "Check it.".to_string(),
             },
-            strand_dir: PathBuf::from("../custom-source"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("../custom-source")),
             event_description: None,
         };
 
         assert_eq!(
-            knot.strand_dir,
-            PathBuf::from("../custom-source")
+            knot.strand_source,
+            StrandSource::Filesystem(PathBuf::from("../custom-source"))
         );
     }
 
@@ -532,7 +527,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "Check it.".to_string(),
             },
-            strand_dir: PathBuf::from("project/prds"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("project/prds")),
             event_description: None,
@@ -621,7 +615,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "do it".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -641,7 +634,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "do it".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -658,7 +650,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "do it".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: false,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -675,13 +666,12 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "do it".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
         };
         // Build JSON without the git_versioned field
-        let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_dir":"strands"}"#;
+        let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_source":"strands"}"#;
         let deserialized: Knot = serde_json::from_str(json_minimal).unwrap();
         assert_eq!(deserialized.id, knot_no_field.id);
         assert!(deserialized.git_versioned, "missing field should default to true");
@@ -1331,7 +1321,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: instructions.to_string(),
             },
-            strand_dir: std::path::PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(std::path::PathBuf::from("strands")),
             event_description: None,

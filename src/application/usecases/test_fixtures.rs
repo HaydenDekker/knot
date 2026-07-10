@@ -552,8 +552,8 @@ impl Default for MockStrandFileChecker {
 /// Build a knot with the given ID and default values.
 ///
 /// Defaults: `agent_profile_ref: "fast"`, `prompt_template.instructions:
-/// "check it"`, `strand_dir: "strands"`, `git_versioned: true`,
-/// `strand_source: Filesystem("strands")`, `event_description: None`.
+/// "check it"`, `strand_source: Filesystem("strands")`, `git_versioned: true`,
+/// `event_description: None`.
 pub fn build_knot(id: impl Into<String>) -> Knot {
     Knot {
         id: KnotId(id.into()),
@@ -561,17 +561,19 @@ pub fn build_knot(id: impl Into<String>) -> Knot {
         prompt_template: PromptTemplate {
             instructions: "check it".to_string(),
         },
-        strand_dir: PathBuf::from("strands"),
         git_versioned: true,
         strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
         event_description: None,
     }
 }
 
-/// Build a knot with custom strand_dir.
-pub fn build_knot_with_strand_dir(id: impl Into<String>, strand_dir: PathBuf) -> Knot {
+/// Build a knot with a custom strand_source filesystem path.
+pub fn build_knot_with_strand_source(
+    id: impl Into<String>,
+    path: PathBuf,
+) -> Knot {
     let mut knot = build_knot(id);
-    knot.strand_dir = strand_dir;
+    knot.strand_source = StrandSource::Filesystem(path);
     knot
 }
 

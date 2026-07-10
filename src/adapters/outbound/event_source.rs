@@ -76,8 +76,8 @@ struct InnerState {
     /// — more specific (longer) paths always take priority over
     /// broader (shorter) parent paths.
     watched_dirs: Vec<(PathBuf, WatchType)>,
-    /// Project root directory. Used to resolve relative `strand_dir`
-    /// and `strand_dir` paths from knot config files during event
+    /// Project root directory. Used to resolve relative `strand_source`
+    /// paths from knot config files during event
     /// mapping, matching the resolution done during initial load.
     project_root: PathBuf,
 }
@@ -229,16 +229,18 @@ impl InnerState {
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
                         Ok((knot_file, _warnings)) => {
+                            // Resolve strand_source filesystem path to absolute.
+                            let resolved_source = knot_file.strand_source.clone().with_resolved_path(
+                                knot_file.strand_source.path()
+                                    .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
+                                    .unwrap_or_default(),
+                            );
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
-                                strand_dir: resolve_path(
-                                    &self.project_root,
-                                    &knot_file.strand_dir,
-                                ),
                                 git_versioned: knot_file.git_versioned,
-                                strand_source: knot_file.strand_source,
+                                strand_source: resolved_source,
                                 event_description: knot_file.event_description,
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
@@ -295,16 +297,18 @@ impl InnerState {
                 match std::fs::read_to_string(path) {
                     Ok(content) => match knot_file::parse(&content) {
                         Ok((knot_file, _warnings)) => {
+                            // Resolve strand_source filesystem path to absolute.
+                            let resolved_source = knot_file.strand_source.clone().with_resolved_path(
+                                knot_file.strand_source.path()
+                                    .map(|p| resolve_path(&self.project_root, &p.to_path_buf()))
+                                    .unwrap_or_default(),
+                            );
                             let knot = Knot {
                                 id: KnotId(knot_file.name.clone()),
                                 agent_profile_ref: knot_file.agent_profile_ref,
                                 prompt_template: knot_file.prompt_template,
-                                strand_dir: resolve_path(
-                                    &self.project_root,
-                                    &knot_file.strand_dir,
-                                ),
                                 git_versioned: knot_file.git_versioned,
-                                strand_source: knot_file.strand_source,
+                                strand_source: resolved_source,
                                 event_description: knot_file.event_description,
                             };
                             if matches!(event.kind, EventKind::Create(_)) {
@@ -394,7 +398,7 @@ impl NotifyEventSource {
     /// watches. `config_sender` receives `ConfigEvent` from rig and
     /// loom directory watches.
     ///
-    /// `project_root` is used to resolve relative `strand_dir`
+    /// `project_root` is used to resolve relative `strand_source`
     /// paths from knot config files during event mapping.
     ///
     /// Uses `notify::Config` with a 50ms poll interval for consistent

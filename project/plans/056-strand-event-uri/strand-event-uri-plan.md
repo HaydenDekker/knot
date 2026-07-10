@@ -116,17 +116,17 @@ Introduce `StrandSource` enum in domain, add `event_description` to `KnotFile`/`
 Update `KnotFile::parse()` to handle `strand-dir` as either a plain path or `event:` URI.
 Remove the redundant `strand_dir: PathBuf` field — `strand_source: StrandSource` is the single source of truth.
 
-- [ ] In `RawFrontmatter`, add `event_description: Option<String>` (YAML key: `event-description`)
-- [ ] In `parse()`, parse `strand-dir` string through `StrandSource::from_str()` — this is now the **only** place the raw string is consumed
-- [ ] On malformed `event:` URI (missing parts, wrong scheme), return `KnotFileError::StrandSourceError`
-- [ ] Propagate `event_description` from raw to `KnotFile`
-- [ ] **Remove `strand_dir: PathBuf` from `KnotFile`** — `strand_source` is the single representation
-- [ ] **Remove `strand_dir: PathBuf` from `Knot`** — `strand_source` is the single representation
-- [ ] Add `StrandSource::path() -> Option<&Path>` helper for consumers that need the filesystem path (returns `Some` for `Filesystem`, `None` for `EventUri`)
-- [ ] Update `knot_from_file()` in `loom_repository.rs` — remove `strand_dir` field, pass `strand_source` through
-- [ ] Update `resolve_path()` callers in `loom_repository.rs` — resolve path from `strand_source.path()` instead of `strand_dir`
-- [ ] Update all other `strand_dir` consumers (watchers, event_source, process_strand, tests) to use `strand_source`
-- [ ] **Tests**: Parse valid event URI, parse event URI with event-description, parse plain path (unchanged), parse malformed event URI returns error, parse event URI with missing producer returns error, `listens-for` becomes unknown property warning, `path()` helper returns correct path for Filesystem, `path()` returns None for EventUri, `KnotFile` serialisation no longer contains `strand_dir`, `Knot` serialisation no longer contains `strand_dir`
+- [x] In `RawFrontmatter`, add `event_description: Option<String>` (YAML key: `event-description`)
+- [x] In `parse()`, parse `strand-dir` string through `StrandSource::from_str()` — this is now the **only** place the raw string is consumed
+- [x] On malformed `event:` URI (missing parts, wrong scheme), return `KnotFileError::StrandSourceError`
+- [x] Propagate `event_description` from raw to `KnotFile`
+- [x] **Remove `strand_dir: PathBuf` from `KnotFile`** — `strand_source` is the single representation
+- [x] **Remove `strand_dir: PathBuf` from `Knot`** — `strand_source` is the single representation
+- [x] Add `StrandSource::path() -> Option<&Path>` helper for consumers that need the filesystem path (returns `Some` for `Filesystem`, `None` for `EventUri`)
+- [x] Update `knot_from_file()` in `loom_repository.rs` — remove `strand_dir` field, pass `strand_source` through
+- [x] Update `resolve_path()` callers in `loom_repository.rs` — resolve path from `strand_source.path()` instead of `strand_dir`
+- [x] Update all other `strand_dir` consumers (watchers, event_source, process_strand, tests) to use `strand_source`
+- [x] **Tests**: Parse valid event URI, parse event URI with event-description, parse plain path (unchanged), parse malformed event URI returns error, parse event URI with missing producer returns error, `listens-for` becomes unknown property warning, `path()` helper returns correct path for Filesystem, `path()` returns None for EventUri, `KnotFile` serialisation no longer contains `strand_dir`, `Knot` serialisation no longer contains `strand_dir`
 
 ### Phase 2: Context Injection — build_listener_context from StrandSource (improved format)
 

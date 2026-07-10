@@ -51,11 +51,13 @@ impl UnregisterLoom {
 
         // Stop watching strand directories for each knot
         for knot in &loom.knots {
-            self.event_source.unwatch(&knot.strand_dir)
+            let source_path = knot.strand_source.path()
+                .expect("knot should have filesystem path");
+            self.event_source.unwatch(source_path)
                 .map_err(|e| {
                     PortError::EventUnwatchFailed(format!(
                         "failed to unwatch '{}': {}",
-                        knot.strand_dir.display(),
+                        source_path.display(),
                         e
                     ))
                 })?;

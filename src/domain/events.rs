@@ -458,7 +458,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "test".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -958,7 +957,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "Test instructions.".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,

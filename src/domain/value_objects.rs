@@ -475,6 +475,34 @@ impl StrandSource {
         }
     }
 
+    /// Return the filesystem path, if this is a `Filesystem` source.
+    ///
+    /// Returns `Some(&Path)` for [`Filesystem`], or `None` for [`EventUri`].
+    ///
+    /// Used by downstream consumers (watchers, event dispatch) that need
+    /// the actual directory path for file-system operations.
+    pub fn path(&self) -> Option<&std::path::Path> {
+        match self {
+            StrandSource::Filesystem(path) => Some(path.as_path()),
+            StrandSource::EventUri { .. } => None,
+        }
+    }
+
+    /// Return a new `StrandSource` with the filesystem path resolved.
+    ///
+    /// If this is a `Filesystem` source, returns a clone with the path
+    /// replaced by `resolved_path`. If this is an `EventUri`, returns
+    /// a clone unchanged.
+    ///
+    /// Used by `FileSystemLoomRepository::scan()` to convert relative
+    /// paths to absolute after parsing.
+    pub fn with_resolved_path(self, resolved_path: std::path::PathBuf) -> Self {
+        match self {
+            StrandSource::Filesystem(_) => StrandSource::Filesystem(resolved_path),
+            other => other,
+        }
+    }
+
     /// Return `true` if this is the default value (empty filesystem path).
     ///
     /// Used by `skip_serializing_if` to omit the field when it has
@@ -989,7 +1017,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "Review the document.".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -1023,7 +1050,6 @@ mod tests {
             prompt_template: PromptTemplate {
                 instructions: "Check the code.".to_string(),
             },
-            strand_dir: PathBuf::from("input"),
             git_versioned: false,
             strand_source: StrandSource::Filesystem(PathBuf::from("input")),
             event_description: None,

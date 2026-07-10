@@ -2443,7 +2443,6 @@ mod session_title_tests {
             prompt_template: PromptTemplate {
                 instructions: "Review this file.".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
@@ -3184,7 +3183,6 @@ mod event_dispatch_tests {
             prompt_template: PromptTemplate {
                 instructions: "React to events.".to_string(),
             },
-            strand_dir: PathBuf::from("strands"),
             git_versioned: true,
             strand_source: StrandSource::EventUri {
                 producer_knot: target_knot.to_string(),

@@ -12,8 +12,8 @@ use crate::domain::knot_file::{self as knot_file_parser, KnotFile};
 /// Scans a rig directory for looms (subdirectories) and parses
 /// `.md` knot definition files using `KnotFileParser` from the domain layer.
 ///
-/// Each knot defines its own `strand_dir` in its frontmatter (required).
-/// Relative paths are resolved against the loom directory.
+/// Each knot defines its input source in its frontmatter via `strand-dir` (required).
+/// For filesystem sources, relative paths are resolved against the project root.
 /// Tie-off paths are statically derived from loom ID and knot name.
 ///
 /// Also maintains an in-memory registry of saved looms for `get()`,
@@ -123,8 +123,17 @@ impl LoomRepository for FileSystemLoomRepository {
 
             // Resolve per-knot paths relative to the project root
             // (parent of the rig directory).
+            // For Filesystem strand sources, resolve the path to absolute.
+            // For EventUri sources, no filesystem path to resolve.
             for knot in &mut knots {
-                knot.strand_dir = Self::resolve_path(project_root, &knot.strand_dir);
+                knot.strand_source = knot.strand_source.clone().with_resolved_path(
+                    if let Some(path) = knot.strand_source.path() {
+                        Self::resolve_path(project_root, &path.to_path_buf())
+                    } else {
+                        // EventUri — no path to resolve
+                        std::path::PathBuf::new()
+                    },
+                );
             }
 
             let loom = Loom {
@@ -171,7 +180,7 @@ impl FileSystemLoomRepository {
     ///
     /// A tuple of:
     /// - Parsed `Knot` instances with unresolved paths (caller must resolve
-    ///   `strand_dir` relative to the project root).
+    ///   `strand_source` filesystem paths relative to the project root).
     /// - A vector of warning strings for unknown YAML properties in
     ///   the parsed knot frontmatter.
     pub fn scan_knot_files(
@@ -229,15 +238,14 @@ impl FileSystemLoomRepository {
 
     /// Convert a parsed `KnotFile` into a domain `Knot`.
     ///
-    /// The `strand_dir` field carries a raw path from the frontmatter
-    /// (may be relative). Resolution to absolute paths is performed
-    /// by the caller in `scan()`.
+    /// The `strand_source` field carries a raw path or event URI
+    /// from the frontmatter. Resolution of Filesystem paths to
+    /// absolute is performed by the caller in `scan()`.
     fn knot_from_file(file: KnotFile) -> Knot {
         Knot {
             id: KnotId(file.name.clone()),
             agent_profile_ref: file.agent_profile_ref,
             prompt_template: file.prompt_template,
-            strand_dir: file.strand_dir,
             git_versioned: file.git_versioned,
             strand_source: file.strand_source,
             event_description: file.event_description,
@@ -360,7 +368,7 @@ Review with custom dirs
 
         // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
-        assert!(knot.strand_dir.is_absolute());
+        assert!(knot.strand_source.path().map(|p| p.is_absolute()).unwrap_or(false));
     }
 
     #[test]
@@ -548,15 +556,16 @@ broken: yaml: [
         // Every loom's knots have absolute paths.
         for loom in &looms {
             for knot in &loom.knots {
+                let path = knot.strand_source.path().expect("knot should have filesystem path");
                 assert!(
-                    knot.strand_dir.is_absolute(),
-                    "strand_dir should be absolute, got: {}",
-                    knot.strand_dir.display()
+                    path.is_absolute(),
+                    "strand_source path should be absolute, got: {}",
+                    path.display()
                 );
                 assert!(
-                    !knot.strand_dir.to_string_lossy().contains("./"),
-                    "strand_dir should not contain . component, got: {}",
-                    knot.strand_dir.display()
+                    !path.to_string_lossy().contains("./"),
+                    "strand_source path should not contain . component, got: {}",
+                    path.display()
                 );
             }
         }
@@ -584,19 +593,20 @@ broken: yaml: [
         );
 
         let loom = &looms[0];
-        let strand_str = loom.knots[0].strand_dir.to_string_lossy();
+        let path = loom.knots[0].strand_source.path().expect("knot should have filesystem path");
+        let strand_str = path.to_string_lossy();
 
-        // strand_dir must be absolute.
+        // strand_source path must be absolute.
         assert!(
-            loom.knots[0].strand_dir.is_absolute(),
-            "strand_dir should be absolute, got: {}",
+            path.is_absolute(),
+            "strand_source path should be absolute, got: {}",
             strand_str
         );
 
         // No double-slashes in the canonicalised path.
         assert!(
             !strand_str.contains("//"),
-            "strand_dir should not contain double-slashes, got: {}",
+            "strand_source path should not contain double-slashes, got: {}",
             strand_str
         );
     }
@@ -649,14 +659,14 @@ broken: yaml: [
 
         // Custom knot has required directories (resolved to absolute).
         assert!(
-            custom_knot.strand_dir.is_absolute(),
-            "custom knot strand_dir should be absolute"
+            custom_knot.strand_source.path().map(|p| p.is_absolute()).unwrap_or(false),
+            "custom knot strand_source path should be absolute"
         );
 
         // Default knot also has required directories (from frontmatter).
         assert!(
-            default_knot.strand_dir.is_absolute(),
-            "default knot strand_dir should be absolute"
+            default_knot.strand_source.path().map(|p| p.is_absolute()).unwrap_or(false),
+            "default knot strand_source path should be absolute"
         );
     }
 
@@ -703,12 +713,12 @@ Review with custom dirs
         assert_eq!(loom.knots.len(), 1);
 
         let knot = &loom.knots[0];
-        // strand_dir resolves relative to project root (rig's parent).
+        // strand_source resolves relative to project root (rig's parent).
         // "external-source" from temp_root → temp_root/external-source.
+        let path = knot.strand_source.path().expect("knot should have filesystem path");
         assert_eq!(
-            knot.strand_dir,
-            external_source,
-            "knot strand_dir should resolve relative to project root"
+            path, &external_source,
+            "knot strand_source path should resolve relative to project root"
         );
     }
 
@@ -767,20 +777,20 @@ Review with custom dirs
             .expect("knot-b should exist");
 
         // Each knot has its own source directory.
+        let path_a = knot_a.strand_source.path().expect("knot-a should have filesystem path");
+        let path_b = knot_b.strand_source.path().expect("knot-b should have filesystem path");
         assert_eq!(
-            knot_a.strand_dir,
-            source_a,
-            "knot-a should have source-a as strand_dir"
+            path_a, &source_a,
+            "knot-a should have source-a as strand_source path"
         );
         assert_eq!(
-            knot_b.strand_dir,
-            source_b,
-            "knot-b should have source-b as strand_dir"
+            path_b, &source_b,
+            "knot-b should have source-b as strand_source path"
         );
 
         // They should be different.
         assert_ne!(
-            knot_a.strand_dir, knot_b.strand_dir,
+            path_a, path_b,
             "knots should have different strand directories"
         );
     }
@@ -808,7 +818,8 @@ Review with custom dirs
 
         // Knot has required dirs (resolved to absolute paths).
         let knot = &loom.knots[0];
-        assert!(knot.strand_dir.is_absolute(), "strand_dir should be absolute");
+        let path = knot.strand_source.path().expect("knot should have filesystem path");
+        assert!(path.is_absolute(), "strand_source path should be absolute");
     }
 
     #[test]

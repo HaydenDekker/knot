@@ -10,6 +10,7 @@ use crate::application::ports::{
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
+use crate::domain::value_objects::StrandSource;
 use crate::domain::events::{ConfigEvent, LoomEvent};
 
 // Re-export shared types from types module
@@ -27,9 +28,9 @@ use super::types::format_timestamp;
 ///   `LoomRepository::scan()` and register the loom (same flow as
 ///   `RegisterLoom`).
 /// - `ConfigEvent::KnotAdded` — add the knot to the loom in the store,
-///   log `KnotRegistered`, start watcher for `strand_dir`.
+///   log `KnotRegistered`, start watcher for strand source path.
 /// - `ConfigEvent::KnotModified` — update the knot in the store, stop
-///   old watcher, start new watcher if `strand_dir` changed.
+///   old watcher, start new watcher if strand source path changed.
 /// - `ConfigEvent::KnotDeleted` — remove the knot from the loom in the
 ///   store, stop watcher, log `KnotDeregistered`.
 pub struct ConfigEventHandler {
@@ -131,11 +132,16 @@ impl ConfigEventHandler {
 
         // Resolve per-knot paths relative to the project root
         for knot in &mut knots {
-            knot.strand_dir =
-                crate::adapters::outbound::loom_repository::FileSystemLoomRepository::resolve_path(
-                    &self.project_root,
-                    &knot.strand_dir,
-                );
+            knot.strand_source = knot.strand_source.clone().with_resolved_path(
+                if let Some(path) = knot.strand_source.path() {
+                    crate::adapters::outbound::loom_repository::FileSystemLoomRepository::resolve_path(
+                        &self.project_root,
+                        &path.to_path_buf(),
+                    )
+                } else {
+                    std::path::PathBuf::new()
+                },
+            );
         }
 
         let loom = Loom {
@@ -155,7 +161,7 @@ impl ConfigEventHandler {
     /// Handle `ConfigEvent::KnotAdded`.
     ///
     /// Adds the knot to the loom in the store, logs `KnotRegistered`,
-    /// and starts watchers for `strand_dir` and event dispatch
+    /// and starts watchers for strand source path and event dispatch
     /// directories (from `strand_source` event URIs).
     fn handle_knot_added(
         &self,
@@ -177,7 +183,6 @@ impl ConfigEventHandler {
             return Ok(());
         }
 
-        let knot_strand_dir = knot.strand_dir.clone();
         let knot_id = knot.id.clone();
         let knot_for_watches = knot.clone();
         loom.knots.push(knot);
@@ -190,14 +195,17 @@ impl ConfigEventHandler {
             timestamp: format_timestamp(),
         })?;
 
-        // Start watcher (auto-creates strand_dir if missing)
-        super::loom::ensure_strand_dir_and_watch(
-            loom_id,
-            &knot_id,
-            &knot_strand_dir,
-            &*self.log_port,
-            &*self.event_source,
-        )?;
+        // Start watcher for filesystem strand source (auto-creates dir if missing).
+        // EventUri knots don't have a filesystem strand directory.
+        if let Some(strand_path) = knot_for_watches.strand_source.path() {
+            super::loom::ensure_strand_dir_and_watch(
+                loom_id,
+                &knot_id,
+                strand_path,
+                &*self.log_port,
+                &*self.event_source,
+            )?;
+        }
 
         // Start watchers for event dispatch directories
         super::loom::ensure_event_watches(
@@ -221,8 +229,8 @@ impl ConfigEventHandler {
     /// Handle `ConfigEvent::KnotModified`.
     ///
     /// Updates the knot in the store, stops the old watcher if
-    /// `strand_dir` changed, and starts a new watcher for the
-    /// updated `strand_dir`. Also (re-)starts watchers for event
+    /// strand source path changed, and starts a new watcher for the
+    /// updated strand source path. Also (re-)starts watchers for event
     /// dispatch directories (from `strand_source` event URIs).
     ///
     /// If the knot is not found in the loom (e.g., due to a race between
@@ -243,47 +251,52 @@ impl ConfigEventHandler {
         match pos {
             Some(index) => {
                 // Existing knot — update in place
-                let old_strand_dir = loom.knots[index].strand_dir.clone();
-                let new_strand_dir = knot.strand_dir.clone();
+                let old_strand_path = loom.knots[index].strand_source.path().map(|p| p.to_path_buf());
+                let new_strand_path = knot.strand_source.path().map(|p| p.to_path_buf());
                 let knot_id = knot.id.clone();
                 let knot_for_watches = knot.clone();
                 loom.knots[index] = knot;
                 self.store.register(loom);
 
-                // If strand_dir changed, stop old watcher and start new one
-                if old_strand_dir != new_strand_dir {
-                    self.event_source.unwatch_with_type(
-                        &old_strand_dir,
-                        WatchType::Strand(loom_id.clone(), knot_id.clone()),
-                    )
-                    .map_err(|e| {
-                        PortError::EventUnwatchFailed(format!(
-                            "failed to unwatch '{}': {}",
-                            old_strand_dir.display(),
-                            e
-                        ))
-                    })?;
-
-                    super::loom::ensure_strand_dir_and_watch(
-                        loom_id,
-                        &knot_id,
-                        &new_strand_dir,
-                        &*self.log_port,
-                        &*self.event_source,
-                    )?;
+                // If strand source path changed, stop old watcher and start new one
+                if old_strand_path != new_strand_path {
+                    // Stop old watcher if there was one
+                    if let Some(ref old_path) = old_strand_path {
+                        self.event_source.unwatch_with_type(
+                            old_path,
+                            WatchType::Strand(loom_id.clone(), knot_id.clone()),
+                        )
+                        .map_err(|e| {
+                            PortError::EventUnwatchFailed(format!(
+                                "failed to unwatch '{}': {}",
+                                old_path.display(),
+                                e
+                            ))
+                        })?;
+                    }
+                    // Start new watcher if there is a filesystem path
+                    if let Some(ref new_path) = new_strand_path {
+                        super::loom::ensure_strand_dir_and_watch(
+                            loom_id,
+                            &knot_id,
+                            new_path,
+                            &*self.log_port,
+                            &*self.event_source,
+                        )?;
+                    }
 
                     logging::log_knot_event(
                         "modified",
                         &loom_id.0,
                         &knot_id.0,
-                        "strand_dir changed, watcher updated",
+                        "strand_source path changed, watcher updated",
                     );
                 } else {
                     logging::log_knot_event(
                         "modified",
                         &loom_id.0,
                         &knot_id.0,
-                        "config updated (strand_dir unchanged)",
+                        "config updated (strand_source path unchanged)",
                     );
                 }
 
@@ -301,7 +314,6 @@ impl ConfigEventHandler {
                 // Knot not found — recover by registering as new.
                 // This handles the race where LoomAdded scanned before
                 // the knot file was fully written.
-                let knot_strand_dir = knot.strand_dir.clone();
                 let knot_id = knot.id.clone();
                 let knot_for_watches = knot.clone();
                 loom.knots.push(knot);
@@ -321,14 +333,17 @@ impl ConfigEventHandler {
                     timestamp: format_timestamp(),
                 })?;
 
-                // Start watcher (auto-creates strand_dir if missing)
-                super::loom::ensure_strand_dir_and_watch(
-                    loom_id,
-                    &knot_id,
-                    &knot_strand_dir,
-                    &*self.log_port,
-                    &*self.event_source,
-                )?;
+                // Start watcher for filesystem strand source.
+                // EventUri knots don't have a filesystem strand directory.
+                if let Some(strand_path) = knot_for_watches.strand_source.path() {
+                    super::loom::ensure_strand_dir_and_watch(
+                        loom_id,
+                        &knot_id,
+                        strand_path,
+                        &*self.log_port,
+                        &*self.event_source,
+                    )?;
+                }
 
                 // Start watchers for event dispatch directories
                 super::loom::ensure_event_watches(
@@ -355,7 +370,7 @@ impl ConfigEventHandler {
     /// Handle `ConfigEvent::KnotDeleted`.
     ///
     /// Removes the knot from the loom in the store, stops its
-    /// `strand_dir` watcher, and logs `KnotDeregistered`.
+    /// strand source watcher (if filesystem), and logs `KnotDeregistered`.
     fn handle_knot_deleted(
         &self,
         loom_id: &LoomId,
@@ -373,25 +388,27 @@ impl ConfigEventHandler {
             )))?;
 
         let knot = &loom.knots[pos];
-        let strand_dir = knot.strand_dir.clone();
+        let strand_path = knot.strand_source.path().map(|p| p.to_path_buf());
 
         // Remove knot from loom
         let mut updated_loom = loom;
         updated_loom.knots.remove(pos);
         self.store.register(updated_loom);
 
-        // Stop watcher for the knot's strand directory
-        self.event_source.unwatch_with_type(
-            &strand_dir,
-            WatchType::Strand(loom_id.clone(), knot_id.clone()),
-        )
-        .map_err(|e| {
-            PortError::EventUnwatchFailed(format!(
-                "failed to unwatch '{}': {}",
-                strand_dir.display(),
-                e
-            ))
-        })?;
+        // Stop watcher for the knot's strand directory (if filesystem source)
+        if let Some(ref path) = strand_path {
+            self.event_source.unwatch_with_type(
+                path,
+                WatchType::Strand(loom_id.clone(), knot_id.clone()),
+            )
+            .map_err(|e| {
+                PortError::EventUnwatchFailed(format!(
+                    "failed to unwatch '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Log KnotDeregistered
         self.log_port.append(LoomEvent::KnotDeregistered {
@@ -449,10 +466,12 @@ impl ConfigEventHandler {
         // Start file watchers for each knot's strand directory
         // and event dispatch directories (from strand_source event URIs)
         for knot in &loom.knots {
+            let source_path = knot.strand_source.path()
+                .expect("knot should have filesystem path");
             super::loom::ensure_strand_dir_and_watch(
                 &loom.id,
                 &knot.id,
-                &knot.strand_dir,
+                source_path,
                 &*self.log_port,
                 &*self.event_source,
             )?;
@@ -482,7 +501,7 @@ mod config_handler_tests {
 
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_knot, build_knot_with_strand_dir, build_loom,
+        build_knot, build_knot_with_strand_source, build_loom,
         MockLoomLogPort, MockLoomRepository, TrackingEventSource,
     };
 
@@ -500,8 +519,8 @@ mod config_handler_tests {
         let rig_path = tmp.path().to_path_buf();
         let strand_dir = rig_path.join("strands");
         let knots = vec![
-            build_knot_with_strand_dir("k1", strand_dir.clone()),
-            build_knot_with_strand_dir("k2", strand_dir.clone()),
+            build_knot_with_strand_source("k1", strand_dir.clone()),
+            build_knot_with_strand_source("k2", strand_dir.clone()),
         ];
 
         let repo = Arc::new(MockLoomRepository {
@@ -840,7 +859,7 @@ mod config_handler_tests {
 
         // Update knot with different strand_dir
         let updated_knot =
-            build_knot_with_strand_dir("k1", PathBuf::from("new-strands"));
+            build_knot_with_strand_source("k1", PathBuf::from("new-strands"));
 
         let result = handler.execute(ConfigEvent::KnotModified {
             loom_id: loom_id.clone(),
@@ -856,8 +875,8 @@ mod config_handler_tests {
             .find(|k| k.id == KnotId("k1".to_string()))
             .unwrap();
         assert_eq!(
-            k1.strand_dir,
-            PathBuf::from("new-strands")
+            k1.strand_source,
+            StrandSource::Filesystem(PathBuf::from("new-strands"))
         );
 
         // Old watcher stopped
@@ -1317,7 +1336,7 @@ mod config_handler_tests {
             "strand_dir must not exist before test"
         );
 
-        let new_knot = build_knot_with_strand_dir("k2", nonexistent_dir.clone());
+        let new_knot = build_knot_with_strand_source("k2", nonexistent_dir.clone());
         let result = handler.execute(ConfigEvent::KnotAdded {
             loom_id: loom_id.clone(),
             knot: new_knot,
@@ -1433,7 +1452,7 @@ mod config_handler_tests {
 
         // Update knot to point to the nonexistent directory
         let updated_knot =
-            build_knot_with_strand_dir("k1", nonexistent_dir.clone());
+            build_knot_with_strand_source("k1", nonexistent_dir.clone());
 
         let result = handler.execute(ConfigEvent::KnotModified {
             loom_id: loom_id.clone(),
@@ -1491,7 +1510,10 @@ mod config_handler_tests {
         let k1 = loom.knots.iter()
             .find(|k| k.id == KnotId("k1".to_string()))
             .unwrap();
-        assert_eq!(k1.strand_dir, nonexistent_dir);
+        assert_eq!(
+            k1.strand_source,
+            StrandSource::Filesystem(nonexistent_dir.clone())
+        );
     }
 }
 
@@ -1509,7 +1531,7 @@ mod phase2_tests {
 
     #[allow(unused_imports)]
     use super::super::test_fixtures::{
-        build_knot, build_knot_with_strand_dir, build_loom,
+        build_knot, build_knot_with_strand_source, build_loom,
         MockLoomLogPort, TrackingEventSource,
     };
 
@@ -1569,8 +1591,8 @@ mod phase2_tests {
 
         let loom_id = LoomId("new-loom".to_string());
         let knots = vec![
-            build_knot_with_strand_dir("k1", strand_dir.clone()),
-            build_knot_with_strand_dir("k2", strand_dir.clone()),
+            build_knot_with_strand_source("k1", strand_dir.clone()),
+            build_knot_with_strand_source("k2", strand_dir.clone()),
         ];
 
         let repo = Arc::new(MockLoomRepository {

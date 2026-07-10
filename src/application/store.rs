@@ -94,7 +94,6 @@ mod tests {
                         "check it".to_string(),
                     )
                     .unwrap(),
-                    strand_dir: PathBuf::from("strands"),
                     git_versioned: true,
                     strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
                     event_description: None,

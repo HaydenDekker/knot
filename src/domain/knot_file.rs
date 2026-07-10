@@ -81,17 +81,14 @@ pub struct KnotFile {
     pub agent_profile_ref: String,
     /// Prompt template extracted from frontmatter.
     pub prompt_template: PromptTemplate,
-    /// Directory to watch for strand files (required).
-    pub strand_dir: PathBuf,
     /// When `true` (default), a git commit is created after each successful
     /// knot run. Parsed from `git-versioned` frontmatter key.
     pub git_versioned: bool,
     /// The source from which this knot receives its input.
     ///
-    /// Either a filesystem directory or an event URI. Populated from
-    /// `strand-dir` frontmatter. In Phase 0 this is always a
-    /// `Filesystem` path — Phase 1 wires up `EventUri` parsing.
-    #[serde(default, skip_serializing_if = "StrandSource::is_default")]
+    /// Either a filesystem directory or an event URI (`event:<producer>:<EventId>`).
+    /// Populated from `strand-dir` frontmatter — this is the **single** input
+    /// direction for the knot.
     pub strand_source: StrandSource,
     /// Semantic description of events this knot subscribes to.
     ///
@@ -170,27 +167,34 @@ pub fn parse(
     let prompt_template = PromptTemplate::new(instructions)
         .map_err(|_| KnotFileError::MissingPromptTemplate)?;
 
-    // Parse required strand-dir
-    let strand_dir = raw
-        .strand_dir
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .ok_or(KnotFileError::MissingStrandDir)?;
+    // Parse required strand-dir through StrandSource::from_str().
+    // This is the only place the raw strand-dir string is consumed.
+    let strand_dir_raw = raw.strand_dir.filter(|s| !s.trim().is_empty());
+    let strand_source = match strand_dir_raw {
+        Some(ref s) => {
+            StrandSource::from_str(s).map_err(|e| KnotFileError::StrandSourceError(e.message))?
+        }
+        None => return Err(KnotFileError::MissingStrandDir),
+    };
+
+    // strand_source must be Filesystem — EventUri is not a valid
+    // standalone input (the knot would have no filesystem directory to watch).
+    // If strand_source is EventUri, the strand_dir field is absent,
+    // and ensure_strand_dir_and_watch is not called.
+    // For now (Phase 1), we accept both variants. Downstream code
+    // (loom_repository) resolves Filesystem paths to absolute.
+    // EventUri knots don't get a strand_dir — they get an event dispatch
+    // directory created by ensure_event_watches instead.
+    let _ = strand_source.is_event(); // silence unused warning
 
     // git-versioned defaults to true when absent
     let git_versioned = raw.git_versioned.unwrap_or(true);
-
-    // Build StrandSource from the raw strand-dir string.
-    // In Phase 0, strand-dir is always a plain filesystem path.
-    // Phase 1 wires up event URI parsing via StrandSource::from_str().
-    let strand_source = StrandSource::Filesystem(strand_dir.clone());
 
     Ok((
         KnotFile {
             name,
             agent_profile_ref,
             prompt_template,
-            strand_dir,
             git_versioned,
             strand_source,
             event_description: raw.event_description,
@@ -351,7 +355,14 @@ Review the goals section of this PRD. Check that:
         assert_eq!(file.name, "prd-goals-review");
         assert_eq!(file.agent_profile_ref, "fast");
         assert!(file.prompt_template.instructions.contains("specific and measurable"));
-        assert_eq!(file.strand_dir, PathBuf::from("strands"));
+        match &file.strand_source {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(**path, PathBuf::from("strands"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem strand source");
+            }
+        }
     }
 
     #[test]
@@ -371,10 +382,14 @@ Review the document
             "custom-strand-dir knot should produce no warnings, got: {warnings:?}"
         );
         assert_eq!(file.name, "custom-dirs-knot");
-        assert_eq!(
-            file.strand_dir,
-            PathBuf::from("../custom-source")
-        );
+        match &file.strand_source {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(**path, PathBuf::from("../custom-source"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem strand source");
+            }
+        }
     }
 
     #[test]
@@ -408,8 +423,15 @@ Review the document
 
         let (file, warnings) = parse(content).unwrap();
         assert_eq!(file.name, "legacy-knot");
-        assert_eq!(file.strand_dir, PathBuf::from("../input"));
         assert_eq!(file.agent_profile_ref, "fast");
+        match &file.strand_source {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(**path, PathBuf::from("../input"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem");
+            }
+        }
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("tie-off-dir"));
     }
@@ -579,7 +601,6 @@ Do something
             agent_profile_ref: "fast".to_string(),
             prompt_template: PromptTemplate::new("do it".to_string())
                 .unwrap(),
-            strand_dir: PathBuf::from("strands/test"),
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands/test")),
             event_description: None,
@@ -601,7 +622,14 @@ Do something
         );
         assert_eq!(file.name, "roundtrip-knot");
         assert_eq!(file.agent_profile_ref, "fast");
-        assert_eq!(file.strand_dir, PathBuf::from("strands"));
+        match &file.strand_source {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(**path, PathBuf::from("strands"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem");
+            }
+        }
         assert!(file.git_versioned, "should default to true");
     }
 
