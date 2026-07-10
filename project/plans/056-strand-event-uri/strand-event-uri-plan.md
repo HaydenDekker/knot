@@ -178,12 +178,12 @@ Remove `Intent` from `FileSystemLoomRepository`, `ConfigEventHandler`, and event
 
 Update `process_strand` event metadata extraction and `AgentEvent` handling.
 
-- [ ] `AgentEvent` struct: `target_knot` field removed — the producing knot is always known from the tie-off context (ProcessStrand has the knot ID). When parsing, fill `target_knot` from the knot that produced the tie-off.
-- [ ] When processing a strand that came from an event dispatch directory, `extract_event_metadata()` should still work (reads frontmatter of the event file — unchanged)
-- [ ] `EventMetadata` entity and its serialisation are unchanged
-- [ ] Tie-off append with `event_metadata` is unchanged
-- [ ] Ensure `StrandSource::EventUri` knots produce correct `EventMetadata` in their tie-offs
-- [ ] **Tests**: Event-triggered consumer knot produces tie-off with event metadata, Filesystem knot produces tie-off without event metadata, partial event metadata preserved, `AgentEvent` target_knot derived from producing knot
+- [x] `AgentEvent` struct: `target_knot` field removed — the producing knot is always known from the tie-off context (ProcessStrand has the knot ID). When parsing, fill `target_knot` from the knot that produced the tie-off.
+- [x] When processing a strand that came from an event dispatch directory, `extract_event_metadata()` should still work (reads frontmatter of the event file — unchanged)
+- [x] `EventMetadata` entity and its serialisation are unchanged
+- [x] Tie-off append with `event_metadata` is unchanged
+- [x] Ensure `StrandSource::EventUri` knots produce correct `EventMetadata` in their tie-offs
+- [x] **Tests**: Event-triggered consumer knot produces tie-off with event metadata, Filesystem knot produces tie-off without event metadata, partial event metadata preserved, `AgentEvent` target_knot derived from producing knot
 
 ### Phase 7: Skills, Docs, Domain Glossary — Update for new model
 

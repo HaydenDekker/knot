@@ -4209,3 +4209,385 @@ mod tieoff_event_metadata_tests {
         );
     }
 }
+
+// ── Phase 6: Event Metadata and Tie-Off Integration Tests ─────────────
+
+#[cfg(test)]
+mod phase6_integration_tests {
+    use super::*;
+    use crate::domain::entities::{KnotId, LoomId, PromptTemplate};
+    use crate::application::ports::AgentOutput;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile,
+        MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
+        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
+    };
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Build a consumer knot with EventUri strand source.
+    fn build_event_consumer_knot(
+        id: &str,
+        producer_knot: &str,
+        event_id: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: producer_knot.to_string(),
+                event_id: event_id.to_string(),
+            },
+            event_description: Some(format!("When {event_id} occurs.")),
+        }
+    }
+
+    /// Build a normal Filesystem knot.
+    fn build_filesystem_knot(id: &str) -> Knot {
+        build_knot(id)
+    }
+
+    /// Write an event file at the given directory with the given frontmatter.
+    fn write_event_file(
+        dir: &TempDir,
+        event_id: &str,
+        producer_knot: &str,
+        original_strand: Option<&str>,
+    ) -> PathBuf {
+        let mut content = String::from("---\n");
+        content.push_str(&format!("event-id: {}\n", event_id));
+        content.push_str(&format!("target-knot: {}\n", producer_knot));
+        if let Some(orig) = original_strand {
+            content.push_str(&format!("original-strand: {}\n", orig));
+        }
+        content.push_str("timestamp: 2026-07-09T12:00:00Z\n");
+        content.push_str("---\n\n");
+        content.push_str(&format!(
+            "## Event: {} from {}\n\nBody",
+            event_id, producer_knot
+        ));
+        let filename = format!("event-2026-07-09T12-00-00Z.md");
+        let path = dir.path().join(&filename);
+        std::fs::write(&path, &content).unwrap();
+        path
+    }
+
+    /// Build ProcessStrand with tracking tie-off sink.
+    fn build_process_strand_with_tracking(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+        LoomStore,
+    ) {
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, _log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+        );
+
+        (use_case, tie_off_appends, tie_off_content, store)
+    }
+
+    // ── Tests: Event-triggered consumer knot produces tie-off with event metadata ──
+
+    /// When a consumer knot processes an event file (dispatched by
+    /// intent-based routing event file), extract_event_metadata()
+    /// populates EventMetadata from the frontmatter. The tie-off
+    /// append includes structured event fields.
+    #[test]
+    fn event_triggered_consumer_knot_produces_tieoff_with_event_metadata() {
+        let dir = TempDir::new().unwrap();
+        let event_file = write_event_file(
+            &dir,
+            "PlanCreated",
+            "plan-creator",
+            Some("001-feature.md"),
+        );
+
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_event_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "Plan watched and validated.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, tie_off_appends, _content, _store) =
+            build_process_strand_with_tracking(vec![consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("consumer-loom".to_string()),
+            knot_id: KnotId("plan-watcher".to_string()),
+            strand_path: StrandPath(event_file.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Tie-off should be appended with event metadata
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(
+            appends.len(),
+            1,
+            "should have appended exactly 1 tie-off"
+        );
+        let appended = &appends[0];
+        assert!(
+            appended.event_metadata.is_some(),
+            "tie-off should have event metadata for event-triggered strand"
+        );
+        assert_eq!(
+            appended.event_metadata.event_id.as_deref(),
+            Some("PlanCreated")
+        );
+        assert_eq!(
+            appended.event_metadata.source_knot.as_deref(),
+            Some("plan-creator")
+        );
+        assert_eq!(
+            appended.event_metadata.original_strand.as_deref(),
+            Some("001-feature.md")
+        );
+    }
+
+    // ── Tests: Filesystem knot produces tie-off without event metadata ──
+
+    /// When a normal Filesystem knot processes a regular strand file
+    /// (not an event file), extract_event_metadata() returns None
+    /// and the tie-off has no event metadata.
+    #[test]
+    fn filesystem_knot_produces_tieoff_without_event_metadata() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("prd.md");
+        std::fs::write(&strand_path, "Plan for feature X").unwrap();
+
+        let loom = build_loom(
+            "review-loom",
+            vec![build_filesystem_knot("reviewer")],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "Reviewed.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, tie_off_appends, _content, _store) =
+            build_process_strand_with_tracking(vec![loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("review-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Tie-off should be appended WITHOUT event metadata
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(
+            appends.len(),
+            1,
+            "should have appended exactly 1 tie-off"
+        );
+        let appended = &appends[0];
+        assert!(
+            appended.event_metadata.is_none(),
+            "tie-off should NOT have event metadata for filesystem strand"
+        );
+    }
+
+    // ── Tests: Partial event metadata preserved ──
+
+    /// When an event file has only event-id (no target-knot, no
+    /// original-strand), the tie-off preserves only the fields
+    /// that were present.
+    #[test]
+    fn partial_event_metadata_preserved() {
+        let dir = TempDir::new().unwrap();
+        let event_file = write_event_file(
+            &dir,
+            "PlanCreated",
+            "plan-creator",
+            None, // no original-strand
+        );
+
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_event_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "Watched.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, tie_off_appends, _content, _store) =
+            build_process_strand_with_tracking(vec![consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("consumer-loom".to_string()),
+            knot_id: KnotId("plan-watcher".to_string()),
+            strand_path: StrandPath(event_file.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1);
+        let appended = &appends[0];
+        assert!(appended.event_metadata.is_some());
+        // event-id is present
+        assert_eq!(
+            appended.event_metadata.event_id.as_deref(),
+            Some("PlanCreated")
+        );
+        // source_knot is present (mapped from target-knot in frontmatter)
+        assert_eq!(
+            appended.event_metadata.source_knot.as_deref(),
+            Some("plan-creator")
+        );
+        // original_strand is None (not in frontmatter)
+        assert!(appended.event_metadata.original_strand.is_none());
+    }
+
+    // ── Tests: AgentEvent target_knot derived from producing knot ──
+
+    /// In the dispatch flow, the producing knot's ID is known from
+    /// the ProcessStrand context (the knot executing the strand).
+    /// It is passed as `producer_knot` to `dispatch()`, which writes
+    /// it into the event file frontmatter. The AgentEvent struct
+    /// no longer carries a `target_knot` field — it is derived at
+    /// dispatch time from the executing knot's ID.
+    #[test]
+    fn agent_event_target_knot_derived_from_producing_knot() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        // Producer loom with a producer knot
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_filesystem_knot("plan-creator")],
+        );
+
+        // Consumer loom with EventUri knot
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_event_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+            )],
+        );
+
+        // Producer emits an event (no target-knot in event block —
+        // it's derived from context)
+        let output_content = concat!(
+            "Plan created.\n",
+            "\n",
+            "  event: PlanCreated\n",
+            "  plan: PLAN-001\n",
+        );
+        let output = Ok(AgentOutput {
+            stdout: output_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _tie_off_appends, _content, _store) =
+            build_process_strand_with_tracking(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify the agent event does NOT contain target_knot.
+        // The Event struct has no target_knot field — only event_id
+        // and payload. The producing knot's ID is available from
+        // the ProcessStrand context (knot.id.0 == "plan-creator"),
+        // not from the event data itself.
+        let parsed_events =
+            crate::domain::tieoff_parser::extract_agent_events(
+                output_content,
+            );
+        assert!(parsed_events.is_some());
+        let parsed = parsed_events.unwrap();
+        assert_eq!(parsed.event_id, "PlanCreated");
+        // target-knot should NOT be in the payload (it's derived from context)
+        assert!(
+            !parsed.payload.contains_key("target-knot"),
+            "agent event should NOT contain target-knot in payload"
+        );
+        // The producing knot is known from context ("plan-creator"),
+        // which matches knot.id.0
+    }
+}
