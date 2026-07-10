@@ -10,7 +10,6 @@ use crate::application::ports::{
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, Loom, LoomId};
-use crate::domain::value_objects::StrandSource;
 use crate::domain::events::{ConfigEvent, LoomEvent};
 
 // Re-export shared types from types module
@@ -195,24 +194,13 @@ impl ConfigEventHandler {
             timestamp: format_timestamp(),
         })?;
 
-        // Start watcher for filesystem strand source (auto-creates dir if missing).
-        // EventUri knots don't have a filesystem strand directory.
-        if let Some(strand_path) = knot_for_watches.strand_source.path() {
-            super::loom::ensure_strand_dir_and_watch(
-                loom_id,
-                &knot_id,
-                strand_path,
-                &*self.log_port,
-                &*self.event_source,
-            )?;
-        }
-
-        // Start watchers for event dispatch directories
-        super::loom::ensure_event_watches(
+        // Start watcher for the knot's strand source (filesystem path
+        // or event URI dispatch directory)
+        super::loom::ensure_strand_source_watch(
             &self.rig_dir,
             loom_id,
             &knot_id,
-            &knot_for_watches,
+            &knot_for_watches.strand_source,
             &*self.log_port,
             &*self.event_source,
         )?;
@@ -258,9 +246,11 @@ impl ConfigEventHandler {
                 loom.knots[index] = knot;
                 self.store.register(loom);
 
-                // If strand source path changed, stop old watcher and start new one
+                // If strand source path changed, stop old watcher and start
+                // new one. Then (re-)start the watcher for the new strand
+                // source (filesystem path or event URI dispatch directory).
                 if old_strand_path != new_strand_path {
-                    // Stop old watcher if there was one
+                    // Stop old watcher if there was a filesystem path
                     if let Some(ref old_path) = old_strand_path {
                         self.event_source.unwatch_with_type(
                             old_path,
@@ -273,16 +263,6 @@ impl ConfigEventHandler {
                                 e
                             ))
                         })?;
-                    }
-                    // Start new watcher if there is a filesystem path
-                    if let Some(ref new_path) = new_strand_path {
-                        super::loom::ensure_strand_dir_and_watch(
-                            loom_id,
-                            &knot_id,
-                            new_path,
-                            &*self.log_port,
-                            &*self.event_source,
-                        )?;
                     }
 
                     logging::log_knot_event(
@@ -300,12 +280,12 @@ impl ConfigEventHandler {
                     );
                 }
 
-                // (Re-)start watchers for event dispatch directories
-                super::loom::ensure_event_watches(
+                // (Re-)start watcher for the updated strand source.
+                super::loom::ensure_strand_source_watch(
                     &self.rig_dir,
                     loom_id,
                     &knot_id,
-                    &knot_for_watches,
+                    &knot_for_watches.strand_source,
                     &*self.log_port,
                     &*self.event_source,
                 )?;
@@ -333,24 +313,13 @@ impl ConfigEventHandler {
                     timestamp: format_timestamp(),
                 })?;
 
-                // Start watcher for filesystem strand source.
-                // EventUri knots don't have a filesystem strand directory.
-                if let Some(strand_path) = knot_for_watches.strand_source.path() {
-                    super::loom::ensure_strand_dir_and_watch(
-                        loom_id,
-                        &knot_id,
-                        strand_path,
-                        &*self.log_port,
-                        &*self.event_source,
-                    )?;
-                }
-
-                // Start watchers for event dispatch directories
-                super::loom::ensure_event_watches(
+                // Start watcher for the recovered knot's strand source
+                // (filesystem path or event URI dispatch directory)
+                super::loom::ensure_strand_source_watch(
                     &self.rig_dir,
                     loom_id,
                     &knot_id,
-                    &knot_for_watches,
+                    &knot_for_watches.strand_source,
                     &*self.log_port,
                     &*self.event_source,
                 )?;
@@ -463,24 +432,14 @@ impl ConfigEventHandler {
         // Store the loom
         self.store.register(loom.clone());
 
-        // Start file watchers for each knot's strand directory
-        // and event dispatch directories (from strand_source event URIs)
+        // Start file watchers for each knot's strand source
+        // (filesystem path or event URI dispatch directory)
         for knot in &loom.knots {
-            let source_path = knot.strand_source.path()
-                .expect("knot should have filesystem path");
-            super::loom::ensure_strand_dir_and_watch(
-                &loom.id,
-                &knot.id,
-                source_path,
-                &*self.log_port,
-                &*self.event_source,
-            )?;
-
-            super::loom::ensure_event_watches(
+            super::loom::ensure_strand_source_watch(
                 &self.rig_dir,
                 &loom.id,
                 &knot.id,
-                &knot,
+                &knot.strand_source,
                 &*self.log_port,
                 &*self.event_source,
             )?;
@@ -495,7 +454,7 @@ impl ConfigEventHandler {
 #[cfg(test)]
 mod config_handler_tests {
     use super::*;
-    use crate::domain::value_objects::PromptTemplate;
+    use crate::domain::value_objects::{PromptTemplate, StrandSource};
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 

@@ -180,11 +180,11 @@ pub fn parse(
     // strand_source must be Filesystem — EventUri is not a valid
     // standalone input (the knot would have no filesystem directory to watch).
     // If strand_source is EventUri, the strand_dir field is absent,
-    // and ensure_strand_dir_and_watch is not called.
+    // and ensure_strand_source_watch is not called.
     // For now (Phase 1), we accept both variants. Downstream code
     // (loom_repository) resolves Filesystem paths to absolute.
     // EventUri knots don't get a strand_dir — they get an event dispatch
-    // directory created by ensure_event_watches instead.
+    // directory created by ensure_strand_source_watch instead.
     let _ = strand_source.is_event(); // silence unused warning
 
     // git-versioned defaults to true when absent

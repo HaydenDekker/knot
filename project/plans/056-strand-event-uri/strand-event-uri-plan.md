@@ -158,12 +158,12 @@ Refactor the event dispatch matching flow and update the tie-off event parser fo
 
 Merge `ensure_strand_dir_and_watch()` and `ensure_event_watches()` into a single function that handles both `StrandSource` variants.
 
-- [ ] Rename/replace `ensure_strand_dir_and_watch()` with a single function that:
-  - [ ] For `StrandSource::Filesystem(path)` — create if missing, watch (same as current)
-  - [ ] For `StrandSource::EventUri { event_id }` — derive `rig/tie-offs/{loom-id}/{event-id}/`, create if missing, watch
-- [ ] Remove `ensure_event_watches()` entirely
-- [ ] Update callers in `discover.rs`, `register.rs`, `config_event_handler.rs` to call the unified function once per knot (instead of calling both `ensure_strand_dir_and_watch` and `ensure_event_watches`)
-- [ ] **Tests**: Filesystem source creates and watches directory, EventUri source derives and creates event directory, EventUri source watches derived directory, missing rig/tie-offs parents created
+- [x] Rename/replace `ensure_strand_dir_and_watch()` with `ensure_strand_source_watch` that:
+  - [x] For `StrandSource::Filesystem(path)` — create if missing, watch (same as current)
+  - [x] For `StrandSource::EventUri { event_id }` — derive `rig/tie-offs/{loom-id}/{event-id}/`, create if missing, watch
+- [x] Remove `ensure_event_watches()` entirely
+- [x] Update callers in `discover.rs`, `register.rs`, `config_event_handler.rs` to call the unified function once per knot (instead of calling both `ensure_strand_dir_and_watch` and `ensure_event_watches`)
+- [x] **Tests**: Filesystem source creates and watches directory, EventUri source derives and creates event directory, EventUri source watches derived directory, missing rig/tie-offs parents created
 
 ### Phase 5: Loom Repository and Config Event Handler — Remove Intent
 

@@ -83,24 +83,14 @@ impl RegisterLoom {
         // Store the loom
         self.store.register(loom.clone());
 
-        // Start file watchers for each knot's strand directory
-        // and event dispatch directories (from listens_for)
+        // Start file watchers for each knot's strand source
+        // (filesystem path or event URI dispatch directory)
         for knot in &loom.knots {
-            let source_path = knot.strand_source.path()
-                .expect("knot should have filesystem path");
-            super::ensure_strand_dir_and_watch(
-                &loom.id,
-                &knot.id,
-                source_path,
-                &*self.log_port,
-                &*self.event_source,
-            )?;
-
-            super::ensure_event_watches(
+            super::ensure_strand_source_watch(
                 &self.rig_dir,
                 &loom.id,
                 &knot.id,
-                &knot,
+                &knot.strand_source,
                 &*self.log_port,
                 &*self.event_source,
             )?;
