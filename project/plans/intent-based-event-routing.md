@@ -120,7 +120,19 @@ The static routing pattern is a valid current solution. It can be used now to un
 
 No breaking changes — intent-based routing is backward compatible with static routing during transition.
 
-## Implementation Status: ✅ Complete (2026-07-09)
+## Implementation Status: ✅ Complete (2026-07-09) — Superseded
+
+**Superseded by [Plan 056: Strand Event URI](./056-strand-event-uri/strand-event-uri-plan.md) (2026-07-10).**
+
+Plan 056 refactors the knot configuration model introduced by this plan.
+The `listens-for` / `Intent` approach is replaced by `StrandSource` — a
+single input-direction primitive expressed as `strand-dir`. Event consumer
+knots now use `event:` URIs in `strand-dir` instead of a separate
+`listens-for` array. This restores the "one strand, one direction"
+principle and eliminates the dual-input model on event consumer knots.
+
+Existing rigs using `listens-for` will parse with an unknown-property
+warning. Migration instructions are in the [knot-update skill](../.agents/skills/knot-update/SKILL.md).
 
 ## Notes
 - Phases 0-6 implemented: domain model (Intent, AgentEvent, EventMetadata), tie-off parser, intent matching, event dispatcher, context injection, processing pipeline integration, and observability

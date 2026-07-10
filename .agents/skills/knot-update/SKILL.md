@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,122 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### 0.24.0 — StrandSource: Unified Input Direction (2026-07-10)
+
+The `listens-for` array is replaced by `strand-source` (expressed as
+`strand-dir` with an `event:` URI). Each knot now has exactly **one**
+input direction, restoring the "one strand, one direction" principle.
+Event consumer knots set `strand-dir` to an `event:` URI instead of
+a filesystem path, and an optional `event-description` field provides
+the semantic contract injected into the producer's prompt.
+
+#### Affected Documents
+
+| Document Type | Location | Change |
+|---------------|----------|--------|
+| Knot | `rig/*-loom/*.md` | `listens-for` removed; `strand-dir` now accepts `event:` URIs; new optional `event-description` field |
+
+#### Frontmatter Changes
+
+**Before (dual input — filesystem path + event intents):**
+
+```markdown
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "project/reviews"
+listens-for:
+  - target-knot: quality-reviewer
+    event-id: ReviewCompleted
+    event-description: >
+      Emitted when a quality review is complete.
+---
+
+Create a refactor plan when a quality review is complete.
+```
+
+**After (single input — event URI replaces listens-for):**
+
+```markdown
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "event:quality-reviewer:ReviewCompleted"
+event-description: >
+  Emitted when a quality review is complete.
+---
+
+Create a refactor plan when a quality review is complete.
+```
+
+**Normal (non-event) knots are unchanged:**
+
+```markdown
+---
+name: goals-review
+agent-profile-ref: fast
+strand-dir: "project/prds"
+---
+
+Review the goals section.
+```
+
+#### Migration Steps
+
+1. **Find knots with `listens-for`:**
+   ```bash
+   grep -rl "listens-for:" rig/ 2>/dev/null
+   ```
+
+2. **For each consumer knot with `listens-for`:**
+   a. Read the knot file.
+   b. For each intent in `listens-for`, take the `target-knot` value
+      (the producer) and the `event-id` value.
+   c. Replace `strand-dir` with:
+      `"event:<target-knot>:<event-id>"`
+   d. Move `event-description` from the intent object into a top-level
+      `event-description` frontmatter field.
+   e. Remove the entire `listens-for:` block from the frontmatter.
+
+   **If a knot has `listens-for` with multiple intents**, it cannot
+   be migrated directly — `StrandSource` supports only one input.
+   Create separate knots, one per event subscription.
+
+3. **Verify** — Knot must be running:
+   ```bash
+   cat rig/state.json | python3 -m json.tool
+   ```
+   Check that consumer knots appear without errors and that `listens-for`
+   is no longer present in any knot definition.
+
+#### If Not Migrated
+
+- Knots with `listens-for` will parse with an **unknown-property warning**
+  (`listens-for` is no longer a recognised frontmatter key).
+- The knot will not have event subscriptions (the `listens-for` entries
+  are silently ignored).
+- The knot's `strand-dir` filesystem path still works normally.
+- No data loss — existing tie-off files and event directories are
+  preserved.
+
+#### Fields Unchanged by This Migration
+
+All other frontmatter fields keep the same meaning and location:
+
+| Document | Field | Unchanged |
+|----------|-------|-----------|
+| Profile | `name` | Yes |
+| Profile | `provider` | Yes |
+| Profile | `model` | Yes |
+| Profile | `tools` | Yes |
+| Profile | `timeout` | Yes |
+| Knot | `name` | Yes |
+| Knot | `agent-profile-ref` | Yes |
+| Knot | `strand-dir` | Yes (now also accepts `event:` URIs) |
+| Knot | `git-versioned` | Yes |
 
 ---
 

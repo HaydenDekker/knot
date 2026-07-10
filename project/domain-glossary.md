@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-06-28
+> **Last Updated:** 2026-07-10
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -46,9 +46,9 @@ A configured artifact that brings everything together, ready for processing. Com
 
 1. **Agent Profile** — determines *which agent* runs.
 2. **Markdown Body** — task-specific instructions that supplement the profile's system prompt.
-3. **Directories** — the `strand_dir` (where strands to watch live, **required**). The tie-off output path is **statically derived** as `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` — no `tie-off-dir` configuration is needed.
+3. **Strand Source** — a single input direction declared as `strand-dir` in the frontmatter. This can be a filesystem path (normal knots) or an `event:` URI (event consumer knots). The tie-off output path is **statically derived** as `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` — no `tie-off-dir` configuration is needed.
 
-A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.
+A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`, and optionally `event-description`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.
 
 ---
 
@@ -108,7 +108,9 @@ An individual attempt within the session resume loop. The first invocation is no
 
 ### Strand Directory
 
-The directory that a knot watches for strand file events. Configured per-knot as `strand_dir` in the knot's YAML frontmatter. This is the directory where raw input files (**strands**) live.
+The directory that a knot watches for strand file events. Configured per-knot as `strand-dir` in the knot's YAML frontmatter. This is the directory where raw input files (**strands**) live.
+
+For normal knots this is a filesystem path (e.g. `"project/prds"`). For event consumer knots this is an `event:` URI (e.g. `"event:quality-reviewer:ReviewCompleted"`), which Knot resolves to the dispatch subdirectory `rig/tie-offs/{loom-id}/{event-id}/`. In both cases the value is represented internally as a `StrandSource` (see below).
 
 > **Note:** The strand directory is the *knot-level* watch target. It is not the same as the loom directory. The loom directory holds knot definition files; the strand directory holds the files being processed.
 
@@ -136,9 +138,11 @@ Statically derived path under `rig/tie-offs/{loom-id}/`. No longer configurable 
 
 ### Tie-Off Events
 
-Typed subdirectories inside a knot's tie-off directory that carry static event files for agent-to-agent communication. The subdirectory name declares the event type.
+Typed subdirectories inside a loom's tie-off directory that carry event files for agent-to-agent communication. These directories are created automatically by Knot's event dispatch system when an event is emitted.
 
-A producing knot writes event files into its own tie-off event subdirectory. A consuming knot points its `strand-dir` at that subdirectory to subscribe. This is the **static routing** pattern — the current mechanism for a2a communication before intent-based routing ships.
+**Dynamic routing (current):** A consumer knot declares its subscription using an `event:` URI in its `strand-dir` (e.g. `event:quality-reviewer:ReviewCompleted`). Knot resolves this to `rig/tie-offs/{loom-id}/{event-id}/`, creates the directory, and watches it. When the producer emits a matching event, Knot creates an event file in that directory, triggering the consumer.
+
+**Static routing (legacy):** A producing knot writes event files directly into a typed subdirectory. A consuming knot points its `strand-dir` at that subdirectory using a filesystem path. This pattern still works but is superseded by dynamic routing.
 
 **Layout:**
 
@@ -146,18 +150,9 @@ A producing knot writes event files into its own tie-off event subdirectory. A c
 rig/tie-offs/<loom-id>/
 ├── <knot-name>-tie-off.md    ← append-only log (always present)
 ├── <another-knot>-tie-off.md  ← another knot's tie-off (flat)
-├── <event-type>/              ← typed event subdirectory
-│   └── <event-file>.md        ← static event strand for consumers
-└── <another-event-type>/      ← another event type (if needed)
+└── <event-id>/                ← event dispatch subdirectory (created by Knot)
+      └── <event-file>.md      ← dispatched event strand for consumers
 ```
-
-**Convention:**
-
-- Event subdirectory names are lowercase plural (e.g. `reviews`, `findings`, `plans`)
-- Event file names follow the pattern `<plan-number>-<description>.md` or `<identifier>-<description>.md`
-- The subdirectory is created when the knot is created — it is part of the knot's output contract
-- Consumer knots reference the full path in their `strand-dir`:
-  `../../tie-offs/<loom-id>/<event-type>`
 
 **Why tie-off directories?** The PRDs define a clean separation: rig directories hold workflow definitions; tie-off directories hold derived state. Placing events in tie-off directories keeps the rig directory pure (only loom definitions) and places events in the correct output namespace.
 
@@ -204,6 +199,21 @@ A background task that periodically polls the rig's in-memory state and writes i
 
 ---
 
+### StrandSource
+
+The single input-direction primitive for a knot. Replaces the previous dual-input model (`strand-dir` filesystem path + `listens-for` event intents). A knot has exactly **one** `StrandSource`, expressed as `strand-dir` in the knot's YAML frontmatter.
+
+Two variants:
+
+- **Filesystem** — a plain directory path (e.g. `"project/prds"`). The knot watches that directory for strand files. This is the common case.
+- **EventUri** — an `event:` URI of the form `event:<producer-knot-id>:<EventId>`. Knot resolves this to the dispatch subdirectory `rig/tie-offs/{loom-id}/{event-id}/` and watches it. The producer knot and event ID are encoded in the URI, so consumer intent is declared *in the same field* that declares the watched directory.
+
+An optional `event-description` frontmatter field on consumer knots provides the semantic description injected into the producer's prompt. When absent, a generic prompt is injected.
+
+**Why StrandSource?** Previously, knots had two input channels: `strand-dir` (filesystem) and `listens-for` (event intents). This gave a knot two input directions and allowed implicit fan-in. `StrandSource` unifies these into one field, one direction — restoring the "one strand, one direction" principle.
+
+---
+
 ## Term Relationships
 
 ```
@@ -215,8 +225,8 @@ Rig (`./rig/`)
  │     └── <loom-id>/
  │           ├── .loom-log (activity log)
  │           ├── <knot-name>-tie-off.md (tie-off output, appended per event)
- │           └── <event-type>/ (typed event subdirectory — static a2a comms)
- │                 └── <event-file>.md (static event strand for consumers)
+ │           └── <event-id>/ (event dispatch subdirectory — dynamic a2a comms)
+ │                 └── <event-file>.md (dispatched event strand for consumers)
  └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
       └── Knot definition files (first-level `.md` files)
             ├── Agent Profile
@@ -224,6 +234,9 @@ Rig (`./rig/`)
             │     ├── Skills
             │     ├── Tools
             │     └── Profile Prompt
-            └── Markdown Body (task-specific instructions)
-            └── strand_dir (required — directory to watch for strands)
+            ├── Markdown Body (task-specific instructions)
+            └── StrandSource (required — single input direction)
+                  ├── Filesystem (plain path — e.g. "project/prds")
+                  └── EventUri (event:<producer>:<EventId> — resolved to tie-off dispatch dir)
+            └── event-description (optional — semantic description injected into producer prompt)
 ```

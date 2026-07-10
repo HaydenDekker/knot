@@ -84,17 +84,18 @@ Rig (`./rig/`, top-level container)
 - A **knot** is a `.md` file with YAML frontmatter inside a loom
   directory. It references a shared **agent profile** via
   `agent-profile-ref`. The markdown body (after the closing `---`)
-  contains the knot's task-specific instructions. Each knot watches
-  its own `strand-dir` for input files (strands).
+  contains the knot's task-specific instructions. Each knot has a
+  single input direction declared as `strand-dir` — either a filesystem
+  path or an `event:` URI for event consumer knots.
 - An **agent profile** is a `.md` file with YAML frontmatter stored in
   `rig/profiles/{name}.md`. The frontmatter holds structural metadata
   (name, provider, model, tools, timeout) and the markdown body contains
   the agent's system prompt (persona instructions). Multiple knots can
   reference the same profile.
-- **Tie-off events** are typed subdirectories inside a knot's tie-off
-  directory (e.g. `reviews/`, `findings/`). They carry static event
-  files that other knots can consume via `strand-dir`. Event directories
-  are created when the knot is created.
+- **Event dispatch** subdirectories are created automatically by Knot
+  inside `rig/tie-offs/{loom-id}/{EventId}/` when a consumer knot uses
+  an `event:` URI in its `strand-dir`. These carry dispatched event
+  files that trigger consumer knots.
 
 ---
 
@@ -227,17 +228,13 @@ A loom is created by making a directory (ending in `-loom`) and writing
 
 4. **Create the loom directory** at `rig/{id}/` (e.g. `rig/prd-review-loom/`).
 
-5. **Determine tie-off events** for each knot. Ask the user:
-   "What events does this knot emit for other agents to consume?
-   (e.g. `reviews`, `findings`, `plans`) — or none if it only
-   writes to its tie-off log."
-   For each event type, create a typed subdirectory in the knot's
-   tie-off directory:
-   ```bash
-   mkdir -p rig/tie-offs/{loom-id}/{event-type}
-   ```
-   These directories are part of the knot's output contract. Consumer
-   knots will reference them in their `strand-dir`.
+5. **Determine event subscriptions** for each knot. Ask the user:
+   "Does this knot consume events from another knot? (e.g.
+   `event:quality-reviewer:ReviewCompleted`) — or does it read
+   from a normal filesystem directory?"
+   If the knot consumes events, set `strand-dir` to the `event:` URI
+   and optionally add `event-description`. Knot will create and watch
+   the dispatch directory automatically.
 
 6. **Write knot definition files** inside the loom directory.
    For a single knot named `goals-review`:
@@ -268,12 +265,11 @@ When asked to add a knot to an existing loom:
 2. **Verify the profile exists**: Read `rig/state.json` and check the
    `profiles` array for the knot's `agent_profile_ref`.
 
-3. **Determine tie-off events**. Ask the user:
-   "What events does this knot emit?" For each event type, create
-   the typed subdirectory:
-   ```bash
-   mkdir -p rig/tie-offs/{loom-id}/{event-type}
-   ```
+3. **Determine event subscription**. Ask the user:
+   "Does this knot consume events from another knot?"
+   If so, set `strand-dir` to the `event:` URI and optionally add
+   `event-description`. Knot will create and watch the dispatch
+   directory automatically.
 
 4. **Write the knot file** as `{knot-name}.md` inside the loom
    directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
@@ -372,8 +368,8 @@ Review the goals section of this PRD. Check that:
 |-------|----------|-------------|
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
-| `strand-dir` | **Yes** | Directory to watch for strand files. Resolved relative to the project root. |
-| `listens-for` | No | List of event intents this knot wants to consume (see Intent-Based Event Routing below). Defaults to empty. |
+| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI (e.g. `"event:quality-reviewer:ReviewCompleted"`). Resolved relative to the project root for paths. |
+| `event-description` | No | Semantic description of the event, injected into the producer's prompt. Only meaningful when `strand-dir` is an `event:` URI. |
 | `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
 
 ### Markdown Body
@@ -393,21 +389,90 @@ will reject such files with a `KnotParseWarning`.
 - Tie-off paths are statically derived:
   `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
 
-### Tie-Off Events — Static Agent-to-Agent Communication
+### Event Routing
 
-Knots that produce outputs for other knots to consume create **typed
-subdirectories** in their tie-off directory. These are called **tie-off
-events** — the static routing mechanism for agent-to-agent communication
-(before intent-based routing ships in Plan 45).
+Knots that consume events from other knots use an `event:` URI in their
+`strand-dir` field. This is the single input-direction primitive —
+each knot has exactly **one** `strand-dir`, whether it reads from the
+filesystem or from event dispatch.
 
-**Convention:**
+**Event URI format:**
 
-- Event subdirectory names are **lowercase plural** (e.g. `reviews`,
-  `findings`, `plans`)
-- Event file names follow `<identifier>-<description>.md` (e.g.
-  `016-quality-review.md`)
-- The subdirectory is part of the knot's output contract — created at
-  knot creation time
+```
+event:<producer-knot-id>:<EventId>
+```
+
+Three colon-separated parts. No escaping needed — knot IDs are
+kebab-case slugs, event IDs are PascalCase identifiers.
+
+**Consumer knot (declares subscription via `strand-dir`):**
+
+```markdown
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "event:quality-reviewer:ReviewCompleted"
+event-description: >
+  Emitted when a quality review is complete and findings are
+  ready for planning.
+---
+
+Create a refactor plan when a quality review is complete.
+```
+
+The `event-description` field provides the semantic contract injected
+into the producer's prompt. When absent, a generic message is injected.
+
+**Producer knot (no declaration needed — Knot injects instructions):**
+
+Before the producer knot runs, Knot scans all other knots' `strand-dir`
+values for `event:` URIs that reference this knot as the producer, and
+injects event instructions at the **beginning** of its prompt. The
+injected block includes a `## Agent Events` heading, event descriptions,
+and instructions to always emit an event block:
+
+```
+## Agent Events
+
+Other knots are listening for events you may emit. If an event occurs
+during your work, include an explicit event block in your tie-off using
+the format shown.
+
+Events you may emit:
+- `ReviewCompleted` — Emitted when a quality review is complete and
+  findings are ready for planning.
+
+If an event occurred, emit in your tie-off:
+```
+event: ReviewCompleted
+description: <short summary of what happened>
+<additional fields as relevant>
+```
+
+If no events occurred, emit:
+```
+event: None
+```
+```
+
+The producer writes the event block in its tie-off. Knot parses it,
+matches to consumer `event:` URIs, and creates event files in each
+consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
+
+**How it works:**
+
+1. Consumer sets `strand-dir` to an `event:` URI
+   (`event:<producer-knot>:<EventId>`).
+2. Consumer optionally provides `event-description` for the semantic
+   contract injected into the producer's prompt.
+3. Knot creates and watches the dispatch directory:
+   `rig/tie-offs/{loom-id}/{event-id}/`.
+4. Before the producer runs, Knot injects event instructions into its
+   prompt (grouped by `event-id`, deduplicated across consumers).
+5. Producer emits a structured event block in its tie-off
+   (`event: EventId` or `event: None`).
+6. Knot parses the tie-off, matches to consumer `event:` URIs, and
+   creates event files in each consumer's dispatch directory.
 
 **Layout:**
 
@@ -415,90 +480,12 @@ events** — the static routing mechanism for agent-to-agent communication
 rig/tie-offs/<loom-id>/
 ├── <knot-name>-tie-off.md    ← append-only log (always present)
 ├── <another-knot>-tie-off.md  ← another knot's tie-off (flat)
-├── <event-type>/              ← typed event subdirectory
-│   └── <event-file>.md        ← static event strand for consumers
-└── <another-event-type>/      ← another event type (if needed)
+└── <EventId>/                ← dispatch subdirectory (created by Knot)
+      └── <event-file>.md      ← dispatched event strand for consumers
 ```
 
-**Consumer side:** A consuming knot points its `strand-dir` at the
-event subdirectory:
-
-```
-yaml
-strand-dir: "../../tie-offs/review-loom/reviews"
-```
-
-This subscribes only to the `reviews` event type. Multiple consumers
-can strand from the same event subdirectory.
-
-### Intent-Based Event Routing
-
-Intent-based routing is the first-class mechanism for agent-to-agent
-events. Consumer knots declare `listens-for` intents in their
-frontmatter, producers emit structured events in their tie-offs, and
-Knot automatically dispatches matching events to consumers.
-
-**Consumer knot (declares what events it wants):**
-
-```markdown
----
-name: refactor-planner
-agent-profile-ref: coder
-strand-dir: "project/reviews"
-listens-for:
-  - target-knot: quality-reviewer
-    event-id: ReviewCompleted
-    event-description: >
-      Emitted when a quality review is complete and findings are
-      ready for planning.
----
-
-Create a refactor plan when a quality review is complete.
-```
-
-**Producer knot (no declaration needed — Knot injects instructions):**
-
-Before the producer knot runs, Knot scans all other knots' `listens-for`
-entries and injects event instructions at the **beginning** of its
-prompt. The producer writes structured events in its tie-off:
-
-```
-[2026-07-09T12:00:00Z] Quality review complete.
-  event: ReviewCompleted
-  target-knot: quality-reviewer
-  findings: "3 SOLID violations found"
-  scope: "file decomposition and hex architecture fix"
-```
-
-**How it works:**
-
-1. Consumer declares `listens-for` with `target-knot`, `event-id`,
-   and `event-description`.
-2. Before the target knot runs, Knot injects event instructions into
-   its prompt (grouped by `event-id`, deduplicated across consumers).
-3. Target knot emits a structured event block in its tie-off.
-4. Knot parses the tie-off, matches events to consumer intents, and
-   creates event files in each consumer's tie-off directory.
-5. The consumer's `strand-dir` should point to the event subdirectory:
-   `../../tie-offs/{loom-id}/{event-id}/`
-
-**Comparison with static routing:**
-
-| Aspect | Static (tie-off subdirectories) | Intent-based |
-|--------|--------------------------------|--------------|
-| Who defines events | Producer creates subdirectory | Consumer declares intent |
-| Routing | Fixed `strand-dir` path | Dynamic — Knot matches at runtime |
-| Fan-out | Consumer must know subdirectory | Multiple consumers declare independently |
-| Event payload | Full file content | Structured key-value pairs |
-
-**Migration from static to intent-based:**
-
-1. Add `listens-for` to consumer knot frontmatter.
-2. Update consumer's `strand-dir` to the intent event subdirectory:
-   `../../tie-offs/{loom-id}/{event-id}/`
-3. Producer tie-offs already contain structured event data (Knot
-   injects the format).
-4. Remove static event subdirectories (they become redundant).
+Multiple consumers can subscribe to the same producer event — each gets
+its own dispatch directory in its loom's tie-off directory.
 
 ### Example Project Layout
 
@@ -507,15 +494,21 @@ project_root/              ← strand-dir resolves from here
 ├── project/prds/          ← strand-dir: "project/prds"
 └── rig/                   ← rig directory
     ├── profiles/          ← shared agent profiles
-    │   └── fast.md
-    ├── tie-offs/          ← static tie-off directory
-    │   └── prd-review-loom/
+    │   ├── fast.md
+    │   └── coder.md
+    ├── tie-offs/          ← tie-off directory
+    │   ├── prd-review-loom/
+    │   │   ├── .loom-log
+    │   │   └── prd-goals-review-tie-off.md
+    │   └── planning-loom/
     │       ├── .loom-log
-    │       ├── prd-goals-review-tie-off.md
-    │       └── findings/        ← event type: review findings
-    │           └── 001-goal-issue.md
-    └── prd-review-loom/   ← loom directory
-        └── prd-goals-review.md
+    │       ├── refactor-planner-tie-off.md
+    │       └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
+    │           └── event-2026-07-10T12-00-00.md
+    ├── prd-review-loom/   ← loom with normal knot
+    │   └── prd-goals-review.md  ← strand-dir: "project/prds"
+    └── planning-loom/     ← loom with event consumer knot
+        └── refactor-planner.md  ← strand-dir: "event:quality-reviewer:ReviewCompleted"
 ```
 
 ---
@@ -659,7 +652,7 @@ model: gpt-4o
 You are a fast reviewer.
 EOF
 
-# Create a loom with a knot (write files directly)
+# Create a loom with a normal knot (filesystem strand-dir)
 mkdir -p rig/prd-review-loom
 cat > rig/prd-review-loom/goals-review.md << 'EOF'
 ---
@@ -671,9 +664,19 @@ strand-dir: "project/prds"
 Review the goals section.
 EOF
 
-# Create event subdirectories for the knot's output
-# (other knots can strand from these directories)
-mkdir -p rig/tie-offs/prd-review-loom/findings
+# Create an event consumer knot (event: URI strand-dir)
+cat > rig/planning-loom/refactor-planner.md << 'EOF'
+---
+name: refactor-planner
+agent-profile-ref: coder
+strand-dir: "event:quality-reviewer:ReviewCompleted"
+event-description: >
+  Emitted when a quality review is complete and findings
+  are ready for planning.
+---
+
+Create a refactor plan when a quality review is complete.
+EOF
 
 # Verify Knot has discovered the changes
 # Wait up to 5 seconds, then:
