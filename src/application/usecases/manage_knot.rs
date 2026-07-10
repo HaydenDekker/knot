@@ -151,7 +151,7 @@ impl ManageKnot {
 #[cfg(test)]
 mod manage_knot_tests {
     use super::*;
-    use crate::domain::value_objects::PromptTemplate;
+    use crate::domain::value_objects::{PromptTemplate, StrandSource};
     use std::path::PathBuf;
 
     use super::super::test_fixtures::build_loom;
@@ -166,7 +166,8 @@ mod manage_knot_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         }
     }
 

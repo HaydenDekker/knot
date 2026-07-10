@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::domain::entities::{Loom, LoomId};
+use crate::domain::value_objects::StrandSource;
 
 // ── LoomStore ──────────────────────────────────────────────────────────────
 
@@ -95,7 +96,8 @@ mod tests {
                     .unwrap(),
                     strand_dir: PathBuf::from("strands"),
                     git_versioned: true,
-                    listens_for: Vec::new(),
+                    strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+                    event_description: None,
                 },
             ],
         }

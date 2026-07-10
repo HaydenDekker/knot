@@ -98,7 +98,7 @@ impl RegisterLoom {
                 &self.rig_dir,
                 &loom.id,
                 &knot.id,
-                &knot.listens_for,
+                &knot,
                 &*self.log_port,
                 &*self.event_source,
             )?;

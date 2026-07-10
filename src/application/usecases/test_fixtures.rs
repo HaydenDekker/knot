@@ -17,6 +17,7 @@ use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandFileChecker, StrandPath, TieOff,
     TieOffPath,
 };
+use crate::domain::value_objects::StrandSource;
 use crate::domain::events::{AgentEvent, LoomEvent, RigLogEvent};
 use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
 
@@ -552,7 +553,7 @@ impl Default for MockStrandFileChecker {
 ///
 /// Defaults: `agent_profile_ref: "fast"`, `prompt_template.instructions:
 /// "check it"`, `strand_dir: "strands"`, `git_versioned: true`,
-/// `listens_for: vec![]`.
+/// `strand_source: Filesystem("strands")`, `event_description: None`.
 pub fn build_knot(id: impl Into<String>) -> Knot {
     Knot {
         id: KnotId(id.into()),
@@ -562,7 +563,8 @@ pub fn build_knot(id: impl Into<String>) -> Knot {
         },
         strand_dir: PathBuf::from("strands"),
         git_versioned: true,
-        listens_for: Vec::new(),
+        strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+        event_description: None,
     }
 }
 

@@ -109,28 +109,39 @@ pub fn matches_intent(event: &AgentEvent, intent: &Intent) -> bool {
 /// ```
 ///
 pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
-    // Collect all intents where this knot is the target.
-    let mut matching_intents: Vec<&Intent> = Vec::new();
+    use crate::domain::value_objects::StrandSource;
+
+    // Collect all event subscriptions where this knot is the producer.
+    let mut matching_sources: Vec<&StrandSource> = Vec::new();
     for other in all_knots {
-        for intent in &other.listens_for {
-            if intent.target_knot == knot.id.0 {
-                matching_intents.push(intent);
+        if let StrandSource::EventUri {
+            producer_knot,
+            event_id: _,
+        } = &other.strand_source
+        {
+            if producer_knot == &knot.id.0 {
+                matching_sources.push(&other.strand_source);
             }
         }
     }
 
     // No listeners — no injection needed.
-    if matching_intents.is_empty() {
+    if matching_sources.is_empty() {
         return String::new();
     }
 
-    // Group by event-id. Use a Vec of (event_id, description, description)
-    // preserving insertion order (first seen event-id wins).
+    // Group by event-id, preserving insertion order (first seen wins).
     let mut seen_ids = std::collections::HashSet::new();
-    let mut unique_events: Vec<&Intent> = Vec::new();
-    for intent in matching_intents {
-        if seen_ids.insert(intent.event_id.clone()) {
-            unique_events.push(intent);
+    let mut unique_sources: Vec<&StrandSource> = Vec::new();
+    for source in matching_sources {
+        if let StrandSource::EventUri {
+            producer_knot: _,
+            event_id,
+        } = source
+        {
+            if seen_ids.insert(event_id.clone()) {
+                unique_sources.push(source);
+            }
         }
     }
 
@@ -142,21 +153,21 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
     );
     output.push_str("Events you may emit:\n");
 
-    for intent in &unique_events {
-        output.push_str(&format!(
-            "- `{}` — {}\n",
-            intent.event_id, intent.event_description
-        ));
-        output.push_str("  Emit in your tie-off:\n");
-        output.push_str("  ```\n");
-        output.push_str(&format!("  event: {}\n", intent.event_id));
-        output.push_str(&format!("  target-knot: {}\n", knot.id.0));
-        // The event-description field describes the event semantically.
-        // The actual payload keys the agent should emit come from the
-        // knot's instructions and the intent's description. We don't
-        // know payload schema here — the agent formats it from context.
-        // So we only show the mandatory fields.
-        output.push_str("  ```\n");
+    for source in &unique_sources {
+        if let StrandSource::EventUri {
+            producer_knot: _,
+            event_id,
+        } = source
+        {
+            output.push_str(&format!(
+                "- `{}`\n",
+                event_id
+            ));
+            output.push_str("  Emit in your tie-off:\n");
+            output.push_str("  ```\n");
+            output.push_str(&format!("  event: {}\n", event_id));
+            output.push_str("  ```\n");
+        }
     }
 
     output
@@ -434,223 +445,13 @@ mod tests {
     use crate::domain::entities::PromptTemplate;
     use std::path::PathBuf;
 
-    // ── Intent Tests ─────────────────────────────────────────────
+    // ── Intent / matches_intent / build_listener_context Tests ─
+    // All removed in Phase 0 — Intent, matches_intent, and the
+    // listens_for-based build_listener_context are refactored in
+    // Phases 3 (context injection) and 8 (cleanup).
+    // New tests will be added in those phases.
 
-    #[test]
-    fn intent_construction() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a new plan is created.".to_string(),
-        };
-
-        assert_eq!(intent.target_knot, "plan-creator");
-        assert_eq!(intent.event_id, "PlanCreated");
-        assert_eq!(
-            intent.event_description,
-            "Emit when a new plan is created."
-        );
-    }
-
-    #[test]
-    fn intent_serialisation_roundtrip() {
-        let intent = Intent {
-            target_knot: "implementation-planner".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created for the first time."
-                .to_string(),
-        };
-
-        let json = serde_json::to_string(&intent).unwrap();
-        let deserialized: Intent = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, intent);
-    }
-
-    // ── Intent Matching Tests ────────────────────────────────────
-
-    #[test]
-    fn matches_intent_exact_match_on_event_id_and_target_knot() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_no_match_when_event_id_differs() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "PlanApproved".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(!matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_no_match_when_target_knot_differs() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "other-knot".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(!matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_no_match_when_both_differ() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "ReviewDone".to_string(),
-            target_knot: "reviewer".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(!matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_payload_does_not_affect_matching() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-
-        // Event with rich payload — should still match
-        let mut payload = HashMap::new();
-        payload.insert("plan".to_string(), "PLAN-001".to_string());
-        payload.insert("scope".to_string(), "event routing".to_string());
-        let event_with_payload = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload,
-        };
-
-        // Event with empty payload — should also match
-        let event_empty = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(matches_intent(&event_with_payload, &intent));
-        assert!(matches_intent(&event_empty, &intent));
-    }
-
-    #[test]
-    fn matches_intent_case_sensitive_event_id() {
-        let intent = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "plancreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        // event_id match is exact (case-sensitive)
-        assert!(!matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_case_sensitive_target_knot() {
-        let intent = Intent {
-            target_knot: "Plan-Creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let event = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        // target_knot match is exact (case-sensitive)
-        assert!(!matches_intent(&event, &intent));
-    }
-
-    #[test]
-    fn matches_intent_multiple_intents_different_events() {
-        // Two intents on the same target knot but different event-ids.
-        // Only the matching intent should return true.
-        let intent_created = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when a plan is created.".to_string(),
-        };
-        let intent_approved = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanApproved".to_string(),
-            event_description: "Emit when a plan is approved.".to_string(),
-        };
-
-        let created_event = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(matches_intent(&created_event, &intent_created));
-        assert!(!matches_intent(&created_event, &intent_approved));
-    }
-
-    #[test]
-    fn matches_intent_same_event_id_different_producers() {
-        // Two intents for the same event-id but from different knots.
-        // Only the intent whose target_knot matches should return true.
-        let intent_from_creator = Intent {
-            target_knot: "plan-creator".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when plan-creator makes a plan.".to_string(),
-        };
-        let intent_from_reviewer = Intent {
-            target_knot: "reviewer".to_string(),
-            event_id: "PlanCreated".to_string(),
-            event_description: "Emit when reviewer creates a plan.".to_string(),
-        };
-
-        let event = AgentEvent {
-            event_id: "PlanCreated".to_string(),
-            target_knot: "plan-creator".to_string(),
-            payload: HashMap::new(),
-        };
-
-        assert!(matches_intent(&event, &intent_from_creator));
-        assert!(!matches_intent(&event, &intent_from_reviewer));
-    }
-
-    // ── Context Injection Tests ──────────────────────────────────
-
-    fn make_test_knot(
-        id: &str,
-        listens_for: Vec<Intent>,
-    ) -> Knot {
+    fn make_test_knot(id: &str) -> Knot {
         Knot {
             id: KnotId(id.to_string()),
             agent_profile_ref: "fast".to_string(),
@@ -659,226 +460,9 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for,
+            strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         }
-    }
-
-    #[test]
-    fn build_listener_context_no_listeners_returns_empty() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let consumer = make_test_knot(
-            "consumer",
-            vec![Intent {
-                target_knot: "other-knot".to_string(),
-                event_id: "PlanCreated".to_string(),
-                event_description: "When a plan is created".to_string(),
-            }],
-        );
-
-        let ctx = build_listener_context(&producer, &[consumer.clone()]);
-        assert!(
-            ctx.is_empty(),
-            "should be empty when no consumers listen to this knot"
-        );
-    }
-
-    #[test]
-    fn build_listener_context_no_knots_returns_empty() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let ctx = build_listener_context(&producer, &[]);
-        assert!(ctx.is_empty());
-    }
-
-    #[test]
-    fn build_listener_context_single_consumer_single_event() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let consumer = make_test_knot(
-            "consumer",
-            vec![Intent {
-                target_knot: "plan-creator".to_string(),
-                event_id: "PlanCreated".to_string(),
-                event_description: "Emit when a plan is created.".to_string(),
-            }],
-        );
-
-        let ctx = build_listener_context(&producer, &[consumer.clone()]);
-
-        assert!(
-            !ctx.is_empty(),
-            "should produce context when consumer listens"
-        );
-        assert!(
-            ctx.contains("Before undertaking your task"),
-            "should contain preamble"
-        );
-        assert!(
-            ctx.contains("Events you may emit:"),
-            "should contain event header"
-        );
-        assert!(
-            ctx.contains("`PlanCreated`"),
-            "should contain event-id: {}",
-            ctx
-        );
-        assert!(
-            ctx.contains("Emit when a plan is created."),
-            "should contain event description"
-        );
-        assert!(
-            ctx.contains("event: PlanCreated"),
-            "should show emit format"
-        );
-        assert!(
-            ctx.contains("target-knot: plan-creator"),
-            "should show target-knot in format block"
-        );
-    }
-
-    #[test]
-    fn build_listener_context_deduplicates_same_event_id() {
-        // Two consumers listening for the same event-id from the same
-        // knot — should produce only one event block.
-        let producer = make_test_knot("plan-creator", vec![]);
-        let consumer_a = make_test_knot(
-            "consumer-a",
-            vec![Intent {
-                target_knot: "plan-creator".to_string(),
-                event_id: "PlanCreated".to_string(),
-                event_description: "Emit when a plan is created.".to_string(),
-            }],
-        );
-        let consumer_b = make_test_knot(
-            "consumer-b",
-            vec![Intent {
-                target_knot: "plan-creator".to_string(),
-                event_id: "PlanCreated".to_string(),
-                event_description: "When the plan is first created.".to_string(),
-            }],
-        );
-
-        let ctx =
-            build_listener_context(&producer, &[consumer_a, consumer_b]);
-
-        // Should contain the event header once
-        let event_count = ctx.matches("`PlanCreated`").count();
-        assert_eq!(
-            event_count, 1,
-            "should deduplicate: only one PlanCreated block, got:\n{}",
-            ctx
-        );
-    }
-
-    #[test]
-    fn build_listener_context_multiple_different_events() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let consumer = make_test_knot(
-            "consumer",
-            vec![
-                Intent {
-                    target_knot: "plan-creator".to_string(),
-                    event_id: "PlanCreated".to_string(),
-                    event_description: "When a plan is created.".to_string(),
-                },
-                Intent {
-                    target_knot: "plan-creator".to_string(),
-                    event_id: "PlanApproved".to_string(),
-                    event_description: "When a plan is approved.".to_string(),
-                },
-            ],
-        );
-
-        let ctx = build_listener_context(&producer, &[consumer.clone()]);
-
-        assert!(ctx.contains("`PlanCreated`"));
-        assert!(ctx.contains("`PlanApproved`"));
-        // Each event appears exactly once
-        assert_eq!(ctx.matches("`PlanCreated`").count(), 1);
-        assert_eq!(ctx.matches("`PlanApproved`").count(), 1);
-    }
-
-    #[test]
-    fn build_listener_context_multiple_consumers_different_events() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let consumer_a = make_test_knot(
-            "consumer-a",
-            vec![Intent {
-                target_knot: "plan-creator".to_string(),
-                event_id: "PlanCreated".to_string(),
-                event_description: "When a plan is created.".to_string(),
-            }],
-        );
-        let consumer_b = make_test_knot(
-            "consumer-b",
-            vec![Intent {
-                target_knot: "plan-creator".to_string(),
-                event_id: "PlanApproved".to_string(),
-                event_description: "When a plan is approved.".to_string(),
-            }],
-        );
-
-        let ctx =
-            build_listener_context(&producer, &[consumer_a, consumer_b]);
-
-        // Both events should appear
-        assert!(ctx.contains("`PlanCreated`"));
-        assert!(ctx.contains("`PlanApproved`"));
-        assert_eq!(ctx.matches("`PlanCreated`").count(), 1);
-        assert_eq!(ctx.matches("`PlanApproved`").count(), 1);
-    }
-
-    #[test]
-    fn build_listener_context_ignores_other_targets() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let other_producer = make_test_knot("other-knot", vec![]);
-        let consumer = make_test_knot(
-            "consumer",
-            vec![Intent {
-                target_knot: "other-knot".to_string(),
-                event_id: "Something".to_string(),
-                event_description: "When something happens".to_string(),
-            }],
-        );
-
-        let ctx = build_listener_context(
-            &producer,
-            &[other_producer, consumer.clone()],
-        );
-
-        assert!(
-            ctx.is_empty(),
-            "should be empty when consumer listens to a different knot"
-        );
-    }
-
-    #[test]
-    fn build_listener_context_mixed_targets_filters_correctly() {
-        let producer = make_test_knot("plan-creator", vec![]);
-        let other = make_test_knot("other-knot", vec![]);
-        let consumer = make_test_knot(
-            "consumer",
-            vec![
-                Intent {
-                    target_knot: "plan-creator".to_string(),
-                    event_id: "PlanCreated".to_string(),
-                    event_description: "When a plan is created.".to_string(),
-                },
-                Intent {
-                    target_knot: "other-knot".to_string(),
-                    event_id: "Something".to_string(),
-                    event_description: "When something happens".to_string(),
-                },
-            ],
-        );
-
-        let ctx =
-            build_listener_context(&producer, &[other, consumer.clone()]);
-
-        // Should contain PlanCreated but NOT Something
-        assert!(ctx.contains("`PlanCreated`"));
-        assert!(
-            !ctx.contains("`Something`"),
-            "should not include events targeting other knots"
-        );
     }
 
     // ── AgentEvent Tests ─────────────────────────────────────────
@@ -1376,7 +960,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: crate::domain::value_objects::StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         }
     }
 

@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::domain::events::Intent;
-use crate::domain::value_objects::{AgentProfile, PromptTemplate};
+use crate::domain::value_objects::{AgentProfile, PromptTemplate, StrandSource};
 
 pub use crate::domain::value_objects::AgentProfileError;
 
@@ -27,6 +26,16 @@ pub enum KnotFileError {
     /// No markdown body content after the closing `---` delimiter.
     /// The body is required and contains the knot instructions.
     MissingBody,
+    /// The `strand-dir` value could not be parsed as a valid path or
+    /// event URI.
+    StrandSourceError(String),
+}
+
+impl KnotFileError {
+    /// Create a `StrandSourceError` from a human-readable message.
+    pub fn strand_source(message: impl Into<String>) -> Self {
+        Self::StrandSourceError(message.into())
+    }
 }
 
 impl std::fmt::Display for KnotFileError {
@@ -49,6 +58,9 @@ impl std::fmt::Display for KnotFileError {
             }
             KnotFileError::MissingBody => {
                 write!(f, "knot file has no body content (prompt instructions must be in the markdown body after the closing frontmatter delimiter)")
+            }
+            KnotFileError::StrandSourceError(msg) => {
+                write!(f, "invalid strand-dir value: {msg}")
             }
         }
     }
@@ -74,13 +86,20 @@ pub struct KnotFile {
     /// When `true` (default), a git commit is created after each successful
     /// knot run. Parsed from `git-versioned` frontmatter key.
     pub git_versioned: bool,
-    /// List of event intents this knot listens for.
+    /// The source from which this knot receives its input.
     ///
-    /// Each intent declares interest in a specific event from a specific
-    /// target knot. Parsed from `listens-for` frontmatter as a YAML list of
-    /// `{target-knot, event-id, event-description}` objects.
-    #[serde(default)]
-    pub listens_for: Vec<Intent>,
+    /// Either a filesystem directory or an event URI. Populated from
+    /// `strand-dir` frontmatter. In Phase 0 this is always a
+    /// `Filesystem` path — Phase 1 wires up `EventUri` parsing.
+    #[serde(default, skip_serializing_if = "StrandSource::is_default")]
+    pub strand_source: StrandSource,
+    /// Semantic description of events this knot subscribes to.
+    ///
+    /// Injected into the producer knot's prompt when this knot is
+    /// an event consumer. Populated from `event-description` frontmatter.
+    #[serde(rename = "event-description")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_description: Option<String>,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -93,12 +112,11 @@ struct RawFrontmatter {
     strand_dir: Option<String>,
     #[serde(rename = "git-versioned")]
     git_versioned: Option<bool>,
-    /// Event intents this knot listens for.
+    /// Semantic description of events this knot subscribes to.
     ///
-    /// Parsed from `listens-for` as a YAML list of objects with keys:
-    /// `target-knot`, `event-id`, `event-description`.
-    #[serde(default, rename = "listens-for")]
-    listens_for: Vec<Intent>,
+    /// Populated from `event-description` frontmatter key.
+    #[serde(rename = "event-description")]
+    event_description: Option<String>,
     /// Captures any unknown YAML keys for warning emission.
     #[allow(dead_code)]
     #[serde(flatten)]
@@ -162,6 +180,11 @@ pub fn parse(
     // git-versioned defaults to true when absent
     let git_versioned = raw.git_versioned.unwrap_or(true);
 
+    // Build StrandSource from the raw strand-dir string.
+    // In Phase 0, strand-dir is always a plain filesystem path.
+    // Phase 1 wires up event URI parsing via StrandSource::from_str().
+    let strand_source = StrandSource::Filesystem(strand_dir.clone());
+
     Ok((
         KnotFile {
             name,
@@ -169,7 +192,8 @@ pub fn parse(
             prompt_template,
             strand_dir,
             git_versioned,
-            listens_for: raw.listens_for,
+            strand_source,
+            event_description: raw.event_description,
         },
         warnings,
     ))
@@ -557,7 +581,8 @@ Do something
                 .unwrap(),
             strand_dir: PathBuf::from("strands/test"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands/test")),
+            event_description: None,
         };
 
         let json = serde_json::to_string(&file).unwrap();
@@ -964,63 +989,44 @@ Full review with timeout.
         assert_eq!(profile.tools, vec!["fs", "web"]);
     }
 
-    // ── listens-for (Intent-Based Routing) Tests ─────────────────
+    // ── StrandSource and event-description Tests ────────────────
 
     #[test]
-    fn knot_file_with_single_listens_for() {
+    fn knot_file_parses_plain_strand_dir_as_filesystem_source() {
         let content = "---
 name: consumer-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
-listens-for:
-  - target-knot: plan-creator
-    event-id: PlanCreated
-    event-description: When a new plan is created
 ---
 
 React to plan creation.
 ";
-        let (file, warnings) = parse(content).unwrap();
-        assert!(
-            warnings.is_empty(),
-            "no warnings expected, got: {warnings:?}"
-        );
+        let (file, _warnings) = parse(content).unwrap();
         assert_eq!(file.name, "consumer-knot");
-        assert_eq!(file.listens_for.len(), 1);
-        assert_eq!(file.listens_for[0].target_knot, "plan-creator");
-        assert_eq!(file.listens_for[0].event_id, "PlanCreated");
-        assert_eq!(
-            file.listens_for[0].event_description,
-            "When a new plan is created"
-        );
+        assert!(matches!(file.strand_source, StrandSource::Filesystem(_)));
+        assert!(file.event_description.is_none());
     }
 
     #[test]
-    fn knot_file_with_multiple_listens_for() {
+    fn knot_file_parses_event_description() {
         let content = "---
 name: consumer-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
-listens-for:
-  - target-knot: plan-creator
-    event-id: PlanCreated
-    event-description: When a new plan is created
-  - target-knot: plan-creator
-    event-id: PlanApproved
-    event-description: When a plan is approved
+event-description: When a plan is created
 ---
 
-React to plan events.
+React to plan creation.
 ";
-        let (file, warnings) = parse(content).unwrap();
-        assert!(warnings.is_empty());
-        assert_eq!(file.listens_for.len(), 2);
-        assert_eq!(file.listens_for[0].event_id, "PlanCreated");
-        assert_eq!(file.listens_for[1].event_id, "PlanApproved");
+        let (file, _warnings) = parse(content).unwrap();
+        assert_eq!(
+            file.event_description,
+            Some("When a plan is created".to_string())
+        );
     }
 
     #[test]
-    fn knot_file_without_listens_for_defaults_empty() {
+    fn knot_file_without_event_description_defaults_to_none() {
         let content = "---
 name: simple-knot
 agent-profile-ref: fast
@@ -1029,21 +1035,17 @@ strand-dir: \"strands\"
 
 Do something.
 ";
-        let (file, warnings) = parse(content).unwrap();
-        assert!(warnings.is_empty());
-        assert!(file.listens_for.is_empty());
+        let (file, _warnings) = parse(content).unwrap();
+        assert!(file.event_description.is_none());
     }
 
     #[test]
-    fn knot_file_with_listens_for_serialization_roundtrip() {
+    fn knot_file_serialization_roundtrip_with_event_description() {
         let content = "---
 name: consumer-knot
 agent-profile-ref: fast
 strand-dir: \"strands\"
-listens-for:
-  - target-knot: plan-creator
-    event-id: PlanCreated
-    event-description: When a plan is created
+event-description: When a plan is created
 ---
 
 React to plan creation.
@@ -1054,12 +1056,14 @@ React to plan creation.
         let json = serde_json::to_string(&file).unwrap();
         let deserialized: KnotFile = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, file);
-        assert_eq!(deserialized.listens_for.len(), 1);
-        assert_eq!(deserialized.listens_for[0].event_id, "PlanCreated");
+        assert_eq!(
+            deserialized.event_description,
+            Some("When a plan is created".to_string())
+        );
     }
 
     #[test]
-    fn knot_file_serialization_with_empty_listens_for() {
+    fn knot_file_serialization_with_no_event_description() {
         let content = "---
 name: no-listens-knot
 agent-profile-ref: fast
@@ -1071,24 +1075,20 @@ Do something.
         let (file, _warnings) = parse(content).unwrap();
 
         let json = serde_json::to_string(&file).unwrap();
-        // Should contain listens_for as empty array
+        // event_description: None should be omitted from JSON
         assert!(
-            json.contains("\"listens_for\":[]"),
-            "empty listens_for should serialise as []: {}",
+            !json.contains("event-description"),
+            "event-description should be omitted when None: {}",
             json
         );
         let deserialized: KnotFile = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.listens_for.is_empty());
+        assert!(deserialized.event_description.is_none());
     }
 
     #[test]
-    fn knot_file_listens_for_with_unknown_extra_keys_warns() {
-        // If a listens-for entry has extra keys beyond target-knot,
-        // event-id, event-description, serde_yaml will handle them via
-        // the flatten/extra mechanism at the top level. The listens-for
-        // entries themselves use Intent struct which ignores unknown keys
-        // via serde's default behavior (it would error if they were
-        // unexpected, but we use #[serde(default)] on the field).
+    fn knot_file_listens_for_is_unknown_property() {
+        // `listens-for` is no longer a recognised key — it should
+        // appear as an unknown property warning.
         let content = "---
 name: consumer-knot
 agent-profile-ref: fast
@@ -1096,17 +1096,15 @@ strand-dir: \"strands\"
 listens-for:
   - target-knot: plan-creator
     event-id: PlanCreated
-    event-description: When a plan is created
-some-other-key: value
+    event-description: When a new plan is created
 ---
 
 React to plan creation.
 ";
         let (file, warnings) = parse(content).unwrap();
-        assert_eq!(file.listens_for.len(), 1);
-        assert_eq!(file.listens_for[0].event_id, "PlanCreated");
-        // The extra top-level key should warn
+        assert_eq!(file.name, "consumer-knot");
+        assert!(matches!(file.strand_source, StrandSource::Filesystem(_)));
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("some-other-key"));
+        assert!(warnings[0].contains("listens-for"));
     }
 }

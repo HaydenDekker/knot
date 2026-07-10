@@ -156,7 +156,7 @@ impl ConfigEventHandler {
     ///
     /// Adds the knot to the loom in the store, logs `KnotRegistered`,
     /// and starts watchers for `strand_dir` and event dispatch
-    /// directories (from `listens_for`).
+    /// directories (from `strand_source` event URIs).
     fn handle_knot_added(
         &self,
         loom_id: &LoomId,
@@ -178,8 +178,8 @@ impl ConfigEventHandler {
         }
 
         let knot_strand_dir = knot.strand_dir.clone();
-        let knot_listens_for = knot.listens_for.clone();
         let knot_id = knot.id.clone();
+        let knot_for_watches = knot.clone();
         loom.knots.push(knot);
         self.store.register(loom);
 
@@ -199,12 +199,12 @@ impl ConfigEventHandler {
             &*self.event_source,
         )?;
 
-        // Start watchers for event dispatch directories (listens_for)
+        // Start watchers for event dispatch directories
         super::loom::ensure_event_watches(
             &self.rig_dir,
             loom_id,
             &knot_id,
-            &knot_listens_for,
+            &knot_for_watches,
             &*self.log_port,
             &*self.event_source,
         )?;
@@ -223,7 +223,7 @@ impl ConfigEventHandler {
     /// Updates the knot in the store, stops the old watcher if
     /// `strand_dir` changed, and starts a new watcher for the
     /// updated `strand_dir`. Also (re-)starts watchers for event
-    /// dispatch directories from `listens_for`.
+    /// dispatch directories (from `strand_source` event URIs).
     ///
     /// If the knot is not found in the loom (e.g., due to a race between
     /// `LoomAdded` scanning a partially-written directory and a later
@@ -245,8 +245,8 @@ impl ConfigEventHandler {
                 // Existing knot — update in place
                 let old_strand_dir = loom.knots[index].strand_dir.clone();
                 let new_strand_dir = knot.strand_dir.clone();
-                let knot_listens_for = knot.listens_for.clone();
                 let knot_id = knot.id.clone();
+                let knot_for_watches = knot.clone();
                 loom.knots[index] = knot;
                 self.store.register(loom);
 
@@ -292,7 +292,7 @@ impl ConfigEventHandler {
                     &self.rig_dir,
                     loom_id,
                     &knot_id,
-                    &knot_listens_for,
+                    &knot_for_watches,
                     &*self.log_port,
                     &*self.event_source,
                 )?;
@@ -302,8 +302,8 @@ impl ConfigEventHandler {
                 // This handles the race where LoomAdded scanned before
                 // the knot file was fully written.
                 let knot_strand_dir = knot.strand_dir.clone();
-                let knot_listens_for = knot.listens_for.clone();
                 let knot_id = knot.id.clone();
+                let knot_for_watches = knot.clone();
                 loom.knots.push(knot);
                 self.store.register(loom);
 
@@ -335,7 +335,7 @@ impl ConfigEventHandler {
                     &self.rig_dir,
                     loom_id,
                     &knot_id,
-                    &knot_listens_for,
+                    &knot_for_watches,
                     &*self.log_port,
                     &*self.event_source,
                 )?;
@@ -447,7 +447,7 @@ impl ConfigEventHandler {
         self.store.register(loom.clone());
 
         // Start file watchers for each knot's strand directory
-        // and event dispatch directories (from listens_for)
+        // and event dispatch directories (from strand_source event URIs)
         for knot in &loom.knots {
             super::loom::ensure_strand_dir_and_watch(
                 &loom.id,
@@ -461,7 +461,7 @@ impl ConfigEventHandler {
                 &self.rig_dir,
                 &loom.id,
                 &knot.id,
-                &knot.listens_for,
+                &knot,
                 &*self.log_port,
                 &*self.event_source,
             )?;

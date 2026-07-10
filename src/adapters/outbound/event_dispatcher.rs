@@ -140,6 +140,7 @@ mod tests {
 
     fn build_consumer_knot() -> Knot {
         use crate::domain::entities::{KnotId, PromptTemplate};
+        use crate::domain::value_objects::StrandSource;
         use std::path::PathBuf;
 
         Knot {
@@ -150,7 +151,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("../../tie-offs/review-loom/PlanCreated"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("../../tie-offs/review-loom/PlanCreated")),
+            event_description: None,
         }
     }
 

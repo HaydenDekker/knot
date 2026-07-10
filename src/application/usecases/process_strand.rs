@@ -16,7 +16,7 @@ use crate::domain::entities::{
 };
 use crate::domain::events::{build_listener_context, matches_intent, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
-use crate::domain::value_objects::{AgentConfig, RigAgentConfig};
+use crate::domain::value_objects::{AgentConfig, RigAgentConfig, StrandSource};
 
 // Re-export shared types from types module
 use super::types::format_timestamp;
@@ -421,7 +421,7 @@ impl ProcessStrand {
         };
 
         // Build listener context (per-invocation, not cached).
-        // Scans all knots' listens-for entries and injects event
+        // Scans all knots' strand_source entries and injects event
         // instructions at the beginning of the prompt.
         let all_knots = Self::collect_all_knots(&self.store);
         let listener_context = build_listener_context(knot, &all_knots);
@@ -627,8 +627,8 @@ impl ProcessStrand {
 
     /// Collect all knots from all registered looms in the store.
     ///
-    /// Used to build listener context — scanning all knots' listens-for
-    /// declarations to find which ones target a specific knot.
+    /// Used to build listener context — scanning all knots' strand_source
+    /// entries to find which ones target a specific knot.
     fn collect_all_knots(store: &LoomStore) -> Vec<Knot> {
         store.list().into_iter().flat_map(|loom| loom.knots).collect()
     }
@@ -662,8 +662,12 @@ impl ProcessStrand {
         for event in &events {
             for loom in &all_looms {
                 for consumer_knot in &loom.knots {
-                    for intent in &consumer_knot.listens_for {
-                        if matches_intent(event, intent) {
+                    if let StrandSource::EventUri {
+                        producer_knot,
+                        event_id,
+                    } = &consumer_knot.strand_source
+                    {
+                        if producer_knot == &knot.id.0 && event_id == &event.event_id {
                             // Dispatch event file to consumer's tie-off dir
                             let _path = self.event_dispatcher.dispatch(
                                 event,
@@ -2441,7 +2445,8 @@ mod session_title_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
         let loom = build_loom("test-loom", vec![knot]);
         store.register(loom);
@@ -3181,15 +3186,15 @@ mod event_dispatch_tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: vec![Intent {
-                target_knot: target_knot.to_string(),
+            strand_source: StrandSource::EventUri {
+                producer_knot: target_knot.to_string(),
                 event_id: event_id.to_string(),
-                event_description: event_desc.to_string(),
-            }],
+            },
+            event_description: Some(event_desc.to_string()),
         }
     }
 
-    /// Build a producer knot with no listens-for.
+    /// Build a producer knot with no event subscriptions.
     fn build_producer_knot(id: &str) -> Knot {
         build_knot(id)
     }
@@ -3521,11 +3526,6 @@ mod event_dispatch_tests {
         assert!(
             prompt.contains("`PlanCreated`"),
             "prompt should contain event-id: {}",
-            prompt
-        );
-        assert!(
-            prompt.contains("target-knot: plan-creator"),
-            "prompt should show target-knot in emit format: {}",
             prompt
         );
         // Listener context is at the beginning, before the knot's instructions

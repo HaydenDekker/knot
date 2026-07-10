@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::domain::events::Intent;
+use crate::domain::value_objects::StrandSource;
 
 // Re-export value objects for convenient access through the entities module
 pub use crate::domain::value_objects::{PromptTemplate, RigAgentConfig};
@@ -142,10 +142,7 @@ fn default_git_versioned() -> bool {
     true
 }
 
-/// Default value for `listens_for`: empty (no event subscriptions).
-fn default_listens_for() -> Vec<crate::domain::events::Intent> {
-    Vec::new()
-}
+/// Default value for `event_description`: none.
 
 /// A Knot is the core unit of work: an agent goal paired with a prompt template.
 ///
@@ -165,13 +162,20 @@ pub struct Knot {
     /// opt out of automatic versioning for this knot.
     #[serde(default = "default_git_versioned")]
     pub git_versioned: bool,
-    /// List of event intents this knot listens for.
+    /// The source from which this knot receives its input.
     ///
-    /// Each intent declares interest in a specific event from a specific
-    /// target knot. Populated from `listens-for` frontmatter via
-    /// `KnotFile::listens_for`.
-    #[serde(default = "default_listens_for")]
-    pub listens_for: Vec<Intent>,
+    /// Either a filesystem directory to watch or an event URI
+    /// (`event:<producer-knot-id>:<EventId>`). Populated from
+    /// `strand-dir` frontmatter via `KnotFile::strand_source`.
+    #[serde(default)]
+    pub strand_source: StrandSource,
+    /// Semantic description of events this knot subscribes to.
+    ///
+    /// Injected into the producer knot's prompt when this knot is
+    /// an event consumer. Populated from `event-description` frontmatter.
+    #[serde(rename = "event-description")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_description: Option<String>,
 }
 
 /// A Loom orchestrates a collection of Knots.
@@ -488,7 +492,8 @@ mod tests {
             prompt_template: prompt_template.clone(),
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
 
         assert_eq!(knot.id, id);
@@ -508,7 +513,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("../custom-source"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("../custom-source")),
+            event_description: None,
         };
 
         assert_eq!(
@@ -528,7 +534,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("project/prds"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("project/prds")),
+            event_description: None,
         }];
 
         let loom = Loom {
@@ -616,7 +623,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
 
         let json = serde_json::to_string(&knot).unwrap();
@@ -635,7 +643,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
         let json = serde_json::to_string(&knot_true).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
@@ -651,7 +660,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: false,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
         let json = serde_json::to_string(&knot_false).unwrap();
         let deserialized: Knot = serde_json::from_str(&json).unwrap();
@@ -667,7 +677,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
         // Build JSON without the git_versioned field
         let json_minimal = r#"{"id":"git-default","agent_profile_ref":"fast","prompt_template":{"instructions":"do it"},"strand_dir":"strands"}"#;
@@ -1322,7 +1333,8 @@ mod tests {
             },
             strand_dir: std::path::PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(std::path::PathBuf::from("strands")),
+            event_description: None,
         }
     }
 

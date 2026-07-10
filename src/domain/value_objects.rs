@@ -339,10 +339,155 @@ impl AgentProfile {
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+// ── StrandSource — Unified Input Direction ─────────────────────────────────
+
+/// The source from which a knot receives its input (its "strand").
+///
+/// A knot has exactly **one** input direction, expressed via `strand-dir` in
+/// its definition file. The value can be either:
+///
+/// - A filesystem path (`StrandSource::Filesystem`) — the normal case where
+///   the knot watches a directory for new input files.
+/// - An event URI (`StrandSource::EventUri`) — the knot subscribes to events
+///   emitted by another knot. The URI encodes the producer knot ID and the
+///   event identifier: `event:<producer-knot-id>:<EventId>`.
+///
+/// This replaces the old dual-input model where knots had both `strand-dir`
+/// (filesystem) and `listens_for` (event intents). With `StrandSource`, there
+/// is one field, one direction, one watcher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StrandSource {
+    /// A filesystem path to watch for input files.
+    Filesystem(std::path::PathBuf),
+    /// An event subscription encoded as a URI.
+    ///
+    /// Format: `event:<producer-knot-id>:<EventId>`
+    EventUri {
+        /// The knot that emits the event (the producer).
+        producer_knot: String,
+        /// The event identifier to subscribe to.
+        event_id: String,
+    },
+}
+
+/// Error details for a malformed event URI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrandSourceError {
+    /// Human-readable description of what was wrong.
+    pub message: String,
+}
+
+impl std::fmt::Display for StrandSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid strand source: {}", self.message)
+    }
+}
+
+impl std::error::Error for StrandSourceError {}
+
+impl Default for StrandSource {
+    /// Default is a `Filesystem` with an empty path.
+    fn default() -> Self {
+        Self::Filesystem(std::path::PathBuf::new())
+    }
+}
+
+impl StrandSource {
+    /// Parse a `strand-dir` string into a [`StrandSource`].
+    ///
+    /// Supports two formats:
+    ///
+    /// 1. **Plain path** — any string that does not start with `event:` is
+    ///    treated as a filesystem path and wrapped in
+    ///    `StrandSource::Filesystem(PathBuf)`.
+    ///
+    /// 2. **Event URI** — strings starting with `event:` must follow the
+    ///    format `event:<producer-knot-id>:<EventId>` where the producer
+    ///    knot ID and event ID are separated by colons. There must be
+    ///    exactly three colon-separated parts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StrandSourceError` if the URI scheme is `event:` but the
+    /// format is malformed (not exactly three parts, or any part is empty).
+    pub fn from_str(s: &str) -> Result<Self, StrandSourceError> {
+        let s = s.trim();
+
+        if s.starts_with("event:") {
+            // Parse as event URI: event:<producer-knot-id>:<EventId>
+            let without_scheme = &s[6..]; // skip "event:"
+            let parts: Vec<&str> = without_scheme.split(':').collect();
+
+            if parts.len() != 2 {
+                return Err(StrandSourceError {
+                    message: format!(
+                        "event URI must have exactly two parts after '
+                         event:' (got {}): '{}'",
+                        parts.len(), s
+                    ),
+                });
+            }
+
+            let producer_knot = parts[0].trim();
+            let event_id = parts[1].trim();
+
+            if producer_knot.is_empty() {
+                return Err(StrandSourceError {
+                    message: "producer knot ID is empty in event URI".to_string(),
+                });
+            }
+
+            if event_id.is_empty() {
+                return Err(StrandSourceError {
+                    message: "event ID is empty in event URI".to_string(),
+                });
+            }
+
+            Ok(StrandSource::EventUri {
+                producer_knot: producer_knot.to_string(),
+                event_id: event_id.to_string(),
+            })
+        } else {
+            // Plain filesystem path
+            Ok(StrandSource::Filesystem(s.into()))
+        }
+    }
+
+    /// Return `true` if this is an event subscription.
+    ///
+    /// Returns `false` for filesystem paths.
+    pub fn is_event(&self) -> bool {
+        matches!(self, StrandSource::EventUri { .. })
+    }
+
+    /// Return the event URI components, if this is an event subscription.
+    ///
+    /// Returns `(&str, &str)` of `(producer_knot, event_id)` for
+    /// [`EventUri`], or `None` for [`Filesystem`].
+    pub fn as_event(&self) -> Option<(&str, &str)> {
+        match self {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => Some((producer_knot, event_id)),
+            StrandSource::Filesystem(_) => None,
+        }
+    }
+
+    /// Return `true` if this is the default value (empty filesystem path).
+    ///
+    /// Used by `skip_serializing_if` to omit the field when it has
+    /// not been set (e.g. during deserialization from JSON).
+    pub fn is_default(&self) -> bool {
+        matches!(self, StrandSource::Filesystem(path) if path.as_os_str().is_empty())
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::path::PathBuf;
     use super::*;
 
     #[test]
@@ -846,7 +991,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("strands"),
             git_versioned: true,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+            event_description: None,
         };
 
         let config = profile.resolve_for_knot(&knot);
@@ -879,7 +1025,8 @@ mod tests {
             },
             strand_dir: PathBuf::from("input"),
             git_versioned: false,
-            listens_for: Vec::new(),
+            strand_source: StrandSource::Filesystem(PathBuf::from("input")),
+            event_description: None,
         };
 
         let config = profile.resolve_for_knot(&knot);
@@ -975,5 +1122,166 @@ mod tests {
         }
         let config = RigAgentConfig::default_config();
         assert_no_cli_fields(&config);
+    }
+
+    // ── StrandSource Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn strand_source_is_event_false_for_filesystem() {
+        let source = StrandSource::Filesystem(PathBuf::from(
+            "project/prds/my-prd.md",
+        ));
+        assert!(!source.is_event());
+        assert!(source.as_event().is_none());
+    }
+
+    #[test]
+    fn strand_source_is_event_true_for_event_uri() {
+        let source =
+            StrandSource::from_str("event:plan-creator:PlanCreated")
+                .unwrap();
+        assert!(source.is_event());
+        assert!(source.as_event().is_some());
+    }
+
+    #[test]
+    fn strand_source_from_str_plain_path() {
+        let result = StrandSource::from_str("project/prds").unwrap();
+        match result {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(path, PathBuf::from("project/prds"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem, got EventUri");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_from_str_relative_path() {
+        let result = StrandSource::from_str("../custom-source").unwrap();
+        match result {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(path, PathBuf::from("../custom-source"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem, got EventUri");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_from_str_event_uri() {
+        let result =
+            StrandSource::from_str("event:plan-creator:PlanCreated")
+                .unwrap();
+        match result {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            StrandSource::Filesystem(_) => {
+                panic!("expected EventUri, got Filesystem");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_from_str_event_uri_multiple_parts() {
+        // Producer knot ID contains hyphens, event ID is PascalCase
+        let result = StrandSource::from_str(
+            "event:implementation-planner:ValidationFailed",
+        )
+        .unwrap();
+        match result {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "implementation-planner");
+                assert_eq!(event_id, "ValidationFailed");
+            }
+            StrandSource::Filesystem(_) => {
+                panic!("expected EventUri, got Filesystem");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_from_str_malformed_missing_parts() {
+        // "event:only-one-part" has only one part after "event:" — should fail
+        let result = StrandSource::from_str("event:only-one-part");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("two parts"));
+    }
+
+    #[test]
+    fn strand_source_from_str_malformed_empty_producer() {
+        let result = StrandSource::from_str("event::PlanCreated");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("producer knot ID is empty"));
+    }
+
+    #[test]
+    fn strand_source_from_str_malformed_empty_event_id() {
+        let result = StrandSource::from_str("event:plan-creator:");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("event ID is empty"));
+    }
+
+    #[test]
+    fn strand_source_from_str_event_uri_with_whitespace() {
+        // Whitespace should be trimmed from parts
+        let result =
+            StrandSource::from_str("event: plan-creator : PlanCreated ")
+                .unwrap();
+        match result {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            StrandSource::Filesystem(_) => {
+                panic!("expected EventUri, got Filesystem");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_from_str_path_with_colon_is_filesystem() {
+        // A path that contains colons (e.g. Windows-style) is still a
+        // filesystem path as long as it doesn't start with "event:"
+        let result = StrandSource::from_str("strands:subdir").unwrap();
+        match result {
+            StrandSource::Filesystem(path) => {
+                assert_eq!(path, PathBuf::from("strands:subdir"));
+            }
+            StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem, got EventUri");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_as_event_returns_components() {
+        let source =
+            StrandSource::from_str("event:producer:MyEvent").unwrap();
+        let (producer, event_id) = source.as_event().unwrap();
+        assert_eq!(producer, "producer");
+        assert_eq!(event_id, "MyEvent");
+    }
+
+    #[test]
+    fn strand_source_as_event_returns_none_for_filesystem() {
+        let source = StrandSource::Filesystem(PathBuf::from("strands"));
+        assert!(source.as_event().is_none());
     }
 }

@@ -239,7 +239,8 @@ impl FileSystemLoomRepository {
             prompt_template: file.prompt_template,
             strand_dir: file.strand_dir,
             git_versioned: file.git_versioned,
-            listens_for: file.listens_for,
+            strand_source: file.strand_source,
+            event_description: file.event_description,
         }
     }
 

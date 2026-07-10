@@ -270,6 +270,7 @@ mod write_state_tests {
     use crate::domain::value_objects::AgentProfile;
     use crate::application::store::LoomStore;
     use crate::domain::entities::{Knot, Loom, LoomId, StrandPath, TieOffPath};
+    use crate::domain::value_objects::StrandSource;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
@@ -397,7 +398,8 @@ mod write_state_tests {
                     },
                     strand_dir: PathBuf::from("strands"),
                     git_versioned: true,
-                    listens_for: Vec::new(),
+                    strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
+                    event_description: None,
                 },
             ],
         }
