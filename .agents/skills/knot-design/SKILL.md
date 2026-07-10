@@ -4,7 +4,7 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.1"
+  version: "1.1.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -16,6 +16,67 @@ to feedback loops.
 This skill captures design principles learned from building and debugging
 real Knot rigs. Use it when planning a new loom, reviewing knot boundaries,
 or diagnosing loop behaviour.
+
+---
+
+## ⚠️ Never Leak Internal Terminology Into Prompts or Event Descriptions
+
+The markdown body of a knot (its instructions) and the `event-description`
+frontmatter field are **injected directly into the agent's prompt**. They
+are **not** internal documentation — they are what the agent reads and
+follows. Therefore:
+
+**Never use knot-specific internal terms in prompts or event descriptions.**
+Use generic, domain-agnostic language instead. Workflows should be reusable
+across different orchestration systems, not tied to Knot's terminology.
+
+| ❌ Knot-specific (do NOT use in prompts) | ✅ Generic (use instead) |
+|------------------------------------------|--------------------------|
+| tie-off                                  | final response |
+| strand                                   | input file, work item, trigger file |
+| knot                                     | task |
+| loom                                     | workspace |
+| strand-dir                               | input directory, source path |
+| tie-off directory                        | output directory |
+| tie-off file                             | output document, result file |
+| event                                    | message, notification, signal |
+| event-description                        | (use a plain `description:` or `summary` field) |
+
+### Template for Generic Instructions
+
+When writing knot instructions, follow this pattern:
+
+```markdown
+You are a <role>. <Goal statement>.
+
+1. Read the <input file>.
+2. Inspect current state of <target domain>.
+3. Determine if the goal is already met.
+4. If yes, report "no changes needed" with explanation.
+5. If no, apply minimal changes to achieve the goal.
+6. Write your <output document> at the expected output path.
+
+## Constraints
+- Never overwrite work in <other domain> — only append observations.
+- Re-running on the same <input file> must produce no additional changes.
+```
+
+### Examples
+
+**❌ Bad — leaks internal terminology:**
+
+```markdown
+Read the strand. Process it. Append to the tie-off file.
+Emit an event in your tie-off if one occurs.
+```
+
+**✅ Good — uses generic terms:**
+
+```markdown
+Read the input file. Process it. Write your final response
+to the output document. Emit a notification in your output
+document if one occurs.
+```
 
 ---
 
@@ -59,6 +120,8 @@ Ensure the plan file exists at project/plans/<slug>.md and contains
 phases that deliver [goal]. Inspect the file first. If it already
 contains aligned phases, make no changes. If phases are missing or
 misaligned, update in place.
+
+Write your final response to the output document.
 ```
 
 ### Idempotency Checklist
@@ -340,15 +403,16 @@ strand-dir: "<path>"
 
 You are a <role>. <Goal statement>.
 
-1. Read the strand (provided).
+1. Read the input file (provided).
 2. Inspect current state of <target domain>.
 3. Determine if the goal is already met.
 4. If yes, report "no changes needed" with explanation.
 5. If no, apply minimal changes to achieve the goal.
+6. Write your final response.
 
 ## Constraints
 - Never overwrite work in <other domain> — only append observations.
-- Re-running this on the same strand must produce no additional changes.
+- Re-running on the same input file must produce no additional changes.
 ```
 
 ### Step 6: Check for Loops

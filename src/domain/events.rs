@@ -94,10 +94,10 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
 
     let mut output = String::from(
         "## Agent Events\n\n\
-         Other knots are listening for events you may emit. If an event occurs\n\
-         during your work, include an explicit event block in your tie-off using\n\
+         Other processors are listening for events you may emit. If an event occurs\n\
+         during your work, include an explicit event block in your final response using\n\
          the format shown.\n\n\
-         You may emit **multiple events** in one tie-off — one indented block\n\
+         You may emit **multiple events** in one final response — one indented block\n\
          per event type.\n\n\
          Events you may emit:\n",
     );
@@ -106,7 +106,7 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
         let description = if let Some(desc) = &consumer.event_description {
             desc.as_str()
         } else {
-            "If this event occurs, emit a structured event block in your tie-off."
+            "If this event occurs, emit a structured event block in your final response."
         };
 
         output.push_str(&format!(
@@ -115,7 +115,7 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
         ));
     }
 
-    output.push_str("\nIf events occurred, emit one indented block per event in your tie-off:\n");
+    output.push_str("\nIf events occurred, emit one indented block per event in your final response:\n");
     output.push_str("```\n");
     output.push_str("event: <EventId>\n");
     output.push_str("description: <short summary of what happened>\n");
@@ -624,7 +624,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &[consumer]);
         assert!(
-            context.contains("If this event occurs, emit a structured event block in your tie-off."),
+            context.contains("If this event occurs, emit a structured event block in your final response."),
             "should use generic message when event-description is None: {}",
             context
         );
