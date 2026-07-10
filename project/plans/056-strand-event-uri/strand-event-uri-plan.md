@@ -169,10 +169,10 @@ Merge `ensure_strand_dir_and_watch()` and `ensure_event_watches()` into a single
 
 Remove `Intent` from `FileSystemLoomRepository`, `ConfigEventHandler`, and event source mapping.
 
-- [ ] In `FileSystemLoomRepository::scan_knot_files()`, use `KnotFile.strand_source` to construct `Knot`
-- [ ] In `ConfigEventHandler::handle_knot_added/modified()`, use `strand_source` and `event_description`
-- [ ] In `event_source.rs` `map_rig_event()` and `map_loom_event()`, construct `Knot` from `KnotFile` with `strand_source` and `event_description` (remove `listens_for` field)
-- [ ] **Tests**: Scan loom with EventUri knot, scan loom with Filesystem knot, config event handler registers EventUri knot, config event handler registers Filesystem knot
+- [x] In `FileSystemLoomRepository::scan_knot_files()`, use `KnotFile.strand_source` to construct `Knot`
+- [x] In `ConfigEventHandler::handle_knot_added/modified()`, use `strand_source` and `event_description`
+- [x] In `event_source.rs` `map_rig_event()` and `map_loom_event()`, construct `Knot` from `KnotFile` with `strand_source` and `event_description` (remove `listens_for` field)
+- [x] **Tests**: Scan loom with EventUri knot, scan loom with Filesystem knot, config event handler registers EventUri knot, config event handler registers Filesystem knot
 
 ### Phase 6: Event Metadata and Tie-Off Integration — Derive from strand_source
 

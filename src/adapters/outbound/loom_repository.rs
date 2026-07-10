@@ -1010,6 +1010,266 @@ Review
         );
     }
 
+    // ── Phase 5: strand_source construction tests (EventUri + Filesystem) ──
+
+    /// Scan a loom that contains an EventUri knot — `strand-dir` is an
+    /// event URI and `scan_knot_files` should parse it into
+    /// `StrandSource::EventUri` with correct producer_knot and event_id.
+    #[test]
+    fn scan_loom_with_event_uri_knot() {
+        let rig = tempfile::tempdir().unwrap();
+
+        let loom_dir = rig.path().join("event-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // Knot with event URI as strand-dir.
+        let knot_content = r#"---
+name: plan-validator
+agent-profile-ref: fast
+strand-dir: "event:plan-creator:PlanCreated"
+event-description: When a plan is created
+---
+
+Validate the plan.
+"#;
+        fs::write(loom_dir.join("plan-validator.md"), knot_content).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
+
+        assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
+
+        let loom = &looms[0];
+        assert_eq!(loom.id, LoomId("event-loom".to_string()));
+        assert_eq!(loom.knots.len(), 1);
+
+        let knot = &loom.knots[0];
+        assert_eq!(knot.id, KnotId("plan-validator".to_string()));
+
+        // Verify the strand_source is an EventUri with correct fields.
+        match &knot.strand_source {
+            crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(
+                    producer_knot, "plan-creator",
+                    "producer_knot should be 'plan-creator'"
+                );
+                assert_eq!(
+                    event_id, "PlanCreated",
+                    "event_id should be 'PlanCreated'"
+                );
+            }
+            crate::domain::value_objects::StrandSource::Filesystem(path) => {
+                panic!(
+                    "expected EventUri, got Filesystem({:?})",
+                    path
+                );
+            }
+        }
+
+        // Event description should be preserved.
+        assert_eq!(
+            knot.event_description,
+            Some("When a plan is created".to_string())
+        );
+
+        // EventUri knots have no filesystem path.
+        assert!(
+            knot.strand_source.path().is_none(),
+            "EventUri should have no filesystem path"
+        );
+
+        // is_event should return true.
+        assert!(
+            knot.strand_source.is_event(),
+            "EventUri knot should be_event = true"
+        );
+    }
+
+    /// Scan a loom that contains a Filesystem knot — `strand-dir` is a plain
+    /// path and `scan_knot_files` should parse it into
+    /// `StrandSource::Filesystem` with the path resolved to absolute.
+    #[test]
+    fn scan_loom_with_filesystem_knot() {
+        let rig = tempfile::tempdir().unwrap();
+
+        // Create an actual strand directory so the path resolves.
+        let strand_dir = rig.path().join("strands");
+        fs::create_dir(&strand_dir).unwrap();
+
+        let loom_dir = rig.path().join("fs-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // Knot with plain path as strand-dir.
+        let knot_content = format!(
+            r#"---
+name: review-knot
+agent-profile-ref: fast
+strand-dir: "{}"
+---
+
+Review the document.
+"#,
+            strand_dir.display()
+        );
+        fs::write(loom_dir.join("review-knot.md"), knot_content).unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
+
+        assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
+
+        let loom = &looms[0];
+        assert_eq!(loom.id, LoomId("fs-loom".to_string()));
+        assert_eq!(loom.knots.len(), 1);
+
+        let knot = &loom.knots[0];
+        assert_eq!(knot.id, KnotId("review-knot".to_string()));
+
+        // Verify the strand_source is a Filesystem with resolved path.
+        match &knot.strand_source {
+            crate::domain::value_objects::StrandSource::Filesystem(path) => {
+                assert!(
+                    path.is_absolute(),
+                    "Filesystem path should be resolved to absolute, got: {:?}",
+                    path
+                );
+                assert!(
+                    path.exists(),
+                    "Filesystem path should exist: {:?}",
+                    path
+                );
+            }
+            crate::domain::value_objects::StrandSource::EventUri { .. } => {
+                panic!("expected Filesystem, got EventUri");
+            }
+        }
+
+        // event_description should be None for a plain Filesystem knot.
+        assert!(
+            knot.event_description.is_none(),
+            "Filesystem knot should have no event_description"
+        );
+
+        // is_event should return false.
+        assert!(
+            !knot.strand_source.is_event(),
+            "Filesystem knot should have is_event = false"
+        );
+    }
+
+    /// Scan a loom that contains both an EventUri knot and a Filesystem
+    /// knot — both should be parsed and stored correctly.
+    #[test]
+    fn scan_loom_with_mixed_event_uri_and_filesystem_knots() {
+        let rig = tempfile::tempdir().unwrap();
+
+        // Create an actual strand directory for the Filesystem knot.
+        let strand_dir = rig.path().join("strands");
+        fs::create_dir(&strand_dir).unwrap();
+
+        let loom_dir = rig.path().join("mixed-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        // Filesystem knot.
+        let fs_knot_content = format!(
+            r#"---
+name: reviewer
+agent-profile-ref: fast
+strand-dir: "{}"
+---
+
+Review the document.
+"#,
+            strand_dir.display()
+        );
+        fs::write(loom_dir.join("reviewer.md"), fs_knot_content).unwrap();
+
+        // EventUri knot.
+        let event_knot_content = r#"---
+name: plan-validator
+agent-profile-ref: fast
+strand-dir: "event:plan-creator:PlanCreated"
+event-description: When a plan is created
+---
+
+Validate the plan.
+"#;
+        fs::write(
+            loom_dir.join("plan-validator.md"),
+            event_knot_content,
+        )
+        .unwrap();
+
+        let repo = FileSystemLoomRepository::new();
+        let (looms, warnings) = repo.scan(rig.path()).unwrap();
+
+        assert_eq!(looms.len(), 1, "should find one loom");
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {:?}",
+            warnings
+        );
+
+        let loom = &looms[0];
+        assert_eq!(
+            loom.knots.len(),
+            2,
+            "loom should have both knots"
+        );
+
+        // Find each knot by name.
+        let reviewer_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("reviewer".to_string()))
+            .expect("reviewer knot should exist");
+        let plan_validator_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("plan-validator".to_string()))
+            .expect("plan-validator knot should exist");
+
+        // Filesystem knot should have a resolved path.
+        match &reviewer_knot.strand_source {
+            crate::domain::value_objects::StrandSource::Filesystem(path) => {
+                assert!(path.is_absolute());
+                assert!(path.exists());
+            }
+            _ => panic!(
+                "reviewer should be Filesystem, got {:?}",
+                reviewer_knot.strand_source
+            ),
+        }
+
+        // EventUri knot should have correct event fields.
+        match &plan_validator_knot.strand_source {
+            crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            _ => panic!(
+                "plan-validator should be EventUri, got {:?}",
+                plan_validator_knot.strand_source
+            ),
+        }
+    }
+
     // ── Phase 3: warning propagation tests ─────────────────────────────
 
     #[test]

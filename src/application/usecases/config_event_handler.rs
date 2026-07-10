@@ -1497,8 +1497,21 @@ mod phase2_tests {
     // ── Mock LoomRepository for ConfigEventHandler tests ───────────────
 
     struct MockLoomRepository {
+        scan_looms: Arc<Mutex<Vec<Loom>>>,
+        scan_warnings: Arc<Mutex<Vec<String>>>,
         scan_knots: Arc<Mutex<Vec<Knot>>>,
         scan_error: Arc<Mutex<Option<String>>>,
+    }
+
+    impl MockLoomRepository {
+        fn new() -> Self {
+            Self {
+                scan_looms: Arc::new(Mutex::new(vec![])),
+                scan_warnings: Arc::new(Mutex::new(vec![])),
+                scan_knots: Arc::new(Mutex::new(vec![])),
+                scan_error: Arc::new(Mutex::new(None)),
+            }
+        }
     }
 
     impl LoomRepository for MockLoomRepository {
@@ -1506,7 +1519,10 @@ mod phase2_tests {
             &self,
             _rig: &std::path::Path,
         ) -> Result<(Vec<Loom>, Vec<String>), PortError> {
-            Ok((vec![], vec![]))
+            Ok((
+                self.scan_looms.lock().unwrap().clone(),
+                self.scan_warnings.lock().unwrap().clone(),
+            ))
         }
 
         fn scan_knot_files(
@@ -1555,6 +1571,8 @@ mod phase2_tests {
         ];
 
         let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
             scan_knots: Arc::new(Mutex::new(knots)),
             scan_error: Arc::new(Mutex::new(None)),
         });
@@ -1605,6 +1623,8 @@ mod phase2_tests {
         let loom_id = LoomId("missing-loom".to_string());
 
         let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
             scan_knots: Arc::new(Mutex::new(vec![])),
             scan_error: Arc::new(Mutex::new(Some(
                 "No such file or directory".to_string(),
@@ -1646,6 +1666,234 @@ mod phase2_tests {
             store.get(&loom_id).is_none(),
             "loom should not be registered after scan failure"
         );
+    }
+
+    // ── Phase 5: strand_source construction tests (EventUri + Filesystem) ──
+
+    /// `ConfigEventHandler::handle_knot_added` with an EventUri knot:
+    /// adds the knot to the loom in the store, logs `KnotRegistered`,
+    /// and starts a watcher for the event dispatch directory.
+    #[test]
+    fn config_handler_knot_added_event_uri() {
+        use crate::domain::value_objects::StrandSource;
+
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
+            scan_error: Arc::new(Mutex::new(None)),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        // Use a temp dir so the rig/tie-offs/{loom-id}/{event-id}/
+        // dispatch directory can be created.
+        let tmp = tempfile::tempdir().unwrap();
+        let rig_path = tmp.path().to_path_buf();
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            rig_path.clone(),
+        );
+
+        // Build an EventUri knot (the same way map_loom_event would).
+        let event_knot = Knot {
+            id: KnotId("plan-validator".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "Validate the plan.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: "plan-creator".to_string(),
+                event_id: "PlanCreated".to_string(),
+            },
+            event_description: Some("When a plan is created".to_string()),
+        };
+
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: event_knot.clone(),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom now has 2 knots
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+
+        // The EventUri knot should be stored with correct strand_source.
+        let validator_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("plan-validator".to_string()))
+            .unwrap();
+        assert_eq!(
+            validator_knot.strand_source,
+            StrandSource::EventUri {
+                producer_knot: "plan-creator".to_string(),
+                event_id: "PlanCreated".to_string(),
+            }
+        );
+        assert_eq!(
+            validator_knot.event_description,
+            Some("When a plan is created".to_string())
+        );
+
+        // Log: KnotRegistered
+        let events = logged_events.lock().unwrap();
+        assert!(events.len() >= 1);
+        match &events[0] {
+            LoomEvent::KnotRegistered {
+                loom_id: lid,
+                knot_id,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "plan-validator");
+            }
+            other => {
+                panic!("Expected KnotRegistered, got {other:?}");
+            }
+        }
+
+        // Watcher started for the event dispatch directory.
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        // The event dispatch path is rig/tie-offs/{loom-id}/{event-id}/
+        let expected = rig_path
+            .join("tie-offs")
+            .join("test-loom")
+            .join("PlanCreated");
+        assert!(
+            watches[0] == expected,
+            "watcher path should be the event dispatch directory {:?}, got: {:?}",
+            expected,
+            watches[0]
+        );
+    }
+
+    /// `ConfigEventHandler::handle_knot_added` with a Filesystem knot:
+    /// adds the knot to the loom in the store, logs `KnotRegistered`,
+    /// and starts a watcher for the strand directory.
+    #[test]
+    fn config_handler_knot_added_filesystem() {
+        use crate::domain::value_objects::StrandSource;
+
+        let loom_id = LoomId("test-loom".to_string());
+        let existing_loom =
+            build_loom("test-loom", vec![build_knot("k1")]);
+
+        let store = LoomStore::new();
+        store.register(existing_loom);
+
+        let repo = Arc::new(MockLoomRepository {
+            scan_looms: Arc::new(Mutex::new(vec![])),
+            scan_warnings: Arc::new(Mutex::new(vec![])),
+            scan_knots: Arc::new(Mutex::new(vec![])),
+            scan_error: Arc::new(Mutex::new(None)),
+        });
+        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (
+            event_source,
+            watch_calls,
+            _unwatch_calls,
+            _set_ids_calls,
+        ) = TrackingEventSource::new();
+
+        // Use a temp dir so the strand directory can be created.
+        let tmp = tempfile::tempdir().unwrap();
+        let rig_path = tmp.path().to_path_buf();
+        let loom_dir = rig_path.join("test-loom");
+        fs::create_dir(&loom_dir).unwrap();
+        let strand_dir = loom_dir.join("strands");
+
+        let handler = ConfigEventHandler::new(
+            repo,
+            Arc::new(log_port),
+            store.clone(),
+            Arc::new(event_source),
+            rig_path.clone(),
+        );
+
+        // Build a Filesystem knot (the same way map_loom_event would).
+        let fs_knot = Knot {
+            id: KnotId("reviewer".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "Review the document.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::Filesystem(strand_dir.clone()),
+            event_description: None,
+        };
+
+        let result = handler.execute(ConfigEvent::KnotAdded {
+            loom_id: loom_id.clone(),
+            knot: fs_knot.clone(),
+        });
+
+        // Should succeed
+        assert!(result.is_ok(), "should succeed: {:?}", result);
+
+        // Loom now has 2 knots
+        let loom = store.get(&loom_id).unwrap();
+        assert_eq!(loom.knots.len(), 2);
+
+        // The Filesystem knot should be stored with correct strand_source.
+        let reviewer_knot = loom
+            .knots
+            .iter()
+            .find(|k| k.id == KnotId("reviewer".to_string()))
+            .unwrap();
+        assert!(
+            matches!(reviewer_knot.strand_source,
+                StrandSource::Filesystem(_)
+            )
+        );
+        assert_eq!(
+            reviewer_knot.strand_source.path(),
+            Some(strand_dir.as_path())
+        );
+        assert!(reviewer_knot.event_description.is_none());
+
+        // Log: KnotRegistered
+        let events = logged_events.lock().unwrap();
+        assert!(events.len() >= 1);
+        match &events[0] {
+            LoomEvent::KnotRegistered {
+                loom_id: lid,
+                knot_id,
+                ..
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(knot_id.0, "reviewer");
+            }
+            other => {
+                panic!("Expected KnotRegistered, got {other:?}");
+            }
+        }
+
+        // Watcher started for the strand directory.
+        let watches = watch_calls.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0], strand_dir);
     }
 }
 
