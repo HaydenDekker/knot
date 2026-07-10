@@ -142,6 +142,8 @@ Typed subdirectories inside a loom's tie-off directory that carry event files fo
 
 **Dynamic routing (current):** A consumer knot declares its subscription using an `event:` URI in its `strand-dir` (e.g. `event:quality-reviewer:ReviewCompleted`). Knot resolves this to `rig/tie-offs/{loom-id}/{event-id}/`, creates the directory, and watches it. When the producer emits a matching event, Knot creates an event file in that directory, triggering the consumer.
 
+**Multi-event emission:** A single producer knot can emit **multiple events** in one tie-off — one indented event block per event type (e.g. `PlanCreated`, `ScopeChanged`, `GoalsApproved`). Each event block is independently parsed and dispatched to its matching consumers. If no events occurred, the producer emits `event: None`.
+
 **Static routing (legacy):** A producing knot writes event files directly into a typed subdirectory. A consuming knot points its `strand-dir` at that subdirectory using a filesystem path. This pattern still works but is superseded by dynamic routing.
 
 **Layout:**

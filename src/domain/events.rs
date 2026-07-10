@@ -48,6 +48,12 @@ pub struct AgentEvent {
 /// The returned markdown is designed to be prepended to the knot's
 /// instructions before execution.
 ///
+/// ## Multi-event format
+///
+/// A producer may emit **multiple events** in a single tie-off (one
+/// indented block per event type). Each event block is independently
+/// parsed and dispatched. If no events occurred, emit `event: None`.
+///
 pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
     use crate::domain::value_objects::StrandSource;
 
@@ -91,6 +97,8 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
          Other knots are listening for events you may emit. If an event occurs\n\
          during your work, include an explicit event block in your tie-off using\n\
          the format shown.\n\n\
+         You may emit **multiple events** in one tie-off — one indented block\n\
+         per event type.\n\n\
          Events you may emit:\n",
     );
 
@@ -107,7 +115,7 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
         ));
     }
 
-    output.push_str("\nIf an event occurred, emit in your tie-off:\n");
+    output.push_str("\nIf events occurred, emit one indented block per event in your tie-off:\n");
     output.push_str("```\n");
     output.push_str("event: <EventId>\n");
     output.push_str("description: <short summary of what happened>\n");

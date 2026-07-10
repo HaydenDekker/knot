@@ -638,8 +638,9 @@ impl ProcessStrand {
     /// After a knot completes successfully, this extracts any structured
     /// agent events from the tie-off content, matches them against consumer
     /// `strand_source` entries (EventUri), and dispatches event files to
-    /// each matching consumer. `event: None` signals (returned as `None`
-    /// by the parser) produce no dispatch.
+    /// each matching consumer. `event: None` signals (skipped by parser)
+    /// produce no dispatch. Multiple events in a single tie-off are each
+    /// dispatched independently to their matching consumers.
     ///
     /// Returns a `LoomEvent::EventsDispatched` log entry if any events
     /// were dispatched, or `None` if no events were found.
@@ -651,42 +652,45 @@ impl ProcessStrand {
         strand_path: &StrandPath,
     ) -> Result<Option<LoomEvent>, PortError> {
         // Parse tie-off for agent events.
-        // Returns None for `event: None` (no dispatch), or Some(event) for
-        // a real event. The producing knot's ID is available from the `knot`
-        // parameter — `target-knot` is derived from context, not emitted.
-        let Some(event) =
-            crate::domain::tieoff_parser::extract_agent_events(tie_off_content)
-        else {
-            return Ok(None);
-        };
+        // Returns a Vec of all events found (may be empty).
+        // The producing knot's ID is available from the `knot` parameter.
+        let events =
+            crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
 
-        // Iterate by loom to track consumer_loom_id for dispatch
+        if events.is_empty() {
+            return Ok(None);
+        }
+
+        // Iterate by loom to track consumer_loom_id for dispatch.
+        // Each event is dispatched independently to its matching consumers.
         let all_looms = self.store.list();
         let mut dispatches: Vec<(String, String)> = Vec::new();
-        for loom in &all_looms {
-            for consumer_knot in &loom.knots {
-                if let StrandSource::EventUri {
-                    producer_knot,
-                    event_id,
-                } = &consumer_knot.strand_source
-                {
-                    // Match: producer_knot == this knot's ID AND event_id matches
-                    if producer_knot == &knot.id.0 && event_id == &event.event_id
+        for event in &events {
+            for loom in &all_looms {
+                for consumer_knot in &loom.knots {
+                    if let StrandSource::EventUri {
+                        producer_knot,
+                        event_id,
+                    } = &consumer_knot.strand_source
                     {
-                        // Dispatch event file to consumer's tie-off dir.
-                        // producer_knot is passed so event files include it
-                        // in frontmatter, even though it's not in AgentEvent.
-                        let _path = self.event_dispatcher.dispatch(
-                            &event,
-                            consumer_knot,
-                            &knot.id.0,
-                            &loom.id,
-                            &self.rig_dir,
-                        )?;
-                        dispatches.push((
-                            event.event_id.clone(),
-                            loom.id.0.clone(),
-                        ));
+                        // Match: producer_knot == this knot's ID AND event_id matches
+                        if producer_knot == &knot.id.0 && event_id == &event.event_id
+                        {
+                            // Dispatch event file to consumer's tie-off dir.
+                            // producer_knot is passed so event files include it
+                            // in frontmatter, even though it's not in AgentEvent.
+                            let _path = self.event_dispatcher.dispatch(
+                                event,
+                                consumer_knot,
+                                &knot.id.0,
+                                &loom.id,
+                                &self.rig_dir,
+                            )?;
+                            dispatches.push((
+                                event.event_id.clone(),
+                                loom.id.0.clone(),
+                            ));
+                        }
                     }
                 }
             }
@@ -4579,8 +4583,8 @@ mod phase6_integration_tests {
             crate::domain::tieoff_parser::extract_agent_events(
                 output_content,
             );
-        assert!(parsed_events.is_some());
-        let parsed = parsed_events.unwrap();
+        assert_eq!(parsed_events.len(), 1);
+        let parsed = &parsed_events[0];
         assert_eq!(parsed.event_id, "PlanCreated");
         // target-knot should NOT be in the payload (it's derived from context)
         assert!(

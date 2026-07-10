@@ -23,9 +23,12 @@ The `listens-for` array, `Intent` struct, and `matches_intent()` function are re
 
 The injected context block is improved:
 - Has a **markdown heading** so it's visually distinct from knot instructions
-- Producer is told to **always emit an event block** — either a real event or `event: None`
+- Producer is told to emit **an event block per event type** — multiple events
+  can be emitted in a single tie-off (e.g. `PlanCreated` and `ScopeChanged`)
+- Producer must emit **`event: None`** if no events occurred
 - Event block includes a **`description`** field (required for non-None events)
 - Producer does **not** see consumer knot names — only the events it may emit
+- Each event type gets **its own indented block** in the tie-off
 
 Target injected format:
 
@@ -40,12 +43,19 @@ Events you may emit:
 - `NonConformance` — Emitted when validation of a CI job fails one or
   more BDD scenarios. Contains the plan, CI job, failed scenarios with
   evidence, and a gap summary.
+- `PlanCreated` — Emitted when a new implementation plan is authored.
 
-If an event occurred, emit in your tie-off:
+If events occurred, emit one indented block per event in your tie-off:
 ```
 event: NonConformance
 description: <short summary of what happened>
 <additional fields as relevant>
+```
+
+event: PlanCreated
+```
+description: New plan for feature X
+plan-id: PLAN-001
 ```
 
 If no events occurred, emit:
@@ -56,11 +66,15 @@ event: None
 
 ### Event Contract
 
-- `event:` is **always present** in the structured tie-off block
-- When `event:` has a real ID, `description:` is **required**
-- When `event: None`, no other fields are needed
-- `target-knot` is **not emitted by the producer** — the system knows which knot produced the tie-off; it was redundant
-- The tie-off event parser must recognise `event: None` as a valid signal (no dispatch occurs)
+- A tie-off may contain **zero, one, or many** indented event blocks
+- When **no events** occurred, the tie-off must contain `event: None`
+- When **one or more events** occurred, emit one indented block per event
+  — each block starts with `event: <EventId>` and includes `description:`
+- Each event block is **independently parsed and dispatched** to its consumers
+- `event: None` is recognised as a valid signal (no dispatch occurs for that block)
+- `target-knot` is **not emitted by the producer** — derived from context
+- The tie-off event parser returns a **`Vec<AgentEvent>`** — all non-None
+  events found in the tie-off (multiple dispatch per tie-off)
 
 ## Existing Tests
 
@@ -140,19 +154,24 @@ Refactor `build_listener_context()` to scan `strand_source` instead of `listens_
 - [ ] Remove `Intent` dependency from the function
 - [ ] **Tests**: Output has heading, output contains event descriptions, output does NOT contain consumer knot names, output instructs `event: None` for no-events, output requires description field, single consumer triggers context, no consumers returns empty, multiple consumers same event deduplicates, multiple different events from same producer, generic message when event-description is None
 
-### Phase 3: Event Dispatch — Match consumers by strand_source, handle event: None
+### Phase 3: Event Dispatch — Match consumers by strand_source, multi-event array
 
 Refactor the event dispatch matching flow and update the tie-off event parser for the new format.
+The parser now returns **`Vec<AgentEvent>`** instead of `Option<AgentEvent>` — a producer can emit
+multiple event types in one tie-off (e.g. `PlanCreated`, `ScopeChanged`, `GoalsApproved`).
 
 - [ ] **Tie-off parser changes** (`tieoff_parser::extract_agent_events`):
+  - [ ] **Return type changes**: `Option<AgentEvent>` → `Vec<AgentEvent>`
+  - [ ] Collect **all** indented event blocks (not just the last one)
+  - [ ] `event: None` is a valid signal — when parsed, no `AgentEvent` is produced for that block (skip it)
   - [ ] `target-knot` is no longer emitted by the producer — the caller (ProcessStrand) fills it from the knot producing the tie-off
-  - [ ] `event: None` is a valid signal — when parsed, no `AgentEvent` is produced (skip dispatch)
   - [ ] `description` is a new recognised payload field (no special handling, just passes through)
   - [ ] `AgentEvent` struct: remove `target_knot` field (derived at dispatch time), keep `event_id` and `payload`
-- [ ] **Dispatch matching**: scan all knots for `strand_source: EventUri { producer_knot, event_id }` where `event_id` matches the parsed event and `producer_knot` matches the producing knot's ID (known from context, not from the event)
+- [ ] **Dispatch matching**: for **each** `AgentEvent` in the parsed vec, scan all knots for `strand_source: EventUri { producer_knot, event_id }` where `event_id` matches the event and `producer_knot` matches the producing knot's ID
+- [ ] **Dispatch loop**: iterate the vec of events; dispatch each to its matching consumers independently; accumulate all dispatches into one `EventsDispatched` loom-log entry
 - [ ] Remove `matches_intent(event, intent)` function from `events.rs`
 - [ ] Remove `Intent` struct from `events.rs` (no longer needed)
-- [ ] **Tests**: Full dispatch flow with EventUri consumers, `event: None` produces no dispatch, fan-out two looms with EventUri, no consumers no dispatch, event ID mismatch no dispatch, description field passes through to event payload, target-knot derived from producing knot context
+- [ ] **Tests**: Full dispatch flow with EventUri consumers, `event: None` produces no dispatch, fan-out two looms with EventUri, no consumers no dispatch, event ID mismatch no dispatch, description field passes through to event payload, target-knot derived from producing knot context, **multiple events in one tie-off each dispatch independently**, **empty vec returned when no events found**, **mixed event blocks (real events + event: None) — only real events dispatched**
 
 ### Phase 4: Watchers — Unified strand directory and event directory handling
 

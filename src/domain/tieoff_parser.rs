@@ -128,8 +128,9 @@ pub fn extract_last_n(
 /// Extract structured agent events from tie-off content.
 ///
 /// Scans the tie-off body for indented key-value blocks that contain an
-/// `event:` key. Each such block represents one `AgentEvent` emitted by a
-/// target knot.
+/// `event:` key. Each such block represents one `AgentEvent` emitted by the
+/// producer knot. A single tie-off may contain **zero, one, or many** event
+/// blocks — each is independently parsed and dispatched.
 ///
 /// ## Format
 ///
@@ -143,11 +144,15 @@ pub fn extract_last_n(
 /// ## review triggered by Created input.md
 /// Timestamp: 2026-06-25T10:00:00Z
 /// ---
-/// Plan PLAN-001 created.
+/// Plan PLAN-001 created. Scope changed.
 ///
 ///   event: PlanCreated
 ///   plan: PLAN-001
 ///   description: Implementation plan for knot event routing
+///
+///   event: ScopeChanged
+///   plan: PLAN-001
+///   description: Scope reduced to core features only
 ///
 /// Some follow-up text.
 /// ```
@@ -155,21 +160,37 @@ pub fn extract_last_n(
 /// ## Graceful handling
 ///
 /// - Blocks without `event:` are skipped (just indented metadata).
-/// - `event: None` produces no `AgentEvent` — returns `None`.
+/// - `event: None` produces no `AgentEvent` for that block (skipped).
 /// - Malformed lines (no `:` separator) are skipped.
 /// - Non-indented lines are skipped.
 /// - `target-knot:` in the event block is ignored (not emitted by the
 ///   producer).
-/// - Multiple event blocks: the **last** event in the tie-off is returned
-///   (single-event-per-tie-off model).
+/// - Multiple event blocks: **all** events are collected and returned.
 pub fn extract_agent_events(
     content: &str,
-) -> Option<crate::domain::events::AgentEvent> {
-    let mut last_event: Option<crate::domain::events::AgentEvent> = None;
+) -> Vec<crate::domain::events::AgentEvent> {
+    let mut events: Vec<crate::domain::events::AgentEvent> = Vec::new();
     let mut current_event_id: Option<String> = None;
     let mut payload: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut in_block = false;
+
+    fn flush(
+        events: &mut Vec<crate::domain::events::AgentEvent>,
+        current_event_id: &mut Option<String>,
+        payload: &mut std::collections::HashMap<String, String>,
+        in_block: &mut bool,
+    ) {
+        if *in_block {
+            if let Some(eid) = current_event_id.take() {
+                events.push(crate::domain::events::AgentEvent {
+                    event_id: eid,
+                    payload: std::mem::take(payload),
+                });
+            }
+            *in_block = false;
+        }
+    }
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -177,19 +198,13 @@ pub fn extract_agent_events(
         if !trimmed.is_empty() && line.starts_with([' ', '\t']) {
             if let Some((key, value)) = parse_kv_line(trimmed) {
                 if key == "event" {
-                    // Flush previous event if any
-                    if in_block
-                        && let Some(eid) = current_event_id.take()
-                    {
-                        last_event = Some(crate::domain::events::AgentEvent {
-                            event_id: eid,
-                            payload: std::mem::take(&mut payload),
-                        });
-                    }
+                    // Flush previous event block if any
+                    flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
+
                     current_event_id = Some(value.clone());
                     in_block = true;
 
-                    // `event: None` — no event to dispatch, clear state
+                    // `event: None` — no event to dispatch for this block
                     if value == "None" {
                         current_event_id = None;
                         in_block = false;
@@ -205,29 +220,14 @@ pub fn extract_agent_events(
             // Invalid key-value lines inside blocks are silently skipped
         } else {
             // Non-indented line — flush current block
-            if in_block {
-                if let Some(eid) = current_event_id.take() {
-                    last_event = Some(crate::domain::events::AgentEvent {
-                        event_id: eid,
-                        payload: std::mem::take(&mut payload),
-                    });
-                }
-                in_block = false;
-            }
+            flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
         }
     }
 
     // Flush any remaining block at end of content
-    if in_block {
-        if let Some(eid) = current_event_id.take() {
-            last_event = Some(crate::domain::events::AgentEvent {
-                event_id: eid,
-                payload,
-            });
-        }
-    }
+    flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
 
-    last_event
+    events
 }
 
 /// Parse a single indented line as `key: value`.
@@ -421,7 +421,10 @@ mod tests {
     #[test]
     fn extract_agent_events_empty_input() {
         let events = extract_agent_events("");
-        assert!(events.is_none());
+        assert!(
+            events.is_empty(),
+            "empty input should produce empty vec"
+        );
     }
 
     #[test]
@@ -433,7 +436,10 @@ mod tests {
             "Normal body text without any events.",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_none());
+        assert!(
+            events.is_empty(),
+            "no event blocks should produce empty vec"
+        );
     }
 
     #[test]
@@ -446,15 +452,14 @@ mod tests {
             "  description: Implementation plan for knot event routing\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "PlanCreated");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
         assert_eq!(
-            event.payload.get("plan"),
+            events[0].payload.get("plan"),
             Some(&"PLAN-001".to_string())
         );
         assert_eq!(
-            event.payload.get("description"),
+            events[0].payload.get("description"),
             Some(&"Implementation plan for knot event routing".to_string())
         );
     }
@@ -472,16 +477,14 @@ mod tests {
             "Additional notes follow.",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "GoalsApproved");
-        assert_eq!(event.payload.get("prd"), Some(&"PRD-042".to_string()));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "GoalsApproved");
+        assert_eq!(events[0].payload.get("prd"), Some(&"PRD-042".to_string()));
     }
 
     #[test]
-    fn extract_agent_events_multiple_events_returns_last() {
-        // With Option<AgentEvent> return, multiple events produce the
-        // last one (single event per tie-off model).
+    fn extract_agent_events_multiple_events_all_collected() {
+        // Multiple event blocks are all collected (multi-event model).
         let content = concat!(
             "First event fired.\n",
             "  event: PlanCreated\n",
@@ -495,12 +498,15 @@ mod tests {
             "  approver: lead-dev\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        // The last event block is returned
-        assert_eq!(event.event_id, "PlanApproved");
+        assert_eq!(events.len(), 2, "should collect all event blocks");
+        assert_eq!(events[0].event_id, "PlanCreated");
         assert_eq!(
-            event.payload.get("approver"),
+            events[0].payload.get("plan"),
+            Some(&"PLAN-001".to_string())
+        );
+        assert_eq!(events[1].event_id, "PlanApproved");
+        assert_eq!(
+            events[1].payload.get("approver"),
             Some(&"lead-dev".to_string())
         );
     }
@@ -513,7 +519,10 @@ mod tests {
             "  plan: PLAN-001\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_none());
+        assert!(
+            events.is_empty(),
+            "block without event: key should be skipped"
+        );
     }
 
     #[test]
@@ -524,11 +533,10 @@ mod tests {
             "  detail: info\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "SomethingHappened");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "SomethingHappened");
         assert_eq!(
-            event.payload.get("detail"),
+            events[0].payload.get("detail"),
             Some(&"info".to_string())
         );
     }
@@ -542,11 +550,10 @@ mod tests {
             "  record-count: 42\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "DataProcessed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "DataProcessed");
         assert_eq!(
-            event.payload.get("record-count"),
+            events[0].payload.get("record-count"),
             Some(&"42".to_string())
         );
     }
@@ -560,15 +567,14 @@ mod tests {
             "  timestamp: 2026-06-25T10:00:00Z\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "FileProcessed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "FileProcessed");
         assert_eq!(
-            event.payload.get("path"),
+            events[0].payload.get("path"),
             Some(&"/home/user/file.md".to_string())
         );
         assert_eq!(
-            event.payload.get("timestamp"),
+            events[0].payload.get("timestamp"),
             Some(&"2026-06-25T10:00:00Z".to_string())
         );
     }
@@ -582,7 +588,10 @@ mod tests {
             "event: NotAnEvent\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_none());
+        assert!(
+            events.is_empty(),
+            "non-indented event: is not an event block"
+        );
     }
 
     #[test]
@@ -593,9 +602,8 @@ mod tests {
             "  data: final\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "LastEvent");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "LastEvent");
     }
 
     #[test]
@@ -623,15 +631,14 @@ mod tests {
             "Plan updated with new scope.\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "PlanCreated");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
         assert_eq!(
-            event.payload.get("plan"),
+            events[0].payload.get("plan"),
             Some(&"PLAN-007".to_string())
         );
         assert_eq!(
-            event.payload.get("description"),
+            events[0].payload.get("description"),
             Some(&"Add intent-based event routing".to_string())
         );
     }
@@ -644,9 +651,8 @@ mod tests {
             "\tdata: tabs work\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "TabIndented");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "TabIndented");
     }
 
     #[test]
@@ -656,9 +662,8 @@ mod tests {
             "  event: \n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "");
     }
 
     #[test]
@@ -670,10 +675,9 @@ mod tests {
             "  description: \"A plan with 'quotes'\"\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
+        assert_eq!(events.len(), 1);
         assert_eq!(
-            event.payload.get("description"),
+            events[0].payload.get("description"),
             Some(&"\"A plan with 'quotes'\"".to_string())
         );
     }
@@ -686,7 +690,7 @@ mod tests {
         );
         let events = extract_agent_events(content);
         assert!(
-            events.is_none(),
+            events.is_empty(),
             "'event: None' should produce no AgentEvent"
         );
     }
@@ -703,7 +707,7 @@ mod tests {
         );
         let events = extract_agent_events(content);
         assert!(
-            events.is_none(),
+            events.is_empty(),
             "'event: None' should produce no AgentEvent"
         );
     }
@@ -718,16 +722,15 @@ mod tests {
             "  plan: PLAN-001\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "PlanCreated");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
         assert_eq!(
-            event.payload.get("plan"),
+            events[0].payload.get("plan"),
             Some(&"PLAN-001".to_string())
         );
         // `target-knot` should NOT be in the payload
         assert!(
-            !event.payload.contains_key("target-knot"),
+            !events[0].payload.contains_key("target-knot"),
             "'target-knot' should not appear in payload"
         );
     }
@@ -742,12 +745,54 @@ mod tests {
             "  browser: safari\n",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_some());
-        let event = events.unwrap();
-        assert_eq!(event.event_id, "ValidationFailed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "ValidationFailed");
         assert_eq!(
-            event.payload.get("description"),
+            events[0].payload.get("description"),
             Some(&"E2E test for login flow failed on Safari".to_string())
         );
+    }
+
+    #[test]
+    fn extract_agent_events_three_events_all_collected() {
+        // Producer emits three different event types — all dispatched.
+        let content = concat!(
+            "Plan work complete.\n",
+            "  event: PlanCreated\n",
+            "  plan: PLAN-001\n",
+            "  description: New plan created\n",
+            "\n",
+            "  event: ScopeChanged\n",
+            "  plan: PLAN-001\n",
+            "  description: Scope reduced\n",
+            "\n",
+            "  event: GoalsApproved\n",
+            "  plan: PLAN-001\n",
+            "  approver: lead\n",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 3, "should collect all three events");
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert_eq!(events[1].event_id, "ScopeChanged");
+        assert_eq!(events[2].event_id, "GoalsApproved");
+    }
+
+    #[test]
+    fn extract_agent_events_none_between_real_events_skipped() {
+        // `event: None` between real events is skipped; real events
+        // are still collected.
+        let content = concat!(
+            "  event: FirstEvent\n",
+            "  data: one\n",
+            "\n",
+            "  event: None\n",
+            "\n",
+            "  event: SecondEvent\n",
+            "  data: two\n",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 2, "event: None should be skipped");
+        assert_eq!(events[0].event_id, "FirstEvent");
+        assert_eq!(events[1].event_id, "SecondEvent");
     }
 }
