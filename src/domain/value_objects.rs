@@ -378,6 +378,19 @@ pub struct StrandSourceError {
     pub message: String,
 }
 
+/// The resolved subscription type for an event URI.
+///
+/// Used during matching — not persisted or serialised.
+/// Captures whether a `StrandSource::EventUri` target resolved
+/// as a knot-level or loom-level subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventSubscription {
+    /// Subscribe to events from a specific knot.
+    KnotLevel { producer_knot: String, event_id: String },
+    /// Subscribe to events from any knot in a specific loom.
+    LoomLevel { producer_loom: String, event_id: String },
+}
+
 impl std::fmt::Display for StrandSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "invalid strand source: {}", self.message)
@@ -509,6 +522,70 @@ impl StrandSource {
     /// not been set (e.g. during deserialization from JSON).
     pub fn is_default(&self) -> bool {
         matches!(self, StrandSource::Filesystem(path) if path.as_os_str().is_empty())
+    }
+
+    /// Return `true` if the event URI target ends with `-loom`.
+    ///
+    /// Uses the loom naming convention (directories ending in `-loom`)
+    /// as a heuristic — no registry access needed. Returns `false` for
+    /// [`Filesystem`] sources.
+    pub fn is_loom_target(&self) -> bool {
+        match self {
+            StrandSource::EventUri { producer_knot, .. } => {
+                producer_knot.ends_with("-loom")
+            }
+            StrandSource::Filesystem(_) => false,
+        }
+    }
+
+    /// Resolve this event URI against a known producer.
+    ///
+    /// Returns:
+    /// - `Some(EventSubscription::KnotLevel)` if the target matches
+    ///   `producer_knot_id` directly, or matches any known knot name
+    ///   in `all_knot_ids` (and the target does not end with `-loom`).
+    /// - `Some(EventSubscription::LoomLevel)` if the target matches
+    ///   `producer_loom_id`. The `-loom` suffix check takes precedence
+    ///   — if the target ends with `-loom`, loom-level match is tried
+    ///   first even if a knot with that name exists.
+    /// - `None` if no match.
+    ///
+    /// Returns `None` for [`Filesystem`] sources.
+    pub fn resolve_for_producer(
+        &self,
+        producer_knot_id: &str,
+        producer_loom_id: &str,
+        all_knot_ids: &[&str],
+    ) -> Option<EventSubscription> {
+        let (target, event_id) = match self {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => (producer_knot.as_str(), event_id.as_str()),
+            StrandSource::Filesystem(_) => return None,
+        };
+
+        if self.is_loom_target() {
+            // Target ends with `-loom` — loom-level takes precedence.
+            if target == producer_loom_id {
+                return Some(EventSubscription::LoomLevel {
+                    producer_loom: target.to_string(),
+                    event_id: event_id.to_string(),
+                });
+            }
+            // Doesn't match the producer's loom — no match.
+            return None;
+        }
+
+        // Not a loom target — check knot-level.
+        if target == producer_knot_id || all_knot_ids.contains(&target) {
+            return Some(EventSubscription::KnotLevel {
+                producer_knot: target.to_string(),
+                event_id: event_id.to_string(),
+            });
+        }
+
+        None
     }
 }
 
@@ -1295,5 +1372,155 @@ mod tests {
     fn strand_source_as_event_returns_none_for_filesystem() {
         let source = StrandSource::Filesystem(PathBuf::from("strands"));
         assert!(source.as_event().is_none());
+    }
+
+    // ── Loom-Level Event URI Tests ────────────────────────────────────────
+
+    #[test]
+    fn strand_source_from_str_loom_uri() {
+        let result =
+            StrandSource::from_str("event:planning-loom:PlanCreated")
+                .unwrap();
+        match result {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => {
+                assert_eq!(producer_knot, "planning-loom");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            StrandSource::Filesystem(_) => {
+                panic!("expected EventUri, got Filesystem");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_is_loom_target_true_for_loom_suffix() {
+        let source =
+            StrandSource::from_str("event:planning-loom:PlanCreated")
+                .unwrap();
+        assert!(source.is_loom_target());
+    }
+
+    #[test]
+    fn strand_source_is_loom_target_false_for_knot_name() {
+        let source =
+            StrandSource::from_str("event:plan-creator:PlanCreated")
+                .unwrap();
+        assert!(!source.is_loom_target());
+    }
+
+    #[test]
+    fn strand_source_is_loom_target_false_for_filesystem() {
+        let source = StrandSource::Filesystem(PathBuf::from("strands"));
+        assert!(!source.is_loom_target());
+    }
+
+    #[test]
+    fn strand_source_resolve_for_producer_knot_match() {
+        let source =
+            StrandSource::from_str("event:plan-creator:PlanCreated")
+                .unwrap();
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator", "reviewer"],
+        );
+        assert!(result.is_some());
+        match result.unwrap() {
+            EventSubscription::KnotLevel { producer_knot, event_id } => {
+                assert_eq!(producer_knot, "plan-creator");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            EventSubscription::LoomLevel { .. } => {
+                panic!("expected KnotLevel, got LoomLevel");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_resolve_for_producer_loom_match() {
+        let source =
+            StrandSource::from_str("event:planning-loom:PlanCreated")
+                .unwrap();
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator", "reviewer"],
+        );
+        assert!(result.is_some());
+        match result.unwrap() {
+            EventSubscription::LoomLevel { producer_loom, event_id } => {
+                assert_eq!(producer_loom, "planning-loom");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            EventSubscription::KnotLevel { .. } => {
+                panic!("expected LoomLevel, got KnotLevel");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_resolve_for_producer_no_match() {
+        let source =
+            StrandSource::from_str("event:review-loom:ReviewDone")
+                .unwrap();
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator", "reviewer"],
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn strand_source_resolve_for_producer_no_match_knot_level() {
+        // Knot-level subscription that doesn't match the producer
+        let source =
+            StrandSource::from_str("event:other-knot:SomeEvent")
+                .unwrap();
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator", "reviewer"],
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn strand_source_resolve_loom_suffix_takes_precedence() {
+        // Target ends with `-loom` — should resolve as loom-level
+        // even if a knot with that exact name exists in all_knot_ids.
+        let source =
+            StrandSource::from_str("event:planning-loom:PlanCreated")
+                .unwrap();
+        // Include a knot named "planning-loom" in the knot list
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator", "reviewer", "planning-loom"],
+        );
+        assert!(result.is_some());
+        match result.unwrap() {
+            EventSubscription::LoomLevel { producer_loom, event_id } => {
+                assert_eq!(producer_loom, "planning-loom");
+                assert_eq!(event_id, "PlanCreated");
+            }
+            EventSubscription::KnotLevel { .. } => {
+                panic!("expected LoomLevel (loom suffix takes precedence), got KnotLevel");
+            }
+        }
+    }
+
+    #[test]
+    fn strand_source_resolve_for_producer_filesystem_returns_none() {
+        let source = StrandSource::Filesystem(PathBuf::from("strands"));
+        let result = source.resolve_for_producer(
+            "plan-creator",
+            "planning-loom",
+            &["plan-creator"],
+        );
+        assert!(result.is_none());
     }
 }
