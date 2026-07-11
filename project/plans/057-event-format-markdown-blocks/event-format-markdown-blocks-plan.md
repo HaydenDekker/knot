@@ -123,7 +123,7 @@ The old indented-block and plain-```-block paths are removed.
 
 **Note:** Phase 1 (tests) and Phase 2 (implementation) were completed together by the sub-agent. All 603 lib tests pass.
 
-### Phase 3: Update `build_listener_context` prompt
+### Phase 3: Update `build_listener_context` prompt ✅ DONE
 
 Update the injected context in `build_listener_context` (`events.rs`) to instruct agents to emit ```markdown blocks with frontmatter + body instead of indented key-value pairs. The prompt example should show the new format with multiple events.
 
@@ -133,7 +133,7 @@ Update the injected context in `build_listener_context` (`events.rs`) to instruc
 - New test: prompt shows frontmatter + body structure
 - New test: prompt shows `event: None` in the new format
 
-### Phase 4: Wire event body through the dispatcher
+### Phase 4: Wire event body through the dispatcher ✅ DONE
 
 Update `FileSystemEventDispatcher` to include the event body when writing the dispatched event file. The file format already has a frontmatter + body structure (`build_event_file_content`), so this is wiring the `body` field into the output. If an event has no body, the existing "No payload data." or bullet-list body is used.
 
