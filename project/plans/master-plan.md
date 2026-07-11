@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 57 | [Agent Event Format — Markdown Code Blocks](057-event-format-markdown-blocks/event-format-markdown-blocks-plan.md) | ⬜ Planned | 2026-07-11 |
+| 57 | [Agent Event Format — Markdown Code Blocks](057-event-format-markdown-blocks/event-format-markdown-blocks-plan.md) | ✅ Complete | 2026-07-11 |
 | 56 | [Strand Event URI](056-strand-event-uri/strand-event-uri-plan.md) | ✅ Complete | 2026-07-10 |
 | 53 | [Integration Test Strategy](053-integration-test-strategy/integration-test-strategy-plan.md) | ✅ Complete | 2026-07-01 | (completed 2026-07-03)
 | 52 | [Flatten Tie-Off Paths](052-flat-tie-off-paths/flat-tie-off-paths-plan.md) | ✅ Complete | 2026-07-01 |

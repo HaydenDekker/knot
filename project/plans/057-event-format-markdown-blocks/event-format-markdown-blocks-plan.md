@@ -149,3 +149,9 @@ Update `FileSystemEventDispatcher` to include the event body when writing the di
 - The `---` delimiter for frontmatter is standard Markdown/YAML frontmatter convention.
 - Backward compatibility: existing tie-off files with the old format will have their events silently ignored. This is acceptable because events are consumed immediately at dispatch time — old tie-offs are never re-parsed.
 - The `event: None` signal remains the same conceptually (no events emitted) but changes format to live inside a ```markdown block with frontmatter.
+
+## Implementation Status: ✅ Complete (2026-07-11)
+
+- All 5 phases (0-4) implemented and verified
+- 608 tests passing (up from 603 — new parser and dispatcher tests added)
+- Version bumped to 0.25.0
