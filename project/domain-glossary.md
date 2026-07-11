@@ -208,7 +208,10 @@ The single input-direction primitive for a knot. Replaces the previous dual-inpu
 Two variants:
 
 - **Filesystem** — a plain directory path (e.g. `"project/prds"`). The knot watches that directory for strand files. This is the common case.
-- **EventUri** — an `event:` URI of the form `event:<producer-knot-id>:<EventId>`. Knot resolves this to the dispatch subdirectory `rig/tie-offs/{loom-id}/{event-id}/` and watches it. The producer knot and event ID are encoded in the URI, so consumer intent is declared *in the same field* that declares the watched directory.
+- **EventUri** — an `event:` URI of the form `event:<target>:<EventId>`. The target can be either a **knot ID** (knot-level subscription) or a **loom ID** (loom-level subscription, target ends with `-loom`). Knot resolves this to the dispatch subdirectory `rig/tie-offs/{loom-id}/{event-id}/` and watches it.
+
+  - **Knot-level** — `event:<producer-knot-id>:<EventId>` (e.g. `event:plan-creator:PlanCreated`). Only events emitted by the specific named knot match. Only that knot receives event injection in its prompt.
+  - **Loom-level** — `event:<producer-loom-id>:<EventId>` (e.g. `event:planning-loom:PlanCreated`). Events emitted by **any knot** in the named loom match. **Every knot** in the loom receives event injection in its prompt, so any of them can emit the event.
 
 An optional `event-description` frontmatter field on consumer knots provides the semantic description injected into the producer's prompt. When absent, a generic prompt is injected.
 
