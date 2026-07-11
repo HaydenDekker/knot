@@ -64,10 +64,16 @@ pub struct AgentEvent {
 /// dispatched. If no events occurred, emit `event: None` inside a
 /// ```markdown block with `---` delimiters.
 ///
-pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
+pub fn build_listener_context(
+    knot: &Knot,
+    loom_id: &LoomId,
+    all_knots: &[Knot],
+) -> String {
     use crate::domain::value_objects::StrandSource;
 
     // Collect all event subscriptions where this knot is the producer.
+    // Matches both knot-level (producer_knot == knot.id) and
+    // loom-level (producer_knot ends with "-loom" && == loom_id).
     let mut matching_knots: Vec<&Knot> = Vec::new();
     for other in all_knots {
         if let StrandSource::EventUri {
@@ -75,7 +81,10 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
             ..
         } = &other.strand_source
         {
-            if producer_knot == &knot.id.0 {
+            let is_knot_level = producer_knot == &knot.id.0;
+            let is_loom_level =
+                producer_knot.ends_with("-loom") && producer_knot == &loom_id.0;
+            if is_knot_level || is_loom_level {
                 matching_knots.push(other);
             }
         }
@@ -422,6 +431,10 @@ mod tests {
 
     // ── build_listener_context Tests (Phase 2) ────────────────────────
 
+    fn default_loom_id() -> LoomId {
+        LoomId("test-loom".to_string())
+    }
+
     fn make_test_knot(id: &str) -> Knot {
         KnotBuilder::new(id)
             .with_instructions("test")
@@ -448,7 +461,7 @@ mod tests {
     #[test]
     fn build_listener_context_no_consumers_returns_empty() {
         let producer = make_test_knot("plan-creator");
-        let context = build_listener_context(&producer, &[]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[]);
         assert!(
             context.is_empty(),
             "no consumers should produce empty context: '{}'",
@@ -461,7 +474,7 @@ mod tests {
     fn build_listener_context_only_filesystem_knots_returns_empty() {
         let producer = make_test_knot("plan-creator");
         let filesystem_knot = make_test_knot("reviewer");
-        let context = build_listener_context(&producer, &[filesystem_knot]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[filesystem_knot]);
         assert!(
             context.is_empty(),
             "only filesystem knots should produce empty context: '{}'",
@@ -479,7 +492,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.starts_with("## Agent Events\n"),
             "context should start with heading: {}",
@@ -497,7 +510,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created for the first time".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("When a plan is created for the first time"),
             "context should contain event description: {}",
@@ -516,7 +529,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         // The consumer knot ID should NOT appear in the output
         assert!(
             !context.contains("secret-validator"),
@@ -535,7 +548,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("event: None"),
             "context should instruct to emit 'event: None': {}",
@@ -553,7 +566,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("description:")
                 && context.contains("<short summary"),
@@ -572,7 +585,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(!context.is_empty());
         assert!(context.contains("## Agent Events"));
         assert!(context.contains("PlanCreated"));
@@ -598,7 +611,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created for audit".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer1, consumer2]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2]);
         // Count occurrences of "PlanCreated" in the event list (should appear
         // only once as a bullet point)
         let count = context.matches("- `PlanCreated`").count();
@@ -621,7 +634,7 @@ mod tests {
             "ValidationFailed",
             Some("When validation fails".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer1, consumer2]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2]);
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("ValidationFailed"));
         assert!(context.contains("When a plan is created"));
@@ -638,7 +651,7 @@ mod tests {
             "PlanCreated",
             None, // no event-description
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("If this event occurs, emit a structured event block in your final response."),
             "should use generic message when event-description is None: {}",
@@ -662,7 +675,7 @@ mod tests {
             "OtherEvent",
             Some("Some event".to_string()),
         );
-        let context = build_listener_context(&producer, &[other_consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[other_consumer]);
         assert!(context.is_empty());
     }
 
@@ -683,7 +696,7 @@ mod tests {
             "OtherEvent",
             Some("Some event".to_string()),
         );
-        let context = build_listener_context(&producer, &[matching, non_matching]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[matching, non_matching]);
         assert!(!context.is_empty());
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("When a plan is created"));
@@ -703,7 +716,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("```markdown"),
             "prompt should use ```markdown fence: {}",
@@ -721,7 +734,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
             context.contains("---"),
             "prompt should show frontmatter delimiters (---): {}",
@@ -744,7 +757,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         // event: None should be inside a ```markdown block with --- delimiters
         assert!(context.contains("```markdown"));
         assert!(context.contains("event: None"));
@@ -755,6 +768,109 @@ mod tests {
             "event: None should be wrapped in frontmatter (---): {}",
             none_section
         );
+    }
+
+    // ── Loom-Level Subscription Tests ────────────────────────────
+
+    /// Consumer with `event:planning-loom:PlanCreated` matches a knot
+    /// inside `planning-loom`.
+    #[test]
+    fn build_listener_context_loom_level_consumer_matches_producer_in_loom() {
+        let producer = make_test_knot("plan-creator");
+        let loom_id = LoomId("planning-loom".to_string());
+        let consumer = make_event_knot(
+            "plan-validator",
+            "planning-loom", // loom-level subscription
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &loom_id, &[consumer]);
+        assert!(!context.is_empty());
+        assert!(context.contains("## Agent Events"));
+        assert!(context.contains("PlanCreated"));
+        assert!(context.contains("When a plan is created"));
+    }
+
+    /// Consumer with `event:planning-loom:PlanCreated` does NOT match
+    /// a knot inside `review-loom`.
+    #[test]
+    fn build_listener_context_loom_level_consumer_no_match_different_loom() {
+        let producer = make_test_knot("plan-creator");
+        let loom_id = LoomId("review-loom".to_string());
+        let consumer = make_event_knot(
+            "plan-validator",
+            "planning-loom", // subscribed to a different loom
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &loom_id, &[consumer]);
+        assert!(
+            context.is_empty(),
+            "loom-level subscription should not match a different loom: {}",
+            context
+        );
+    }
+
+    /// Both knot-level and loom-level consumers for the same event appear
+    /// (deduplicated by event ID).
+    #[test]
+    fn build_listener_context_mixed_knot_and_loom_consumers() {
+        let producer = make_test_knot("plan-creator");
+        let loom_id = LoomId("planning-loom".to_string());
+        // Knot-level consumer — targets this specific knot
+        let knot_consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        // Loom-level consumer — targets the entire loom
+        let loom_consumer = make_event_knot(
+            "plan-auditor",
+            "planning-loom",
+            "PlanCreated",
+            Some("When a plan is created for audit".to_string()),
+        );
+        let context =
+            build_listener_context(&producer, &loom_id, &[knot_consumer, loom_consumer]);
+        assert!(!context.is_empty());
+        assert!(context.contains("PlanCreated"));
+        // Both consumers subscribe to the same event — should deduplicate
+        let count = context.matches("- `PlanCreated`").count();
+        assert_eq!(
+            count, 1,
+            "same event from knot-level and loom-level consumers should deduplicate: {}",
+            context
+        );
+    }
+
+    /// Verify that every knot in the subscribed-to loom receives event
+    /// instructions.
+    #[test]
+    fn build_listener_context_all_knots_in_loom_get_injection() {
+        let loom_id = LoomId("planning-loom".to_string());
+        let consumer = make_event_knot(
+            "plan-validator",
+            "planning-loom", // loom-level subscription
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+
+        // Multiple knots in the same loom — each should get injection
+        let knot1 = make_test_knot("plan-creator");
+        let knot2 = make_test_knot("plan-reviewer");
+        let knot3 = make_test_knot("plan-approver");
+
+        let ctx1 = build_listener_context(&knot1, &loom_id, &[consumer.clone()]);
+        let ctx2 = build_listener_context(&knot2, &loom_id, &[consumer.clone()]);
+        let ctx3 = build_listener_context(&knot3, &loom_id, &[consumer.clone()]);
+
+        assert!(!ctx1.is_empty(), "knot1 should get injection");
+        assert!(!ctx2.is_empty(), "knot2 should get injection");
+        assert!(!ctx3.is_empty(), "knot3 should get injection");
+        assert!(ctx1.contains("PlanCreated"));
+        assert!(ctx2.contains("PlanCreated"));
+        assert!(ctx3.contains("PlanCreated"));
     }
 
     // ── AgentEvent Tests ─────────────────────────────────────────

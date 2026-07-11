@@ -424,7 +424,8 @@ impl ProcessStrand {
         // Scans all knots' strand_source entries and injects event
         // instructions at the beginning of the prompt.
         let all_knots = Self::collect_all_knots(&self.store);
-        let listener_context = build_listener_context(knot, &all_knots);
+        let listener_context =
+            build_listener_context(knot, &loom_id, &all_knots);
         let prompt = if listener_context.is_empty() {
             base_prompt
         } else {
