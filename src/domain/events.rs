@@ -58,8 +58,11 @@ pub struct AgentEvent {
 /// ## Multi-event format
 ///
 /// A producer may emit **multiple events** in a single tie-off (one
-/// indented block per event type). Each event block is independently
-/// parsed and dispatched. If no events occurred, emit `event: None`.
+/// ```markdown code block per event). Each event block contains
+/// YAML-style frontmatter between `---` delimiters and an optional
+/// freeform body. Each event block is independently parsed and
+/// dispatched. If no events occurred, emit `event: None` inside a
+/// ```markdown block with `---` delimiters.
 ///
 pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
     use crate::domain::value_objects::StrandSource;
@@ -104,8 +107,8 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
          Other processors are listening for events you may emit. If an event occurs\n\
          during your work, include an explicit event block in your final response using\n\
          the format shown.\n\n\
-         You may emit **multiple events** in one final response — one indented block\n\
-         per event type.\n\n\
+         You may emit **multiple events** in one final response — each event as its own\n\
+         ```markdown code block.\n\n\
          Events you may emit:\n",
     );
 
@@ -122,16 +125,22 @@ pub fn build_listener_context(knot: &Knot, all_knots: &[Knot]) -> String {
         ));
     }
 
-    output.push_str("\nIf events occurred, emit one indented block per event in your final response:\n");
-    output.push_str("```\n");
+    output.push_str(
+        "\nIf events occurred, emit one ```markdown block per event:\n");
+    output.push_str("\n```markdown\n");
+    output.push_str("---\n");
     output.push_str("event: <EventId>\n");
     output.push_str("description: <short summary of what happened>\n");
     output.push_str("<additional fields as relevant>\n");
+    output.push_str("---\n\n");
+    output.push_str("Freeform narrative context about the event.\n");
     output.push_str("```\n");
 
     output.push_str("\nIf no events occurred, emit:\n");
-    output.push_str("```\n");
+    output.push_str("\n```markdown\n");
+    output.push_str("---\n");
     output.push_str("event: None\n");
+    output.push_str("---\n");
     output.push_str("```\n");
 
     output
@@ -680,6 +689,72 @@ mod tests {
         assert!(context.contains("When a plan is created"));
         assert!(!context.contains("OtherEvent"));
         assert!(!context.contains("other-validator"));
+    }
+
+    // ── Phase 3: New format tests ─────────────────────────
+
+    /// Prompt uses ```markdown fence (not plain ```).
+    #[test]
+    fn build_listener_context_prompt_uses_markdown_fence() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("```markdown"),
+            "prompt should use ```markdown fence: {}",
+            context
+        );
+    }
+
+    /// Prompt shows frontmatter (--- delimiters) and body structure.
+    #[test]
+    fn build_listener_context_prompt_shows_frontmatter_and_body() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        assert!(
+            context.contains("---"),
+            "prompt should show frontmatter delimiters (---): {}",
+            context
+        );
+        assert!(
+            context.contains("narrative context"),
+            "prompt should show body/narrative context area: {}",
+            context
+        );
+    }
+
+    /// Prompt shows event: None in the new frontmatter format.
+    #[test]
+    fn build_listener_context_event_none_uses_frontmatter_format() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &[consumer]);
+        // event: None should be inside a ```markdown block with --- delimiters
+        assert!(context.contains("```markdown"));
+        assert!(context.contains("event: None"));
+        // The event: None block should have --- on both sides
+        let none_section = context.split("event: None").nth(1).unwrap();
+        assert!(
+            none_section.contains("---"),
+            "event: None should be wrapped in frontmatter (---): {}",
+            none_section
+        );
     }
 
     // ── AgentEvent Tests ─────────────────────────────────────────
