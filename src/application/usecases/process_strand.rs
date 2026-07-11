@@ -3292,9 +3292,13 @@ mod event_dispatch_tests {
         let event_content = concat!(
             "Plan created successfully.\n",
             "\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-001\n",
-            "  description: Test plan\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: Test plan\n",
+            "---\n",
+            "```",
         );
 
         let output = Ok(AgentOutput {
@@ -3436,8 +3440,12 @@ mod event_dispatch_tests {
 
         let event_content = concat!(
             "Plan created.\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-002\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-002\n",
+            "---\n",
+            "```",
         );
         let output = Ok(AgentOutput {
             stdout: event_content.to_string(),
@@ -3741,9 +3749,14 @@ mod event_dispatch_tests {
 
         let output = Ok(AgentOutput {
             stdout: concat!(
-                "  event: PlanCreated\n",
-                "  plan: PLAN-001\n",
-                "  description: New plan for feature X\n",
+                "```markdown\n",
+                "---\n",
+                "event: PlanCreated\n",
+                "plan: PLAN-001\n",
+                "description: New plan for feature X\n",
+                "---\n",
+                "```
+"
             )
             .to_string(),
             stderr: String::new(),
@@ -3804,8 +3817,12 @@ mod event_dispatch_tests {
         // Event block does NOT contain target-knot (derived from context)
         let output = Ok(AgentOutput {
             stdout: concat!(
-                "  event: PlanCreated\n",
-                "  plan: PLAN-001\n",
+                "```markdown\n",
+                "---\n",
+                "event: PlanCreated\n",
+                "plan: PLAN-001\n",
+                "---\n",
+                "```\n"
             )
             .to_string(),
             stderr: String::new(),
@@ -4555,8 +4572,12 @@ mod phase6_integration_tests {
         let output_content = concat!(
             "Plan created.\n",
             "\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-001\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "```",
         );
         let output = Ok(AgentOutput {
             stdout: output_content.to_string(),

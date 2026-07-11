@@ -127,138 +127,174 @@ pub fn extract_last_n(
 
 /// Extract structured agent events from tie-off content.
 ///
-/// Scans the tie-off body for key-value blocks that contain an `event:` key.
-/// Each such block represents one `AgentEvent` emitted by the producer knot.
-/// A single tie-off may contain **zero, one, or many** event blocks — each is
-/// independently parsed and dispatched.
+/// Scans the tie-off body for ```markdown code blocks. Each block contains
+/// YAML-style frontmatter (between `---` delimiters) followed by a freeform
+/// body. The frontmatter contains key-value pairs where the first key must be
+/// `event:` (the event identifier). All other keys become the payload.
 ///
-/// ## Supported formats
+/// ## Format
 ///
-/// Events can be emitted in two formats:
-///
-/// 1. **Indented key-value block** (original format):
-///    Lines are indented with whitespace.
-///
-/// 2. **Code block** (```` ``` ```` delimited):
-///    Key-value lines appear between triple-backtick fences.
-///    This format is used when the agent wraps the event in a markdown code
-///    block for readability.
-///
-/// In both formats, the first key must be `event:` (the event identifier).
-/// The `target-knot:` key is no longer emitted by the producer — it is derived
-/// from context at dispatch time. All other keys (including `description`)
-/// become the payload.
-///
-/// ### Indented format example
-///
-/// ```text
-///   event: PlanCreated
-///   plan: PLAN-001
-///   description: Implementation plan for knot event routing
-/// ```
-///
-/// ### Code block format example
-///
-/// ```text
-/// ```
+/// ```ignore
+/// ```markdown
+/// ---
 /// event: PlanCreated
 /// plan: PLAN-001
-/// description: Implementation plan for knot event routing
+/// description: Implementation plan for event routing
+/// ---
+///
+/// The plan covers three phases.
 /// ```
-/// ```
+///
+/// Multiple events are emitted as separate ```markdown blocks.
 ///
 /// ## Graceful handling
 ///
-/// - Blocks without `event:` are skipped (just indented metadata).
+/// - Only ```markdown blocks are parsed (other language tags ignored).
 /// - `event: None` produces no `AgentEvent` for that block (skipped).
-/// - Malformed lines (no `:` separator) are skipped.
-/// - `target-knot:` in the event block is ignored (not emitted by the
-///   producer).
-/// - Multiple event blocks: **all** events are collected and returned.
+/// - Missing closing `---` in frontmatter: body is None, frontmatter still
+///   parsed.
+/// - Empty body after `---` is allowed (body is None).
+/// - Malformed lines (no `:` separator) in frontmatter are skipped.
+/// - Multiple ```markdown blocks: all events are collected and returned.
 pub fn extract_agent_events(
     content: &str,
 ) -> Vec<crate::domain::events::AgentEvent> {
     let mut events: Vec<crate::domain::events::AgentEvent> = Vec::new();
-    let mut current_event_id: Option<String> = None;
-    let mut payload: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut in_block = false;
-    // Whether we are inside a ``` delimited code block.
-    // Lines inside a code block are treated as event-block lines
-    // (same as indented lines), even though they start at column 0.
-    let mut in_code_block = false;
 
-    fn flush(
-        events: &mut Vec<crate::domain::events::AgentEvent>,
-        current_event_id: &mut Option<String>,
-        payload: &mut std::collections::HashMap<String, String>,
-        in_block: &mut bool,
-    ) {
-        if *in_block {
-            if let Some(eid) = current_event_id.take() {
-                events.push(crate::domain::events::AgentEvent {
-                    event_id: eid,
-                    payload: std::mem::take(payload),
-                    body: None,
-                });
-            }
-            *in_block = false;
+    let blocks = extract_markdown_blocks(content);
+
+    for block_content in blocks {
+        if let Some(event) = parse_event_block(&block_content) {
+            events.push(event);
         }
     }
+
+    events
+}
+
+/// Extract the content of ```markdown code blocks from text.
+///
+/// Only blocks that start with exactly ```markdown (no other language tag)
+/// are included. Returns the content between the opening and closing fences.
+fn extract_markdown_blocks(content: &str) -> Vec<String> {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut in_block = false;
+    let mut current_lines: Vec<String> = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Detect ``` fence — toggles code block mode.
-        // A line that is exactly ``` (optionally with leading/trailing
-        // whitespace) opens or closes a code block.
-        if trimmed == "```" {
-            in_code_block = !in_code_block;
-            // Closing a code block also flushes the current event block.
-            if !in_code_block {
-                flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
+        if trimmed == "```markdown" {
+            if !in_block {
+                in_block = true;
+                current_lines.clear();
             }
+            // If already in a block, treat ```markdown as content (nested)
             continue;
         }
 
-        // Treat indented lines AND lines inside a code block as
-        // potential event-block content.
-        let is_event_line =
-            !trimmed.is_empty() && (line.starts_with([' ', '\t']) || in_code_block);
-
-        if is_event_line {
-            if let Some((key, value)) = parse_kv_line(trimmed) {
-                if key == "event" {
-                    // Flush previous event block if any
-                    flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
-
-                    current_event_id = Some(value.clone());
-                    in_block = true;
-
-                    // `event: None` — no event to dispatch for this block
-                    if value == "None" {
-                        current_event_id = None;
-                        in_block = false;
-                        payload.clear();
-                    }
-                } else if in_block {
-                    // `target-knot:` is ignored — derived from context
-                    if key != "target-knot" {
-                        payload.insert(key, value);
-                    }
-                }
+        if in_block {
+            if trimmed == "```" {
+                blocks.push(current_lines.join("\n"));
+                current_lines.clear();
+                in_block = false;
+            } else {
+                current_lines.push(line.to_string());
             }
-            // Invalid key-value lines inside blocks are silently skipped
-        } else {
-            // Non-indented, non-code-block line — flush current block
-            flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
         }
     }
 
-    // Flush any remaining block at end of content
-    flush(&mut events, &mut current_event_id, &mut payload, &mut in_block);
+    blocks
+}
 
-    events
+/// Parse a single ```markdown block's content into an AgentEvent.
+///
+/// The block contains YAML-style frontmatter between `---` delimiters,
+/// followed by an optional freeform body.
+///
+/// Returns `None` if:
+/// - `event:` key is missing
+/// - `event:` value is `None`
+/// - No `---` delimiter found (not valid frontmatter)
+fn parse_event_block(
+    content: &str,
+) -> Option<crate::domain::events::AgentEvent> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find frontmatter delimiters
+    let mut frontmatter_start: Option<usize> = None;
+    let mut frontmatter_end: Option<usize> = None;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "---" {
+            if frontmatter_start.is_none() {
+                frontmatter_start = Some(i);
+            } else if frontmatter_end.is_none() {
+                frontmatter_end = Some(i);
+                break;
+            }
+        }
+    }
+
+    // No frontmatter opening delimiter — not a valid event block
+    let start = frontmatter_start?;
+
+    // Parse frontmatter key-value pairs
+    let (mut payload, body) = if let Some(end) = frontmatter_end {
+        // Both delimiters found — normal case
+        let fm_lines: Vec<&str> = lines[start + 1..end].iter().map(|s| s.trim()).collect();
+        let payload = parse_frontmatter(&fm_lines);
+
+        // Body is everything after the closing ---
+        let body_lines: Vec<&str> = lines[end + 1..].to_vec();
+        let body_text = body_lines.join("\n").trim().to_string();
+        let body = if body_text.is_empty() {
+            None
+        } else {
+            Some(body_text)
+        };
+
+        (payload, body)
+    } else {
+        // Opening --- found but no closing ---
+        // Treat everything after opening --- as frontmatter, body is None
+        let fm_lines: Vec<&str> = lines[start + 1..].iter().map(|s| s.trim()).collect();
+        (parse_frontmatter(&fm_lines), None)
+    };
+
+    // Extract event_id from payload
+    let event_id = payload.get("event")?.clone();
+
+    // `event: None` — no event to dispatch
+    if event_id == "None" {
+        return None;
+    }
+
+    // Remove `event` from payload (it's the identifier, not payload data)
+    payload.remove("event");
+
+    Some(crate::domain::events::AgentEvent {
+        event_id,
+        payload,
+        body,
+    })
+}
+
+/// Parse frontmatter lines into a HashMap of key-value pairs.
+///
+/// Lines without a `:` separator are skipped.
+fn parse_frontmatter(
+    lines: &[&str],
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+
+    for line in lines {
+        if let Some((key, value)) = parse_kv_line(line) {
+            map.insert(key, value);
+        }
+    }
+
+    map
 }
 
 /// Parse a single indented line as `key: value`.
@@ -447,19 +483,17 @@ mod tests {
         assert_eq!(sections[1].body, "Updated body");
     }
 
-    // ── extract_agent_events Tests ────────────────────────────────
+
+    // ── extract_agent_events Tests ── markdown block format ─────────
 
     #[test]
     fn extract_agent_events_empty_input() {
         let events = extract_agent_events("");
-        assert!(
-            events.is_empty(),
-            "empty input should produce empty vec"
-        );
+        assert!(events.is_empty());
     }
 
     #[test]
-    fn extract_agent_events_no_events() {
+    fn extract_agent_events_no_markdown_blocks() {
         let content = concat!(
             "## review triggered by Created file.md\n",
             "Timestamp: 2026-06-01T00:00:00Z\n",
@@ -467,20 +501,21 @@ mod tests {
             "Normal body text without any events.",
         );
         let events = extract_agent_events(content);
-        assert!(
-            events.is_empty(),
-            "no event blocks should produce empty vec"
-        );
+        assert!(events.is_empty());
     }
 
     #[test]
-    fn extract_agent_events_single_event() {
+    fn extract_agent_events_single_markdown_block_with_frontmatter_and_body() {
         let content = concat!(
-            "Plan PLAN-001 created.\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: Implementation plan for event routing\n",
+            "---\n",
             "\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-001\n",
-            "  description: Implementation plan for knot event routing\n",
+            "The plan covers three phases.\n",
+            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
@@ -491,115 +526,163 @@ mod tests {
         );
         assert_eq!(
             events[0].payload.get("description"),
-            Some(&"Implementation plan for knot event routing".to_string())
+            Some(&"Implementation plan for event routing".to_string())
+        );
+        assert_eq!(
+            events[0].body,
+            Some("The plan covers three phases.".to_string())
         );
     }
 
     #[test]
-    fn extract_agent_events_with_surrounding_text() {
+    fn extract_agent_events_multiple_markdown_blocks() {
         let content = concat!(
-            "Here is some analysis of the PRD.\n",
+            "Some intro text.\n",
             "\n",
-            "The goals look solid.\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
             "\n",
-            "  event: GoalsApproved\n",
-            "  prd: PRD-042\n",
+            "Plan created with initial scope.\n",
+            "```\n",
             "\n",
-            "Additional notes follow.",
+            "```markdown\n",
+            "---\n",
+            "event: ScopeChanged\n",
+            "plan: PLAN-001\n",
+            "description: Phase 2 removed from scope\n",
+            "---\n",
+            "\n",
+            "Phase 2 was removed after stakeholder review.\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert_eq!(events[0].body, Some("Plan created with initial scope.".to_string()));
+        assert_eq!(events[1].event_id, "ScopeChanged");
+        assert_eq!(
+            events[1].payload.get("description"),
+            Some(&"Phase 2 removed from scope".to_string())
+        );
+        assert_eq!(
+            events[1].body,
+            Some("Phase 2 was removed after stakeholder review.".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_agent_events_non_markdown_language_tag_ignored() {
+        let content = concat!(
+            "```yaml\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "body text\n",
+            "```\n",
+        );
+        let events = extract_agent_events(content);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn extract_agent_events_event_none_in_markdown_block() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: None\n",
+            "---\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn extract_agent_events_missing_closing_frontmatter_delimiter() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: No closing delimiter\n",
+            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "GoalsApproved");
-        assert_eq!(events[0].payload.get("prd"), Some(&"PRD-042".to_string()));
-    }
-
-    #[test]
-    fn extract_agent_events_multiple_events_all_collected() {
-        // Multiple event blocks are all collected (multi-event model).
-        let content = concat!(
-            "First event fired.\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-001\n",
-            "\n",
-            "Some text between events.\n",
-            "\n",
-            "Second event fired.\n",
-            "  event: PlanApproved\n",
-            "  plan: PLAN-001\n",
-            "  approver: lead-dev\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 2, "should collect all event blocks");
         assert_eq!(events[0].event_id, "PlanCreated");
         assert_eq!(
             events[0].payload.get("plan"),
             Some(&"PLAN-001".to_string())
         );
-        assert_eq!(events[1].event_id, "PlanApproved");
-        assert_eq!(
-            events[1].payload.get("approver"),
-            Some(&"lead-dev".to_string())
-        );
+        assert_eq!(events[0].body, None);
     }
 
     #[test]
-    fn extract_agent_events_block_without_event_key_skipped() {
-        // Indented key-value block without `event:` is not an agent event.
+    fn extract_agent_events_empty_body() {
         let content = concat!(
-            "Some analysis:\n",
-            "  plan: PLAN-001\n",
-        );
-        let events = extract_agent_events(content);
-        assert!(
-            events.is_empty(),
-            "block without event: key should be skipped"
-        );
-    }
-
-    #[test]
-    fn extract_agent_events_no_target_knot_in_output() {
-        // `target-knot` is ignored — derived from context, not emitted.
-        let content = concat!(
-            "  event: SomethingHappened\n",
-            "  detail: info\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "SomethingHappened");
-        assert_eq!(
-            events[0].payload.get("detail"),
-            Some(&"info".to_string())
-        );
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert_eq!(events[0].body, None);
     }
 
     #[test]
-    fn extract_agent_events_malformed_lines_skipped_gracefully() {
-        // Lines without `:` separator inside a block are skipped.
+    fn extract_agent_events_body_with_blank_lines_and_formatting() {
         let content = concat!(
-            "  event: DataProcessed\n",
-            "  this line has no colon\n",
-            "  record-count: 42\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "\n",
+            "## Summary\n",
+            "\n",
+            "Key points:\n",
+            "- Point one\n",
+            "- Point two\n",
+            "\n",
+            "That's it.\n",
+            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "DataProcessed");
         assert_eq!(
-            events[0].payload.get("record-count"),
-            Some(&"42".to_string())
+            events[0].body,
+            Some(concat!(
+                "## Summary\n",
+                "\n",
+                "Key points:\n",
+                "- Point one\n",
+                "- Point two\n",
+                "\n",
+                "That's it."
+            ).to_string())
         );
     }
 
     #[test]
     fn extract_agent_events_values_with_colons() {
-        // Values can contain colons — only the first colon splits.
         let content = concat!(
-            "  event: FileProcessed\n",
-            "  path: /home/user/file.md\n",
-            "  timestamp: 2026-06-25T10:00:00Z\n",
+            "```markdown\n",
+            "---\n",
+            "event: FileProcessed\n",
+            "path: /home/user/file.md\n",
+            "timestamp: 2026-06-25T10:00:00Z\n",
+            "---\n",
+            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "FileProcessed");
         assert_eq!(
             events[0].payload.get("path"),
             Some(&"/home/user/file.md".to_string())
@@ -611,36 +694,129 @@ mod tests {
     }
 
     #[test]
-    fn extract_agent_events_non_indented_kv_ignored() {
-        // Non-indented key-value lines (like header Timestamp:) are not
-        // part of event blocks.
+    fn extract_agent_events_malformed_frontmatter_lines_skipped() {
         let content = concat!(
-            "Timestamp: 2026-06-01T00:00:00Z\n",
-            "event: NotAnEvent\n",
+            "```markdown\n",
+            "---\n",
+            "event: DataProcessed\n",
+            "this line has no colon\n",
+            "record-count: 42\n",
+            "---\n",
+            "```",
         );
         let events = extract_agent_events(content);
-        assert!(
-            events.is_empty(),
-            "non-indented event: is not an event block"
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].payload.get("record-count"),
+            Some(&"42".to_string())
         );
     }
 
     #[test]
-    fn extract_agent_events_event_at_end_of_content() {
-        // Event block at the very end of content (no trailing newline).
+    fn extract_agent_events_block_without_event_key_skipped() {
         let content = concat!(
-            "  event: LastEvent\n",
-            "  data: final\n",
+            "```markdown\n",
+            "---\n",
+            "plan: PLAN-001\n",
+            "description: No event key\n",
+            "---\n",
+            "body text\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn extract_agent_events_with_surrounding_text() {
+        let content = concat!(
+            "Here is some analysis of the PRD.\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: GoalsApproved\n",
+            "prd: PRD-042\n",
+            "---\n",
+            "\n",
+            "Goals were reviewed and approved.\n",
+            "```\n",
+            "\n",
+            "Additional notes follow.",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "LastEvent");
+        assert_eq!(events[0].event_id, "GoalsApproved");
+        assert_eq!(events[0].payload.get("prd"), Some(&"PRD-042".to_string()));
+    }
+
+    #[test]
+    fn extract_agent_events_three_events_all_collected() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "Plan created.\n",
+            "```\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: ScopeChanged\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "Scope reduced.\n",
+            "```\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: GoalsApproved\n",
+            "plan: PLAN-001\n",
+            "approver: lead\n",
+            "---\n",
+            "Goals approved.\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert_eq!(events[1].event_id, "ScopeChanged");
+        assert_eq!(events[2].event_id, "GoalsApproved");
+    }
+
+    #[test]
+    fn extract_agent_events_event_none_between_real_events_skipped() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: FirstEvent\n",
+            "data: one\n",
+            "---\n",
+            "First.\n",
+            "```\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: None\n",
+            "---\n",
+            "```\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: SecondEvent\n",
+            "data: two\n",
+            "---\n",
+            "Second.\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_id, "FirstEvent");
+        assert_eq!(events[1].event_id, "SecondEvent");
     }
 
     #[test]
     fn extract_agent_events_mixed_with_full_tieoff_sections() {
-        // Realistic scenario: full tie-off content with multiple sections,
-        // some containing events and some not.
         let content = concat!(
             "## planner triggered by Created spec.md\n",
             "Timestamp: 2026-06-25T10:00:00Z\n",
@@ -652,14 +828,20 @@ mod tests {
             "---\n",
             "Plan created successfully.\n",
             "\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-007\n",
-            "  description: Add intent-based event routing\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-007\n",
+            "description: Add intent-based event routing\n",
+            "---\n",
+            "\n",
+            "Plan created with three phases.\n",
+            "```\n",
             "---\n",
             "## planner triggered by Modified plan.md\n",
             "Timestamp: 2026-06-25T12:00:00Z\n",
             "---\n",
-            "Plan updated with new scope.\n",
+            "Plan updated with new scope.",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 1);
@@ -672,265 +854,89 @@ mod tests {
             events[0].payload.get("description"),
             Some(&"Add intent-based event routing".to_string())
         );
-    }
-
-    #[test]
-    fn extract_agent_events_tabs_as_indentation() {
-        // Tab indentation should also work.
-        let content = concat!(
-            "\tevent: TabIndented\n",
-            "\tdata: tabs work\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "TabIndented");
-    }
-
-    #[test]
-    fn extract_agent_events_empty_event_id() {
-        // `event:` with empty value — still creates an event with empty ID.
-        let content = concat!(
-            "  event: \n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "");
-    }
-
-    #[test]
-    fn extract_agent_events_quoted_values() {
-        // Values with surrounding quotes — quotes are preserved as-is
-        // (consumer code handles unquoting if needed).
-        let content = concat!(
-            "  event: QuotedData\n",
-            "  description: \"A plan with 'quotes'\"\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
         assert_eq!(
-            events[0].payload.get("description"),
-            Some(&"\"A plan with 'quotes'\"".to_string())
+            events[0].body,
+            Some("Plan created with three phases.".to_string())
         );
     }
 
-    #[test]
-    fn extract_agent_events_none_produces_no_event() {
-        // `event: None` is a valid signal — no `AgentEvent` is produced.
-        let content = concat!(
-            "  event: None\n",
-        );
-        let events = extract_agent_events(content);
-        assert!(
-            events.is_empty(),
-            "'event: None' should produce no AgentEvent"
-        );
-    }
+    // ── extract_markdown_blocks Tests ─────────────────────────────
 
     #[test]
-    fn extract_agent_events_none_with_surrounding_text() {
-        // `event: None` in the middle of other content.
+    fn extract_markdown_blocks_finds_single_block() {
         let content = concat!(
-            "Processing complete.\n",
-            "\n",
-            "  event: None\n",
-            "\n",
-            "Nothing else to report.",
+            "Some text.\n",
+            "```markdown\n",
+            "---\n",
+            "event: Test\n",
+            "---\n",
+            "body\n",
+            "```\n",
+            "More text.",
         );
-        let events = extract_agent_events(content);
-        assert!(
-            events.is_empty(),
-            "'event: None' should produce no AgentEvent"
-        );
-    }
-
-    #[test]
-    fn extract_agent_events_target_knot_ignored() {
-        // `target-knot:` in the event block is ignored — derived from
-        // context at dispatch time, not emitted by the producer.
-        let content = concat!(
-            "  event: PlanCreated\n",
-            "  target-knot: plan-creator\n",
-            "  plan: PLAN-001\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "PlanCreated");
+        let blocks = extract_markdown_blocks(content);
+        assert_eq!(blocks.len(), 1);
         assert_eq!(
-            events[0].payload.get("plan"),
-            Some(&"PLAN-001".to_string())
-        );
-        // `target-knot` should NOT be in the payload
-        assert!(
-            !events[0].payload.contains_key("target-knot"),
-            "'target-knot' should not appear in payload"
+            blocks[0],
+            concat!("---\n", "event: Test\n", "---\n", "body")
         );
     }
 
     #[test]
-    fn extract_agent_events_description_passed_through() {
-        // The `description` field is a regular payload field — no special
-        // handling, it just passes through.
+    fn extract_markdown_blocks_finds_multiple_blocks() {
         let content = concat!(
-            "  event: ValidationFailed\n",
-            "  description: E2E test for login flow failed on Safari\n",
-            "  browser: safari\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "ValidationFailed");
-        assert_eq!(
-            events[0].payload.get("description"),
-            Some(&"E2E test for login flow failed on Safari".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_agent_events_three_events_all_collected() {
-        // Producer emits three different event types — all dispatched.
-        let content = concat!(
-            "Plan work complete.\n",
-            "  event: PlanCreated\n",
-            "  plan: PLAN-001\n",
-            "  description: New plan created\n",
-            "\n",
-            "  event: ScopeChanged\n",
-            "  plan: PLAN-001\n",
-            "  description: Scope reduced\n",
-            "\n",
-            "  event: GoalsApproved\n",
-            "  plan: PLAN-001\n",
-            "  approver: lead\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 3, "should collect all three events");
-        assert_eq!(events[0].event_id, "PlanCreated");
-        assert_eq!(events[1].event_id, "ScopeChanged");
-        assert_eq!(events[2].event_id, "GoalsApproved");
-    }
-
-    #[test]
-    fn extract_agent_events_none_between_real_events_skipped() {
-        // `event: None` between real events is skipped; real events
-        // are still collected.
-        let content = concat!(
-            "  event: FirstEvent\n",
-            "  data: one\n",
-            "\n",
-            "  event: None\n",
-            "\n",
-            "  event: SecondEvent\n",
-            "  data: two\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 2, "event: None should be skipped");
-        assert_eq!(events[0].event_id, "FirstEvent");
-        assert_eq!(events[1].event_id, "SecondEvent");
-    }
-
-    // ── Code Block Format Tests ──────────────────────────────────
-
-    #[test]
-    fn extract_agent_events_code_block_single_event() {
-        // Event emitted inside a ``` code block (lines not indented).
-        let content = concat!(
-            "```
-",
-            "event: NonConformance\n",
-            "plan: 013 (tauri-frontend-resources)\n",
-            "ci_job: frontend\n",
-            "description: 4 of 6 delivered scenarios are NOT RUN\n",
-            "```\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "NonConformance");
-        assert_eq!(
-            events[0].payload.get("plan"),
-            Some(&"013 (tauri-frontend-resources)".to_string())
-        );
-        assert_eq!(events[0].payload.get("ci_job"), Some(&"frontend".to_string()));
-        assert_eq!(
-            events[0].payload.get("description"),
-            Some(&"4 of 6 delivered scenarios are NOT RUN".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_agent_events_code_block_with_surrounding_text() {
-        // Code block event surrounded by non-event text.
-        let content = concat!(
-            "Validation complete. Here's the summary:\n",
-            "\n",
-            "Some analysis text.\n",
-            "\n",
-            "```\n",
-            "event: PlanCreated\n",
-            "plan: PLAN-001\n",
+            "```markdown\n",
+            "block one\n",
             "```\n",
             "\n",
-            "Additional notes follow.\n",
+            "```markdown\n",
+            "block two\n",
+            "```",
         );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "PlanCreated");
-        assert_eq!(
-            events[0].payload.get("plan"),
-            Some(&"PLAN-001".to_string())
-        );
+        let blocks = extract_markdown_blocks(content);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], "block one");
+        assert_eq!(blocks[1], "block two");
     }
 
     #[test]
-    fn extract_agent_events_mixed_indented_and_code_block() {
-        // Both formats in the same content.
-        let content = concat!(
-            "First event (indented format):\n",
-            "  event: FirstEvent\n",
-            "  data: one\n",
-            "\n",
-            "Second event (code block format):\n",
-            "```\n",
-            "event: SecondEvent\n",
-            "data: two\n",
-            "```\n",
-        );
-        let events = extract_agent_events(content);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_id, "FirstEvent");
-        assert_eq!(events[1].event_id, "SecondEvent");
-    }
-
-    #[test]
-    fn extract_agent_events_code_block_none_skipped() {
-        // `event: None` inside a code block is still skipped.
-        let content = concat!(
-            "```\n",
-            "event: None\n",
-            "```\n",
-        );
-        let events = extract_agent_events(content);
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn extract_agent_events_code_block_with_lang_tag() {
-        // ``` with a language tag (e.g. ```yaml) — the opening
-        // fence line is NOT exactly ``` so it does NOT toggle the
-        // code block flag. Lines inside are not indented, so they
-        // are treated as non-event lines. This is expected — the
-        // canonical format is ``` without a language tag.
+    fn extract_markdown_blocks_ignores_other_language_tags() {
         let content = concat!(
             "```yaml\n",
-            "event: PlanCreated\n",
-            "plan: PLAN-001\n",
+            "event: Test\n",
             "```\n",
+            "\n",
+            "```markdown\n",
+            "real block\n",
+            "```\n",
+            "\n",
+            "```json\n",
+            "ignored\n",
+            "```",
         );
-        let events = extract_agent_events(content);
-        // ```yaml is not exactly ```, so the block is NOT entered.
-        // Lines inside are not indented, so they are skipped.
-        // The closing ``` would toggle (but there's no event anyway).
-        assert!(
-            events.is_empty(),
-            "code block with language tag is not recognized as event block"
+        let blocks = extract_markdown_blocks(content);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0], "real block");
+    }
+
+    // ── parse_event_block Tests ───────────────────────────────────
+
+    #[test]
+    fn parse_event_block_missing_frontmatter_returns_none() {
+        let content = "event: Test\nplan: PLAN-001";
+        let result = parse_event_block(content);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_event_block_no_event_key_returns_none() {
+        let content = concat!(
+            "---\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "body",
         );
+        let result = parse_event_block(content);
+        assert!(result.is_none());
     }
 }
