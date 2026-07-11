@@ -81,7 +81,7 @@ All existing tests validate the **current** (indented/``` code block) format. Th
 
 ## Phases
 
-### Phase 0: Add `body` field to `AgentEvent` and update serialisation
+### Phase 0: Add `body` field to `AgentEvent` and update serialisation ✅ DONE
 
 Add `body: Option<String>` to `AgentEvent` in `events.rs`. Update the struct's serialisation tests. This is a pure domain-layer change with no parser or prompt changes.
 
@@ -90,7 +90,7 @@ Add `body: Option<String>` to `AgentEvent` in `events.rs`. Update the struct's s
 - New test: `AgentEvent` with body round-trips through JSON serialisation
 - New test: `AgentEvent` with `None` body survives serialisation
 
-### Phase 1: Write failing tests for the new parser format
+### Phase 1: Write failing tests for the new parser format ✅ DONE
 
 Write the parser tests **before** implementing the parser. These tests define the target format:
 
@@ -104,7 +104,7 @@ Write the parser tests **before** implementing the parser. These tests define th
 
 **Tests:** All new tests in `tieoff_parser.rs` — the old tests for indented/``` blocks will be replaced.
 
-### Phase 2: Implement the new parser
+### Phase 2: Implement the new parser ✅ DONE
 
 Replace `extract_agent_events` with a parser that:
 
@@ -120,6 +120,8 @@ Replace `extract_agent_events` with a parser that:
 The old indented-block and plain-```-block paths are removed.
 
 **Tests:** All tests from Phase 1 should pass. Existing indented/``` block tests are deleted.
+
+**Note:** Phase 1 (tests) and Phase 2 (implementation) were completed together by the sub-agent. All 603 lib tests pass.
 
 ### Phase 3: Update `build_listener_context` prompt
 
