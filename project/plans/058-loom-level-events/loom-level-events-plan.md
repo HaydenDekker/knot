@@ -1,5 +1,13 @@
 # Plan: Loom-Level Event Subscriptions
 
+## Implementation Status: ✅ Complete (2026-07-11)
+
+## Notes
+- All 3 phases (0, 1, 2) implemented and verified
+- Full test suite passes (625 lib tests + 100+ integration tests, 0 failures)
+- Version bumped to 0.26.0
+- Domain glossary `StrandSource` entry updated with loom-level subscription format
+
 ## Problem
 
 Events are currently first-class citizens with knot-level subscriptions: a consumer declares `strand-dir: "event:<producer-knot>:<EventId>"` and Knot matches events by producer knot ID + event ID. This works for point-to-point agent communication.
