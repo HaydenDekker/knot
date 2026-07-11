@@ -754,6 +754,7 @@ mod tests {
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
             payload,
+            body: None,
         };
 
         let tieoff = TieOff {

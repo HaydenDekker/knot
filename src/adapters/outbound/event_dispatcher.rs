@@ -139,6 +139,7 @@ mod tests {
         AgentEvent {
             event_id: "PlanCreated".to_string(),
             payload,
+            body: None,
         }
     }
 
@@ -285,6 +286,7 @@ mod tests {
         let event = AgentEvent {
             event_id: "EmptyEvent".to_string(),
             payload: HashMap::new(),
+            body: None,
         };
         let consumer = build_consumer_knot();
         let loom_id = LoomId("consumer-loom".to_string());
@@ -361,10 +363,12 @@ mod tests {
         let event1 = AgentEvent {
             event_id: "PlanCreated".to_string(),
             payload: HashMap::new(),
+            body: None,
         };
         let event2 = AgentEvent {
             event_id: "PlanApproved".to_string(),
             payload: HashMap::new(),
+            body: None,
         };
         let consumer = build_consumer_knot();
         let loom_id = LoomId("consumer-loom".to_string());

@@ -24,6 +24,13 @@ pub struct AgentEvent {
     /// Includes fields like `plan`, `description`, `source`, etc.
     #[serde(default)]
     pub payload: HashMap<String, String>,
+    /// Freeform narrative context attached to the event.
+    ///
+    /// When agents emit events inside ```markdown code blocks with
+    /// YAML-style frontmatter, the text after the closing `---` is
+    /// captured here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 
@@ -689,6 +696,7 @@ mod tests {
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
             payload,
+            body: None,
         };
 
         assert_eq!(event.event_id, "PlanCreated");
@@ -697,6 +705,7 @@ mod tests {
             event.payload.get("plan"),
             Some(&"PLAN-001".to_string())
         );
+        assert_eq!(event.body, None);
     }
 
     #[test]
@@ -707,6 +716,7 @@ mod tests {
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
             payload,
+            body: None,
         };
 
         let json = serde_json::to_string(&event).unwrap();
@@ -719,6 +729,7 @@ mod tests {
         let event = AgentEvent {
             event_id: "Something".to_string(),
             payload: HashMap::new(),
+            body: None,
         };
 
         // Serialize and deserialize — empty payload should survive
@@ -735,6 +746,82 @@ mod tests {
         let event: AgentEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_id, "Test");
         assert!(event.payload.is_empty());
+    }
+
+    #[test]
+    fn agent_event_with_body_roundtrips_through_json() {
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-010".to_string());
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            payload,
+            body: Some(
+                "The plan covers three phases: planning, review, and approval.".to_string(),
+            ),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        // Verify body appears in JSON
+        assert!(
+            json.contains("body"),
+            "JSON should contain body field: {}",
+            json
+        );
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        assert_eq!(
+            deserialized.body.as_deref(),
+            Some("The plan covers three phases: planning, review, and approval.")
+        );
+    }
+
+    #[test]
+    fn agent_event_with_none_body_survives_serialisation() {
+        let event = AgentEvent {
+            event_id: "NoBodyEvent".to_string(),
+            payload: HashMap::new(),
+            body: None,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        // body is skip_serializing_if = is_none, so it should not appear
+        assert!(
+            !json.contains("body"),
+            "JSON should not contain body when None: {}",
+            json
+        );
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        assert_eq!(deserialized.body, None);
+    }
+
+    #[test]
+    fn agent_event_missing_body_in_json_defaults_to_none() {
+        // JSON without a body field should deserialize with None
+        let json = r#"{"event_id":"Test","payload":{"key":"val"}}"#;
+        let event: AgentEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_id, "Test");
+        assert_eq!(event.body, None);
+    }
+
+    #[test]
+    fn agent_event_with_empty_string_body_preserved() {
+        let event = AgentEvent {
+            event_id: "EmptyBody".to_string(),
+            payload: HashMap::new(),
+            body: Some(String::new()),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            json.contains("body"),
+            "JSON should contain body even when empty string: {}",
+            json
+        );
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        assert_eq!(deserialized.body.as_deref(), Some(""));
     }
 
     #[test]

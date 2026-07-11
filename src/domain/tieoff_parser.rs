@@ -199,6 +199,7 @@ pub fn extract_agent_events(
                 events.push(crate::domain::events::AgentEvent {
                     event_id: eid,
                     payload: std::mem::take(payload),
+                    body: None,
                 });
             }
             *in_block = false;
