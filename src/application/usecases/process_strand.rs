@@ -16,7 +16,9 @@ use crate::domain::entities::{
 };
 use crate::domain::events::{build_listener_context, LoomEvent, StrandEvent};
 use crate::domain::knot_file::derive_tieoff_path;
-use crate::domain::value_objects::{AgentConfig, RigAgentConfig, StrandSource};
+use crate::domain::value_objects::{
+    AgentConfig, EventSubscription, RigAgentConfig, StrandSource,
+};
 
 // Re-export shared types from types module
 use super::types::format_timestamp;
@@ -672,21 +674,40 @@ impl ProcessStrand {
         // Iterate by loom to track consumer_loom_id for dispatch.
         // Each event is dispatched independently to its matching consumers.
         let all_looms = self.store.list();
+        // Collect all knot IDs for resolve_for_producer to disambiguate
+        // knot-level vs loom-level targets.
+        let all_knot_ids: Vec<&str> = all_looms
+            .iter()
+            .flat_map(|l| l.knots.iter())
+            .map(|k| k.id.0.as_str())
+            .collect();
         let mut dispatches: Vec<(String, String)> = Vec::new();
         for event in &events {
             for loom in &all_looms {
                 for consumer_knot in &loom.knots {
-                    if let StrandSource::EventUri {
-                        producer_knot,
-                        event_id,
-                    } = &consumer_knot.strand_source
-                    {
-                        // Match: producer_knot == this knot's ID AND event_id matches
-                        if producer_knot == &knot.id.0 && event_id == &event.event_id
-                        {
+                    let resolved = consumer_knot
+                        .strand_source
+                        .resolve_for_producer(
+                            &knot.id.0,
+                            &loom_id.0,
+                            &all_knot_ids,
+                        );
+                    if let Some(sub) = resolved {
+                        let matches_event = match &sub {
+                            EventSubscription::KnotLevel {
+                                event_id: sub_event_id,
+                                ..
+                            } => sub_event_id == &event.event_id,
+                            EventSubscription::LoomLevel {
+                                event_id: sub_event_id,
+                                ..
+                            } => sub_event_id == &event.event_id,
+                        };
+                        if matches_event {
                             // Dispatch event file to consumer's tie-off dir.
-                            // producer_knot is passed so event files include it
-                            // in frontmatter, even though it's not in AgentEvent.
+                            // knot.id.0 is passed as the producer knot ID so
+                            // event files include it in frontmatter, even
+                            // though it's not in AgentEvent.
                             let _path = self.event_dispatcher.dispatch(
                                 event,
                                 consumer_knot,
@@ -3887,6 +3908,222 @@ mod event_dispatch_tests {
             content.contains("## Event: PlanCreated from plan-creator"),
             "event file body should reference producer knot: {}",
             content
+        );
+    }
+
+    // ── Loom-Level Dispatch Tests ────────────────────────────────────
+
+    /// Producer in a loom that a consumer has subscribed to via loom-level
+    /// event URI — event is dispatched.
+    #[test]
+    fn dispatch_agent_events_loom_level_subscription_matches() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        // Producer loom — consumer listens for events from THIS loom
+        let producer_loom = build_loom(
+            "planning-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        // Consumer subscribes to the loom-level event (target ends with -loom)
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "planning-loom", // loom-level subscription
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let event_content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: Test plan\n",
+            "---\n",
+            "```",
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("planning-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            1,
+            "loom-level subscription should dispatch, got {} events",
+            dispatched.len()
+        );
+        let (evt, consumer_knot_name, consumer_loom, _rig_dir) = &dispatched[0];
+        assert_eq!(evt.event_id, "PlanCreated");
+        assert_eq!(*consumer_knot_name, "plan-watcher");
+        assert_eq!(*consumer_loom, "consumer-loom");
+    }
+
+    /// Producer in a different loom from the loom-level subscription —
+    /// no dispatch.
+    #[test]
+    fn dispatch_agent_events_loom_level_subscription_no_match_different_loom() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        // Producer is in review-loom, consumer listens for planning-loom events
+        let producer_loom = build_loom(
+            "review-loom",
+            vec![build_producer_knot("reviewer")],
+        );
+
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "planning-loom", // subscribed to a different loom
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let event_content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: Test plan\n",
+            "---\n",
+            "```",
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("review-loom".to_string()),
+            knot_id: KnotId("reviewer".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert!(
+            dispatched.is_empty(),
+            "loom-level subscription should not match a different loom, got {} events",
+            dispatched.len()
+        );
+    }
+
+    /// Both knot-level and loom-level consumers for the same event
+    /// from the same producer — both receive the dispatch.
+    #[test]
+    fn dispatch_agent_events_mixed_knot_and_loom_subscriptions() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "planning-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        // Consumer 1: knot-level subscription (targets plan-creator directly)
+        let knot_consumer = build_consumer_knot(
+            "plan-watcher",
+            "plan-creator",
+            "PlanCreated",
+            "When a plan is created.",
+        );
+        // Consumer 2: loom-level subscription (targets planning-loom)
+        let loom_consumer = build_consumer_knot(
+            "plan-auditor",
+            "planning-loom",
+            "PlanCreated",
+            "When a plan is created.",
+        );
+
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![knot_consumer, loom_consumer],
+        );
+
+        let event_content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "description: Test plan\n",
+            "---\n",
+            "```",
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("planning-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            2,
+            "both knot-level and loom-level consumers should dispatch, got {} events",
+            dispatched.len()
+        );
+
+        // Verify both consumers received the event
+        let consumer_names: Vec<&String> =
+            dispatched.iter().map(|(_, name, _, _)| name).collect();
+        assert!(
+            consumer_names.contains(&&"plan-watcher".to_string()),
+            "knot-level consumer should receive dispatch"
+        );
+        assert!(
+            consumer_names.contains(&&"plan-auditor".to_string()),
+            "loom-level consumer should receive dispatch"
         );
     }
 }
