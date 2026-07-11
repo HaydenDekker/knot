@@ -4,8 +4,8 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.23.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.26.0+"
 ---
 
 # Knot Design Skill
@@ -356,6 +356,75 @@ When designing a pair of knots that form a loop:
 - [ ] Tie-off files provide an **audit trail** of iterations
 - [ ] A **stale-strand check** exists (skip if strand content unchanged)
 - [ ] A **human-escalation path** exists (max iterations or oscillation detection)
+
+---
+
+## Event Subscription Design
+
+When designing knots that consume events, choose the right subscription
+level to keep your rig maintainable.
+
+### Knot-Level vs Loom-Level Subscriptions
+
+**Knot-level** (`event:<knot-name>:<EventId>`) subscribes to events
+from a *specific* producer knot. Use when:
+- You need events from exactly one known producer.
+- Different knots in the same loom emit different event types.
+- You want precise control over which producer triggers the consumer.
+
+**Loom-level** (`event:<loom-name>:<EventId>`) subscribes to events
+from *any knot* within a loom. Use when:
+- Multiple knots in a loom can emit the same event type.
+- You expect knots to be added to the loom over time.
+- The consumer doesn't care which specific knot produced the event,
+  only that the event occurred within that domain.
+
+### When to Prefer Loom-Level
+
+```
+# ❌ Knot-level — repetitive when multiple producers exist
+strand-dir: "event:prd-planner:PlanCreated"
+strand-dir: "event:adr-planner:PlanCreated"   # separate knot needed!
+strand-dir: "event:goal-planner:PlanCreated"   # another one!
+
+# ✅ Loom-level — one subscription covers the whole loom
+strand-dir: "event:planning-loom:PlanCreated"
+```
+
+With loom-level, adding a new knot to `planning-loom` that emits
+`PlanCreated` automatically triggers the consumer — no subscription
+changes needed.
+
+### Loom-Level Design Checklist
+
+When choosing a loom-level subscription:
+
+- [ ] Multiple knots in the loom *can* emit the same event type
+- [ ] The consumer's logic is *producer-agnostic* (doesn't need to know which knot produced it)
+- [ ] The loom's knot set might grow over time
+- [ ] The target loom name ends in `-loom` (required by convention)
+
+### Event Injection Scope
+
+With a loom-level subscription to `event:planning-loom:PlanCreated`:
+- **Every knot** inside `planning-loom` receives event injection
+  instructions in its prompt.
+- This means every knot knows it should emit an `event:` block in its
+  tie-off if the event occurred during its turn.
+- Events from knots that *don't* actually trigger the event simply
+  emit `event: None` — no harm.
+
+### Resolution Precedence
+
+If a target name matches both a knot name and a loom name:
+- Loom-level takes precedence if the target ends in `-loom`.
+- This is a naming constraint: knot names should not end in `-loom`.
+
+### Backward Compatibility
+
+All existing `event:<knot-name>:<EventId>` URIs continue to work
+unchanged. The loom-level feature is additive — no migration needed
+for existing subscriptions.
 
 ---
 

@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.2.0"
-  compatibility: "Knot 0.23.0+"
+  version: "5.3.0"
+  compatibility: "Knot 0.26.0+"
 ---
 
 # Knot Create Skill
@@ -230,11 +230,13 @@ A loom is created by making a directory (ending in `-loom`) and writing
 
 5. **Determine event subscriptions** for each knot. Ask the user:
    "Does this knot consume events from another knot? (e.g.
-   `event:quality-reviewer:ReviewCompleted`) — or does it read
-   from a normal filesystem directory?"
+   `event:quality-reviewer:ReviewCompleted`) — or from an entire loom?
+   (e.g. `event:planning-loom:PlanCreated`) — or does it read from a
+   normal filesystem directory?"
    If the knot consumes events, set `strand-dir` to the `event:` URI
    and optionally add `event-description`. Knot will create and watch
-   the dispatch directory automatically.
+   the dispatch directory automatically. For loom-level subscriptions,
+   the target must end in `-loom`.
 
 6. **Write knot definition files** inside the loom directory.
    For a single knot named `goals-review`:
@@ -266,10 +268,12 @@ When asked to add a knot to an existing loom:
    `profiles` array for the knot's `agent_profile_ref`.
 
 3. **Determine event subscription**. Ask the user:
-   "Does this knot consume events from another knot?"
+   "Does this knot consume events from another knot? Or from an entire
+   loom?"
    If so, set `strand-dir` to the `event:` URI and optionally add
-   `event-description`. Knot will create and watch the dispatch
-   directory automatically.
+   `event-description`. For loom-level subscriptions, the target must
+   end in `-loom`. Knot will create and watch the dispatch directory
+   automatically.
 
 4. **Write the knot file** as `{knot-name}.md` inside the loom
    directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
@@ -368,7 +372,7 @@ Review the goals section of this PRD. Check that:
 |-------|----------|-------------|
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
-| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI (e.g. `"event:quality-reviewer:ReviewCompleted"`). Resolved relative to the project root for paths. |
+| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`) and loom-level (`"event:planning-loom:PlanCreated"`) subscriptions. Paths are resolved relative to the project root. |
 | `event-description` | No | Semantic description of the event, injected into the producer's prompt. Only meaningful when `strand-dir` is an `event:` URI. |
 | `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
 
@@ -399,13 +403,29 @@ filesystem or from event dispatch.
 **Event URI format:**
 
 ```
-event:<producer-knot-id>:<EventId>
+event:<producer-target>:<EventId>
 ```
 
-Three colon-separated parts. No escaping needed — knot IDs are
-kebab-case slugs, event IDs are PascalCase identifiers.
+Three colon-separated parts. No escaping needed — targets are
+kebab-case slugs (knot IDs or loom IDs), event IDs are PascalCase
+identifiers.
 
-**Consumer knot (declares subscription via `strand-dir`):**
+**Two subscription levels:**
+
+- **Knot-level** (existing): `event:<knot-name>:<EventId>` — subscribe
+to events from a *specific knot*. Example:
+  `event:quality-reviewer:ReviewCompleted`
+- **Loom-level** (new in 0.26.0): `event:<loom-name>:<EventId>` —
+  subscribe to events from *any knot* within a loom. The target must
+  end in `-loom`. Example:
+  `event:planning-loom:PlanCreated`
+
+Loom-level subscriptions are useful when multiple knots in a loom can
+emit the same event type — the consumer subscribes once instead of
+once-per-knot. Every knot in the subscribed-to loom receives event
+injection instructions in its prompt.
+
+**Consumer knot — knot-level (declares subscription via `strand-dir`):**
 
 ```markdown
 ---
@@ -422,6 +442,26 @@ Create a refactor plan when a quality review is complete.
 
 The `event-description` field provides the semantic contract injected
 into the producer's prompt. When absent, a generic message is injected.
+
+**Consumer knot — loom-level (subscribe to any knot in a loom):**
+
+```markdown
+---
+name: change-tracker
+agent-profile-ref: fast
+strand-dir: "event:planning-loom:PlanCreated"
+event-description: >
+  Emitted when any knot in the planning loom creates a new plan.
+---
+
+Track all plan creation events.
+```
+
+With a loom-level subscription, **every knot** inside `planning-loom`
+receives event injection instructions. Events emitted by *any* knot
+in that loom are dispatched to the consumer. The `-loom` suffix on
+the target is the heuristic that distinguishes loom-level from
+knot-level subscriptions.
 
 **Producer knot (no declaration needed — Knot injects instructions):**
 
@@ -462,17 +502,27 @@ consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
 **How it works:**
 
 1. Consumer sets `strand-dir` to an `event:` URI
-   (`event:<producer-knot>:<EventId>`).
+   (`event:<producer-target>:<EventId>`), where `<producer-target>`
+   is either a knot name (knot-level) or a loom name ending in
+   `-loom` (loom-level).
 2. Consumer optionally provides `event-description` for the semantic
    contract injected into the producer's prompt.
 3. Knot creates and watches the dispatch directory:
    `rig/tie-offs/{loom-id}/{event-id}/`.
-4. Before the producer runs, Knot injects event instructions into its
-   prompt (grouped by `event-id`, deduplicated across consumers).
+4. Before a producer knot runs, Knot injects event instructions into
+   its prompt (grouped by `event-id`, deduplicated across consumers):
+   - For **knot-level** subscriptions: instructions are injected only
+     into the named producer knot's prompt.
+   - For **loom-level** subscriptions: instructions are injected into
+     **every knot** within the subscribed-to loom.
 5. Producer emits a structured event block in its tie-off
    (`event: EventId` or `event: None`).
-6. Knot parses the tie-off, matches to consumer `event:` URIs, and
-   creates event files in each consumer's dispatch directory.
+6. Knot parses the tie-off and matches events:
+   - **Knot-level**: `target == producer_knot_id` → match.
+   - **Loom-level**: `target == producer_loom_id` (target ends in
+     `-loom`) → match. If the target matches both a knot name and
+     a loom name, loom-level takes precedence.
+7. Matching events create files in each consumer's dispatch directory.
 
 **Layout:**
 
@@ -486,6 +536,19 @@ rig/tie-offs/<loom-id>/
 
 Multiple consumers can subscribe to the same producer event — each gets
 its own dispatch directory in its loom's tie-off directory.
+
+**Loom-level vs knot-level — dispatch behaviour:**
+
+Both subscription levels write event files to the *same* dispatch
+directory (`rig/tie-offs/{consumer-loom-id}/{event-id}/`). The only
+difference is *which producers match*:
+
+- **Knot-level**: only the named knot's events match.
+- **Loom-level**: events from *any* knot in the named loom match.
+
+When a consumer has both a knot-level and a loom-level subscription
+for the same `EventId`, Knot deduplicates by event ID — the consumer
+receives the event once regardless of how many subscriptions matched.
 
 ### Example Project Layout
 
@@ -664,7 +727,7 @@ strand-dir: "project/prds"
 Review the goals section.
 EOF
 
-# Create an event consumer knot (event: URI strand-dir)
+# Create an event consumer knot — knot-level (event: URI strand-dir)
 cat > rig/planning-loom/refactor-planner.md << 'EOF'
 ---
 name: refactor-planner
@@ -676,6 +739,19 @@ event-description: >
 ---
 
 Create a refactor plan when a quality review is complete.
+EOF
+
+# Create an event consumer knot — loom-level (subscribe to entire loom)
+cat > rig/planning-loom/change-tracker.md << 'EOF'
+---
+name: change-tracker
+agent-profile-ref: fast
+strand-dir: "event:prd-review-loom:ReviewCompleted"
+event-description: >
+  Emitted when any knot in prd-review-loom completes a review.
+---
+
+Track all review completions from the PRD review loom.
 EOF
 
 # Verify Knot has discovered the changes
