@@ -107,7 +107,10 @@ impl FileSystemEventDispatcher {
         ));
         lines.push(String::new());
 
-        if event.payload.is_empty() {
+        // Body: event body if present, otherwise fallback
+        if let Some(ref body) = event.body {
+            lines.push(body.clone());
+        } else if event.payload.is_empty() {
             lines.push("No payload data.".to_string());
         } else {
             lines.push("Payload:".to_string());
@@ -456,6 +459,99 @@ mod tests {
         assert!(
             lines.iter().any(|l| *l == "## Event: PlanCreated from plan-creator"),
             "body should have event header"
+        );
+    }
+
+    #[test]
+    fn dispatched_file_includes_event_body_in_markdown_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-001".to_string());
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            payload,
+            body: Some(
+                "The plan covers three phases: planning, review, and approval."
+                    .to_string(),
+            ),
+        };
+        let consumer = build_consumer_knot();
+        let loom_id = LoomId("consumer-loom".to_string());
+
+        let dispatcher = FileSystemEventDispatcher::new();
+        let path = dispatcher
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir)
+            .unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        // Event body appears in the markdown content
+        assert!(
+            content
+                .contains("The plan covers three phases: planning, review, and approval."),
+            "dispatched file should contain event body: {}",
+            content
+        );
+        // Fallback content should NOT appear when body is present
+        assert!(
+            !content.contains("Payload:"),
+            "should not show payload fallback when body is present: {}",
+            content
+        );
+        assert!(
+            !content.contains("No payload data."),
+            "should not show empty payload fallback when body is present: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn dispatched_file_without_body_uses_fallback_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        // Event with no body but with payload — should show bullet list
+        let event = build_event();
+        let consumer = build_consumer_knot();
+        let loom_id = LoomId("consumer-loom".to_string());
+
+        let dispatcher = FileSystemEventDispatcher::new();
+        let path = dispatcher
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir)
+            .unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("Payload:"),
+            "should show payload fallback when body is None: {}",
+            content
+        );
+        assert!(
+            content.contains("- **plan**: PLAN-001"),
+            "should list payload bullets when body is None: {}",
+            content
+        );
+
+        // Event with no body and no payload — should show "No payload data."
+        let event_empty = AgentEvent {
+            event_id: "EmptyEvent".to_string(),
+            payload: HashMap::new(),
+            body: None,
+        };
+        let path2 = dispatcher
+            .dispatch(&event_empty, &consumer, "plan-creator", &loom_id, &rig_dir)
+            .unwrap();
+
+        let content2 = std::fs::read_to_string(&path2).unwrap();
+        assert!(
+            content2.contains("No payload data."),
+            "should show empty fallback when body is None and payload is empty: {}",
+            content2
         );
     }
 }
