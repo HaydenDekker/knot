@@ -503,27 +503,6 @@ impl ProcessStrand {
         // Write loom-log: KnotCompleted or KnotFailed.
         match outcome.tie_off_status() {
             Some(crate::domain::entities::TieOffStatus::Produced) => {
-                // Git versioning commit (best-effort, non-fatal).
-                // Runs AFTER loom-log appends so the commit captures
-                // the tie-off, KnotCompleted, and StrandProcessed entries.
-                if knot.git_versioned {
-                    if let Some(ref content) = outcome.tie_off_content() {
-                        let commit_result = self.git_versioning_port.commit(
-                            &loom_id,
-                            &knot_id,
-                            &strand_path,
-                            &event_label,
-                            content,
-                        );
-                        if let Err(ref e) = commit_result {
-                            logging::log_strand_event(
-                                &format!("git commit warning: {}", e),
-                                &strand_path.0,
-                            );
-                        }
-                    }
-                }
-
                 // Dispatch agent events to matching consumer knots
                 // (best-effort — dispatch failures are non-fatal).
                 if let Some(ref content) = outcome.tie_off_content() {
@@ -553,6 +532,27 @@ impl ProcessStrand {
                     error: None,
                     timestamp: format_timestamp(),
                 })?;
+
+                // Git versioning commit (best-effort, non-fatal).
+                // Runs last so the commit captures all artifacts from the
+                // turn: tie-off, dispatched events, and loom-log entries.
+                if knot.git_versioned {
+                    if let Some(ref content) = outcome.tie_off_content() {
+                        let commit_result = self.git_versioning_port.commit(
+                            &loom_id,
+                            &knot_id,
+                            &strand_path,
+                            &event_label,
+                            content,
+                        );
+                        if let Err(ref e) = commit_result {
+                            logging::log_strand_event(
+                                &format!("git commit warning: {}", e),
+                                &strand_path.0,
+                            );
+                        }
+                    }
+                }
 
                 logging::log_strand_event(
                     &format!("{} completed (knot={})", strand_kind, knot_id.0),
