@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
+  version: "1.4.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,73 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### 0.26.0 — Tie-Off Filenames Renamed (2026-07-13)
+
+Tie-off output files renamed from `{knot-name}-tie-off.md` to
+`tie-off-{knot-name}.md`.
+
+**Why:** The `tie-off-` prefix groups tie-off files together in
+`rig/tie-offs/{loom-id}/`, making them visually distinct from event
+subdirectories and other files that may appear in the same directory.
+
+#### Affected Files
+
+| What Changed | Old Filename | New Filename |
+|---|---|---|
+| Tie-off files | `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` | `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md` |
+
+#### Migration Steps
+
+Tie-off files are append-mode history. Existing files at the old name
+are harmless — Knot will create new files with the renamed path on the
+next processing event. To migrate existing history:
+
+1. **Find all tie-off files:**
+   ```bash
+   find rig/tie-offs/ -type f -name '*-tie-off.md'
+   ```
+
+2. **Rename each file** — move the knot name from prefix to suffix:
+   ```bash
+   for file in rig/tie-offs/*-loom/*-tie-off.md; do
+     name="${file##*/}"                          # filename with extension
+     name="${name%-tie-off.md}"                   # strip suffix → knot name
+     dir="${file%/*}"                             # directory
+     mv "$file" "${dir}/tie-off-${name}.md" 2>/dev/null
+   done
+   ```
+
+   Or use a find+rename one-liner:
+   ```bash
+   find rig/tie-offs/ -type f -name '*-tie-off.md' | while read file; do
+     base="${file##*/}"                          # filename with extension
+     base="${base%-tie-off.md}"                   # strip suffix → knot name
+     dir="${file%/*}"                             # directory
+     mv "$file" "${dir}/tie-off-${base}.md" 2>/dev/null
+   done
+   ```
+
+3. **Verify** — Knot must be running:
+   ```bash
+   cat rig/state.json | python3 -m json.tool
+   ```
+   Check that knot `last_tie_off_path` values use the new `tie-off-{knot-name}.md` format.
+
+#### If Not Migrated
+
+- Old-named files remain on disk (harmless orphan files)
+- New processing events create tie-off files at the new filename
+- No data loss — append-mode means existing content in old files is preserved
+- Knot's `state.json` will reference the new filenames going forward
+
+#### Fields Unchanged by This Migration
+
+Only the filesystem filename of tie-off output files is affected.
+All profile and knot frontmatter fields, knot definitions, and
+loom definitions are unchanged.
 
 ---
 
@@ -284,10 +351,9 @@ processing event. To consolidate:
 
 2. **Move each tie-off file flat:**
    ```bash
-   # For each loom:
-   for knot_dir in rig/tie-offs/{loom-id}/*/; do
+   for knot_dir in rig/tie-offs/*-loom/*/; do
      knot_name=$(basename "$knot_dir")
-     mv "$knot_dir/${knot_name}-tie-off.md" "rig/tie-offs/{loom-id}/${knot_name}-tie-off.md" 2>/dev/null
+     mv "$knot_dir/${knot_name}-tie-off.md" "${knot_dir%/*}/${knot_name}-tie-off.md" 2>/dev/null
      rmdir "$knot_dir" 2>/dev/null
    done
    ```

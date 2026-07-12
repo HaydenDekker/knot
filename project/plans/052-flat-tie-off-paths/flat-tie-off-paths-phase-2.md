@@ -3,12 +3,12 @@
 **Plan:** [Flatten Tie-Off Paths](flat-tie-off-paths-plan.md)
 
 ## Checklist
-- [x] Update `tests/tie_off.rs` — change all `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
-- [x] Update `tests/skill_integration.rs` — change all `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
-- [x] Update `tests/adapter_integration.rs` — change all `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
-- [x] Update `tests/agent_integration.rs` — change `tie-offs/review-loom/review/` to `tie-offs/review-loom/` and `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
-- [x] Update `tests/session_resume.rs` — change all `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
-- [x] Update `tests/pipeline.rs` — change `tie-offs/review-loom/review/` to `tie-offs/review-loom/` and `tie-offs/review-loom/review/review-tie-off.md` to `tie-offs/review-loom/review-tie-off.md`
+- [x] Update `tests/tie_off.rs` — change all `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
+- [x] Update `tests/skill_integration.rs` — change all `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
+- [x] Update `tests/adapter_integration.rs` — change all `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
+- [x] Update `tests/agent_integration.rs` — change `tie-offs/review-loom/review/` to `tie-offs/review-loom/` and `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
+- [x] Update `tests/session_resume.rs` — change all `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
+- [x] Update `tests/pipeline.rs` — change `tie-offs/review-loom/review/` to `tie-offs/review-loom/` and `tie-offs/review-loom/review/tie-off-review.md` to `tie-offs/review-loom/tie-off-review.md`
 - [x] Review `tests/helpers.rs` — check for any tie-off file path references (loom-log paths should be unchanged)
 - [x] Review `tests/rig_cli.rs` — check share command test setup for nested tie-off directory creation
 - [x] Search `tests/` for any remaining `tie-offs/.*\/.*\/.*-tie-off` pattern (nested paths)

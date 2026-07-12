@@ -25,7 +25,7 @@ For example, if `plan-planner` (in `planning-loom`) listens for `PlanCreated` fr
 
 ```
 rig/tie-offs/planning-loom/
-├── plan-planner-tie-off.md              ← consumer's own tie-off log
+├── tie-off-plan-planner.md              ← consumer's own tie-off log
 └── PlanCreated/                         ← event folder (named by event-id)
     └── event-2026-07-09T10:00:00Z.md    ← dispatched event
 ```
@@ -38,7 +38,7 @@ If two knots listen for the same event, **each gets its own copy** in its own ti
 Producer knot runs
   └── writes structured event in its tie-off:
       rig/tie-offs/review-loom/plan-reviewer/
-          └── plan-reviewer-tie-off.md
+          └── tie-off-plan-reviewer.md
               └── [timestamp] event: PlanCreated ...
 
 Knot parses event from tie-off
@@ -59,7 +59,7 @@ Knot parses event from tie-off
 
 ### Implications for Design
 
-- Event files are scoped per **loom**, not per knot. The consumer's `strand-dir` points at the loom's tie-off directory (`../../tie-offs/{loom-id}/`), which contains the knot's own tie-off file and all event subdirectories. Knot must ensure the consumer's own tie-off file (`{knot}-tie-off.md`) is not processed as a strand — handled by existing strand watch filtering.
+- Event files are scoped per **loom**, not per knot. The consumer's `strand-dir` points at the loom's tie-off directory (`../../tie-offs/{loom-id}/`), which contains the knot's own tie-off file and all event subdirectories. Knot must ensure the consumer's own tie-off file (`tie-off-{knot}.md`) is not processed as a strand — handled by existing strand watch filtering.
 
 - A knot listening for multiple event types shares the same loom-level event namespace. Events for different knots in the same loom coexist alongside each other (e.g. `PlanCreated/`, `ReviewComplete/`), and the `strand-dir` watch covers them all.
 

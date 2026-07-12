@@ -18,7 +18,7 @@ rig/
 ├── tie-offs/                          ← Processing output (append-only)
 │   └── {loom-id}/
 │       ├── .loom-log                  ← Per-loom activity log
-│       └── {knot-name}-tie-off.md     ← Knot output (appended per event)
+│       └── tie-off-{knot-name}.md     ← Knot output (appended per event)
 ├── {name}-loom/                       ← Loom directory (must end in `-loom`)
 │   ├── {knot-name}.md                 ← Knot definition
 │   └── ...
@@ -53,14 +53,14 @@ Tie-off output paths are **statically derived** from the loom and knot
 names — no configuration is needed:
 
 ```
-rig/tie-offs/{loom-id}/{knot-name}-tie-off.md
+rig/tie-offs/{loom-id}/tie-off-{knot-name}.md
 ```
 
 For example, the knot `goals-review` in loom `prd-review-loom` writes
 its tie-off to:
 
 ```
-rig/tie-offs/prd-review-loom/goals-review-tie-off.md
+rig/tie-offs/prd-review-loom/tie-off-goals-review.md
 ```
 
 Each processing event appends to this file. The file grows over time,
@@ -88,7 +88,7 @@ atomically every 5 seconds and contains:
           "id": "goals-review",
           "status": "completed",
           "last_strand_path": "project/prds/goals.md",
-          "last_tie_off_path": "rig/tie-offs/prd-review-loom/goals-review-tie-off.md",
+          "last_tie_off_path": "rig/tie-offs/prd-review-loom/tie-off-goals-review.md",
           "last_error": null
         }
       ]

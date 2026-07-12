@@ -69,8 +69,8 @@ fed into the knot's agent session.
 ### Tie-off
 
 The output produced by a knot after processing. Each processing event is
-appended to a single `{knot-name}-tie-off.md` file at
-`rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`. The file
+appended to a single `tie-off-{knot-name}.md` file at
+`rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`. The file
 grows over time, telling the complete story of the knot's work. Event
 metadata in each section identifies which strand was processed.
 

@@ -114,7 +114,7 @@ async fn composition_smoke_stdio() {
 
     // Assert: pipeline completes, tie-off exists, state.json updated
     wait_for_state_field(&rig, "looms.0.knots.0.status", "completed");
-    assert!(rig.join("tie-offs/review-loom/review-tie-off.md").exists());
+    assert!(rig.join("tie-offs/review-loom/tie-off-review.md").exists());
 }
 ```
 
@@ -201,7 +201,7 @@ fn tieoff_sink_write_creates_file() {
     let tie_off = TieOff { content: "output".to_string(), path: ... };
     sink.write(tie_off).unwrap();
 
-    assert!(tmp.path().join("tie-offs/loom/knot-tie-off.md").exists());
+    assert!(tmp.path().join("tie-offs/loom/tie-off-knot.md").exists());
 }
 ```
 

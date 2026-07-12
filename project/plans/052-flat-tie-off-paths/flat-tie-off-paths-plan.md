@@ -5,7 +5,7 @@
 Tie-offs are currently placed in subdirectories within `rig/tie-offs/`, producing a three-level nesting:
 
 ```
-rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md
+rig/tie-offs/{loom-id}/{knot-name}/tie-off-{knot-name}.md
 ```
 
 This intermediate `{knot-name}` directory adds no value — the tie-off filename already identifies the knot. The extra directory level is annoying to navigate and, more importantly, it wastes the opportunity to use subdirectories within the loom's tie-off space for **event capture**.
@@ -15,7 +15,7 @@ The domain glossary describes "Tie-Off Events" — typed subdirectories for agen
 ```
 rig/tie-offs/{loom-id}/
 ├── .loom-log
-├── review-tie-off.md          ← flat tie-off file
+├── tie-off-review.md          ← flat tie-off file
 ├── plan-architect-tie-off.md  ← another flat tie-off file
 └── reviews/                   ← event subdirectory (captured by folders)
     └── 001-initial-review.md
@@ -28,7 +28,7 @@ Consumer knots that subscribe to events reference:
 
 Tie-off files are placed flat under `rig/tie-offs/{loom-id}/`:
 
-- **Tie-off path:** `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md` (was `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`)
+- **Tie-off path:** `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md` (was `rig/tie-offs/{loom-id}/{knot-name}/tie-off-{knot-name}.md`)
 - **Loom-log path:** unchanged (`rig/tie-offs/{loom-id}/.loom-log`)
 - **Event subdirectories:** still under `rig/tie-offs/{loom-id}/` (one level shallower for consumer `strand-dir` references)
 
@@ -85,7 +85,7 @@ Change the core path derivation in `src/domain/knot_file.rs`:
 
 3. **Update doc comments** in both functions to reflect the new path:
    - `derive_tieoff_path`: "Returns `rig/tie-offs/{loom-id}/`"
-   - `compute_tie_off_path`: "Uses statically derived path: `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`"
+   - `compute_tie_off_path`: "Uses statically derived path: `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`"
 
 4. **Update unit test** `derive_tieoff_path_builds_correct_path` in `knot_file.rs`:
    - Expected path changes from `/workspace/rig/tie-offs/my-loom/review-knot` to `/workspace/rig/tie-offs/my-loom`
@@ -95,10 +95,10 @@ Change the core path derivation in `src/domain/knot_file.rs`:
 Update the hardcoded tie-off paths in `src/application/usecases/process_strand.rs`:
 
 1. **`execution_test_shared::build_process_strand`** — mock tie-off content key:
-   - `/rig/tie-offs/test-loom/k1/k1-tie-off.md` → `/rig/tie-offs/test-loom/k1-tie-off.md`
+   - `/rig/tie-offs/test-loom/k1/tie-off-k1.md` → `/rig/tie-offs/test-loom/tie-off-k1.md`
 
 2. **`process_strand_deleted_includes_strand_history`** — pre-populated tie-off content key:
-   - `/rig/tie-offs/test-loom/k1/k1-tie-off.md` → `/rig/tie-offs/test-loom/k1-tie-off.md`
+   - `/rig/tie-offs/test-loom/k1/tie-off-k1.md` → `/rig/tie-offs/test-loom/tie-off-k1.md`
 
 3. Verify all process_strand unit tests pass.
 
@@ -107,24 +107,24 @@ Update the hardcoded tie-off paths in `src/application/usecases/process_strand.r
 Update integration test files that assert tie-off file paths:
 
 1. **`tests/tie_off.rs`** — all tie-off path assertions:
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 2. **`tests/skill_integration.rs`** — tie-off path assertions:
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 3. **`tests/adapter_integration.rs`** — tie-off path assertions:
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 4. **`tests/agent_integration.rs`** — tie-off path assertions and `tie_off_dir`:
    - `tie-offs/review-loom/review/` → `tie-offs/review-loom/`
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 5. **`tests/session_resume.rs`** — tie-off path assertions:
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 6. **`tests/pipeline.rs`** — tie-off path assertions and `tie_off_dir`:
    - `tie-offs/review-loom/review/` → `tie-offs/review-loom/`
-   - `tie-offs/review-loom/review/review-tie-off.md` → `tie-offs/review-loom/review-tie-off.md`
+   - `tie-offs/review-loom/review/tie-off-review.md` → `tie-offs/review-loom/tie-off-review.md`
 
 7. **`tests/helpers.rs`** — any tie-off path references (loom-log paths unchanged).
 

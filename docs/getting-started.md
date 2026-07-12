@@ -137,7 +137,7 @@ Watch for two things:
 
 1. **The tie-off file appears** — Knot's file watcher detects the
    new strand and triggers the knot. The agent runs and writes its
-   result to `rig/tie-offs/hello-loom/hello-tie-off.md`. You should see this
+   result to `rig/tie-offs/hello-loom/tie-off-hello.md`. You should see this
    file appear in your IDE, containing the agent's greeting for
    Alice.
 

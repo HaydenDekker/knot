@@ -4,14 +4,14 @@
 
 Two issues remain from the static-output-paths refactor:
 
-1. **Terminology mismatch** — The output directory is named `output` and tie-off files are named `{strand-name}.output`, but the domain concept is "tie-off". The directory should be `tie-offs` and each knot's artifact should be `{knot-name}-tie-off.md`. This is a single append-mode file per knot, not one file per strand.
+1. **Terminology mismatch** — The output directory is named `output` and tie-off files are named `{strand-name}.output`, but the domain concept is "tie-off". The directory should be `tie-offs` and each knot's artifact should be `tie-off-{knot-name}.md`. This is a single append-mode file per knot, not one file per strand.
 
 2. **Dead `tie-off-dir` coupling** — `RawFrontmatter` in `knot_file.rs` still accepts `tie-off-dir` from YAML frontmatter (accepted but ignored). This is legacy from before static paths. Users can add arbitrary YAML fields to knot files with no indication they are unused, which is confusing.
 
 ## Target
 
 1. Directory: `rig/output/` → `rig/tie-offs/`
-2. Filename: `{strand-name}.output` → `{knot-name}-tie-off.md` (one file per knot)
+2. Filename: `{strand-name}.output` → `tie-off-{knot-name}.md` (one file per knot)
 3. `RawFrontmatter.tie_off_dir` removed from `knot_file.rs`
 4. Unknown YAML properties in knot frontmatter emit a `.loom-log` warning so the user is informed
 5. `project/domain-glossary.md` updated to reflect new paths
@@ -73,11 +73,11 @@ Hex layer: Domain (`knot_file.rs`)
 Hex layer: Application (`usecases.rs`)
 
 - [x] In `ProcessStrand::compute_tie_off_path`, replace:
-  - `format!("{}.output", strand_filename)` → `{knot-id}-tie-off.md`
-  - The path is now `{knot-name}-tie-off.md` (one file per knot, not per strand)
+  - `format!("{}.output", strand_filename)` → `tie-off-{knot-id}.md`
+  - The path is now `tie-off-{knot-name}.md` (one file per knot, not per strand)
 - [x] Update docstring on `compute_tie_off_path`
 - [x] Update the `unwrap_or_else(|| "output".to_string())` fallback to `"tie-off.md"`
-- [x] Updated 13 integration test files to use `{knot-id}-tie-off.md` path format (20 assertions across 10 test files)
+- [x] Updated 13 integration test files to use `tie-off-{knot-id}.md` path format (20 assertions across 10 test files)
 
 ### Phase 3: Outbound — propagate warnings from parser through scanner to loom-log
 
@@ -117,7 +117,7 @@ Hex layer: Documentation (`project/domain-glossary.md`)
 
 - [x] Update all references from `rig/output/` to `rig/tie-offs/`
 - [x] Update tie-off directory description: path is `rig/tie-offs/{loom-id}/{knot-name}/`
-- [x] Update tie-off file description: filename is `{knot-name}-tie-off.md` (one per knot)
+- [x] Update tie-off file description: filename is `tie-off-{knot-name}.md` (one per knot)
 - [x] Update term relationships diagram
 - [x] Update loom-log path: `rig/tie-offs/{loom-id}/.loom-log`
 - [x] Remove references to `output.md` as the tie-off filename
@@ -151,11 +151,11 @@ Hex layer: Skills (`skills/knot-*/SKILL.md`) — local skills are source of trut
   - Lines 270, 283: remove `"tie_off_dir"` from JSON request/response examples
   - Line 320: update prose about "writing output to one tie-off directory" — tie-off dir is now static `rig/tie-offs/{loom-id}/{knot-name}/`
   - Line 337: remove `tie_off_dir` from curl example
-  - Add note: tie-off paths are static — `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md`
+  - Add note: tie-off paths are static — `rig/tie-offs/{loom-id}/{knot-name}/tie-off-{knot-name}.md`
 - [x] `skills/knot-inspect/SKILL.md` — update path examples to new naming:
   - Line 60: update table example `output/prds` → `tie-offs/`
   - Lines 150, 161: update `"tie_off_dir"` in JSON examples (field removed or path updated)
-  - Line 209: update `"tie_off_path": "output/input.md.output"` → `"tie_off_path": "tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md"`
+  - Line 209: update `"tie_off_path": "output/input.md.output"` → `"tie_off_path": "tie-offs/{loom-id}/{knot-name}/tie-off-{knot-name}.md"`
 - [x] `skills/knot-init/SKILL.md` — update API response example:
   - Line 120: update `"tie_off_dir": "output/docs"` to match new schema
 - [x] Verify all three skills are internally consistent (no orphaned `output/` or `tie-off-dir` references)

@@ -206,7 +206,7 @@ pub fn parse(
 /// Derive the tie-off output directory for a loom.
 ///
 /// Returns `rig/tie-offs/{loom-id}/`. Individual strand
-/// tie-off files (e.g. `{knot-name}-tie-off.md`) are placed flat
+/// tie-off files (e.g. `tie-off-{knot-name}.md`) are placed flat
 /// inside this directory by `ProcessStrand`.
 pub fn derive_tieoff_path(
     loom_id: &str,

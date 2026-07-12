@@ -14,7 +14,7 @@
 
 ### Breaking Change — Flat tie-off paths
 
-Tie-off paths changed from `rig/tie-offs/{loom-id}/{knot-name}/{strand}.output` to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`. The intermediate knot subdirectory is removed. Tie-offs are now one file per knot with append-mode writes.
+Tie-off paths changed from `rig/tie-offs/{loom-id}/{knot-name}/{strand}.output` to `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`. The intermediate knot subdirectory is removed. Tie-offs are now one file per knot with append-mode writes.
 
 Migration: Update any scripts or tooling that reference the old path structure.
 
@@ -123,7 +123,7 @@ file changes and triggers AI agent sessions. Key capabilities:
   files), inspect current state, and apply minimal changes to reach a
   goal. Idempotent by design.
 - **Tie-off output** — Append-only output files at
-  `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`.
+  `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`.
 - **Git versioning** — Automatic commits after each tie-off write
   (opt-out per-knot with `git-versioned: false`).
 - **Session resume** — Automatic retry of failed agent sessions (up to

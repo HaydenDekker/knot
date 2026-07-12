@@ -96,7 +96,7 @@ value in the knot file.
 2. Check the tie-off file — it may contain partial output:
 
    ```bash
-   cat rig/tie-offs/{loom-id}/{knot-name}-tie-off.md
+   cat rig/tie-offs/{loom-id}/tie-off-{knot-name}.md
    ```
 
 3. Check the rig-log for timeout events:

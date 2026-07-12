@@ -113,7 +113,7 @@ Full details in [053-integration-test-strategy/integration-test-strategy-plan.md
 **Status:** ✅ Complete
 **Created:** 2026-07-01
 **Completed:** 2026-07-01
-**Goal:** Remove the intermediate `{knot-name}` subdirectory from tie-off paths, flattening them to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`, freeing subdirectories for event capture.
+**Goal:** Remove the intermediate `{knot-name}` subdirectory from tie-off paths, flattening them to `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`, freeing subdirectories for event capture.
 
 **Result:** `derive_tieoff_path()` simplified from 3-level to 2-level nesting. All code paths, unit tests, integration tests, domain glossary, user docs, and agent skills updated to flat structure. Version bumped to 0.22.0. Migration entry added to knot-update skill. PATH race condition fix: serialisation locks added to 7 test suites (27 test functions). 199 integration tests pass, 475 unit tests pass.
 

@@ -38,6 +38,7 @@ This project maintains agent skills in `.agents/skills/`. Pi discovers these as 
 
 ### Knot Skills
 
+- **knot-analyst** — Analyse rig productivity and project progress at runtime
 - **knot-design** — Design looms and knots (idempotency, naming, loops, responsibility)
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)

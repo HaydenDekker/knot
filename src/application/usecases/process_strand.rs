@@ -615,7 +615,7 @@ impl ProcessStrand {
     }
 
     /// Compute the tie-off output path from knot + strand path.
-    /// Uses statically derived path: `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`.
+    /// Uses statically derived path: `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`.
     /// Tie-off files are placed flat under the loom's tie-off directory.
     fn compute_tie_off_path(
         &self,
@@ -623,7 +623,7 @@ impl ProcessStrand {
         knot: &Knot,
         _strand_path: &StrandPath,
     ) -> TieOffPath {
-        let filename = format!("{}-tie-off.md", knot.id.0);
+        let filename = format!("tie-off-{}.md", knot.id.0);
         let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.rig_dir);
         TieOffPath(base.join(filename))
     }
@@ -1425,7 +1425,7 @@ mod execution_deleted_tests {
         {
             let mut content = tie_off_content.lock().unwrap();
             content.insert(
-                "/rig/tie-offs/test-loom/k1-tie-off.md".to_string(),
+                "/rig/tie-offs/test-loom/tie-off-k1.md".to_string(),
                 concat!(
                     "## review triggered by Created input/strand.md\n",
                     "Timestamp: 2026-06-05T10:00:00Z\n",

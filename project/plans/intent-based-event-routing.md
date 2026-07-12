@@ -39,11 +39,11 @@ Placing event files inside a loom directory mixes runtime output with workflow d
 
 ### How It Works
 
-The tie-off directory for a knot lives at `rig/tie-offs/{loom-id}/{knot-name}/`. It contains the knot's append-only tie-off file (`{knot-name}-tie-off.md`). **Typed subdirectories** within the tie-off directory carry static event files — the subdirectory name declares the event type. A consumer knot in any loom can point its `strand-dir` at a specific event subdirectory:
+The tie-off directory for a knot lives at `rig/tie-offs/{loom-id}/{knot-name}/`. It contains the knot's append-only tie-off file (`tie-off-{knot-name}.md`). **Typed subdirectories** within the tie-off directory carry static event files — the subdirectory name declares the event type. A consumer knot in any loom can point its `strand-dir` at a specific event subdirectory:
 
 ```
 rig/tie-offs/review-loom/implementation-review/
-├── implementation-review-tie-off.md    ← normal tie-off (append-only log)
+├── implementation-tie-off-review.md    ← normal tie-off (append-only log)
 ├── reviews/                            ← event type: quality reviews
 │   ├── 016-quality-review.md           ← static event
 │   └── 017-quality-review.md           ← next event
@@ -77,7 +77,7 @@ planning-loom/implementation-planner.md
     # subscribes to 'reviews' event type, creates refactor plans
 
 rig/tie-offs/review-loom/implementation-review/
-├── implementation-review-tie-off.md    # append-only log
+├── tie-off-implementation-review.md    # append-only log
 └── reviews/                            # event type directory
     └── 016-quality-review.md           # static event
 ```

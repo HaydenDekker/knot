@@ -3,12 +3,12 @@
 **Plan:** [Flatten Tie-Off Paths](flat-tie-off-paths-plan.md)
 
 ## Checklist
-- [x] Update `project/domain-glossary.md` — "Knot" section: change tie-off path to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
+- [x] Update `project/domain-glossary.md` — "Knot" section: change tie-off path to `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
 - [x] Update `project/domain-glossary.md` — "Tie-off Directory" section: remove knot-name subdirectory from description
 - [x] Update `project/domain-glossary.md` — "Tie-Off Events" section: update layout diagram and consumer `strand-dir` reference path
 - [x] Update `project/domain-glossary.md` — "Tie-off" section: update path description
 - [x] Update `project/domain-glossary.md` — "Term Relationships" diagram: flatten the tie-off tree (remove knot-name directory level)
-- [x] Update `docs/concepts.md` — change `rig/tie-offs/{loom-id}/{knot-name}/{knot-name}-tie-off.md` to `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
+- [x] Update `docs/concepts.md` — change `rig/tie-offs/{loom-id}/{knot-name}/tie-off-{knot-name}.md` to `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
 - [x] Update `docs/configuration/rig-structure.md` — update directory tree and path examples to flat layout
 - [x] Update `docs/configuration/knots.md` — update tie-off path and directory tree to flat layout
 - [x] Update `docs/troubleshooting.md` — update any tie-off path references to flat layout

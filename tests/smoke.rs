@@ -88,7 +88,7 @@ fn composition_smoke_stdio() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // ── Verify tie-off file ──
-    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/tie-off-review.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",
@@ -182,7 +182,7 @@ fn composition_smoke_json() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
 
     // ── Verify tie-off file ──
-    let tie_off_file = rig_dir.join("tie-offs/review-loom/review-tie-off.md");
+    let tie_off_file = rig_dir.join("tie-offs/review-loom/tie-off-review.md");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",

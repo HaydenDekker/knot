@@ -15,7 +15,7 @@
 
 ### Tie-off path assertions updated to flat structure
 
-Updated test assertions in the following files to match the new flat tie-off path structure (`rig/tie-offs/{loom-id}/{knot-id}-tie-off.md` instead of `rig/tie-offs/{loom-id}/{knot-id}/{knot-id}-tie-off.md`):
+Updated test assertions in the following files to match the new flat tie-off path structure (`rig/tie-offs/{loom-id}/tie-off-{knot-id}.md` instead of `rig/tie-offs/{loom-id}/{knot-id}/tie-off-{knot-id}.md`):
 
 - `tests/agent_integration.rs` — 3 paths updated (`agent_execution_produces_tie_off`, `agent_execution_append_mode_tie_offs`, `tie_off_contains_agent_output`)
 - `tests/pipeline.rs` — 5 paths updated (`pipeline_processes_strand_create`, `pipeline_ignores_binary_files_and_processes_text_files`, `pipeline_processes_non_md_text_files`, `delete_event_agent_receives_context`, `delete_event_large_tieoff_bounded_context`)

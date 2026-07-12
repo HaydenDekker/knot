@@ -56,7 +56,7 @@ text-based document.
   containing `rig/`.
 - Absolute paths are also accepted and used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
+  `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
 
 ### Example Layout
 
@@ -69,7 +69,7 @@ project_root/
     ├── tie-offs/
     │   └── prd-review-loom/
     │       ├── .loom-log
-    │       └── goals-review-tie-off.md
+    │       └── tie-off-goals-review.md
     └── prd-review-loom/             ← loom directory
         └── goals-review.md          ← knot definition
 ```

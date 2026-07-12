@@ -4,7 +4,7 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.3.0"
+  version: "5.4.0"
   compatibility: "Knot 0.26.0+"
 ---
 
@@ -70,7 +70,7 @@ Rig (`./rig/`, top-level container)
  ├── tie-offs/
  │     └── {loom-id}/
  │           ├── .loom-log   ← activity log
- │           ├── {knot-name}-tie-off.md  ← append-only log
+ │           ├── tie-off-{knot-name}.md  ← append-only log
  │           └── {event-type}/           ← tie-off events
  │                 └── {event}.md        ← static event strand
  └── {name}-loom/            ← loom directory (must end in `-loom`)
@@ -391,7 +391,7 @@ will reject such files with a `KnotParseWarning`.
   (the directory containing the `rig/` folder).
 - Absolute paths are used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/{knot-name}-tie-off.md`
+  `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
 
 ### Event Routing
 
@@ -528,8 +528,8 @@ consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
 
 ```
 rig/tie-offs/<loom-id>/
-├── <knot-name>-tie-off.md    ← append-only log (always present)
-├── <another-knot>-tie-off.md  ← another knot's tie-off (flat)
+├── tie-off-<knot-name>.md      ← append-only log (always present)
+├── tie-off-<another-knot>.md   ← another knot's tie-off (flat)
 └── <EventId>/                ← dispatch subdirectory (created by Knot)
       └── <event-file>.md      ← dispatched event strand for consumers
 ```
@@ -562,10 +562,10 @@ project_root/              ← strand-dir resolves from here
     ├── tie-offs/          ← tie-off directory
     │   ├── prd-review-loom/
     │   │   ├── .loom-log
-    │   │   └── prd-goals-review-tie-off.md
+    │   │   └── tie-off-prd-goals-review.md
     │   └── planning-loom/
     │       ├── .loom-log
-    │       ├── refactor-planner-tie-off.md
+    │       ├── tie-off-refactor-planner.md
     │       └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
     │           └── event-2026-07-10T12-00-00.md
     ├── prd-review-loom/   ← loom with normal knot

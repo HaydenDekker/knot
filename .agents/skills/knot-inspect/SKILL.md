@@ -4,7 +4,7 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.1.0"
+  version: "3.2.0"
   compatibility: "Knot 0.22.0+"
 ---
 
@@ -62,7 +62,7 @@ knot) based on user requests.
           "id": "goals-review",
           "status": "completed",
           "last_strand_path": "project/prds/goals.md",
-          "last_tie_off_path": "rig/tie-offs/prd-review-loom/goals-review-tie-off.md",
+          "last_tie_off_path": "rig/tie-offs/prd-review-loom/tie-off-goals-review.md",
           "last_error": null,
           "last_event_at": "2026-06-10T12:00:03Z"
         }
@@ -215,7 +215,7 @@ representing one event.
 ### Example Activity Entry
 
 ```json
-{"KnotCompleted":{"loom_id":"prd-review-loom","knot_id":"goals-review","strand_path":"project/prds/goals.md","tie_off_path":"rig/tie-offs/prd-review-loom/goals-review-tie-off.md","timestamp":"2026-06-10T12:00:03Z"}}
+{"KnotCompleted":{"loom_id":"prd-review-loom","knot_id":"goals-review","strand_path":"project/prds/goals.md","tie_off_path":"rig/tie-offs/prd-review-loom/tie-off-goals-review.md","timestamp":"2026-06-10T12:00:03Z"}}
 ```
 
 ---

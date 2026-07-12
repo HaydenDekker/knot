@@ -128,7 +128,7 @@ fn create_strand_file(dir: &tempfile::TempDir, name: &str, content: &str) -> Pat
 
 /// Tie-off is written to the correct path under tie-offs/.
 ///
-/// Path structure: `rig/tie-offs/{loom-id}/{knot-id}-tie-off.md`
+/// Path structure: `rig/tie-offs/{loom-id}/tie-off-{knot-id}.md`
 #[test]
 fn tie_off_written_to_correct_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -148,10 +148,10 @@ fn tie_off_written_to_correct_path() {
     assert_eq!(appends.len(), 1, "should have 1 tie-off append");
     let tie_off = &appends[0];
 
-    // Path should be: /rig/tie-offs/review-loom/review-tie-off.md
+    // Path should be: /rig/tie-offs/review-loom/tie-off-review.md
     let path_str = tie_off.path.0.display().to_string();
     assert!(
-        path_str.contains("tie-offs/review-loom/review-tie-off.md"),
+        path_str.contains("tie-offs/review-loom/tie-off-review.md"),
         "tie-off path should contain loom and knot ID: {}",
         path_str
     );
@@ -188,7 +188,7 @@ fn tie_off_path_includes_knot_id() {
     let appends = tie_off_appends.lock().unwrap();
     let path_str = appends[0].path.0.display().to_string();
     assert!(
-        path_str.contains("knot-a-tie-off.md"),
+        path_str.contains("tie-off-knot-a.md"),
         "tie-off filename should include knot-a ID: {}",
         path_str
     );
@@ -232,7 +232,7 @@ fn tie_off_append_mode_history() {
     // Content map tracks the latest write (same path, second overwrites)
     let content = tie_off_content.lock().unwrap();
     let latest = content
-        .get("/rig/tie-offs/review-loom/review-tie-off.md")
+        .get("/rig/tie-offs/review-loom/tie-off-review.md")
         .expect("tie-off path should be in content map");
     assert!(
         latest.contains("review v1"),
@@ -290,7 +290,7 @@ fn delete_event_context_extraction_reads_tieoff() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/rig/tie-offs/review-loom/review-tie-off.md".to_string(),
+            "/rig/tie-offs/review-loom/tie-off-review.md".to_string(),
             concat!(
                 "## review triggered by Created strands/feature.md\n",
                 "Timestamp: 2026-06-05T10:00:00Z\n",
