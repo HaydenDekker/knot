@@ -493,10 +493,6 @@ impl ProcessStrand {
             Some(strand_path.clone())
         };
         let mut session_id: Option<String> = None;
-        // Clone profile_prompt before moving it into execute_with_resume,
-        // so it's still available for enforcement follow-up below.
-        let profile_prompt_for_enforcement =
-            profile.profile_prompt.clone();
         let result = session_resume::execute_with_resume(
             &*self.agent_runner,
             &*self.log_port,
@@ -616,9 +612,6 @@ impl ProcessStrand {
                             if let Ok((followup_config, _)) =
                                 self.resolve_agent_config(knot)
                             {
-                                let profile_prompt =
-                                    profile_prompt_for_enforcement;
-
                                 let followup_result =
                                     session_resume::inject_event_request(
                                         &*self.agent_runner,
@@ -628,8 +621,7 @@ impl ProcessStrand {
                                         &strand_path,
                                         &session_id,
                                         followup_config,
-                                        expected_events.clone(),
-                                        profile_prompt,
+                                        listener_context.clone(),
                                         event_label.clone(),
                                         Some(knot.id.0.clone()),
                                         profile_timeout,

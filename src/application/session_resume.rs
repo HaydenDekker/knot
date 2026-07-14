@@ -39,7 +39,8 @@ fn format_timestamp() -> String {
 ///
 /// Called after successful strand processing when the agent was instructed
 /// to emit events but produced none. Re-enters the Pi session with a
-/// follow-up prompt reminding the agent to provide event blocks.
+/// follow-up prompt that repeats the original listener context (the exact
+/// event emission instructions the agent was already given).
 ///
 /// Returns the agent's response text, which the caller parses for events.
 /// Returns `Err` if the session cannot be re-entered (e.g. no session ID,
@@ -52,8 +53,7 @@ pub fn inject_event_request(
     strand_path: &StrandPath,
     session_id: &Option<String>,
     mut agent_config: AgentConfig,
-    expected_events: Vec<String>,
-    profile_prompt: String,
+    listener_context: String,
     event_type: String,
     knot_name: Option<String>,
     profile_timeout: Option<Duration>,
@@ -66,39 +66,28 @@ pub fn inject_event_request(
         }
     })?;
 
-    // Build the follow-up prompt
-    let event_list = expected_events
-        .iter()
-        .map(|id| format!("- `{id}`"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
+    // Repeat the listener context — the agent already saw these instructions
+    // in the first turn but missed them. No profile prompt needed since the
+    // session already has the full conversation history.
     let prompt = format!(
-        "You were instructed to emit agent events in your previous response, but no event blocks were found.\n\n\
-         Events you were instructed to emit:\n{event_list}\n\n\
-         Please provide at least one event block using the following format:\n\n\
-         ```markdown\n\
-         ---\n\
-         event: <EventId>\n\
-         description: <short summary of what happened>\n\
-         <additional fields as relevant>\n\
-         ---\n\n\
-         Freeform narrative context about the event.\n\
-         ```\n\n\
-         If no events occurred, emit `event: None` inside a ```markdown block with --- delimiters.",
+        "Your previous response did not contain any agent event blocks.\n\n\
+         Please emit events as instructed below:\n\n\
+         {}",
+        listener_context,
     );
 
     // Append --session-id to extra_args
     agent_config.extra_args.push("--session-id".to_string());
     agent_config.extra_args.push(sid.clone());
 
-    // Execute the follow-up
+    // Execute the follow-up with no profile prompt — session already
+    // contains persona and instructions from the first turn.
     let output = agent_runner.execute_with_config(
         &agent_config,
         strand_path.clone(),
         None, // no strand file ref for follow-up
         prompt,
-        profile_prompt,
+        String::new(),
         event_type,
         knot_name,
         profile_timeout,
@@ -1034,8 +1023,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string()],
-            "You are a reviewer.".to_string(),
+            "## Agent Events\n\nYou may emit: PlanCreated".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -1065,8 +1053,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string()],
-            "You are a reviewer.".to_string(),
+            "listener context".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -1094,8 +1081,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string()],
-            "You are a reviewer.".to_string(),
+            "listener context".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -1105,7 +1091,16 @@ mod tests {
     }
 
     #[test]
-    fn inject_event_request_prompt_contains_expected_events() {
+    fn inject_event_request_repeats_listener_context() {
+        let listener = concat!(
+            "## Agent Events\n",
+            "\n",
+            "Events you may emit:\n",
+            "- `PhaseReady` — phase complete, next phase ready\n",
+            "- `ImplementationNote` — implementation discovery",
+        )
+        .to_string();
+
         let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
         let log = TestLoomLog::default();
 
@@ -1123,30 +1118,35 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string(), "ScopeChanged".to_string()],
-            "You are a reviewer.".to_string(),
-            "Created".to_string(),
+            listener,
+            "Modified".to_string(),
             Some("k1".to_string()),
             None,
         );
 
         let contexts = runner.contexts();
-        assert_eq!(contexts.len(), 1);
         let prompt = &contexts[0].prompt;
+        // Prompt repeats the full listener context
         assert!(
-            prompt.contains("`PlanCreated`"),
-            "prompt should list PlanCreated: {}",
-            prompt
+            prompt.contains("Your previous response did not contain any agent event blocks"),
+            "prompt should have preamble"
         );
         assert!(
-            prompt.contains("`ScopeChanged`"),
-            "prompt should list ScopeChanged: {}",
-            prompt
+            prompt.contains("## Agent Events"),
+            "prompt should include listener context"
+        );
+        assert!(
+            prompt.contains("`PhaseReady`"),
+            "prompt should list PhaseReady from listener context"
+        );
+        assert!(
+            prompt.contains("`ImplementationNote`"),
+            "prompt should list ImplementationNote from listener context"
         );
     }
 
     #[test]
-    fn inject_event_request_prompt_includes_event_none_option() {
+    fn inject_event_request_does_not_resend_profile_prompt() {
         let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
         let log = TestLoomLog::default();
 
@@ -1164,20 +1164,18 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string()],
-            "You are a reviewer.".to_string(),
-            "Created".to_string(),
+            "listener context".to_string(),
+            "Modified".to_string(),
             Some("k1".to_string()),
             None,
         );
 
         let contexts = runner.contexts();
-        assert_eq!(contexts.len(), 1);
-        let prompt = &contexts[0].prompt;
+        // Profile prompt is not resent — session already has context
         assert!(
-            prompt.contains("event: None"),
-            "prompt should mention event: None as an option: {}",
-            prompt
+            contexts[0].profile_prompt.is_empty(),
+            "profile prompt should be empty (not resent): {}",
+            contexts[0].profile_prompt
         );
     }
 
@@ -1200,8 +1198,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
             },
-            vec!["PlanCreated".to_string()],
-            "You are a reviewer.".to_string(),
+            "listener context".to_string(),
             "Created".to_string(),
             Some("k1".to_string()),
             None,
