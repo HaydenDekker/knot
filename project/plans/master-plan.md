@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-11
+> **Last Updated:** 2026-07-14
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 59 | [Tie-Off Event Enforcement](059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md) | ✅ Complete | 2026-07-14 |
 | 58 | [Loom-Level Event Subscriptions](058-loom-level-events/loom-level-events-plan.md) | ✅ Complete | 2026-07-11 |
 | 57 | [Agent Event Format — Markdown Code Blocks](057-event-format-markdown-blocks/event-format-markdown-blocks-plan.md) | ✅ Complete | 2026-07-11 |
 | 56 | [Strand Event URI](056-strand-event-uri/strand-event-uri-plan.md) | ✅ Complete | 2026-07-10 |
@@ -83,6 +84,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 59. Tie-Off Event Enforcement
+
+**Status:** ⬜ Planned
+**Created:** 2026-07-14
+**Goal:** Detect when agents instructed to emit tie-off events fail to do so, log the failure via `KnotEventsMissing` in the loom-log, and re-enter the session with a follow-up prompt to remind the agent to provide events.
+
+Full details in [059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md](059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md).
 
 ### 56. Strand Event URI
 
