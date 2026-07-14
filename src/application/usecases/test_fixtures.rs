@@ -854,6 +854,13 @@ impl MockEventDispatcher {
             dispatches,
         )
     }
+
+    /// Return all recorded dispatch calls.
+    pub fn get_dispatches(
+        &self,
+    ) -> Vec<(AgentEvent, String, String, String)> {
+        self.dispatches.lock().unwrap().clone()
+    }
 }
 
 impl Default for MockEventDispatcher {
