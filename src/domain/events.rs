@@ -352,6 +352,17 @@ pub enum LoomEvent {
         /// ISO 8601 UTC timestamp.
         timestamp: String,
     },
+    /// A knot completed successfully but was instructed to emit events
+    /// and produced none in its response.
+    KnotEventsMissing {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// Description of what events were expected.
+        expected_events: Vec<String>,
+        /// ISO 8601 UTC timestamp.
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -1650,6 +1661,16 @@ mod tests {
                 attempt: 3,
                 timestamp: ts.clone(),
             },
+            LoomEvent::KnotEventsMissing {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                expected_events: vec![
+                    "PlanCreated".to_string(),
+                    "ValidationFailed".to_string(),
+                ],
+                timestamp: ts.clone(),
+            },
         ];
 
         for event in &events {
@@ -1998,5 +2019,73 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    // ── KnotEventsMissing Tests (Phase 0) ─────────────────────────
+
+    /// `KnotEventsMissing` serialises and deserialises correctly,
+    /// preserving all fields including the `expected_events` vec.
+    #[test]
+    fn knot_events_missing_event_serialisation() {
+        let loom_id = LoomId("test-loom".to_string());
+        let knot_id = KnotId("plan-creator".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let ts = "2026-07-14T10:00:00Z".to_string();
+
+        let event = LoomEvent::KnotEventsMissing {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            expected_events: vec![
+                "PlanCreated".to_string(),
+                "ValidationFailed".to_string(),
+            ],
+            timestamp: ts.clone(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    /// `KnotEventsMissing` preserves the `expected_events` vec through
+    /// pattern matching and serialisation.
+    #[test]
+    fn knot_events_missing_event_fields() {
+        let loom_id = LoomId("test-loom".to_string());
+        let knot_id = KnotId("plan-creator".to_string());
+        let strand_path = StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let ts = "2026-07-14T10:00:00Z".to_string();
+
+        let event = LoomEvent::KnotEventsMissing {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            expected_events: vec![
+                "PlanCreated".to_string(),
+                "ValidationFailed".to_string(),
+            ],
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::KnotEventsMissing {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                expected_events,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(expected_events.len(), 2);
+                assert_eq!(expected_events[0], "PlanCreated");
+                assert_eq!(expected_events[1], "ValidationFailed");
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected KnotEventsMissing variant"),
+        }
     }
 }

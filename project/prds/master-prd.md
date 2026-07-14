@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-06-26
+> **Last Updated:** 2026-07-14
 
 ## How to Add a PRD
 
@@ -19,6 +19,7 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [Tie-Off Event Enforcement](prd-tie-off-event-enforcement.md) | 🔵 Open | 2026-07-14 |
 | [Demand Control — Concurrency, Throughput and Service Tuning](prd-demand-control.md) | 🔵 Open | 2026-06-26 |
 | [System Reliability — Messaging Control, Replay and Rollback](prd-system-reliability.md) | 🔵 Open | 2026-06-09 |
 | [Knot Skills — AI-Driven Configuration via Skills](prd-knot-skills.md) | ✅ Complete | 2026-06-04 |
@@ -27,6 +28,14 @@ To add it to this index:
 ---
 
 ## PRD Summaries
+
+### Tie-Off Event Enforcement
+
+**Status:** 🔵 Open
+**Created:** 2026-07-14
+**Summary:** Detect when agents instructed to emit tie-off events fail to do so, log the failure, and re-enter the session with a follow-up prompt to remind the agent to provide events.
+
+Full details in [prd-tie-off-event-enforcement.md](prd-tie-off-event-enforcement.md).
 
 ### Demand Control — Concurrency, Throughput and Service Tuning
 

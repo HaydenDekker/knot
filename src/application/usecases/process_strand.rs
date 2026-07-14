@@ -23,6 +23,46 @@ use crate::domain::value_objects::{
 // Re-export shared types from types module
 use super::types::format_timestamp;
 
+// ── Event Enforcement ──────────────────────────────────────────────────
+
+/// Extract the list of expected event IDs for a knot.
+///
+/// Scans all knots' `strand_source` entries for `EventUri` subscriptions
+/// where the current knot is the producer. Returns the deduplicated list
+/// of event IDs that the agent was instructed to emit.
+///
+/// This mirrors the scanning logic in `build_listener_context()` but
+/// returns only the event IDs (not the full context string).
+fn extract_expected_event_ids(
+    knot: &Knot,
+    loom_id: &LoomId,
+    all_knots: &[Knot],
+) -> Vec<String> {
+    use crate::domain::value_objects::StrandSource;
+
+    let mut seen_ids: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+
+    for other in all_knots {
+        if let StrandSource::EventUri {
+            producer_knot,
+            event_id,
+        } = &other.strand_source
+        {
+            let is_knot_level = producer_knot == &knot.id.0;
+            let is_loom_level =
+                producer_knot.ends_with("-loom") && producer_knot == &loom_id.0;
+            if is_knot_level || is_loom_level {
+                seen_ids.entry(event_id.clone()).or_insert(true);
+            }
+        }
+    }
+
+    let mut ids: Vec<String> = seen_ids.into_keys().collect();
+    ids.sort();
+    ids
+}
+
 // ── Event File Detection ─────────────────────────────────────────────
 
 /// Try to read event metadata from a strand file.
@@ -428,6 +468,16 @@ impl ProcessStrand {
         let all_knots = Self::collect_all_knots(&self.store);
         let listener_context =
             build_listener_context(knot, &loom_id, &all_knots);
+
+        // Collect looms and knot IDs for event dispatch (used by both
+        // the primary dispatch and the enforcement follow-up).
+        let all_looms_for_dispatch = self.store.list();
+        let all_knot_ids: Vec<&str> = all_looms_for_dispatch
+            .iter()
+            .flat_map(|l| l.knots.iter())
+            .map(|k| k.id.0.as_str())
+            .collect();
+
         let prompt = if listener_context.is_empty() {
             base_prompt
         } else {
@@ -443,6 +493,10 @@ impl ProcessStrand {
             Some(strand_path.clone())
         };
         let mut session_id: Option<String> = None;
+        // Clone profile_prompt before moving it into execute_with_resume,
+        // so it's still available for enforcement follow-up below.
+        let profile_prompt_for_enforcement =
+            profile.profile_prompt.clone();
         let result = session_resume::execute_with_resume(
             &*self.agent_runner,
             &*self.log_port,
@@ -532,6 +586,151 @@ impl ProcessStrand {
                     error: None,
                     timestamp: format_timestamp(),
                 })?;
+
+                // ── Event Enforcement (Phase 3) ──────────────────────────
+                // If the agent was instructed to emit events but produced
+                // none, log a KnotEventsMissing and attempt one follow-up.
+                if !listener_context.is_empty() {
+                    if let Some(ref content) = outcome.tie_off_content() {
+                        if crate::domain::tieoff_parser::has_no_events(content)
+                        {
+                            let expected_events = extract_expected_event_ids(
+                                knot,
+                                &loom_id,
+                                &all_knots,
+                            );
+
+                            // Log the first KnotEventsMissing
+                            let _ = self.log_port.append(
+                                LoomEvent::KnotEventsMissing {
+                                    loom_id: loom_id.clone(),
+                                    knot_id: knot_id.clone(),
+                                    strand_path: strand_path.clone(),
+                                    expected_events: expected_events.clone(),
+                                    timestamp: format_timestamp(),
+                                },
+                            );
+
+                            // Attempt follow-up re-entry (best-effort).
+                            // Only possible if session_id is available.
+                            if let Ok((followup_config, _)) =
+                                self.resolve_agent_config(knot)
+                            {
+                                let profile_prompt =
+                                    profile_prompt_for_enforcement;
+
+                                let followup_result =
+                                    session_resume::inject_event_request(
+                                        &*self.agent_runner,
+                                        &*self.log_port,
+                                        &loom_id,
+                                        &knot_id,
+                                        &strand_path,
+                                        &session_id,
+                                        followup_config,
+                                        expected_events.clone(),
+                                        profile_prompt,
+                                        event_label.clone(),
+                                        Some(knot.id.0.clone()),
+                                        profile_timeout,
+                                    );
+
+                                match followup_result {
+                                Ok(response) => {
+                                    // Parse follow-up for events
+                                    let followup_events =
+                                        crate::domain::tieoff_parser::
+                                            extract_agent_events(&response);
+
+                                    if !followup_events.is_empty() {
+                                        // Dispatch follow-up events
+                                        for event in &followup_events {
+                                            for loom in &all_looms_for_dispatch {
+                                                for consumer_knot in
+                                                    &loom.knots
+                                                {
+                                                    let resolved =
+                                                        consumer_knot
+                                                            .strand_source
+                                                            .resolve_for_producer(
+                                                                &knot.id.0,
+                                                                &loom_id.0,
+                                                                &all_knot_ids,
+                                                            );
+                                                    if let Some(sub) =
+                                                        resolved
+                                                    {
+                                                        let matches_event =
+                                                            match &sub {
+                                                                EventSubscription::KnotLevel {
+                                                                    event_id:
+                                                                        sub_event_id,
+                                                                    ..
+                                                                } => {
+                                                                    sub_event_id
+                                                                        == &event
+                                                                            .event_id
+                                                                }
+                                                                EventSubscription::LoomLevel {
+                                                                    event_id:
+                                                                        sub_event_id,
+                                                                    ..
+                                                                } => {
+                                                                    sub_event_id
+                                                                        == &event
+                                                                            .event_id
+                                                                }
+                                                            };
+                                                        if matches_event {
+                                                            let _path = self
+                                                                .event_dispatcher
+                                                                .dispatch(
+                                                                    event,
+                                                                    consumer_knot,
+                                                                    &knot
+                                                                        .id
+                                                                        .0,
+                                                                    &loom
+                                                                        .id,
+                                                                    &self
+                                                                        .rig_dir,
+                                                                );
+                                                            // dispatch failures
+                                                            // are non-fatal
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Still no events — log again
+                                        let _ = self.log_port.append(
+                                            LoomEvent::KnotEventsMissing {
+                                                loom_id: loom_id.clone(),
+                                                knot_id: knot_id.clone(),
+                                                strand_path: strand_path
+                                                    .clone(),
+                                                expected_events: expected_events
+                                                    .clone(),
+                                                timestamp: format_timestamp(),
+                                            },
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    // No session ID or runner error
+                                    // — log gracefully, do not fail strand
+                                    eprintln!(
+                                        "event enforcement follow-up failed (knot={}): {}",
+                                        knot_id.0,
+                                        e
+                                    );
+                                }
+                            }
+                            }
+                        }
+                    }
+                }
 
                 // Git versioning commit (best-effort, non-fatal).
                 // Runs last so the commit captures all artifacts from the
@@ -4859,5 +5058,572 @@ mod phase6_integration_tests {
         );
         // The producing knot is known from context ("plan-creator"),
         // which matches knot.id.0
+    }
+}
+
+// ── Phase 3: Event Enforcement Tests ──────────────────────────────────
+
+#[cfg(test)]
+mod event_enforcement_tests {
+    use super::*;
+    use crate::application::ports::{AgentInvocationMetadata, AgentOutput};
+    use crate::domain::entities::{KnotId, LoomId, PromptTemplate};
+    use crate::domain::value_objects::StrandSource;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        TrackingTieOffSink,
+    };
+
+    /// Build a knot that listens for events from another knot.
+    fn build_consumer_knot(
+        id: &str,
+        target_knot: &str,
+        event_id: &str,
+        event_desc: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: false,
+            strand_source: StrandSource::EventUri {
+                producer_knot: target_knot.to_string(),
+                event_id: event_id.to_string(),
+            },
+            event_description: Some(event_desc.to_string()),
+        }
+    }
+
+    /// Build a producer knot with no event subscriptions.
+    fn build_producer_knot(id: &str) -> Knot {
+        use crate::application::usecases::test_fixtures::build_knot;
+        build_knot(id)
+    }
+
+    /// Build ProcessStrand with a tracking event dispatcher.
+    #[allow(clippy::type_complexity)]
+    fn build_enforcement_strand(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        LoomStore,
+    ) {
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, _, _) =
+            crate::application::usecases::test_fixtures::TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(event_dispatcher),
+        );
+
+        (use_case, log_events, dispatches, store)
+    }
+
+    fn ok_output_with_sid(stdout: &str, sid: &str) -> AgentOutput {
+        use crate::application::ports::AgentInvocationMetadata;
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+            }),
+        }
+    }
+
+    fn event_block(event_id: &str) -> String {
+        format!(
+            "```markdown\n---\nevent: {event_id}\n---\n\nEvent body.\n```"
+        )
+    }
+
+    fn event_none_block() -> String {
+        "```markdown\n---\nevent: None\n---\n```".to_string()
+    }
+
+    /// No consumers listening for events from this knot — enforcement
+    /// is skipped entirely (no KnotEventsMissing logged).
+    #[test]
+    fn process_strand_enforcement_no_consumers_skipped() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(vec![producer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // No KnotEventsMissing should be logged
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 0,
+            "no enforcement when there are no consumers"
+        );
+    }
+
+    /// Agent emits events in tie-off — enforcement is skipped.
+    #[test]
+    fn process_strand_enforcement_events_present_skipped() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let event_content = concat!(
+            "Plan created successfully.\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "```",
+        );
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // No KnotEventsMissing should be logged
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(missing_count, 0, "no enforcement when events are present");
+    }
+
+    /// Agent emits `event: None` — enforcement is skipped (valid outcome).
+    #[test]
+    fn process_strand_enforcement_event_none_skipped() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: event_none_block(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // No KnotEventsMissing should be logged
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count,
+            0,
+            "no enforcement when event: None is emitted"
+        );
+    }
+
+    /// No events emitted, consumers exist — KnotEventsMissing is logged
+    /// and follow-up is attempted.
+    #[test]
+    fn process_strand_enforcement_missing_events_logs_and_retries() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // First call: normal output with no events
+        // Second call (follow-up): also no events (mock returns same)
+        let output = Ok(AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+            }),
+        });
+        let runner = Arc::new(MockAgentRunner::new(output.clone()));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // KnotEventsMissing should be logged
+        let events = log_events.lock().unwrap();
+        let missing_events: Vec<&LoomEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .collect();
+        assert!(
+            !missing_events.is_empty(),
+            "KnotEventsMissing should be logged when events are missing"
+        );
+
+        // Verify the KnotEventsMissing carries expected event IDs
+        if let LoomEvent::KnotEventsMissing { expected_events, .. } =
+            missing_events[0]
+        {
+            assert!(
+                expected_events.contains(&"PlanCreated".to_string()),
+                "expected_events should contain PlanCreated"
+            );
+        }
+    }
+
+    /// Follow-up produces events — they are dispatched to consumers.
+    #[test]
+    fn process_strand_enforcement_followup_produces_events_dispatched() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // First call: normal output with no events
+        // Second call (follow-up): produces an event
+        let first_output = AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+            }),
+        };
+        let followup_output = AgentOutput {
+            stdout: event_block("PlanCreated"),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, log_events, dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Event should have been dispatched from follow-up
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            1,
+            "follow-up event should be dispatched"
+        );
+        assert_eq!(dispatched[0].0.event_id, "PlanCreated");
+        assert_eq!(dispatched[0].1, "plan-watcher");
+
+        // Only one KnotEventsMissing (the initial detection),
+        // not a second one (since follow-up produced events)
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 1,
+            "only one KnotEventsMissing when follow-up succeeds"
+        );
+    }
+
+    /// Follow-up still produces no events — second KnotEventsMissing logged.
+    #[test]
+    fn process_strand_enforcement_followup_still_missing_logs_twice() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // First and second calls both return no events
+        let output = AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new(Ok(output)));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Two KnotEventsMissing entries (initial + follow-up still missing)
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 2,
+            "two KnotEventsMissing when follow-up also produces no events"
+        );
+    }
+
+    /// No session ID (stdio adapter) — KnotEventsMissing logged but
+    /// no follow-up re-entry attempted.
+    #[test]
+    fn process_strand_enforcement_no_session_id_log_only() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // Output with no session ID (stdio adapter)
+        let output = Ok(AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None, // no session ID
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // One KnotEventsMissing logged (no follow-up possible)
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 1,
+            "one KnotEventsMissing when no session ID (log only)"
+        );
+
+        // No EventsDispatched (no follow-up)
+        let dispatch_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::EventsDispatched { .. }))
+            .count();
+        assert_eq!(
+            dispatch_count, 0,
+            "no EventsDispatched when no follow-up attempted"
+        );
     }
 }

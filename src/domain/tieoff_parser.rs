@@ -172,6 +172,36 @@ pub fn extract_agent_events(
     events
 }
 
+/// Determine if the tie-off content contains any agent events.
+///
+/// Returns `true` if zero event blocks were found (not even `event: None`).
+/// Returns `false` if at least one event block (including `event: None`) was found.
+///
+/// This is a lightweight check — it does not call `extract_agent_events()`
+/// (which fully parses events). It only checks for the presence of
+/// ```markdown blocks with `---` delimiters. If zero such blocks exist,
+/// the agent produced no events at all.
+///
+/// This is the gate for event enforcement — if the agent was instructed
+/// to emit events but produced zero event blocks, enforcement triggers.
+pub fn has_no_events(content: &str) -> bool {
+    let blocks = extract_markdown_blocks(content);
+    if blocks.is_empty() {
+        return true;
+    }
+
+    // At least one ```markdown block exists — check if any contains
+    // a `---` delimiter (valid frontmatter). A block without `---`
+    // is just a markdown code block, not an event block.
+    for block in &blocks {
+        if block.lines().any(|line| line.trim() == "---") {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Extract the content of ```markdown code blocks from text.
 ///
 /// Only blocks that start with exactly ```markdown (no other language tag)
@@ -938,5 +968,80 @@ mod tests {
         );
         let result = parse_event_block(content);
         assert!(result.is_none());
+    }
+
+    // ── has_no_events Tests (Phase 1) ─────────────────────────────
+
+    #[test]
+    fn has_no_events_empty_input_returns_true() {
+        assert!(has_no_events(""));
+    }
+
+    #[test]
+    fn has_no_events_normal_body_returns_true() {
+        let content = concat!(
+            "## review triggered by Created file.md\n",
+            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "---\n",
+            "Normal body text without any events.",
+        );
+        assert!(has_no_events(content));
+    }
+
+    #[test]
+    fn has_no_events_with_event_block_returns_false() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "Plan created.\n",
+            "```",
+        );
+        assert!(!has_no_events(content));
+    }
+
+    #[test]
+    fn has_no_events_with_event_none_returns_false() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: None\n",
+            "---\n",
+            "```",
+        );
+        assert!(!has_no_events(content));
+    }
+
+    #[test]
+    fn has_no_events_with_multiple_events_returns_false() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "---\n",
+            "```
+",
+            "```markdown\n",
+            "---\n",
+            "event: ScopeChanged\n",
+            "---\n",
+            "```",
+        );
+        assert!(!has_no_events(content));
+    }
+
+    #[test]
+    fn has_no_events_yaml_block_ignored() {
+        let content = concat!(
+            "```yaml\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "body text\n",
+            "```",
+        );
+        assert!(has_no_events(content));
     }
 }
