@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-15 (plan 61 added)
+> **Last Updated:** 2026-07-15 (plan 62 added)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | 📝 Draft | 2026-07-15 |
 | 61 | [Consolidate `build_process_strand` Test Helpers](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md) | 📝 Draft | 2026-07-15 |
 | 60 | [Pending Event Visibility](060-pending-event-visibility/060-pending-event-visibility-plan.md) | ✅ Complete | 2026-07-15 |
 | 59 | [Tie-Off Event Enforcement](059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md) | ✅ Complete | 2026-07-14 |
