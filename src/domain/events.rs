@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::entities::{
@@ -37,12 +39,26 @@ pub struct AgentEvent {
 
 // ── Context Provider Abstraction ─────────────────────────────────────
 
+/// Trait for accessing strand event queue state.
+///
+/// Implemented by the application-layer queue so the domain can query
+/// which strand paths are currently pending (in-queue but not yet
+/// processed) without depending on the concrete queue type.
+///
+/// Used by [`ContextProvider`] implementations to determine which
+/// dispatched events are still pending vs. already consumed.
+pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
+    /// Return the strand paths currently sitting in the queue
+    /// (debounced, awaiting processing).
+    fn pending_strand_paths(&self) -> Vec<std::path::PathBuf>;
+}
+
 /// Data required to build dynamic prompt context segments.
 ///
 /// Carries the knot being invoked, the loom it belongs to, all registered
-/// knots (so providers can inspect consumer relationships), and the rig
-/// directory path (so providers can read filesystem state such as pending
-/// event files).
+/// knots (so providers can inspect consumer relationships), the rig
+/// directory path, and an optional reference to the strand event queue
+/// (so providers can determine which events are still pending).
 #[derive(Debug, Clone)]
 pub struct BuildContext {
     /// The knot currently being invoked.
@@ -53,6 +69,11 @@ pub struct BuildContext {
     pub all_knots: Vec<Knot>,
     /// Absolute path to the rig directory.
     pub rig_dir: std::path::PathBuf,
+    /// Optional reference to the strand event queue for pending event
+    /// visibility. When present, pending events are determined by
+    /// querying the in-memory queue (source of truth) instead of
+    /// scanning the filesystem.
+    pub strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
 }
 
 /// A provider that builds dynamic prompt context segments.
@@ -222,6 +243,17 @@ pub enum StrandEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
     },
+}
+
+impl StrandEvent {
+    /// Extract the strand path from any variant.
+    pub fn strand_path(&self) -> &StrandPath {
+        match self {
+            StrandEvent::Created { strand_path, .. }
+            | StrandEvent::Modified { strand_path, .. }
+            | StrandEvent::Deleted { strand_path, .. } => strand_path,
+        }
+    }
 }
 
 /// A TieOff (output file) was successfully produced.
@@ -2226,6 +2258,7 @@ mod tests {
             loom_id: loom_id.clone(),
             all_knots: all_knots.clone(),
             rig_dir: rig_dir.clone(),
+            strand_queue: None,
         };
 
         assert_eq!(ctx.knot, knot);
@@ -2246,6 +2279,7 @@ mod tests {
             loom_id: LoomId("planning-loom".to_string()),
             all_knots: all_knots.clone(),
             rig_dir: PathBuf::from("/tmp/rig"),
+            strand_queue: None,
         };
 
         assert_eq!(ctx.all_knots.len(), 2);
@@ -2270,6 +2304,7 @@ mod tests {
             loom_id: LoomId("test-loom".to_string()),
             all_knots: vec![],
             rig_dir: PathBuf::from("/tmp/rig"),
+            strand_queue: None,
         };
 
         let result = provider.build_context(&ctx);
@@ -2298,6 +2333,7 @@ mod tests {
             loom_id: LoomId("test-loom".to_string()),
             all_knots: vec![],
             rig_dir: PathBuf::from("/tmp/rig"),
+            strand_queue: None,
         };
 
         let combined: String = providers

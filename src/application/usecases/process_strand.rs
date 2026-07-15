@@ -14,7 +14,7 @@ use crate::domain::entities::{
     EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
     StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
-use crate::domain::events::{BuildContext, ContextProvider, LoomEvent, StrandEvent};
+use crate::domain::events::{BuildContext, ContextProvider, LoomEvent, StrandEvent, StrandQueueAccessor};
 use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
@@ -187,6 +187,8 @@ pub struct ProcessStrand {
     file_checker: Arc<dyn StrandFileChecker>,
     /// Event dispatcher for intent-based agent-to-agent routing.
     event_dispatcher: Arc<dyn EventDispatcherPort>,
+    /// Strand event queue — source of truth for pending events.
+    strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
 }
 
 impl ProcessStrand {
@@ -203,6 +205,7 @@ impl ProcessStrand {
         git_versioning_port: Arc<dyn GitVersioningPort>,
         file_checker: Arc<dyn StrandFileChecker>,
         event_dispatcher: Arc<dyn EventDispatcherPort>,
+        strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
     ) -> Self {
         Self {
             store,
@@ -216,6 +219,7 @@ impl ProcessStrand {
             git_versioning_port,
             file_checker,
             event_dispatcher,
+            strand_queue,
         }
     }
 
@@ -473,6 +477,7 @@ impl ProcessStrand {
             loom_id: loom_id.clone(),
             all_knots,
             rig_dir: self.rig_dir.clone(),
+            strand_queue: self.strand_queue.clone(),
         };
         let listener_context =
             AgentEventsContextProvider.build_context(&build_ctx);
@@ -1007,6 +1012,7 @@ mod profile_resolution_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
@@ -1045,6 +1051,7 @@ mod profile_resolution_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let profile_knot = build_profile_knot("k1", "nonexistent");
@@ -1093,6 +1100,7 @@ mod profile_resolution_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let knot1 = build_profile_knot("k1", "detailed");
@@ -1135,6 +1143,7 @@ mod profile_resolution_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         // Profile doesn't exist yet — should error
@@ -1201,6 +1210,7 @@ mod profile_resolution_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
@@ -1282,6 +1292,7 @@ mod execution_test_shared {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         (
@@ -2064,6 +2075,7 @@ mod profile_timeout_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let knot = build_knot("k1", "slow");
@@ -2106,6 +2118,7 @@ mod profile_timeout_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let knot = build_knot("k1", "fast");
@@ -2159,6 +2172,7 @@ mod profile_timeout_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Created {
@@ -2222,6 +2236,7 @@ mod profile_timeout_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Created {
@@ -2293,6 +2308,7 @@ mod git_versioning_tests {
             git_port,
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         )
     }
 
@@ -2464,6 +2480,7 @@ mod session_title_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Modified {
@@ -2522,6 +2539,7 @@ mod session_title_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Created {
@@ -2568,6 +2586,7 @@ mod session_title_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Deleted {
@@ -2621,6 +2640,7 @@ mod session_title_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         // Process first strand
@@ -2703,6 +2723,7 @@ mod session_title_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         let event = StrandEvent::Modified {
@@ -2794,6 +2815,7 @@ mod text_check_tests {
                 crate::adapters::outbound::ContentInspectorChecker,
             ),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         (use_case, log_events, tie_off_appends)
@@ -3113,6 +3135,7 @@ mod file_existence_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         (use_case, log_events, tie_off_appends, agent_runner)
@@ -3479,6 +3502,7 @@ mod event_dispatch_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
+            None,
         );
 
         (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store)
@@ -4375,6 +4399,7 @@ mod event_dispatch_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
+            None,
         );
 
         (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
@@ -5074,6 +5099,7 @@ mod phase6_integration_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(MockEventDispatcher::default()),
+            None,
         );
 
         (use_case, tie_off_appends, tie_off_content, store)
@@ -5438,6 +5464,7 @@ mod event_enforcement_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
+            None,
         );
 
         (use_case, log_events, dispatches, store)
@@ -6007,6 +6034,7 @@ mod phase4_integration_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
+            None,
         );
 
         (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
@@ -6393,6 +6421,7 @@ mod phase4_integration_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
+            None,
         );
 
         (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store)

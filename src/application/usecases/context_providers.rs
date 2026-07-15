@@ -6,9 +6,10 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::domain::entities::Knot;
-use crate::domain::events::{build_listener_context, BuildContext, ContextProvider};
+use crate::domain::events::{build_listener_context, BuildContext, ContextProvider, StrandQueueAccessor};
 
 // ── Pending Event Metadata ──────────────────────────────────────────────
 
@@ -57,8 +58,12 @@ impl AgentEventsContextProvider {
             return String::new();
         }
 
-        let pending =
-            self.scan_pending_events(&input.knot, &emission_instructions, &input.rig_dir);
+        let pending = self.scan_pending_events(
+            &input.knot,
+            &emission_instructions,
+            &input.rig_dir,
+            input.strand_queue.clone(),
+        );
 
         if pending.is_empty() {
             return emission_instructions;
@@ -69,18 +74,19 @@ impl AgentEventsContextProvider {
         format!("{}\n\n{}", pending_section, emission_instructions)
     }
 
-    /// Scan event dispatch directories for pending events emitted by
+    /// Scan the in-memory strand queue for pending events emitted by
     /// the current producer knot.
     ///
-    /// For each event ID the knot is instructed to emit, scans
-    /// `rig/tie-offs/*/` for matching event subdirectories and reads
-    /// any `.md` files where the `target-knot` frontmatter field
-    /// matches the producer knot ID.
+    /// Queries the strand event queue (source of truth) for files
+    /// currently waiting to be processed. Only events dispatched from
+    /// this producer and matching an event ID the knot may emit are
+    /// included.
     fn scan_pending_events(
         &self,
         knot: &Knot,
         emission_instructions: &str,
         rig_dir: &Path,
+        strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
     ) -> Vec<PendingEvent> {
         // Extract event IDs this knot may emit from the emission
         // instructions. They appear as bullet points: `- \`EventId\` — ...`
@@ -90,13 +96,82 @@ impl AgentEventsContextProvider {
         }
 
         let producer_id = &knot.id.0;
-        let dispatch_base = rig_dir.join("tie-offs");
+
+        // Get pending strand paths from the in-memory queue.
+        // If no queue reference is available, fall back to filesystem scan.
+        let pending_paths = strand_queue
+            .as_ref()
+            .map(|q| q.pending_strand_paths())
+            .unwrap_or_else(|| {
+                Self::scan_dispatch_directory(rig_dir, &event_ids)
+            });
 
         let mut pending = Vec::new();
 
-        // Iterate over each consumer loom directory under tie-offs.
+        for strand_path in pending_paths {
+            // Only consider event files (start with "event-")
+            let filename = strand_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string());
+            let Some(ref name) = filename else {
+                continue;
+            };
+            if !name.starts_with("event-") {
+                continue;
+            }
+
+            // Only include events from a matching event ID directory
+            let parent_dir_name = strand_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+            let Some(ref event_dir_name) = parent_dir_name else {
+                continue;
+            };
+            if !event_ids.contains(event_dir_name) {
+                continue;
+            }
+
+            // Read frontmatter to verify producer and extract metadata
+            let Ok(frontmatter) = extract_frontmatter(&strand_path) else {
+                continue;
+            };
+
+            // Only include events dispatched FROM this producer.
+            let target_knot = frontmatter_get(&frontmatter, "target-knot");
+            if target_knot != Some(producer_id.as_str()) {
+                continue;
+            }
+
+            let description =
+                frontmatter_get(&frontmatter, "description").map(String::from);
+            let timestamp =
+                frontmatter_get(&frontmatter, "timestamp").map(String::from);
+
+            pending.push(PendingEvent {
+                event_id: event_dir_name.clone(),
+                description,
+                filename: filename.unwrap_or_default(),
+                timestamp,
+            });
+        }
+
+        pending
+    }
+
+    /// Scan the dispatch directory for event files matching given
+    /// event IDs. Used as a fallback when no queue reference is
+    /// available (e.g. tests without a queue).
+    fn scan_dispatch_directory(
+        rig_dir: &Path,
+        event_ids: &HashSet<String>,
+    ) -> Vec<std::path::PathBuf> {
+        let dispatch_base = rig_dir.join("tie-offs");
+        let mut paths = Vec::new();
+
         let Ok(looms) = std::fs::read_dir(&dispatch_base) else {
-            return pending;
+            return paths;
         };
 
         for loom_entry in looms.filter_map(|e| e.ok()) {
@@ -105,9 +180,7 @@ impl AgentEventsContextProvider {
                 continue;
             }
 
-            // For each event ID this producer may emit, check for a
-            // matching subdirectory in this consumer loom.
-            for event_id in &event_ids {
+            for event_id in event_ids {
                 let event_dir = loom_path.join(event_id);
                 if !event_dir.is_dir() {
                     continue;
@@ -119,47 +192,20 @@ impl AgentEventsContextProvider {
 
                 for file_entry in entries.filter_map(|e| e.ok()) {
                     let file_path = file_entry.path();
-                    if !file_path.is_file() {
-                        continue;
+                    if file_path.is_file() {
+                        if file_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            == Some("md")
+                        {
+                            paths.push(file_path);
+                        }
                     }
-
-                    let extension =
-                        file_path.extension().and_then(|e| e.to_str());
-                    if extension != Some("md") {
-                        continue;
-                    }
-
-                    let Ok(frontmatter) = extract_frontmatter(&file_path) else {
-                        continue;
-                    };
-
-                    // Only include events dispatched FROM this producer.
-                    let target_knot =
-                        frontmatter_get(&frontmatter, "target-knot");
-                    if target_knot != Some(producer_id.as_str()) {
-                        continue;
-                    }
-
-                    let filename = file_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let description =
-                        frontmatter_get(&frontmatter, "description").map(String::from);
-                    let timestamp =
-                        frontmatter_get(&frontmatter, "timestamp").map(String::from);
-
-                    pending.push(PendingEvent {
-                        event_id: event_id.clone(),
-                        description,
-                        filename,
-                        timestamp,
-                    });
                 }
             }
         }
 
-        pending
+        paths
     }
 }
 
@@ -310,6 +356,7 @@ mod tests {
             loom_id,
             all_knots,
             rig_dir,
+            strand_queue: None,
         }
     }
 

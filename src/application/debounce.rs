@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::domain::events::StrandEvent;
+use crate::domain::events::{StrandEvent, StrandQueueAccessor};
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 
 /// Default debounce window: 100 ms per file.
@@ -192,6 +193,36 @@ impl<T> InspectQueue<T> {
         T: Clone,
     {
         self.inner.lock().unwrap().iter().cloned().collect()
+    }
+}
+
+/// Implement [`StrandQueueAccessor`] for the strand event queue.
+///
+/// Extracts the strand paths from all queued (debounced) events,
+/// excluding shutdown sentinels.
+impl StrandQueueAccessor for InspectQueue<Option<TimestampedStrandEvent>> {
+    fn pending_strand_paths(&self) -> Vec<PathBuf> {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|item| {
+                item.as_ref().map(|ts| ts.event.strand_path().0.clone())
+            })
+            .collect()
+    }
+}
+
+/// Implement `Debug` for the strand event queue.
+///
+/// Required because `StrandQueueAccessor` trait bounds include `Debug`,
+/// and `BuildContext` derives `Debug` which transitively requires it.
+impl std::fmt::Debug for InspectQueue<Option<TimestampedStrandEvent>> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let guard = self.inner.lock().unwrap();
+        f.debug_struct("InspectQueue")
+            .field("len", &guard.len())
+            .finish_non_exhaustive()
     }
 }
 

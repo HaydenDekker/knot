@@ -379,6 +379,7 @@ pub fn start_event_pipeline(
             Arc::new(
                 crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
             ),
+            Some(Arc::clone(&debounce_rx_inner) as Arc<dyn domain::events::StrandQueueAccessor>),
         ));
 
         // Process strand events with queue idle detection.

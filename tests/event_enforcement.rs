@@ -131,6 +131,7 @@ fn build_process_strand(
         git_port.clone(),
         file_checker.clone(),
         event_dispatcher.clone(),
+        None,
     );
 
     (

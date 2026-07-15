@@ -93,6 +93,7 @@ fn build_process_strand(
         Arc::new(MockGitVersioningPort::default()),
         Arc::new(MockStrandFileChecker::new()),
         Arc::new(MockEventDispatcher::default()),
+        None,
     );
 
     (
