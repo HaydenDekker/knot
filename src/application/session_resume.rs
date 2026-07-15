@@ -184,6 +184,10 @@ fn execute_with_resume_internal(
     if let Ok(output) = &result {
         // Check for empty response — log and treat as resumable
         if output.stdout.trim().is_empty() {
+            // Capture session_id from output metadata before returning error
+            // so the caller can retry via session-resume.
+            let sid = output.metadata.as_ref()
+                .and_then(|m| m.session_id.clone());
             let _ = loom_log.append(LoomEvent::KnotEmptyResponse {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
@@ -193,7 +197,7 @@ fn execute_with_resume_internal(
             });
             return Err(PortError::Timeout {
                 message: "agent returned empty response".to_string(),
-                session_id: session_id.clone(),
+                session_id: sid,
             });
         }
         // Capture session_id from successful output metadata
@@ -927,11 +931,16 @@ mod tests {
         // Returns error (treated as resumable, but no session_id → returns)
         assert!(result.is_err());
         match result.unwrap_err() {
-            PortError::Timeout { message, .. } => {
+            PortError::Timeout { message, session_id } => {
                 assert!(
                     message.contains("empty response"),
                     "Expected empty response message, got: {}",
                     message
+                );
+                assert_eq!(
+                    session_id,
+                    Some("sess-abc".to_string()),
+                    "Expected session_id captured from output metadata on empty response"
                 );
             }
             _ => panic!("Expected Timeout error"),

@@ -294,3 +294,10 @@ Uncommitted changes (2026-06-29) — targeted fixes to adapter subprocess lifecy
 - **432 unit tests pass**, clippy clean
 - **No per-attempt timeout cap** — first attempt uses full profile timeout budget. Retries only happen when invocation fails *before* budget exhaustion (transient network error, provider crash mid-stream). If the first attempt actually hits the full timeout, no retry is warranted — budget is genuinely exhausted.
 - **23 new tests** across 5 files: domain events (5), session_resume module (13), ProcessStrand integration (3), integration test file `tests/session_resume.rs` (7)
+
+### Bugfix: Empty response on first attempt skips retry (2026-07-15)
+
+When an agent returned empty output on the first invocation, the session ID from `AgentOutput.metadata` was never captured before returning the resumable error — so the error carried `session_id: None` and no retry was attempted. This meant the "please continue" retry loop only worked for crashes/timeouts, not for empty responses on the first attempt.
+
+- **What was wrong:** `execute_with_resume_internal()` checked `output.stdout.trim().is_empty()` and returned `PortError::Timeout { session_id: session_id.clone() }` — but `*session_id` was still `None` at that point because the session ID capture from `output.metadata` lived *after* the early return.
+- **How it was fixed:** Extract `session_id` from `output.metadata` before returning the empty-response error, so the caller sees a resumable error with a valid session ID and the retry loop fires correctly. Added an assertion to the existing test `empty_response_first_attempt_logs_knot_empty_response` to verify the session ID is now present.
