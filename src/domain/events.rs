@@ -35,6 +35,40 @@ pub struct AgentEvent {
 
 
 
+// ── Context Provider Abstraction ─────────────────────────────────────
+
+/// Data required to build dynamic prompt context segments.
+///
+/// Carries the knot being invoked, the loom it belongs to, all registered
+/// knots (so providers can inspect consumer relationships), and the rig
+/// directory path (so providers can read filesystem state such as pending
+/// event files).
+#[derive(Debug, Clone)]
+pub struct BuildContext {
+    /// The knot currently being invoked.
+    pub knot: Knot,
+    /// The loom containing the current knot.
+    pub loom_id: LoomId,
+    /// All registered knots across all looms.
+    pub all_knots: Vec<Knot>,
+    /// Absolute path to the rig directory.
+    pub rig_dir: std::path::PathBuf,
+}
+
+/// A provider that builds dynamic prompt context segments.
+///
+/// The domain defines the interface; concrete implementations live in the
+/// application layer where they have access to the filesystem and rig state.
+///
+/// This is the first step in moving context injection from a single free
+/// function (`build_listener_context`) to a composable, state-aware pipeline.
+pub trait ContextProvider {
+    /// Build a markdown context segment to be prepended to the agent prompt.
+    ///
+    /// Returns an empty string when no context is relevant.
+    fn build_context(&self, input: &BuildContext) -> String;
+}
+
 // ── Context Injection ──────────────────────────────────────────────────────
 
 /// Build the listener context block to inject at the start of a target
@@ -140,10 +174,20 @@ pub fn build_listener_context(
     output.push_str("---\n");
     output.push_str("event: <EventId>\n");
     output.push_str("description: <short summary of what happened>\n");
+    output.push_str("timestamp: <ISO 8601 timestamp>\n");
     output.push_str("<additional fields as relevant>\n");
     output.push_str("---\n\n");
     output.push_str("Freeform narrative context about the event.\n");
     output.push_str("```\n");
+
+    output.push_str(
+        "\nThe `event`, `description`, and `timestamp` fields are required.\n\n");
+    output.push_str(
+        "You may not edit dispatched events. If you need to adjust an event,\n");
+    output.push_str(
+        "emit a new event with additional context — but only if critical, as\n");
+    output.push_str(
+        "this results in an additional event to be processed later.\n\n");
 
     output.push_str("\nIf no events occurred, emit:\n");
     output.push_str("\n```markdown\n");
@@ -778,6 +822,82 @@ mod tests {
             none_section.contains("---"),
             "event: None should be wrapped in frontmatter (---): {}",
             none_section
+        );
+    }
+
+    // ── Phase 3: Timestamp and required fields ─────────────────
+
+    /// Prompt template includes `timestamp:` field in the format example.
+    #[test]
+    fn build_listener_context_prompt_includes_timestamp_field() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        assert!(
+            context.contains("timestamp:"),
+            "prompt should include timestamp field: {}",
+            context
+        );
+        assert!(
+            context.contains("ISO 8601 timestamp"),
+            "prompt should mention ISO 8601 format: {}",
+            context
+        );
+    }
+
+    /// Prompt template includes "do not edit" guidance text.
+    #[test]
+    fn build_listener_context_prompt_includes_do_not_edit_guidance() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        assert!(
+            context.contains("You may not edit dispatched events"),
+            "prompt should contain 'do not edit' guidance: {}",
+            context
+        );
+        assert!(
+            context.contains("emit a new event"),
+            "prompt should instruct to emit new event if adjustment needed: {}",
+            context
+        );
+    }
+
+    /// Prompt template documents that `event`, `description`, and `timestamp`
+    /// are required fields.
+    #[test]
+    fn build_listener_context_prompt_documents_required_fields() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        assert!(
+            context.contains("required"),
+            "prompt should mention required fields: {}",
+            context
+        );
+        // The required fields mention should reference event, description,
+        // and timestamp
+        assert!(
+            context.contains("event")
+                && context.contains("description")
+                && context.contains("timestamp"),
+            "prompt should reference event, description, and timestamp as required: {}",
+            context
         );
     }
 
@@ -2088,4 +2208,104 @@ mod tests {
             _ => panic!("Expected KnotEventsMissing variant"),
         }
     }
+
+    // ── Phase 0: ContextProvider and BuildContext Tests ──────────────
+
+    /// `BuildContext` carries all required fields with correct values.
+    #[test]
+    fn build_context_carries_all_fields() {
+        let knot = KnotBuilder::new("plan-creator")
+            .with_instructions("create plans")
+            .build();
+        let loom_id = LoomId("planning-loom".to_string());
+        let all_knots = vec![knot.clone()];
+        let rig_dir = PathBuf::from("/tmp/rig");
+
+        let ctx = BuildContext {
+            knot: knot.clone(),
+            loom_id: loom_id.clone(),
+            all_knots: all_knots.clone(),
+            rig_dir: rig_dir.clone(),
+        };
+
+        assert_eq!(ctx.knot, knot);
+        assert_eq!(ctx.loom_id, loom_id);
+        assert_eq!(ctx.all_knots, all_knots);
+        assert_eq!(ctx.rig_dir, rig_dir);
+    }
+
+    /// `BuildContext` can hold multiple knots from different looms.
+    #[test]
+    fn build_context_holds_multiple_knots() {
+        let knot1 = KnotBuilder::new("plan-creator").build();
+        let knot2 = KnotBuilder::new("plan-validator").build();
+        let all_knots = vec![knot1.clone(), knot2.clone()];
+
+        let ctx = BuildContext {
+            knot: knot1.clone(),
+            loom_id: LoomId("planning-loom".to_string()),
+            all_knots: all_knots.clone(),
+            rig_dir: PathBuf::from("/tmp/rig"),
+        };
+
+        assert_eq!(ctx.all_knots.len(), 2);
+        assert_eq!(ctx.all_knots[0].id, knot1.id);
+        assert_eq!(ctx.all_knots[1].id, knot2.id);
+    }
+
+    /// A no-op provider implementing `ContextProvider` returns empty string.
+    #[test]
+    fn no_op_provider_returns_empty_string() {
+        struct NoOpProvider;
+
+        impl ContextProvider for NoOpProvider {
+            fn build_context(&self, _input: &BuildContext) -> String {
+                String::new()
+            }
+        }
+
+        let provider = NoOpProvider;
+        let ctx = BuildContext {
+            knot: KnotBuilder::new("test").build(),
+            loom_id: LoomId("test-loom".to_string()),
+            all_knots: vec![],
+            rig_dir: PathBuf::from("/tmp/rig"),
+        };
+
+        let result = provider.build_context(&ctx);
+        assert!(result.is_empty());
+    }
+
+    /// `ContextProvider` trait can be used polymorphically — a vector of
+    /// providers can each build context and results can be concatenated.
+    #[test]
+    fn context_provider_trait_is_composable() {
+        struct PrefixProvider(&'static str);
+
+        impl ContextProvider for PrefixProvider {
+            fn build_context(&self, _input: &BuildContext) -> String {
+                self.0.to_string()
+            }
+        }
+
+        let providers: Vec<Box<dyn ContextProvider>> = vec![
+            Box::new(PrefixProvider("A\n")),
+            Box::new(PrefixProvider("B\n")),
+        ];
+
+        let ctx = BuildContext {
+            knot: KnotBuilder::new("test").build(),
+            loom_id: LoomId("test-loom".to_string()),
+            all_knots: vec![],
+            rig_dir: PathBuf::from("/tmp/rig"),
+        };
+
+        let combined: String = providers
+            .iter()
+            .map(|p| p.build_context(&ctx))
+            .collect();
+
+        assert_eq!(combined, "A\nB\n");
+    }
 }
+

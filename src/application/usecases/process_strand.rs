@@ -14,7 +14,8 @@ use crate::domain::entities::{
     EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
     StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
-use crate::domain::events::{build_listener_context, LoomEvent, StrandEvent};
+use crate::domain::events::{BuildContext, ContextProvider, LoomEvent, StrandEvent};
+use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
     AgentConfig, EventSubscription, RigAgentConfig, StrandSource,
@@ -464,10 +465,17 @@ impl ProcessStrand {
 
         // Build listener context (per-invocation, not cached).
         // Scans all knots' strand_source entries and injects event
-        // instructions at the beginning of the prompt.
+        // instructions at the beginning of the prompt, including
+        // pending events from the dispatch directory.
         let all_knots = Self::collect_all_knots(&self.store);
+        let build_ctx = BuildContext {
+            knot: knot.clone(),
+            loom_id: loom_id.clone(),
+            all_knots,
+            rig_dir: self.rig_dir.clone(),
+        };
         let listener_context =
-            build_listener_context(knot, &loom_id, &all_knots);
+            AgentEventsContextProvider.build_context(&build_ctx);
 
         // Collect looms and knot IDs for event dispatch (used by both
         // the primary dispatch and the enforcement follow-up).
@@ -593,7 +601,7 @@ impl ProcessStrand {
                             let expected_events = extract_expected_event_ids(
                                 knot,
                                 &loom_id,
-                                &all_knots,
+                                &build_ctx.all_knots,
                             );
 
                             // Log the first KnotEventsMissing
@@ -4317,6 +4325,294 @@ mod event_dispatch_tests {
             "loom-level consumer should receive dispatch"
         );
     }
+
+    /// Build ProcessStrand with a real temp rig directory so the context
+    /// provider can scan for pending event files.
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand_with_rig(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        LoomStore,
+        TempDir,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            rig_dir.clone(),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(event_dispatcher),
+        );
+
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
+    }
+
+    /// Helper: create a dispatched event file in the rig directory.
+    fn create_pending_event_file(
+        rig_dir: &std::path::Path,
+        consumer_loom: &str,
+        event_id: &str,
+        target_knot: &str,
+        description: Option<&str>,
+        filename: &str,
+    ) {
+        let event_dir = rig_dir
+            .join("tie-offs")
+            .join(consumer_loom)
+            .join(event_id);
+        std::fs::create_dir_all(&event_dir).unwrap();
+
+        let mut lines = vec![
+            "---".to_string(),
+            format!("event-id: {}", event_id),
+            format!("target-knot: {}", target_knot),
+            "timestamp: 2026-07-14T10:00:00Z".to_string(),
+        ];
+        if let Some(desc) = description {
+            lines.push(format!("description: {}", desc));
+        }
+        lines.push("---".to_string());
+        lines.push(String::new());
+        lines.push(format!("## Event: {} from {}", event_id, target_knot));
+
+        std::fs::write(event_dir.join(filename), lines.join("\n")).unwrap();
+    }
+
+    /// ProcessStrand execution test: the prompt contains both emission
+    /// instructions and pending events when event files exist on disk.
+    #[test]
+    fn prompt_contains_pending_events_when_files_exist() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
+            build_process_strand_with_rig(vec![producer_loom, consumer_loom], runner.clone());
+
+        // Create a pending event file in the rig directory
+        let rig_dir = temp_dir.path().join("rig");
+        create_pending_event_file(
+            &rig_dir,
+            "consumer-loom",
+            "PlanCreated",
+            "plan-creator",
+            Some("Previous plan for feature X"),
+            "event-2026-07-14T10-00-00Z.md",
+        );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Inspect the captured prompt
+        let contexts = runner.get_captured_contexts();
+        assert!(!contexts.is_empty(), "agent should have been called");
+        let prompt = &contexts[0].prompt;
+
+        // Should contain emission instructions
+        assert!(
+            prompt.contains("## Agent Events"),
+            "prompt should contain Agent Events heading: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("`PlanCreated`"),
+            "prompt should contain event-id: {}",
+            prompt
+        );
+
+        // Should contain pending events section
+        assert!(
+            prompt.contains("## Pending Events"),
+            "prompt should contain Pending Events section: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Previous plan for feature X"),
+            "prompt should contain pending event description: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("event-2026-07-14T10-00-00Z.md"),
+            "prompt should contain pending event filename: {}",
+            prompt
+        );
+    }
+
+    /// ProcessStrand execution test: when no pending event files exist,
+    /// the prompt contains only emission instructions (no Pending Events section).
+    #[test]
+    fn prompt_no_pending_events_when_no_files_exist() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir) =
+            build_process_strand_with_rig(vec![producer_loom, consumer_loom], runner.clone());
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let contexts = runner.get_captured_contexts();
+        assert!(!contexts.is_empty(), "agent should have been called");
+        let prompt = &contexts[0].prompt;
+
+        // Should contain emission instructions
+        assert!(
+            prompt.contains("## Agent Events"),
+            "prompt should contain Agent Events heading: {}",
+            prompt
+        );
+
+        // Should NOT contain pending events section (no files on disk)
+        assert!(
+            !prompt.contains("## Pending Events"),
+            "prompt should NOT contain Pending Events section when no files exist: {}",
+            prompt
+        );
+    }
+
+    /// Refactor verification: existing event enforcement flow still works.
+    /// The KnotEventsMissing path uses build_ctx.all_knots correctly.
+    #[test]
+    fn event_enforcement_flow_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        // Agent output with no events — should trigger enforcement
+        let output = Ok(AgentOutput {
+            stdout: "Plan created, no events emitted.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _tie_off_appends, _content, _dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify KnotEventsMissing was logged
+        let events = log_events.lock().unwrap();
+        let has_missing = events.iter().any(|e| {
+            matches!(e, LoomEvent::KnotEventsMissing { .. })
+        });
+        assert!(
+            has_missing,
+            "KnotEventsMissing should be logged when no events are emitted"
+        );
+    }
 }
 
 // ── Phase 6: Event Metadata Extraction Tests ──────────────────────────
@@ -5617,5 +5913,488 @@ mod event_enforcement_tests {
             dispatch_count, 0,
             "no EventsDispatched when no follow-up attempted"
         );
+    }
+}
+
+// ── Phase 4: Integration and end-to-end verification ─────────────────
+
+#[cfg(test)]
+mod phase4_integration_tests {
+    use super::*;
+    use crate::domain::entities::{Knot, KnotId, LoomId, Loom, PromptTemplate};
+    use crate::application::ports::AgentOutput;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    use super::super::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        TrackingTieOffSink,
+    };
+
+    fn build_consumer_knot(
+        id: &str,
+        producer_knot: &str,
+        event_id: &str,
+        event_desc: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: producer_knot.to_string(),
+                event_id: event_id.to_string(),
+            },
+            event_description: Some(event_desc.to_string()),
+        }
+    }
+
+    fn build_producer_knot(id: &str) -> Knot {
+        build_knot(id)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand_with_rig(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        LoomStore,
+        TempDir,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            rig_dir.clone(),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(event_dispatcher),
+        );
+
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
+    }
+
+    /// Integration test: producer emits event, then re-enters, prompt
+    /// contains pending event reference.
+    ///
+    /// Simulates the flow:
+    /// 1. Producer knot emits `PlanCreated` → event file created in
+    ///    dispatch directory (via FileSystemEventDispatcher simulation).
+    /// 2. Producer knot re-enters (same strand, e.g., Modified event) →
+    ///    pending event from step 1 is visible in its prompt.
+    #[test]
+    fn producer_re_enters_prompt_contains_pending_event() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        // Step 1: Producer emits PlanCreated.
+        // Simulate by creating the dispatched event file directly.
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
+            build_process_strand_with_rig(
+                vec![producer_loom.clone(), consumer_loom.clone()],
+                Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+                    stdout: "ok".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    metadata: None,
+                }))),
+            );
+
+        // Simulate the dispatched event file that would have been created
+        // by FileSystemEventDispatcher.
+        let rig_dir = temp_dir.path().join("rig");
+        let event_dir = rig_dir.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        std::fs::create_dir_all(&event_dir).unwrap();
+        std::fs::write(
+            event_dir.join("event-2026-07-14T10-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: PlanCreated\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T10:00:00Z\n"
+                + "description: Implementation plan for feature X\n"
+                + "---\n"
+                + "\n"
+                + "## Event: PlanCreated from plan-creator\n",
+        )
+        .unwrap();
+
+        // Step 2: Producer re-enters with a Modified event.
+        // Verify the prompt contains the pending event reference.
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case2, _log_events2, _tie_off_appends2, _content2, _dispatches2, _store2, _temp_dir2) =
+            build_process_strand_with_rig(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        // We need to reuse the same rig directory, so let's copy the
+        // event file from step 1 into step 2's rig directory.
+        let rig_dir2 = _temp_dir2.path().join("rig");
+        let event_dir2 = rig_dir2.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        std::fs::create_dir_all(&event_dir2).unwrap();
+        std::fs::write(
+            event_dir2.join("event-2026-07-14T10-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: PlanCreated\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T10:00:00Z\n"
+                + "description: Implementation plan for feature X\n"
+                + "---\n"
+                + "\n"
+                + "## Event: PlanCreated from plan-creator\n",
+        )
+        .unwrap();
+
+        let event = StrandEvent::Modified {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case2.execute(event);
+        assert!(result.is_ok());
+
+        // Inspect the captured prompt
+        let contexts = runner.get_captured_contexts();
+        assert!(!contexts.is_empty(), "agent should have been called");
+        let prompt = &contexts[0].prompt;
+
+        // Should contain pending events section referencing the
+        // previously emitted event.
+        assert!(
+            prompt.contains("## Pending Events"),
+            "prompt should contain Pending Events section: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Implementation plan for feature X"),
+            "prompt should contain pending event description: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("PlanCreated"),
+            "prompt should reference PlanCreated: {}",
+            prompt
+        );
+    }
+
+    /// Integration test: producer with multiple event types sees only
+    /// relevant pending events (matching event IDs).
+    #[test]
+    fn producer_with_multiple_event_types_sees_relevant_pending_events() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![
+                build_consumer_knot(
+                    "plan-watcher",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created.",
+                ),
+                build_consumer_knot(
+                    "plan-fixer",
+                    "plan-creator",
+                    "ValidationFailed",
+                    "When validation fails.",
+                ),
+            ],
+        );
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (_use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
+            build_process_strand_with_rig(
+                vec![producer_loom.clone(), consumer_loom.clone()],
+                runner.clone(),
+            );
+
+        // Create pending events for both event types.
+        let rig_dir = temp_dir.path().join("rig");
+        let event_dir1 = rig_dir.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        std::fs::create_dir_all(&event_dir1).unwrap();
+        std::fs::write(
+            event_dir1.join("event-2026-07-14T10-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: PlanCreated\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T10:00:00Z\n"
+                + "description: Plan for feature X\n"
+                + "---\n"
+                + "\n"
+                + "## Event: PlanCreated from plan-creator\n",
+        )
+        .unwrap();
+
+        let event_dir2 = rig_dir.join("tie-offs").join("consumer-loom").join("ValidationFailed");
+        std::fs::create_dir_all(&event_dir2).unwrap();
+        std::fs::write(
+            event_dir2.join("event-2026-07-14T11-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: ValidationFailed\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T11:00:00Z\n"
+                + "description: Validation failed on PRD\n"
+                + "---\n"
+                + "\n"
+                + "## Event: ValidationFailed from plan-creator\n",
+        )
+        .unwrap();
+
+        let (use_case, _log_events2, _tie_off_appends2, _content2, _dispatches2, _store2, _temp_dir2) =
+            build_process_strand_with_rig(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        // Copy event files to the new rig directory.
+        let rig_dir2 = _temp_dir2.path().join("rig");
+        let event_dir1_2 = rig_dir2.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        std::fs::create_dir_all(&event_dir1_2).unwrap();
+        std::fs::write(
+            event_dir1_2.join("event-2026-07-14T10-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: PlanCreated\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T10:00:00Z\n"
+                + "description: Plan for feature X\n"
+                + "---\n"
+                + "\n"
+                + "## Event: PlanCreated from plan-creator\n",
+        )
+        .unwrap();
+
+        let event_dir2_2 = rig_dir2.join("tie-offs").join("consumer-loom").join("ValidationFailed");
+        std::fs::create_dir_all(&event_dir2_2).unwrap();
+        std::fs::write(
+            event_dir2_2.join("event-2026-07-14T11-00-00Z.md"),
+            "---\n"
+                .to_string()
+                + "event-id: ValidationFailed\n"
+                + "target-knot: plan-creator\n"
+                + "timestamp: 2026-07-14T11:00:00Z\n"
+                + "description: Validation failed on PRD\n"
+                + "---\n"
+                + "\n"
+                + "## Event: ValidationFailed from plan-creator\n",
+        )
+        .unwrap();
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Inspect the captured prompt
+        let contexts = runner.get_captured_contexts();
+        assert!(!contexts.is_empty(), "agent should have been called");
+        let prompt = &contexts[0].prompt;
+
+        // Should contain both pending events
+        assert!(
+            prompt.contains("PlanCreated"),
+            "prompt should contain PlanCreated pending event: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("ValidationFailed"),
+            "prompt should contain ValidationFailed pending event: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Plan for feature X"),
+            "prompt should contain PlanCreated description: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Validation failed on PRD"),
+            "prompt should contain ValidationFailed description: {}",
+            prompt
+        );
+    }
+
+    /// Regression: existing event enforcement flow still works
+    /// (missing events trigger follow-up).
+    #[test]
+    fn regression_event_enforcement_flow_still_works() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "Emit when a plan is created.",
+            )],
+        );
+
+        // Agent output with no events — should trigger enforcement.
+        let output = Ok(AgentOutput {
+            stdout: "Plan created, no events emitted.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _tie_off_appends, _content, _dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Verify KnotEventsMissing was logged.
+        let events = log_events.lock().unwrap();
+        let has_missing = events.iter().any(|e| {
+            matches!(e, LoomEvent::KnotEventsMissing { .. })
+        });
+        assert!(
+            has_missing,
+            "KnotEventsMissing should be logged when no events are emitted"
+        );
+    }
+
+    /// Helper: build ProcessStrand with a mock event dispatcher (no
+    /// real rig directory needed for enforcement tests).
+    #[allow(clippy::type_complexity)]
+    fn build_process_strand_with_dispatcher(
+        looms: Vec<Loom>,
+        agent_runner: Arc<MockAgentRunner>,
+    ) -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<HashMap<String, String>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        LoomStore,
+    ) {
+        let store = LoomStore::new();
+        for loom in looms {
+            store.register(loom);
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), default_profile()),
+            ]))),
+        });
+
+        let runner_for_use_case = agent_runner.clone();
+        let use_case = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            runner_for_use_case as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(event_dispatcher),
+        );
+
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store)
     }
 }

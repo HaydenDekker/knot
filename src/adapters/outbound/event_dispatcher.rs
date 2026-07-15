@@ -89,10 +89,24 @@ impl FileSystemEventDispatcher {
         lines.push("---".to_string());
         lines.push(format!("event-id: {}", event.event_id));
         lines.push(format!("target-knot: {}", producer_knot));
-        lines.push(format!("timestamp: {}", timestamp));
 
-        // Payload fields into frontmatter
+        // Timestamp: prefer the agent's timestamp if provided
+        // (more semantically meaningful — when the event occurred from
+        // the agent's perspective). Fall back to the dispatch system's
+        // timestamp.
+        let effective_timestamp = event
+            .payload
+            .get("timestamp")
+            .map(|s| s.as_str())
+            .unwrap_or(timestamp);
+        lines.push(format!("timestamp: {}", effective_timestamp));
+
+        // Payload fields into frontmatter (skip `timestamp` — already
+        // written above with preferred value).
         for (key, value) in &event.payload {
+            if key == "timestamp" {
+                continue;
+            }
             lines.push(format!("{}: {}", key, value));
         }
 
@@ -552,6 +566,99 @@ mod tests {
             content2.contains("No payload data."),
             "should show empty fallback when body is None and payload is empty: {}",
             content2
+        );
+    }
+
+    /// When the agent provides a `timestamp` in the payload, it is
+    /// preferred over the dispatch system's timestamp (more semantically
+    /// meaningful — when the event occurred from the agent's perspective).
+    #[test]
+    fn build_event_file_content_prefers_agent_timestamp() {
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-001".to_string());
+        payload.insert("description".to_string(), "Implementation plan".to_string());
+        payload.insert(
+            "timestamp".to_string(),
+            "2026-07-14T09:00:00Z".to_string(), // agent's timestamp
+        );
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            payload,
+            body: None,
+        };
+
+        let system_timestamp = "2026-07-14T12:00:00Z".to_string(); // dispatch system's timestamp
+
+        let content = FileSystemEventDispatcher::build_event_file_content(
+            &event,
+            &system_timestamp,
+            "plan-creator",
+        );
+
+        // Should use the agent's timestamp
+        assert!(
+            content.contains("timestamp: 2026-07-14T09:00:00Z"),
+            "should use agent's timestamp: {}",
+            content
+        );
+
+        // Should NOT contain the system timestamp
+        assert!(
+            !content.contains("timestamp: 2026-07-14T12:00:00Z"),
+            "should NOT use system timestamp when agent provides one: {}",
+            content
+        );
+
+        // `timestamp` should appear only once in frontmatter (not duplicated
+        // from payload iteration)
+        let timestamp_count = content.matches("timestamp:").count();
+        assert_eq!(
+            timestamp_count, 1,
+            "timestamp should appear exactly once in frontmatter, found {}: {}",
+            timestamp_count, content
+        );
+    }
+
+    /// When no agent timestamp is in the payload, the dispatch system's
+    /// timestamp is used as fallback.
+    #[test]
+    fn build_event_file_content_falls_back_to_system_timestamp() {
+        let mut payload = HashMap::new();
+        payload.insert("plan".to_string(), "PLAN-001".to_string());
+        payload.insert(
+            "description".to_string(),
+            "Implementation plan".to_string(),
+        );
+        // No timestamp in payload
+
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            payload,
+            body: None,
+        };
+
+        let system_timestamp = "2026-07-14T12:00:00Z".to_string();
+
+        let content = FileSystemEventDispatcher::build_event_file_content(
+            &event,
+            &system_timestamp,
+            "plan-creator",
+        );
+
+        // Should use the system timestamp
+        assert!(
+            content.contains("timestamp: 2026-07-14T12:00:00Z"),
+            "should use system timestamp as fallback: {}",
+            content
+        );
+
+        // timestamp should appear only once
+        let timestamp_count = content.matches("timestamp:").count();
+        assert_eq!(
+            timestamp_count, 1,
+            "timestamp should appear exactly once: {}",
+            timestamp_count
         );
     }
 }

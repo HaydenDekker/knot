@@ -4,6 +4,7 @@
 //! in-memory loom store. Tests use mock port implementations — no IO.
 
 mod config_event_handler;
+mod context_providers;
 mod loom;
 mod manage_knot;
 mod process_strand;
@@ -15,6 +16,7 @@ mod write_state;
 // ── Re-export all public types for backward compatibility ────
 
 pub use config_event_handler::ConfigEventHandler;
+pub use context_providers::AgentEventsContextProvider;
 pub use loom::DiscoverLooms;
 pub use loom::ReloadConfig;
 pub use loom::RegisterLoom;

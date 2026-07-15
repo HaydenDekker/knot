@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-14
+> **Last Updated:** 2026-07-15
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 60 | [Pending Event Visibility](060-pending-event-visibility/060-pending-event-visibility-plan.md) | ✅ Complete | 2026-07-15 |
 | 59 | [Tie-Off Event Enforcement](059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md) | ✅ Complete | 2026-07-14 |
 | 58 | [Loom-Level Event Subscriptions](058-loom-level-events/loom-level-events-plan.md) | ✅ Complete | 2026-07-11 |
 | 57 | [Agent Event Format — Markdown Code Blocks](057-event-format-markdown-blocks/event-format-markdown-blocks-plan.md) | ✅ Complete | 2026-07-11 |
@@ -84,6 +85,19 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 60. Pending Event Visibility
+
+**Status:** ✅ Complete
+**Created:** 2026-07-15
+**Completed:** 2026-07-15
+**Goal:** Give producer knots visibility into previously dispatched events so they can avoid emitting duplicative events on re-processing (session resume, retry, re-processing the same strand).
+
+**Result:** `ContextProvider` trait and `BuildContext` struct defined in domain. `AgentEventsContextProvider` implementation scans event dispatch directories for pending events and injects them into the prompt. Event format now documents `timestamp` as a required field alongside `event` and `description`. Dispatch adapter prefers agent's timestamp from payload. "Do not edit" guidance added to prompt. 18 new tests, 668 total pass. Version bumped to 0.28.0.
+
+**Design document:** [DPR-002: Context Provider Pattern and Pending Event Visibility](../dprs/dpr-002-context-provider-and-pending-events.md)
+
+Full details in [060-pending-event-visibility/060-pending-event-visibility-plan.md](060-pending-event-visibility/060-pending-event-visibility-plan.md).
 
 ### 59. Tie-Off Event Enforcement
 
