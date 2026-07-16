@@ -24,26 +24,9 @@ use crate::domain::value_objects::{
 // Re-export shared types from types module
 use super::types::format_timestamp;
 use super::strand_event_metadata::{extract_expected_event_ids, extract_event_metadata};
+use super::process_strand_helpers::ResolvedExecution;
 
 // ── ProcessStrand ─────────────────────────────────────────────────────────
-
-/// Result of config resolution, prompt building, and agent execution.
-///
-/// Returned by `resolve_config_and_build()` and consumed by the
-/// `execute()` coordinator to drive tie-off writing and success/failure paths.
-struct ResolvedExecution {
-    /// Derived outcome from agent execution.
-    outcome: TieOffOutcome,
-    /// Session ID (set by session-resume retry logic).
-    session_id: Option<String>,
-    /// Listener context injected into the prompt.
-    /// Used by event enforcement to check if events were expected.
-    listener_context: String,
-    /// All knots from all looms (for event enforcement follow-up).
-    all_knots: Vec<Knot>,
-    /// Profile's session timeout (for event enforcement follow-up).
-    profile_timeout: Option<std::time::Duration>,
-}
 
 /// Use case: process a single strand event through the agent pipeline.
 ///
@@ -258,174 +241,6 @@ impl ProcessStrand {
         })
     }
 
-    /// Handle success outcome: event dispatch, KnotCompleted, StrandProcessed,
-    /// event enforcement, git commit, and completion logging.
-    fn handle_success(
-        &self,
-        outcome: &TieOffOutcome,
-        resolved: &ResolvedExecution,
-        strand_kind: &str,
-        knot: &Knot,
-        tie_off_path: &TieOffPath,
-        loom_id: &LoomId,
-        knot_id: &KnotId,
-        strand_path: &StrandPath,
-        event_label: &str,
-    ) -> Result<(), PortError> {
-        // Dispatch agent events to matching consumer knots
-        // (best-effort — dispatch failures are non-fatal).
-        if let Some(ref content) = outcome.tie_off_content() {
-            if let Ok(Some(dispatch_event)) = self.dispatch_agent_events(
-                content,
-                knot,
-                loom_id,
-                strand_path,
-            ) {
-                let _ = self.log_port.append(dispatch_event);
-            }
-        }
-
-        // Append KnotCompleted to loom-log.
-        self.log_port.append(LoomEvent::KnotCompleted {
-            loom_id: loom_id.clone(),
-            knot_id: knot_id.clone(),
-            strand_path: strand_path.clone(),
-            tie_off_path: tie_off_path.clone(),
-            timestamp: format_timestamp(),
-        })?;
-
-        // Append StrandProcessed to loom-log.
-        self.log_port.append(LoomEvent::StrandProcessed {
-            loom_id: loom_id.clone(),
-            strand_path: strand_path.clone(),
-            error: None,
-            timestamp: format_timestamp(),
-        })?;
-
-        // ── Event Enforcement ──────────────────────────────────────────
-        // If the agent was instructed to emit events but produced
-        // none, log a KnotEventsMissing and attempt one follow-up.
-        let all_knot_ids: Vec<&str> = resolved
-            .all_knots
-            .iter()
-            .map(|k| k.id.0.as_str())
-            .collect();
-        if !resolved.listener_context.is_empty() {
-            if let Some(ref content) = outcome.tie_off_content() {
-                if crate::domain::tieoff_parser::has_no_events(content)
-                {
-                    let expected_events = extract_expected_event_ids(
-                        knot,
-                        loom_id,
-                        &resolved.all_knots,
-                    );
-
-                    // Log the first KnotEventsMissing
-                    let _ = self.log_port.append(
-                        LoomEvent::KnotEventsMissing {
-                            loom_id: loom_id.clone(),
-                            knot_id: knot_id.clone(),
-                            strand_path: strand_path.clone(),
-                            expected_events: expected_events.clone(),
-                            timestamp: format_timestamp(),
-                        },
-                    );
-
-                    // Attempt follow-up re-entry (best-effort).
-                    // Only possible if session_id is available.
-                    if let Ok((followup_config, _, _)) =
-                        self.resolve_agent_config(knot)
-                    {
-                        let followup_result =
-                            session_resume::inject_event_request(
-                                &*self.agent_runner,
-                                &*self.log_port,
-                                loom_id,
-                                knot_id,
-                                strand_path,
-                                &resolved.session_id,
-                                followup_config,
-                                resolved.listener_context.clone(),
-                                event_label.to_string(),
-                                Some(knot.id.0.clone()),
-                                resolved.profile_timeout.clone(),
-                            );
-
-                        match followup_result {
-                        Ok(response) => {
-                            // Parse follow-up for events
-                            let followup_events =
-                                crate::domain::tieoff_parser::
-                                    extract_agent_events(&response);
-
-                            if !followup_events.is_empty() {
-                                // Dispatch follow-up events
-                                // (dispatch failures are non-fatal)
-                                let _ = self.dispatch_events_to_consumers(
-                                    &followup_events,
-                                    knot,
-                                    loom_id,
-                                    &all_knot_ids,
-                                );
-                            } else {
-                                // Still no events — log again
-                                let _ = self.log_port.append(
-                                    LoomEvent::KnotEventsMissing {
-                                        loom_id: loom_id.clone(),
-                                        knot_id: knot_id.clone(),
-                                        strand_path: strand_path
-                                            .clone(),
-                                        expected_events: expected_events
-                                            .clone(),
-                                        timestamp: format_timestamp(),
-                                    },
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            // No session ID or runner error
-                            // — log gracefully, do not fail strand
-                            eprintln!(
-                                "event enforcement follow-up failed (knot={}): {}",
-                                knot_id.0,
-                                e
-                            );
-                        }
-                    }
-                    }
-                }
-            }
-        }
-
-        // Git versioning commit (best-effort, non-fatal).
-        // Runs last so the commit captures all artifacts from the
-        // turn: tie-off, dispatched events, and loom-log entries.
-        if knot.git_versioned {
-            if let Some(ref content) = outcome.tie_off_content() {
-                let commit_result = self.git_versioning_port.commit(
-                    loom_id,
-                    knot_id,
-                    strand_path,
-                    event_label,
-                    content,
-                );
-                if let Err(ref e) = commit_result {
-                    logging::log_strand_event(
-                        &format!("git commit warning: {}", e),
-                        &strand_path.0,
-                    );
-                }
-            }
-        }
-
-        logging::log_strand_event(
-            &format!("{} completed (knot={})", strand_kind, knot_id.0),
-            &strand_path.0,
-        );
-
-        Ok(())
-    }
-
     /// Execute the strand processing pipeline.
     ///
     /// Appends lifecycle events to loom-log: KnotProcessing, then
@@ -583,8 +398,8 @@ impl ProcessStrand {
         // Write loom-log: KnotCompleted or KnotFailed.
         match outcome.tie_off_status() {
             Some(crate::domain::entities::TieOffStatus::Produced) => {
-                self.handle_success(
-                    &outcome, &resolved, strand_kind,
+                super::process_strand_helpers::handle_success(
+                    self, &outcome, &resolved, strand_kind,
                     knot, &tie_off_path,
                     &loom_id, &knot_id, &strand_path,
                     &event_label,
@@ -701,7 +516,7 @@ impl ProcessStrand {
     /// files to each matching consumer.
     ///
     /// Returns the list of `(event_id, consumer_loom_id)` dispatches performed.
-    fn dispatch_events_to_consumers(
+    pub(crate) fn dispatch_events_to_consumers(
         &self,
         events: &[AgentEvent],
         producer_knot: &Knot,
@@ -757,7 +572,7 @@ impl ProcessStrand {
     ///
     /// Used to build listener context — scanning all knots' strand_source
     /// entries to find which ones target a specific knot.
-    fn collect_all_knots(store: &LoomStore) -> Vec<Knot> {
+    pub(crate) fn collect_all_knots(store: &LoomStore) -> Vec<Knot> {
         store.list().into_iter().flat_map(|loom| loom.knots).collect()
     }
 
@@ -772,7 +587,7 @@ impl ProcessStrand {
     ///
     /// Returns a `LoomEvent::EventsDispatched` log entry if any events
     /// were dispatched, or `None` if no events were found.
-    fn dispatch_agent_events(
+    pub(crate) fn dispatch_agent_events(
         &self,
         tie_off_content: &str,
         knot: &Knot,
