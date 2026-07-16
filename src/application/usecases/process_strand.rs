@@ -293,6 +293,43 @@ impl ProcessStrand {
         let _ = self.tie_off_sink.append(tie_off);
     }
 
+    /// Handle non-success outcome: write KnotFailed + StrandProcessed logs.
+    fn handle_failure(
+        &self,
+        outcome: &TieOffOutcome,
+        strand_kind: &str,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_path: &StrandPath,
+    ) -> Result<(), PortError> {
+        let error_msg = outcome
+            .error_message()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        self.log_port.append(LoomEvent::KnotFailed {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            error: error_msg.clone(),
+            timestamp: format_timestamp(),
+        })?;
+
+        self.log_port.append(LoomEvent::StrandProcessed {
+            loom_id: loom_id.clone(),
+            strand_path: strand_path.clone(),
+            error: Some(error_msg.clone()),
+            timestamp: format_timestamp(),
+        })?;
+
+        logging::log_strand_event(
+            &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
+            &strand_path.0,
+        );
+
+        Ok(())
+    }
+
     /// Execute the strand processing pipeline.
     ///
     /// Appends lifecycle events to loom-log: KnotProcessing, then
@@ -600,31 +637,10 @@ impl ProcessStrand {
                 );
             }
             _ => {
-                // KnotFailed (error or timeout).
-                let error_msg = outcome
-                    .error_message()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-
-                self.log_port.append(LoomEvent::KnotFailed {
-                    loom_id: loom_id.clone(),
-                    knot_id: knot_id.clone(),
-                    strand_path: strand_path.clone(),
-                    error: error_msg.clone(),
-                    timestamp: format_timestamp(),
-                })?;
-
-                self.log_port.append(LoomEvent::StrandProcessed {
-                    loom_id,
-                    strand_path: strand_path.clone(),
-                    error: Some(error_msg.clone()),
-                    timestamp: format_timestamp(),
-                })?;
-
-                logging::log_strand_event(
-                    &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
-                    &strand_path.0,
-                );
+                self.handle_failure(
+                    &outcome, strand_kind,
+                    &loom_id, &knot_id, &strand_path,
+                )?;
             }
         }
 
