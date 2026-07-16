@@ -56,25 +56,25 @@ struct ResolvedExecution {
 /// 7. Append `KnotCompleted` or `KnotFailed` to loom-log
 /// 8. Append `StrandProcessed` to loom-log
 pub struct ProcessStrand {
-    store: LoomStore,
-    log_port: Arc<dyn LoomLogPort>,
-    agent_runner: Arc<dyn AgentRunner>,
-    tie_off_sink: Arc<dyn TieOffSink>,
+    pub(crate) store: LoomStore,
+    pub(crate) log_port: Arc<dyn LoomLogPort>,
+    pub(crate) agent_runner: Arc<dyn AgentRunner>,
+    pub(crate) tie_off_sink: Arc<dyn TieOffSink>,
     rig_config: RigAgentConfig,
     /// Rig directory — used to derive static output paths.
-    rig_dir: PathBuf,
+    pub(crate) rig_dir: PathBuf,
     /// Profile repository for dynamic profile resolution at processing time.
-    profile_repo: Arc<dyn AgentProfileRepository>,
+    pub(crate) profile_repo: Arc<dyn AgentProfileRepository>,
     /// Rig-log port for recording operational events (timeouts, idle).
-    rig_log: Arc<dyn RigLogPort>,
+    pub(crate) rig_log: Arc<dyn RigLogPort>,
     /// Git versioning port for creating commits after successful runs.
-    git_versioning_port: Arc<dyn GitVersioningPort>,
+    pub(crate) git_versioning_port: Arc<dyn GitVersioningPort>,
     /// Strand file checker for text/binary/temp detection.
     file_checker: Arc<dyn StrandFileChecker>,
     /// Event dispatcher for intent-based agent-to-agent routing.
     event_dispatcher: Arc<dyn EventDispatcherPort>,
     /// Strand event queue — source of truth for pending events.
-    strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
+    pub(crate) strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
 }
 
 impl ProcessStrand {
@@ -256,41 +256,6 @@ impl ProcessStrand {
             all_knots,
             profile_timeout,
         })
-    }
-
-    /// Construct a `TieOff` from execution outcome and write it.
-    ///
-    /// Skipped for timeout outcomes (tie-off preserved unchanged).
-    fn write_tie_off(
-        &self,
-        outcome: &TieOffOutcome,
-        knot: &Knot,
-        tie_off_path: &TieOffPath,
-        strand_path: &StrandPath,
-        event_label: &str,
-    ) {
-        if !outcome.should_write_tie_off() {
-            return;
-        }
-
-        // Extract event metadata if this strand is an event file
-        // (dispatched by intent-based routing).
-        let event_metadata = extract_event_metadata(strand_path);
-
-        let tie_off = TieOff {
-            content: outcome.tie_off_content().unwrap_or_default(),
-            path: tie_off_path.clone(),
-            status: outcome
-                .tie_off_status()
-                .unwrap_or(crate::domain::entities::TieOffStatus::Produced),
-            knot_name: Some(knot.id.0.clone()),
-            event_type: Some(event_label.to_string()),
-            strand_path: Some(strand_path.0.display().to_string()),
-            timestamp: None,
-            agent_events: Vec::new(),
-            event_metadata: event_metadata.unwrap_or_default(),
-        };
-        let _ = self.tie_off_sink.append(tie_off);
     }
 
     /// Handle non-success outcome: write KnotFailed + StrandProcessed logs.
@@ -632,7 +597,9 @@ impl ProcessStrand {
         let outcome = resolved.outcome.clone();
 
         // Write tie-off (skipped for timeout).
-        self.write_tie_off(&outcome, knot, &tie_off_path, &strand_path, &event_label);
+        super::process_strand_helpers::write_tie_off(
+            self, &outcome, knot, &tie_off_path, &strand_path, &event_label,
+        );
 
         // Write rig-log for timeout (preserve unchanged).
         if outcome.is_timeout() {

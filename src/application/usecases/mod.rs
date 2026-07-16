@@ -8,6 +8,7 @@ mod context_providers;
 mod loom;
 mod manage_knot;
 mod process_strand;
+mod process_strand_helpers;
 pub mod query;
 pub mod test_fixtures;
 mod strand_event_metadata;
