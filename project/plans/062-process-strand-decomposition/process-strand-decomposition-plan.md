@@ -65,8 +65,8 @@ All tests use mock ports from `test_fixtures.rs` (shared). Integration tests in 
 | Phase 3 | ✅ Done | `aef7a76` | Single profile load + single `StrandEvent` match |
 | Phase 4 | ✅ Done | `bf8a0aa` | Bug fix was done in Phase 0; added 2 regression tests (670 tests total) |
 | Phase 5 | ✅ Done | `e68aae5` | Decomposed `execute()` into staged methods |
-| Phase 6 | 🔄 In Progress | — | Extract helpers to `process_strand_helpers.rs` |
-| Phase 7 | ⏳ Pending | — | Final verification |
+| Phase 6 | ✅ Done | `8096480` | Extracted 4 helpers + ResolvedExecution to `process_strand_helpers.rs` |
+| Phase 7 | ✅ Done | `8096480` | Full verification: 670 tests pass, clippy clean, release build ok |
 
 ## Phases
 
