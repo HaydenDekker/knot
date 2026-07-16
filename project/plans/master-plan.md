@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-17 (plan 64 added)
+> **Last Updated:** 2026-07-17 (plan 64 completed, old plans purged)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ⬜ Planned | 2026-07-17 |
+| 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ✅ Complete | 2026-07-17 |
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
 | 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | ✅ Complete | 2026-07-16 |
 | 61 | [Consolidate `build_process_strand` Test Helpers](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md) | ✅ Complete | 2026-07-15 |
@@ -70,19 +70,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | 41 | [Tie-Off Context Extraction for Agent Processing](tie-off-context-extraction.md) | ✅ Complete | 2026-06-22 |
 | 40 | [Remove `input-bundling` from Prompt Template](remove-input-bundling.md) | ✅ Complete | 2026-06-20 |
 | 39 | [Accept All Text Files as Strands](accept-all-text-strands.md) | ✅ Complete | 2026-06-19 |
-| 38 | [Removal of HTTP Interface — Full File-First](removal-of-http-interface.md) | ✅ Complete | 2026-06-18 |
-| 37 | [User Documentation and Documentation Skill](user-documentation.md) | ✅ Complete | 2026-06-18 |
-| 36 | [Explicit Pi Session Title](pi-session-title.md) | ✅ Complete | 2026-06-17 |
-| 35 | [Rig Switching and Sharing](rig-switching-and-sharing.md) | ✅ Complete | 2026-06-17 |
-| 34 | [Strand Directory Auto-Creation](strand-dir-auto-create.md) | ✅ Complete | 2026-06-17 |
-| 33 | [Queue Event Dedup — Prevent Duplicate Strand Processing](queue-event-dedup.md) | ✅ Complete | 2026-06-16 |
-| 32 | [Simplify Agent Invocation — Remove --system-prompt](simplify-agent-invocation.md) | ✅ Complete | 2026-06-16 |
 | 31 | [Agent Profile Skills](agent-profile-skills.md) | ⬜ Planned | 2026-06-16 |
-| 30 | [Context Management — Slim Agent Prompt and Tie-Off Headers](context-management.md) | ✅ Complete | 2026-06-15 |
-| 29 | [Auto-Discovery Reliability Fixes](auto-discovery-reliability.md) | ✅ Complete | 2026-06-15 |
-| 28 | [Rig-Log Notification and Timeout Handling](rig-log-notification-and-timeout.md) | ✅ Complete | 2026-06-14 |
-| 27 | [Git Versioning — Automatic Commit History for Agent Work](git-versioning.md) | ✅ Complete | 2026-06-13 |
-| 26 | [HTTP Observability Only — Remove Control Endpoints](http-observability-only.md) | ✅ Complete | 2026-06-13 |
 | 22 | [Notify Sender Leak Fix — Immediate Cascade Drain](notify-sender-leak-fix.md) | ⬜ Planned | 2026-06-11 |
 | 20 | [Knot Modification Observability and Path Resolution Consistency](plan-knot-modify-observability.md) | 🟡 In Progress | 2026-06-08 |
 
@@ -92,9 +80,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 64. Local Time Timestamps
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-07-17
+**Completed:** 2026-07-17
 **Goal:** Replace UTC timestamps with local-time timestamps (ISO 8601 with timezone offset) across all Knot output — logs, loom-logs, event files, tie-offs, and state.
+
+**Result:** `chrono` crate added as dependency. `format_timestamp()` in `logging.rs` now uses `chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z")` producing timestamps like `2026-07-17T14:30:00+01:00`. Duplicate `format_timestamp()` and `days_to_ymd()` removed from `tieoff_sink.rs` (delegates to `logging`). All doc comments updated from "UTC" to "local time". Prompt template updated to reference local time. 2 new unit tests. Version bumped to 0.29.0.
 
 Full details in [064-local-timestamps/local-timestamps-plan.md](064-local-timestamps/local-timestamps-plan.md).
 
@@ -309,87 +300,6 @@ Full details in [remove-input-bundling.md](remove-input-bundling.md).
 
 Full details in [accept-all-text-strands.md](accept-all-text-strands.md).
 
-### 38. Removal of HTTP Interface — Full File-First
-
-**Status:** ✅ Complete
-**Created:** 2026-06-18
-**Completed:** 2026-06-19
-**Goal:** Remove the Axum HTTP server entirely and replace all state observation with `rig/state.json` written on a 5-second poll cycle.
-
-**Result:** HTTP server and all inbound adapter code removed (~7000 lines). `axum`, `utoipa`, `utoipa-swagger-ui`, `tower` dependencies removed. `RigState` domain type + `StateWriter` background task writes `rig/state.json` atomically every 5 seconds. All skills updated to read `rig/state.json`. All integration tests rewritten from HTTP to file-based polling. 546 tests pass. Version bumped to 0.13.0. ADR-008 documents the decision.
-
-Full details in [removal-of-http-interface.md](removal-of-http-interface.md).
-
-### 37. User Documentation and Documentation Skill
-
-**Status:** ✅ Complete
-**Created:** 2026-06-18
-**Completed:** 2026-06-18
-**Goal:** Create user-facing documentation from existing project artifacts (skills, glossary, PRDs, completed plans) and package the extraction methodology into a reusable `project-user-documentation` skill.
-
-**Result:** 11 user-facing docs created in `docs/`: getting-started, concepts, 3 configuration guides (profiles, knots, rig-structure), 2 workflow tutorials (review, file-generation), API reference, troubleshooting guide, design guide, and release notes. `project-user-documentation` skill (393 lines) created at `.agents/skills/project-user-documentation/SKILL.md` and published globally. README updated with documentation index. Documentation-only — no version bump needed.
-
-Full details in [user-documentation.md](user-documentation.md).
-
-### 36. Explicit Pi Session Title
-
-**Status:** ✅ Complete
-**Created:** 2026-06-17
-**Completed:** 2026-06-17
-**Goal:** Add `--name` CLI flag to pi invocation so each session gets a unique, descriptive resume title derived from knot ID and strand filename.
-
-**Result:** `--name` appended to CLI args in `ProcessStrand::execute()` with title format `{knot-id} triggered by {event-type} on {strand-filename}` (e.g. `plan-architect triggered by Modified on 004-manifest-resources.md`). Edge case guarded with `unwrap_or_default()`. 6 new tests (1 in `subprocess.rs`, 5 in `usecases.rs`) covering flag passthrough, title formats for Created/Modified/Deleted events, uniqueness per strand, and prompt content regression guard. 325 tests pass. Version bumped to 0.12.0.
-
-Full details in [pi-session-title.md](pi-session-title.md).
-
-### 35. Rig Switching and Sharing
-
-**Status:** ✅ Complete
-**Created:** 2026-06-17
-**Completed:** 2026-06-17
-**Goal:** Enable switching between multiple rigs on the same project and packaging rigs for sharing with colleagues by distributing loom definitions (excluding derived state).
-
-**Result:** CLI parsing via `std::env::args()` — no external crate needed. `knot` (no args) auto-discovers `*-rig` directories: zero matches creates `rig/`, one match uses it, multiple refuses with usage hint. `knot <rig-name>` uses named rig. `knot share <rig-name>` packages looms + profiles into `.zip` via `zip` crate (excludes tie-offs, logs, config). `RigDiscovery` domain enum + `discover_rigs()` pure function. `AppConfig::with_rig_dir()` convenience constructor. 13 new tests (8 unit + 10 integration, some shared across files). 395+ tests pass. Version bumped to 0.11.0.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-Full details in [rig-switching-and-sharing.md](rig-switching-and-sharing.md).
-
-### 34. Strand Directory Auto-Creation
-
-**Status:** ✅ Complete
-**Created:** 2026-06-17
-**Completed:** 2026-06-17
-**Goal:** Automatically create a knot's `strand_dir` at registration time if it does not exist, logging the creation in the loom-log.
-
-**Result:** `LoomEvent::DirectoryCreated` variant added to domain. `ConfigEventHandler` gained `ensure_strand_dir_and_watch` helper that creates missing `strand_dir` with `fs::create_dir_all` and logs the creation before registering the watcher. Covers initial registration, dynamic knot addition, and knot modification when `strand_dir` changes. 320 tests pass. Version bumped to 0.10.0.
-
-**PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
-
-Full details in [strand-dir-auto-create.md](strand-dir-auto-create.md).
-
-### 33. Queue Event Dedup — Prevent Duplicate Strand Processing
-
-**Status:** ✅ Complete
-**Created:** 2026-06-16
-**Completed:** 2026-06-16
-**Goal:** Replace the debounce engine's output mpsc channel with an inspectable queue so duplicate events for the same strand are collapsed before reaching ProcessStrand.
-
-**Result:** `InspectQueue<StrandEvent>` type with `push_or_replace` dedup by `(strand_path, loom_id, knot_id, event_type)` key. DebounceEngine emits into the queue instead of an opaque mpsc channel. ProcessStrand reads from the queue with notifier-based wait. Shutdown via `Option<StrandEvent>` sentinel. Different event types always pass through — only repeated events of the same type collapse. 316 unit + integration tests pass.
-
-Full details in [queue-event-dedup.md](queue-event-dedup.md).
-
-### 32. Simplify Agent Invocation — Remove --system-prompt
-
-**Status:** ✅ Complete
-**Created:** 2026-06-16
-**Completed:** 2026-06-16
-**Goal:** Remove `--system-prompt` CLI flag from `pi` invocation, rename `AgentProfile.system_prompt` → `profile_prompt`, and merge profile prompt + knot instructions + trigger line into a single stdin prompt. Eliminates knot instruction duplication and makes the profile prompt visible in session files.
-
-**Result:** `AgentConfig::build_cli_args()` no longer accepts system prompt — simplified to `build_cli_args(&self)`. `ExecutionContext` gained `profile_prompt` field. `SubprocessAgentRunner::build_prompt_with_context()` builds prompt chain: profile prompt → knot instructions → trigger line. `resolve_agent_config()` return type simplified from 3-tuple to 2-tuple. Domain glossary updated. ADR-007 documents the decision. 21 files changed, 303+ tests pass. Version bumped to 0.8.0.
-
-Full details in [simplify-agent-invocation.md](simplify-agent-invocation.md).
-
 ### 31. Agent Profile Skills
 
 **Status:** ⬜ Planned
@@ -399,67 +309,6 @@ Full details in [simplify-agent-invocation.md](simplify-agent-invocation.md).
 **PRD:** [AI-Driven File Generation](../prds/prd-ai-driven-file-generation.md)
 
 Full details in [agent-profile-skills.md](agent-profile-skills.md).
-
-### 30. Context Management — Slim Agent Prompt and Tie-Off Headers
-
-**Status:** ✅ Complete
-**Created:** 2026-06-15
-**Completed:** 2026-06-15
-**Goal:** Remove full tie-off history from agent prompt (replaced with single trigger line), update tie-off section headers to single-line format, and remove `previous_tie_off` from `ExecutionContext`.
-
-**Result:** Agent prompt now contains only: system prompt, knot instruction, input file via `@{path}`, and a short trigger line (`**knot-name** triggered by **event-type** on **file-name**`). Tie-off headers changed from three-line format to single-line (`## knot-name triggered by event-type file-name`). `previous_tie_off` field removed from `ExecutionContext`; `knot_name` added. 7 source files changed, 359 tests pass.
-
-Full details in [context-management.md](context-management.md).
-
-### 29. Auto-Discovery Reliability Fixes
-
-**Status:** ✅ Complete
-**Created:** 2026-06-15
-**Completed:** 2026-06-15
-**Goal:** Fix four reliability defects in the auto-discovery feature (Plan #14): path canonicalisation mismatch in rig watch, wasteful full rig re-scan on `LoomAdded`, missing loom path in `LoomAdded` events, and silent event drops when config channel is full.
-
-**Result:** `ConfigEvent::LoomAdded` carries `loom_dir: String` for targeted scanning. `register_watch()` canonicalises rig paths via `resolve_path()` so notify absolute paths match. `handle_loom_added()` scans only the new loom directory via `LoomRepository::scan_knot_files()`. `ReloadConfig` use case + `POST /config/reload` endpoint provides manual recovery. 12 new tests across domain, outbound, application, inbound, and integration layers. Version bumped to 0.6.0. 303+ tests pass.
-
-**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
-
-Full details in [auto-discovery-reliability.md](auto-discovery-reliability.md).
-
-### 28. Rig-Log Notification, Timeout Handling and Rollback
-
-**Status:** ✅ Complete
-**Created:** 2026-06-14
-**Completed:** 2026-06-14
-**Goal:** Rig-level event log (`rig/.rig-log`) records timeout and queue-idle events. On timeout, tie-off is preserved unchanged (error written to loom-log + rig-log only).
-
-**Result:** `RigLogPath` and `RigLogEvent` domain types. `RigLogPort` trait + `FileSystemRigLog` adapter. `AgentProfile.timeout` field (optional, seconds) — parsed from profile frontmatter. `ExecutionContext.timeout` — per-context override with runner default fallback. `ProcessStrand` writes `TimeoutExceeded` to rig-log on timeout (tie-off preserved). Queue idle detection in event loop writes `QueueIdle` after 500ms of no events. 11 new unit tests + 11 new integration tests across `rig_log.rs` and `profile_timeout.rs`. Domain glossary updated with `Rig-log` term. 362 tests pass, clippy clean.
-
-**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
-
-Full details in [rig-log-notification-and-timeout.md](rig-log-notification-and-timeout.md).
-
-### 27. Git Versioning — Automatic Commit History for Agent Work
-
-**Status:** ✅ Complete
-**Created:** 2026-06-13
-**Completed:** 2026-06-14
-**Goal:** Each knot run produces a git commit in the project root with structured message and tie-off body. Opt-out per-knot via `git-versioned: false` in frontmatter. Gracefully skips if not a git repo.
-
-**Result:** `git_versioned: bool` field on `Knot` entity and `KnotFile` (parsed from `git-versioned` frontmatter, defaults `true`). `GitVersioningPort` trait + `MockGitVersioningPort`. `FileSystemGitVersioner` adapter uses `std::process::Command` to run `git` (no C dependency) — stages all changes with `git add -A`, commits with structured subject (`knot: <knot-id> — processed <strand-name> (<event-type>)`) and tie-off body. Graceful degradation: skips if not a git repo, git unavailable, or commit fails (non-fatal warnings). `ProcessStrand::execute()` calls git port after tie-off write when `knot.git_versioned` is `true`. Wired in composition root via `start_event_pipeline`. 17 new unit tests + 3 new integration tests in `tests/git_versioning.rs`. All 293+ tests pass.
-
-**PRD:** [System Reliability — Messaging Control, Replay and Rollback](../prds/prd-system-reliability.md)
-
-Full details in [git-versioning.md](git-versioning.md).
-
-### 26. HTTP Observability Only — Remove Control Endpoints
-
-**Status:** ✅ Complete
-**Created:** 2026-06-13
-**Completed:** 2026-06-13
-**Goal:** Remove all control (POST/PUT/DELETE) endpoints from the HTTP interface, keeping only read-only observability (GET endpoints). Configuration (profiles, looms, knots) becomes file-first — skills write files directly, Knot's file watcher auto-discovers changes.
-
-**Result:** 7 control endpoints removed (`POST /looms`, `DELETE /looms/{id}`, `POST /looms/{id}/knots`, `PATCH /looms/{id}/knots/{name}`, `DELETE /looms/{id}/knots/{name}`, `POST /profiles/{name}`, `DELETE /profiles/{name}`). Request types `RegisterLoomRequest`, `KnotRequest`, `ProfileRequest` removed. 3600+ lines of handler code and tests eliminated. `AgentProfile.body: Option<String>` added for profile markdown body. Skills updated to file-first approach. 317 tests pass (3 ignored). Version bumped to 0.3.0. ADR-006 documents the file-first approach; ADR-005 documents the skill integration testing strategy.
-
-Full details in [http-observability-only.md](http-observability-only.md).
 
 ### 22. Notify Sender Leak Fix — Immediate Cascade Drain
 
