@@ -191,6 +191,27 @@ mod event_metadata_tests {
         assert!(parse_yaml_frontmatter(content).is_none());
     }
 
+    /// Regression: bare `---` delimiter (no content after) was broken
+    /// by an inverted && condition in the original code.
+    #[test]
+    fn parse_yaml_frontmatter_bare_delimiter_returns_none() {
+        let content = "---";
+        assert!(
+            parse_yaml_frontmatter(content).is_none(),
+            "bare --- with no content should return None"
+        );
+    }
+
+    /// Regression: bare `---` followed by newline but no closing delimiter.
+    #[test]
+    fn parse_yaml_frontmatter_bare_delimiter_with_newline_returns_none() {
+        let content = "---\n";
+        assert!(
+            parse_yaml_frontmatter(content).is_none(),
+            "bare --- with newline but no closing delimiter should return None"
+        );
+    }
+
     #[test]
     fn parse_yaml_frontmatter_whitespace_trimming() {
         let content = "---\nevent-id: PlanCreated \n target-knot: plan-creator \n---\n\nBody";
