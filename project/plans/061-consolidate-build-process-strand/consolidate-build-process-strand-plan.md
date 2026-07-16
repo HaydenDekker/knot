@@ -94,3 +94,11 @@ None — this is a pure refactor. All existing tests must pass before and after.
 - A `ProcessStrandResult` struct (not a tuple) makes the API self-documenting and allows optional fields. Callers destructure with `let result = builder(...).build(); let ProcessStrandResult { strand, log_events, .. } = result;`
 - The builder should NOT be generic over port types — it always uses the same mock types. If a test needs a different mock, it can construct `ProcessStrand` directly (rare case, no current user).
 - This refactor does NOT change any test behaviour or assertions — it is purely structural.
+
+## Implementation Status
+
+**Completed:** 2026-07-16
+**Commit:** ef5401a
+**Version bump:** none — pure test refactor, no behaviour change
+
+Both phases implemented. 8 duplicate `build_process_strand` helpers replaced with a single `ProcessStrandBuilder` in `tests/helpers.rs`. All 64 affected integration tests pass. Clippy clean.

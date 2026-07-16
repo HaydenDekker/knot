@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-16 (plan 63 added)
+> **Last Updated:** 2026-07-16 (plan 61 completed, plan 63 added)
 
 ## How to Add a Plan
 
@@ -48,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 |---|------|--------|---------|
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
 | 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | ✅ Complete | 2026-07-16 |
-| 61 | [Consolidate `build_process_strand` Test Helpers](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md) | 📝 Draft | 2026-07-15 |
+| 61 | [Consolidate `build_process_strand` Test Helpers](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md) | ✅ Complete | 2026-07-15 |
 | 60 | [Pending Event Visibility](060-pending-event-visibility/060-pending-event-visibility-plan.md) | ✅ Complete | 2026-07-15 |
 | 59 | [Tie-Off Event Enforcement](059-tie-off-event-enforcement/tie-off-event-enforcement-plan.md) | ✅ Complete | 2026-07-14 |
 | 58 | [Loom-Level Event Subscriptions](058-loom-level-events/loom-level-events-plan.md) | ✅ Complete | 2026-07-11 |
@@ -96,6 +96,17 @@ _Overview sections for active and recently completed plans go here._
 **Goal:** Suppress spurious DELETE events caused by atomic file rewrites (truncate+write) using a configurable 5-second suppression window in the debounce engine.
 
 Full details in [063-spurious-delete-suppression/spurious-delete-suppression-plan.md](063-spurious-delete-suppression/spurious-delete-suppression-plan.md).
+
+### 61. Consolidate `build_process_strand` Test Helpers
+
+**Status:** ✅ Complete
+**Created:** 2026-07-15
+**Completed:** 2026-07-16
+**Goal:** Consolidate 8 duplicate `build_process_strand` helper functions across integration test files into a single shared `ProcessStrandBuilder` with fluent setters.
+
+**Result:** `ProcessStrandBuilder` in `tests/helpers.rs` with fluent API (`with_profile()`, `with_looms()`, `with_tracking_git()`, `with_tracking_event_dispatcher()`, `with_tracking_file_checker()`). `ProcessStrandResult` struct with typed fields and optional tracking ports. All 8 local `build_process_strand` functions removed from `tie_off.rs`, `rig_log.rs`, `agent_integration.rs`, `profile_timeout.rs`, `session_resume.rs`, `git_versioning.rs`, `event_enforcement.rs`, and `pipeline.rs`. All 909 tests pass, clippy clean. No version bump — pure test refactor.
+
+Full details in [061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md).
 
 ### 60. Pending Event Visibility
 
