@@ -10,21 +10,20 @@
 //! The multi-knot shared-directory unwatch fix is verified by a composition
 //! smoke test in `tests/smoke.rs`.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
 use knot::application::ports::{
-    AgentOutput, AgentRunner, PortError,
+    AgentOutput, PortError,
 };
-use knot::application::store::LoomStore;
-use knot::application::usecases::ProcessStrand;
 use knot::application::usecases::test_fixtures::*;
 use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffStatus,
+    Knot, KnotId, Loom, LoomId, StrandPath, TieOffStatus,
 };
 use knot::domain::events::{LoomEvent, StrandEvent};
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -39,69 +38,6 @@ fn build_loom(id: &str, knots: Vec<Knot>) -> Loom {
         id: LoomId(id.to_string()),
         knots,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns a tuple of (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner, git_port, file_checker).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: Loom,
-    agent_runner: Arc<MockAgentRunner>,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<TieOff>>>,
-    Arc<Mutex<Vec<knot::domain::events::RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-    Arc<MockGitVersioningPort>,
-    Arc<MockStrandFileChecker>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-    let (git_port, _git_commits) = MockGitVersioningPort::new();
-    let git_port = Arc::new(git_port);
-    let file_checker = Arc::new(MockStrandFileChecker::new());
-    let event_dispatcher = Arc::new(MockEventDispatcher::default());
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), default_profile()),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        git_port.clone(),
-        file_checker.clone(),
-        event_dispatcher,
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-        git_port,
-        file_checker,
-    )
 }
 
 /// Build a `StrandEvent::Created` for the given loom/knot/strand.
@@ -183,8 +119,15 @@ fn pipeline_processes_strand_create() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     let event = created_event("review-loom", "review", strand_path);
 
@@ -216,8 +159,15 @@ fn pipeline_reprocesses_on_strand_modify() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // First: Created event
     use_case.execute(created_event("review-loom", "review", strand_path.clone()))
@@ -248,8 +198,14 @@ fn pipeline_handles_strand_delete() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     let event = deleted_event(
         "review-loom",
@@ -281,8 +237,15 @@ fn pipeline_processes_non_md_text_files() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("rust review output");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, _git, _file_checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
     let event = created_event("review-loom", "review", strand_path);
     let result = use_case.execute(event);
     assert!(result.is_ok());
@@ -319,8 +282,17 @@ fn pipeline_ignores_binary_files_and_processes_text_files() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, _git, file_checker) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
+    let file_checker = result.file_checker.as_ref().expect("file_checker should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = result;
 
     // --- Binary file: should be ignored ---
     let binary_path = dir.path().join("data.bin");
@@ -384,8 +356,14 @@ fn pipeline_handles_agent_failure() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = failure_runner("agent crash");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     let event = created_event("review-loom", "review", strand_path);
     let result = use_case.execute(event);
@@ -419,8 +397,14 @@ fn loom_log_contains_full_event_sequence() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -467,9 +451,15 @@ fn delete_event_agent_receives_context() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events,
-        tie_off_content, captured, _git, _checker) =
-        build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        tie_off_content,
+        agent_runner: captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // Pre-populate tie-off with previous processing history
     {
@@ -535,8 +525,15 @@ fn delete_event_agent_skips_missing_file() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        agent_runner: captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // Process a delete event for a file that doesn't exist on disk
     // (Deleted events skip the file existence check)
@@ -579,9 +576,15 @@ fn delete_event_large_tieoff_bounded_context() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events,
-        tie_off_content, captured, _git, _checker) =
-        build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        tie_off_content,
+        agent_runner: captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // Build a tie-off with many entries for target.md interleaved
     // with entries for other strands
@@ -682,8 +685,14 @@ fn pipeline_silently_skips_known_temp_file() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("slow output");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // Process the temp file event
     use_case.execute(created_event("review-loom", "review", temp_path)).unwrap();
@@ -740,8 +749,14 @@ fn pipeline_logs_strand_skipped_for_unknown_missing_file() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("output");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git, _checker) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_tracking_git()
+        .with_tracking_file_checker()
+        .build();
 
     // Create event for a file that does NOT exist on disk
     let missing_path = PathBuf::from("strands/some_missing_file.md");

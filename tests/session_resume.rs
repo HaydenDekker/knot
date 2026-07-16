@@ -9,23 +9,22 @@
 //! the \`PiStdioAgentRunner\` adapter does NOT capture session_id from stdout,
 //! confirming that stdio mode cannot support session resume.
 
-use std::collections::HashMap;
+mod helpers;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use helpers::ProcessStrandBuilder;
 use knot::adapters::pi_stdio::PiStdioAgentRunner;
 use knot::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, PortError,
 };
-use knot::application::store::LoomStore;
 use knot::application::usecases::test_fixtures::*;
-use knot::application::usecases::ProcessStrand;
 use knot::domain::entities::{KnotId, LoomId, StrandPath, TieOffStatus};
 use knot::domain::events::{LoomEvent, RigLogEvent};
 use knot::domain::value_objects::AgentProfile;
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -48,62 +47,6 @@ fn build_loom(
 /// Build a profile with a custom timeout (in seconds).
 fn build_profile_with_timeout(timeout_secs: u64) -> AgentProfile {
     default_profile().with_timeout(Some(timeout_secs))
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: knot::domain::entities::Loom,
-    agent_runner: Arc<MockAgentRunner>,
-    profile: AgentProfile,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
-    Arc<Mutex<Vec<RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), profile),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        Arc::new(MockGitVersioningPort::default()),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-    )
 }
 
 /// Build a StrandEvent::Created for the given loom/knot/strand.
@@ -173,9 +116,17 @@ fn test_session_resume_success() {
         Ok(ok_output_with_sid("resumed response", "sess-resume")),
     ]));
 
-    let (use_case, log_events, tie_off_appends, rig_events, _content,
-        captured_runner) =
-        build_process_strand(loom, runner, default_profile());
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        tie_off_content: _content,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -257,9 +208,16 @@ fn test_session_resume_transparent_on_success() {
         Ok(ok_output_with_sid("transparent success", "sess-transparent")),
     ]));
 
-    let (use_case, log_events, tie_off_appends, rig_events, _content,
-        _captured) =
-        build_process_strand(loom, runner, default_profile());
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner: _captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -326,9 +284,16 @@ fn test_session_resume_exhausted() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = Arc::new(MockAgentRunner::new_sequence(responses));
 
-    let (use_case, log_events, _tie_off_appends, rig_events, _content,
-        captured_runner) =
-        build_process_strand(loom, runner, default_profile());
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends: _tie_off_appends,
+        rig_events,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
 
     // Set zero retry delay for fast test execution
     unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
@@ -386,9 +351,16 @@ fn test_session_resume_non_resumable_error() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = Arc::new(MockAgentRunner::new_sequence(vec![Err(err_fatal())]));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured_runner) =
-        build_process_strand(loom, runner, default_profile());
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends: _tie_off_appends,
+        rig_events: _rig_events,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();

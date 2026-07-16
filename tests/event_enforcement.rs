@@ -11,23 +11,22 @@
 //! 4. Follow-up response parsed for events → dispatched if found
 //! 5. If still no events, second `KnotEventsMissing` logged
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
 use knot::application::ports::{
-    AgentOutput, AgentRunner,
+    AgentOutput,
 };
 use knot::application::ports::AgentInvocationMetadata;
-use knot::application::store::LoomStore;
-use knot::application::usecases::ProcessStrand;
 use knot::application::usecases::test_fixtures::*;
 use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffStatus,
+    Knot, KnotId, Loom, LoomId, StrandPath, TieOffStatus,
 };
 use knot::domain::events::{LoomEvent, StrandEvent};
 use knot::domain::value_objects::StrandSource;
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -80,69 +79,6 @@ fn success_output_no_session(stdout: &str) -> AgentOutput {
         exit_code: 0,
         metadata: None,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up, returning
-/// handles for inspection.
-///
-/// Supports multiple looms (for event consumers in a different loom).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    looms: Vec<Loom>,
-    agent_runner: Arc<MockAgentRunner>,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<TieOff>>>,
-    Arc<Mutex<Vec<knot::domain::events::RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-    Arc<MockEventDispatcher>,
-) {
-    let store = LoomStore::new();
-    for loom in &looms {
-        store.register(loom.clone());
-    }
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-    let (git_port, _git_commits) = MockGitVersioningPort::new();
-    let git_port = Arc::new(git_port);
-    let file_checker = Arc::new(MockStrandFileChecker::new());
-    let event_dispatcher = Arc::new(MockEventDispatcher::default());
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), default_profile()),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        git_port.clone(),
-        file_checker.clone(),
-        event_dispatcher.clone(),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-        event_dispatcher,
-    )
 }
 
 /// Build a `StrandEvent::Created` for the given loom/knot/strand.
@@ -226,9 +162,17 @@ fn test_event_enforcement_with_real_pi() {
         Ok(followup_output),
     ]));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, event_dispatcher) =
-        build_process_strand(vec![producer_loom, consumer_loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -334,9 +278,18 @@ fn test_event_enforcement_stdio_no_reentry() {
     );
     let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured, event_dispatcher) =
-        build_process_strand(vec![producer_loom, consumer_loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        agent_runner: captured,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -344,8 +297,8 @@ fn test_event_enforcement_stdio_no_reentry() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 
@@ -413,9 +366,18 @@ fn test_event_enforcement_event_none_passes() {
     );
     let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured, event_dispatcher) =
-        build_process_strand(vec![producer_loom, consumer_loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        agent_runner: captured,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -423,8 +385,8 @@ fn test_event_enforcement_event_none_passes() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 
@@ -484,9 +446,18 @@ fn test_event_enforcement_no_consumers() {
     );
     let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured, event_dispatcher) =
-        build_process_strand(vec![loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        agent_runner: captured,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -494,8 +465,8 @@ fn test_event_enforcement_no_consumers() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 
@@ -563,9 +534,17 @@ fn test_event_enforcement_followup_also_fails() {
         Ok(followup_output),
     ]));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, event_dispatcher) =
-        build_process_strand(vec![producer_loom, consumer_loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -573,8 +552,8 @@ fn test_event_enforcement_followup_also_fails() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 
@@ -645,12 +624,17 @@ fn test_event_enforcement_multiple_consumers() {
         Ok(followup_output),
     ]));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured, event_dispatcher) =
-        build_process_strand(
-            vec![producer_loom, validation_loom, audit_loom],
-            runner,
-        );
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, validation_loom, audit_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -658,8 +642,8 @@ fn test_event_enforcement_multiple_consumers() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 
@@ -710,14 +694,21 @@ fn test_event_enforcement_regression_basic_pipeline() {
     let output = success_output_no_session("review output");
     let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, _dispatcher) =
-        build_process_strand(vec![loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = ProcessStrandBuilder::new(_dummy_loom, runner)
+        .with_looms(vec![loom])
+        .with_tracking_event_dispatcher()
+        .build();
 
     let event = created_event("review-loom", "review", strand_path);
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     // Normal pipeline events, no enforcement
     let events = log_events.lock().unwrap();
@@ -779,9 +770,18 @@ fn test_event_enforcement_regression_normal_dispatch() {
     );
     let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        captured, event_dispatcher) =
-        build_process_strand(vec![producer_loom, consumer_loom], runner);
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result.event_dispatcher.as_ref().expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        agent_runner: captured,
+        ..
+    } = result;
 
     let event = created_event(
         "planning-loom",
@@ -789,8 +789,8 @@ fn test_event_enforcement_regression_normal_dispatch() {
         strand_path,
     );
 
-    let result = use_case.execute(event);
-    assert!(result.is_ok());
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
 
     let events = log_events.lock().unwrap();
 

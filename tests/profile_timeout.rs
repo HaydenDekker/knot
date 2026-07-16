@@ -5,18 +5,17 @@
 //! (\`MockAgentRunner\` returning \`PortError::Timeout\`) — no
 //! \`start_knot()\`, no \`TEST_MUTEX\`, no PATH manipulation.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
-use knot::application::ports::{AgentOutput, AgentRunner, PortError};
-use knot::application::store::LoomStore;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
+use knot::application::ports::{AgentOutput, PortError};
 use knot::application::usecases::test_fixtures::*;
-use knot::application::usecases::ProcessStrand;
 use knot::domain::entities::{KnotId, LoomId, StrandPath, TieOffStatus};
 use knot::domain::events::{LoomEvent, RigLogEvent};
 use knot::domain::value_objects::AgentProfile;
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -34,62 +33,6 @@ fn build_loom(
         id: LoomId(id.to_string()),
         knots,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: knot::domain::entities::Loom,
-    agent_runner: Arc<MockAgentRunner>,
-    profile: AgentProfile,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
-    Arc<Mutex<Vec<RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), profile),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        Arc::new(MockGitVersioningPort::default()),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-    )
 }
 
 /// Build a StrandEvent::Created for the given loom/knot/strand.
@@ -138,45 +81,27 @@ fn profile_timeout_is_passed_to_runner() {
 
     let loom = build_loom("review-loom", vec![build_knot("review")]);
 
-    // TrackingAgentRunner captures the context but always succeeds
-    let (runner, runner_contexts) = TrackingAgentRunner::new();
-    let runner = Arc::new(runner);
+    let runner = MockAgentRunner::new(Ok(AgentOutput {
+        stdout: "mock output".to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+        metadata: None,
+    }));
 
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, _log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, _tie_off_appends, _tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, _rig_events) = MockRigLogPort::new();
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), profile),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        Arc::new(MockGitVersioningPort::default()),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        agent_runner: runner_arc,
+        ..
+    } = ProcessStrandBuilder::new(loom, Arc::new(runner))
+        .with_profile(profile)
+        .build();
 
     use_case
         .execute(created_event("review-loom", "review", strand_path))
         .unwrap();
 
     // Verify the captured context has the correct timeout
-    let contexts = runner_contexts.lock().unwrap();
+    let contexts = runner_arc.get_captured_contexts();
     assert!(!contexts.is_empty(), "should have at least 1 context");
     let ctx = &contexts[0];
 
@@ -212,8 +137,16 @@ fn profile_timeout_results_in_timeout_events() {
     };
     let runner = Arc::new(MockAgentRunner::new(Err(timeout_err)));
 
-    let (use_case, log_events, tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner, profile);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(profile)
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -297,8 +230,16 @@ fn profile_non_timeout_error_writes_tieoff() {
     };
     let runner = Arc::new(MockAgentRunner::new(Err(agent_err)));
 
-    let (use_case, log_events, tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner, profile);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(profile)
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -356,8 +297,16 @@ fn profile_timeout_success_no_timeout_events() {
     });
     let runner = Arc::new(MockAgentRunner::new(output));
 
-    let (use_case, log_events, tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner, profile);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(profile)
+        .build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();

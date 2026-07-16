@@ -8,21 +8,16 @@
 //! all ports are mocked, tests run fully parallel, and complete in
 //! sub-millisecond time.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
-use knot::application::ports::{
-    AgentOutput, AgentRunner, PortError,
-};
-use knot::application::store::LoomStore;
-use knot::application::usecases::ProcessStrand;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
+use knot::application::ports::{AgentOutput, PortError};
 use knot::application::usecases::test_fixtures::*;
-use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath, TieOff, TieOffStatus,
-};
-use knot::domain::events::{LoomEvent, RigLogEvent};
-use knot::RigAgentConfig;
+use knot::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath, TieOffStatus};
+use knot::domain::events::LoomEvent;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -37,61 +32,6 @@ fn build_loom(id: &str, knots: Vec<Knot>) -> Loom {
         id: LoomId(id.to_string()),
         knots,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns a tuple of (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: Loom,
-    agent_runner: Arc<MockAgentRunner>,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<TieOff>>>,
-    Arc<Mutex<Vec<RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), default_profile()),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        Arc::new(MockGitVersioningPort::default()),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-    )
 }
 
 /// Build a `StrandEvent::Created` for the given loom/knot/strand.
@@ -160,8 +100,12 @@ fn agent_execution_produces_tie_off() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("agent response here");
 
-    let (use_case, _log_events, tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        tie_off_appends,
+        agent_runner: _captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     let event = created_event("test-loom", "review", strand_path);
 
@@ -191,8 +135,12 @@ fn agent_execution_append_mode_tie_offs() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("review v1");
 
-    let (use_case, _log_events, tie_off_appends, _rig_events,
-        tie_off_content, _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        tie_off_appends,
+        tie_off_content,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     // First strand
     use_case
@@ -239,8 +187,11 @@ fn agent_execution_updates_state_file() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("review done");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))
@@ -289,8 +240,11 @@ fn agent_failure_records_error_in_state() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = failure_runner("agent crash");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))
@@ -347,8 +301,11 @@ fn agent_failure_records_loom_log_entry() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = failure_runner("execution failed");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))
@@ -388,8 +345,12 @@ fn tie_off_contains_agent_output() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("line one\nline two\nline three");
 
-    let (use_case, _log_events, tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        tie_off_appends,
+        agent_runner: _captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))
@@ -417,8 +378,13 @@ fn agent_handles_deleted_strand() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("deletion summary");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        agent_runner: captured,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     let event = deleted_event(
         "test-loom",
@@ -469,15 +435,23 @@ fn agent_handles_multiple_looms_independently() {
     let loom1 = build_loom("review-loom", vec![build_knot("review")]);
     let runner1 = success_runner("review output");
 
-    let (use_case1, log_events1, tie_off_appends1, _rig_events1,
-        _content1, _captured1) = build_process_strand(loom1, runner1);
+    let helpers::ProcessStrandResult {
+        strand: use_case1,
+        log_events: log_events1,
+        tie_off_appends: tie_off_appends1,
+        ..
+    } = ProcessStrandBuilder::new(loom1, runner1).build();
 
     // Loom 2: planning
     let loom2 = build_loom("planning-loom", vec![build_knot("plan")]);
     let runner2 = success_runner("planning output");
 
-    let (use_case2, log_events2, tie_off_appends2, _rig_events2,
-        _content2, _captured2) = build_process_strand(loom2, runner2);
+    let helpers::ProcessStrandResult {
+        strand: use_case2,
+        log_events: log_events2,
+        tie_off_appends: tie_off_appends2,
+        ..
+    } = ProcessStrandBuilder::new(loom2, runner2).build();
 
     // Process strands in both looms independently
     use_case1
@@ -527,8 +501,11 @@ fn agent_state_transitions_through_processing() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("done");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))
@@ -577,8 +554,11 @@ fn strand_processed_no_error_on_success() {
     let loom = build_loom("test-loom", vec![build_knot("review")]);
     let runner = success_runner("ok");
 
-    let (use_case, log_events, _tie_off_appends, _rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case
         .execute(created_event("test-loom", "review", strand_path))

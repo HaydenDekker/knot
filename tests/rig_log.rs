@@ -10,21 +10,16 @@
 //! Queue idle detection is an infrastructure concern handled by the
 //! debounce engine and verified by composition (smoke) tests.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
-use knot::application::ports::{
-    AgentOutput, AgentRunner, PortError,
-};
-use knot::application::store::LoomStore;
-use knot::application::usecases::ProcessStrand;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
+use knot::application::ports::{AgentOutput, PortError};
 use knot::application::usecases::test_fixtures::*;
-use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath,
-};
+use knot::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath};
 use knot::domain::events::{LoomEvent, RigLogEvent, StrandEvent};
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -39,61 +34,6 @@ fn build_loom(id: &str, knots: Vec<Knot>) -> Loom {
         id: LoomId(id.to_string()),
         knots,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns a tuple of (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: Loom,
-    agent_runner: Arc<MockAgentRunner>,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
-    Arc<Mutex<Vec<RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), default_profile()),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        Arc::new(MockGitVersioningPort::default()),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-    )
 }
 
 /// Build a `StrandEvent::Created` for the given loom/knot/strand.
@@ -158,8 +98,11 @@ fn rig_log_timeout_exceeded_on_agent_timeout() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = timeout_runner("session exceeded 60s");
 
-    let (use_case, _log_events, _tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        rig_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -201,8 +144,11 @@ fn rig_log_no_event_on_non_timeout_error() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = failure_runner("agent crash");
 
-    let (use_case, _log_events, _tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        rig_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -223,8 +169,11 @@ fn rig_log_no_event_on_success() {
     let loom = build_loom("review-loom", vec![build_knot("review")]);
     let runner = success_runner("ok output");
 
-    let (use_case, _log_events, _tie_off_appends, rig_events, _content,
-        _captured) = build_process_strand(loom, runner);
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        rig_events,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner).build();
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();

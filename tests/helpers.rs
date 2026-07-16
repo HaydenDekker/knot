@@ -3,13 +3,226 @@
 //! Provides file-based polling helpers to verify rig state via
 //! `rig/state.json`, replacing the previous HTTP-based verification.
 //! Also includes fixtures for creating knots, profiles, and mock agents.
+//!
+//! The [`ProcessStrandBuilder`] provides a fluent builder for constructing
+//! `ProcessStrand` with all mock ports wired up, replacing the duplicated
+//! local `build_process_strand` functions that existed in each test file.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use knot::application::ports::AgentRunner;
+use knot::application::store::LoomStore;
+use knot::application::usecases::test_fixtures::*;
+use knot::application::usecases::ProcessStrand;
+use knot::domain::entities::Loom;
+use knot::domain::value_objects::AgentProfile;
+use knot::RigAgentConfig;
 use serde_json::Value;
+
+// ── ProcessStrandBuilder ──────────────────────────────────────────────
+
+/// Result of building a [`ProcessStrand`] use case with mocked ports.
+///
+/// All common handles are always present. Optional tracking ports are
+/// `Some` only when explicitly requested via the builder.
+pub struct ProcessStrandResult {
+    /// The `ProcessStrand` use case instance.
+    pub strand: ProcessStrand,
+    /// Captured loom-log events.
+    pub log_events: Arc<Mutex<Vec<knot::domain::events::LoomEvent>>>,
+    /// Recorded tie-off appends (one per `append()` call).
+    pub tie_off_appends: Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
+    /// Captured rig-log events.
+    pub rig_events: Arc<Mutex<Vec<knot::domain::events::RigLogEvent>>>,
+    /// Tie-off content keyed by path display string.
+    pub tie_off_content: Arc<Mutex<HashMap<String, String>>>,
+    /// The mock agent runner (captures execution contexts).
+    pub agent_runner: Arc<MockAgentRunner>,
+    /// Git versioning port — present only when `.with_tracking_git()` is used.
+    pub git_port: Option<Arc<MockGitVersioningPort>>,
+    /// Git commits recorded by the tracking git port.
+    pub git_commits: Option<Arc<Mutex<Vec<(knot::domain::entities::LoomId, knot::domain::entities::KnotId, String, String, String)>>>>,
+    /// Strand file checker — present only when `.with_tracking_file_checker()` is used.
+    pub file_checker: Option<Arc<MockStrandFileChecker>>,
+    /// Event dispatcher — present only when `.with_tracking_event_dispatcher()` is used.
+    pub event_dispatcher: Option<Arc<MockEventDispatcher>>,
+}
+
+/// Builder for constructing [`ProcessStrand`] with all mock ports wired up.
+///
+/// Replaces the duplicated local `build_process_strand` functions that
+/// existed in each integration test file. Use the fluent setters to
+/// configure optional tracking ports and profile overrides:
+///
+/// ```ignore
+/// let result = ProcessStrandBuilder::new(loom, runner).build();
+/// let ProcessStrandResult { strand, log_events, .. } = result;
+/// ```
+///
+/// ```ignore
+/// let result = ProcessStrandBuilder::new(loom, runner)
+///     .with_profile(custom_profile)
+///     .with_tracking_git()
+///     .build();
+/// ```
+pub struct ProcessStrandBuilder {
+    /// Looms to register in the store (single loom by default).
+    looms: Vec<Loom>,
+    /// The mock agent runner.
+    agent_runner: Arc<MockAgentRunner>,
+    /// Custom profile override (uses `default_profile()` if `None`).
+    profile: Option<AgentProfile>,
+    /// Whether to create a tracking git port.
+    tracking_git: bool,
+    /// Whether to expose the tracking event dispatcher in the result.
+    tracking_event_dispatcher: bool,
+    /// Whether to expose the file checker in the result.
+    tracking_file_checker: bool,
+}
+
+impl ProcessStrandBuilder {
+    /// Create a new builder with a single loom and the given agent runner.
+    pub fn new(loom: Loom, agent_runner: Arc<MockAgentRunner>) -> Self {
+        Self {
+            looms: vec![loom],
+            agent_runner,
+            profile: None,
+            tracking_git: false,
+            tracking_event_dispatcher: false,
+            tracking_file_checker: false,
+        }
+    }
+
+    /// Replace the single-loom with multiple looms.
+    ///
+    /// Used by tests that need event consumers in a different loom.
+    pub fn with_looms(mut self, looms: Vec<Loom>) -> Self {
+        self.looms = looms;
+        self
+    }
+
+    /// Override the default agent profile.
+    ///
+    /// Used by tests that need a custom timeout or other profile settings.
+    pub fn with_profile(mut self, profile: AgentProfile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    /// Enable tracking of git versioning calls.
+    ///
+    /// Returns `git_port` and `git_commits` in the result.
+    pub fn with_tracking_git(mut self) -> Self {
+        self.tracking_git = true;
+        self
+    }
+
+    /// Enable tracking of event dispatch calls.
+    ///
+    /// Returns `event_dispatcher` in the result.
+    pub fn with_tracking_event_dispatcher(mut self) -> Self {
+        self.tracking_event_dispatcher = true;
+        self
+    }
+
+    /// Enable tracking of strand file checks.
+    ///
+    /// Returns `file_checker` in the result.
+    pub fn with_tracking_file_checker(mut self) -> Self {
+        self.tracking_file_checker = true;
+        self
+    }
+
+    /// Build the [`ProcessStrand`] use case with all mocked ports.
+    pub fn build(self) -> ProcessStrandResult {
+        let store = LoomStore::new();
+        for loom in &self.looms {
+            store.register(loom.clone());
+        }
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, rig_events) = MockRigLogPort::new();
+
+        let profile = self.profile.unwrap_or_else(default_profile);
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([
+                ("fast".to_string(), profile.clone()),
+            ]))),
+        });
+
+        let git_port: Arc<dyn knot::application::ports::GitVersioningPort>;
+        let git_port_concrete: Option<Arc<MockGitVersioningPort>>;
+        let git_commits: Option<Arc<Mutex<Vec<(knot::domain::entities::LoomId, knot::domain::entities::KnotId, String, String, String)>>>>;
+
+        if self.tracking_git {
+            let (gp, gc) = MockGitVersioningPort::new();
+            git_port_concrete = Some(Arc::new(gp));
+            git_commits = Some(gc);
+            git_port = git_port_concrete.clone().unwrap();
+        } else {
+            git_port_concrete = None;
+            git_commits = None;
+            git_port = Arc::new(MockGitVersioningPort::default());
+        }
+
+        let file_checker: Arc<dyn knot::domain::entities::StrandFileChecker>;
+        let file_checker_concrete: Option<Arc<MockStrandFileChecker>>;
+
+        if self.tracking_file_checker {
+            file_checker_concrete = Some(Arc::new(MockStrandFileChecker::new()));
+            file_checker = file_checker_concrete.clone().unwrap();
+        } else {
+            file_checker_concrete = None;
+            file_checker = Arc::new(MockStrandFileChecker::new());
+        }
+
+        let event_dispatcher: Arc<dyn knot::application::ports::EventDispatcherPort>;
+        let event_dispatcher_concrete: Option<Arc<MockEventDispatcher>>;
+
+        if self.tracking_event_dispatcher {
+            event_dispatcher_concrete = Some(Arc::new(MockEventDispatcher::default()));
+            event_dispatcher = event_dispatcher_concrete.clone().unwrap();
+        } else {
+            event_dispatcher_concrete = None;
+            event_dispatcher = Arc::new(MockEventDispatcher::default());
+        }
+
+        let strand = ProcessStrand::new(
+            store.clone(),
+            Arc::new(log_port),
+            self.agent_runner.clone() as Arc<dyn AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(rig_log),
+            git_port,
+            file_checker,
+            event_dispatcher,
+            None,
+        );
+
+        ProcessStrandResult {
+            strand,
+            log_events,
+            tie_off_appends,
+            rig_events,
+            tie_off_content,
+            agent_runner: self.agent_runner,
+            git_port: git_port_concrete,
+            git_commits,
+            file_checker: file_checker_concrete,
+            event_dispatcher: event_dispatcher_concrete,
+        }
+    }
+}
 
 // ── Knot Content Fixtures ──────────────────────────────────────────────────
 

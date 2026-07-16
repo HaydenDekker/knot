@@ -8,21 +8,16 @@
 //! all ports are mocked, tests run fully parallel, and complete in
 //! sub-millisecond time.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+mod helpers;
 
-use knot::application::ports::{
-    AgentOutput, AgentRunner, PortError,
-};
-use knot::application::store::LoomStore;
-use knot::application::usecases::ProcessStrand;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use helpers::ProcessStrandBuilder;
+use knot::application::ports::{AgentOutput, PortError};
 use knot::application::usecases::test_fixtures::*;
-use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, StrandPath,
-};
+use knot::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath};
 use knot::domain::events::{LoomEvent, StrandEvent};
-use knot::RigAgentConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -46,67 +41,6 @@ fn build_loom(id: &str, knots: Vec<Knot>) -> Loom {
         id: LoomId(id.to_string()),
         knots,
     }
-}
-
-/// Build the ProcessStrand use case with all mocks wired up.
-///
-/// Returns a tuple of (use_case, log_events, tie_off_appends, rig_events,
-/// tie_off_content, agent_runner, git_port, git_commits).
-#[allow(clippy::type_complexity)]
-fn build_process_strand(
-    loom: Loom,
-    agent_runner: Arc<MockAgentRunner>,
-) -> (
-    ProcessStrand,
-    Arc<Mutex<Vec<LoomEvent>>>,
-    Arc<Mutex<Vec<knot::domain::entities::TieOff>>>,
-    Arc<Mutex<Vec<knot::domain::events::RigLogEvent>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<MockAgentRunner>,
-    Arc<MockGitVersioningPort>,
-    Arc<Mutex<Vec<(knot::domain::entities::LoomId, knot::domain::entities::KnotId, String, String, String)>>>,
-) {
-    let store = LoomStore::new();
-    store.register(loom);
-
-    let (log_port, log_events) = MockLoomLogPort::new();
-    let (tie_off_sink, tie_off_appends, tie_off_content) =
-        TrackingTieOffSink::new();
-    let (rig_log, rig_events) = MockRigLogPort::new();
-    let (git_port, git_commits) = MockGitVersioningPort::new();
-    let git_port = Arc::new(git_port);
-
-    let profile_repo = Arc::new(MockProfileRepository {
-        profiles: Arc::new(Mutex::new(HashMap::from_iter([
-            ("fast".to_string(), default_profile()),
-        ]))),
-    });
-
-    let use_case = ProcessStrand::new(
-        store.clone(),
-        Arc::new(log_port),
-        agent_runner.clone() as Arc<dyn AgentRunner>,
-        Arc::new(tie_off_sink),
-        RigAgentConfig::default_config(),
-        PathBuf::from("/rig"),
-        profile_repo,
-        Arc::new(rig_log),
-        git_port.clone(),
-        Arc::new(MockStrandFileChecker::new()),
-        Arc::new(MockEventDispatcher::default()),
-        None,
-    );
-
-    (
-        use_case,
-        log_events,
-        tie_off_appends,
-        rig_events,
-        tie_off_content,
-        agent_runner,
-        git_port,
-        git_commits,
-    )
 }
 
 /// Build a `StrandEvent::Created` for the given loom/knot/strand.
@@ -163,8 +97,12 @@ fn git_commit_created_after_processing() {
     let loom = build_loom("review-loom", vec![build_knot_git_on("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git_port, git_commits) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner).with_tracking_git().build();
+    let git_commits = result.git_commits.as_ref().expect("git_commits should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        ..
+    } = result;
 
     use_case.execute(created_event("review-loom", "review", strand_path.clone()))
         .unwrap();
@@ -197,8 +135,12 @@ fn no_git_commit_when_not_versioned() {
     let loom = build_loom("review-loom", vec![build_knot_git_off("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git_port, git_commits) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner).with_tracking_git().build();
+    let git_commits = result.git_commits.as_ref().expect("git_commits should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        ..
+    } = result;
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -220,8 +162,12 @@ fn no_git_commit_on_processing_failure() {
     let loom = build_loom("review-loom", vec![build_knot_git_on("review")]);
     let runner = failure_runner("crash");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git_port, git_commits) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner).with_tracking_git().build();
+    let git_commits = result.git_commits.as_ref().expect("git_commits should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        ..
+    } = result;
 
     use_case.execute(created_event("review-loom", "review", strand_path))
         .unwrap();
@@ -244,8 +190,12 @@ fn git_multiple_commits_for_multiple_strands() {
     let loom = build_loom("review-loom", vec![build_knot_git_on("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, _log_events, _tie_off_appends, _rig_events, _content,
-        _captured, _git_port, git_commits) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner).with_tracking_git().build();
+    let git_commits = result.git_commits.as_ref().expect("git_commits should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        ..
+    } = result;
 
     use_case.execute(created_event("review-loom", "review", strand1))
         .unwrap();
@@ -276,8 +226,14 @@ fn git_commit_error_is_handled_gracefully() {
     let loom = build_loom("review-loom", vec![build_knot_git_on("review")]);
     let runner = success_runner("review output");
 
-    let (use_case, log_events, tie_off_appends, _rig_events, _content,
-        _captured, git_port, _git_commits) = build_process_strand(loom, runner);
+    let result = ProcessStrandBuilder::new(loom, runner).with_tracking_git().build();
+    let git_port = result.git_port.as_ref().expect("git_port should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        ..
+    } = result;
 
     // Force git port to return an error
     git_port.set_error(PortError::GitCommitFailed(
