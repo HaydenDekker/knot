@@ -55,6 +55,18 @@ All tests use mock ports from `test_fixtures.rs` (shared). Integration tests in 
 - **`parse_yaml_frontmatter` bug** — the frontmatter parsing has a logic error (see Phase 4) with no test covering the bare `---` case. A regression test is added during that phase.
 - **Event enforcement follow-up path** — the follow-up re-entry in the enforcement block has no dedicated unit test. It is covered only indirectly by integration tests. A targeted test is added during Phase 2 (dispatch loop extraction).
 
+## Progress
+
+| Phase | Status | Commit | Notes |
+|-------|--------|--------|-------|
+| Phase 0 | ✅ Done | `9bfe8dc` | Extracted 3 helpers + 13 tests to `strand_event_metadata.rs` |
+| Phase 1 | ✅ Done | `b0177de` | Extracted `validate_strand()` — returns `Result<bool, PortError>` |
+| Phase 2 | ✅ Done | `a0c30aa` | Extracted `dispatch_events_to_consumers()` — shared by both call sites |
+| Phase 3 | ✅ Done | `aef7a76` | Single profile load + single `StrandEvent` match |
+| Phase 4 | ✅ Done | `bf8a0aa` | Bug fix was done in Phase 0; added 2 regression tests (670 tests total) |
+| Phase 5 | 🔄 In Progress | — | Decomposing `execute()` into staged methods |
+| Phase 6 | ⏳ Pending | — | Final verification |
+
 ## Phases
 
 ### Phase 0: Extract event metadata helpers into `strand_event_metadata.rs`
