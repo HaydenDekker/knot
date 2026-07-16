@@ -18,7 +18,7 @@ use crate::domain::events::{AgentEvent, BuildContext, ContextProvider, LoomEvent
 use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
-    AgentConfig, EventSubscription, RigAgentConfig, StrandSource,
+    AgentConfig, AgentProfile, EventSubscription, RigAgentConfig, StrandSource,
 };
 
 // Re-export shared types from types module
@@ -91,21 +91,22 @@ impl ProcessStrand {
         }
     }
 
-    /// Resolve the effective `AgentConfig` for a knot and the profile's
-    /// session timeout.
+    /// Resolve the effective `AgentConfig` for a knot, the profile's
+    /// session timeout, and the profile itself.
     ///
     /// Loads the profile from the repository and delegates the
     /// profile→config mapping to `AgentProfile::resolve_for_knot()`.
     /// The profile's `profile_prompt` is delivered via stdin
     /// (not `--system-prompt`), so it is not merged here.
     ///
-    /// Returns a tuple of `(AgentConfig, Option<Duration>)` where
-    /// the `Option<Duration>` is the profile's timeout
-    /// (or `None` to use the runner's default).
+    /// Returns a tuple of `(AgentConfig, Option<Duration>, AgentProfile)`
+    /// where the `Option<Duration>` is the profile's timeout
+    /// (or `None` to use the runner's default) and the `AgentProfile`
+    /// is the loaded profile (avoiding a second repository lookup).
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
-    ) -> Result<(AgentConfig, Option<std::time::Duration>), PortError> {
+    ) -> Result<(AgentConfig, Option<std::time::Duration>, AgentProfile), PortError> {
         let profile = self
             .profile_repo
             .get(&knot.agent_profile_ref)
@@ -117,7 +118,7 @@ impl ProcessStrand {
         let config = profile.resolve_for_knot(knot);
         let timeout = profile.session_timeout();
 
-        Ok((config, timeout))
+        Ok((config, timeout, profile))
     }
 
     /// Execute the strand processing pipeline.
@@ -125,13 +126,50 @@ impl ProcessStrand {
     /// Appends lifecycle events to loom-log: KnotProcessing, then
     /// KnotCompleted or KnotFailed, then StrandProcessed.
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
-        let (loom_id, knot_id, strand_path) = Self::extract_event_fields(&event);
-
-        let strand_kind = match &event {
-            StrandEvent::Created { .. } => "Created",
-            StrandEvent::Modified { .. } => "Modified",
-            StrandEvent::Deleted { .. } => "Deleted",
+        // Single match: extract fields, event_type, and strand_kind.
+        let (loom_id, knot_id, strand_path, event_type) = match &event {
+            StrandEvent::Created {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => (
+                loom_id.clone(),
+                knot_id.clone(),
+                strand_path.clone(),
+                KnotEventType::Created,
+            ),
+            StrandEvent::Modified {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => (
+                loom_id.clone(),
+                knot_id.clone(),
+                strand_path.clone(),
+                KnotEventType::Modified,
+            ),
+            StrandEvent::Deleted {
+                loom_id,
+                knot_id,
+                strand_path,
+            } => (
+                loom_id.clone(),
+                knot_id.clone(),
+                strand_path.clone(),
+                KnotEventType::Deleted,
+            ),
         };
+        let strand_kind = match event_type {
+            KnotEventType::Created => "Created",
+            KnotEventType::Modified => "Modified",
+            KnotEventType::Deleted => "Deleted",
+        };
+        let event_label = match event_type {
+            KnotEventType::Created => "Created".to_string(),
+            KnotEventType::Modified => "Modified".to_string(),
+            KnotEventType::Deleted => "Deleted".to_string(),
+        };
+
         logging::log_strand_event(
             &format!("{} processing start (knot={})", strand_kind, knot_id.0),
             &strand_path.0,
@@ -151,17 +189,6 @@ impl ProcessStrand {
                 knot_id.0, loom_id.0
             )))?;
 
-        let event_type = match event {
-            StrandEvent::Created { .. } => KnotEventType::Created,
-            StrandEvent::Modified { .. } => KnotEventType::Modified,
-            StrandEvent::Deleted { .. } => KnotEventType::Deleted,
-        };
-        let event_label = match event_type {
-            KnotEventType::Created => "Created".to_string(),
-            KnotEventType::Modified => "Modified".to_string(),
-            KnotEventType::Deleted => "Deleted".to_string(),
-        };
-
         // Determine tie-off path (statically derived from loom + knot)
         let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
@@ -180,7 +207,7 @@ impl ProcessStrand {
 
         // 2. Resolve effective agent config (profile) and build CLI args
         let resolved = self.resolve_agent_config(knot);
-        let (agent_config, profile_timeout) = resolved
+        let (agent_config, profile_timeout, profile) = resolved
             .inspect_err(|err| {
                 let error_msg = err.to_string();
                 // Write error tie-off
@@ -215,17 +242,6 @@ impl ProcessStrand {
                     &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
                 );
-            })?;
-        let (agent_config, profile_timeout) =
-            (agent_config, profile_timeout);
-
-        // Load profile to get profile_prompt for stdin delivery
-        let profile = self
-            .profile_repo
-            .get(&knot.agent_profile_ref)
-            .map_err(|e| PortError::ProfileNotFound(e.to_string()))?
-            .ok_or_else(|| {
-                PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
 
         // For Deleted events: read existing tie-off content and extract
@@ -430,7 +446,7 @@ impl ProcessStrand {
 
                             // Attempt follow-up re-entry (best-effort).
                             // Only possible if session_id is available.
-                            if let Ok((followup_config, _)) =
+                            if let Ok((followup_config, _, _)) =
                                 self.resolve_agent_config(knot)
                             {
                                 let followup_result =
@@ -550,29 +566,6 @@ impl ProcessStrand {
         }
 
         Ok(())
-    }
-
-    /// Extract common fields from any `StrandEvent` variant.
-    fn extract_event_fields(
-        event: &StrandEvent,
-    ) -> (LoomId, KnotId, StrandPath) {
-        match event {
-            StrandEvent::Created {
-                loom_id,
-                knot_id,
-                strand_path,
-            }
-            | StrandEvent::Modified {
-                loom_id,
-                knot_id,
-                strand_path,
-            }
-            | StrandEvent::Deleted {
-                loom_id,
-                knot_id,
-                strand_path,
-            } => (loom_id.clone(), knot_id.clone(), strand_path.clone()),
-        }
     }
 
     /// Compute the tie-off output path from knot + strand path.
@@ -874,7 +867,7 @@ mod profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "fast");
-        let (config, profile_timeout) =
+        let (config, profile_timeout, _profile) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
 
         // Resolved config should use profile values
@@ -964,9 +957,9 @@ mod profile_resolution_tests {
         let knot1 = build_profile_knot("k1", "detailed");
         let knot2 = build_profile_knot("k2", "detailed");
 
-        let (config1, timeout1) =
+        let (config1, timeout1, _profile1) =
             use_case.resolve_agent_config(&knot1).unwrap();
-        let (config2, timeout2) =
+        let (config2, timeout2, _profile2) =
             use_case.resolve_agent_config(&knot2).unwrap();
 
         // Both should resolve to the same profile values
@@ -1025,7 +1018,7 @@ mod profile_resolution_tests {
             .insert("new-profile".to_string(), profile);
 
         // Now the same knot should resolve successfully
-        let (config, profile_timeout) =
+        let (config, profile_timeout, _profile) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
         assert_eq!(config.provider, "openai");
         // Profile has no timeout set
@@ -1072,7 +1065,7 @@ mod profile_resolution_tests {
         );
 
         let profile_knot = build_profile_knot("k1", "reviewer");
-        let (config, _profile_timeout) =
+        let (config, _profile_timeout, _profile) =
             use_case.resolve_agent_config(&profile_knot).unwrap();
         let args = config.build_cli_args();
 
@@ -1937,7 +1930,7 @@ mod profile_timeout_tests {
         );
 
         let knot = build_knot("k1", "slow");
-        let (_config, timeout) =
+        let (_config, timeout, _profile) =
             use_case.resolve_agent_config(&knot).unwrap();
 
         assert_eq!(timeout, Some(Duration::from_secs(600)));
@@ -1980,7 +1973,7 @@ mod profile_timeout_tests {
         );
 
         let knot = build_knot("k1", "fast");
-        let (_config, timeout) =
+        let (_config, timeout, _profile) =
             use_case.resolve_agent_config(&knot).unwrap();
 
         assert_eq!(timeout, None);
