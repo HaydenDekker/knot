@@ -9,7 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::domain::entities::Knot;
-use crate::domain::events::{build_listener_context, BuildContext, ContextProvider, StrandQueueAccessor};
+use crate::domain::events::{build_listener_context, BuildContext, StrandQueueAccessor};
+pub use crate::domain::events::ContextProvider;
 
 // ── Pending Event Metadata ──────────────────────────────────────────────
 

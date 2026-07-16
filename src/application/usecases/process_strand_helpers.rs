@@ -3,10 +3,13 @@
 //! Extracted from `ProcessStrand` impl to reduce the size of
 //! `process_strand.rs` and improve modularity.
 
+use crate::application::usecases::context_providers::{AgentEventsContextProvider, ContextProvider};
 use crate::application::usecases::process_strand::ProcessStrand;
 use crate::application::usecases::strand_event_metadata::{extract_expected_event_ids, extract_event_metadata};
-use crate::application::ports::PortError;
+use crate::application::ports::{KnotEventType, PortError};
+use crate::application::session_resume;
 use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath, TieOff, TieOffOutcome, TieOffPath};
+use crate::domain::events::BuildContext;
 
 /// Result of config resolution, prompt building, and agent execution.
 ///
@@ -100,6 +103,125 @@ pub fn handle_failure(
     );
 
     Ok(())
+}
+
+/// Resolve agent config, build prompt, execute agent, derive outcome.
+///
+/// Covers: profile resolution, deleted-event history, prompt building,
+/// listener context, agent execution, and outcome derivation.
+///
+/// Returns a `ResolvedExecution` with the outcome, session ID, listener
+/// context, and all knots for downstream event enforcement.
+pub fn resolve_config_and_build(
+    ps: &ProcessStrand,
+    knot: &Knot,
+    event_type: KnotEventType,
+    event_label: String,
+    strand_path: &StrandPath,
+    loom_id: &LoomId,
+    tie_off_path: &TieOffPath,
+) -> Result<ResolvedExecution, PortError> {
+    // Resolve effective agent config (profile).
+    let (agent_config, profile_timeout, profile) =
+        ps.resolve_agent_config(knot)?;
+
+    // For Deleted events: read existing tie-off content and extract
+    // scoped strand history (last 5 entries for this strand).
+    let is_deleted = matches!(event_type, KnotEventType::Deleted);
+    let strand_history = if is_deleted {
+        let tie_off_content = ps
+            .tie_off_sink
+            .read_content(tie_off_path)
+            .unwrap_or_default();
+        let strand_path_str =
+            strand_path.0.to_string_lossy().to_string();
+        let sections =
+            crate::domain::tieoff_parser::extract_last_n(
+                &tie_off_content,
+                &strand_path_str,
+                5,
+            );
+        if sections.is_empty() {
+            None
+        } else {
+            Some(sections)
+        }
+    } else {
+        None
+    };
+
+    // Strand filename — used in prompt for Deleted events.
+    let strand_filename = strand_path.0
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Build the prompt. For Deleted events, use domain method
+    // Knot::deleted_prompt() which composes the deletion notice
+    // and scoped strand history.
+    let base_prompt = if is_deleted {
+        let sections = strand_history
+            .as_deref()
+            .unwrap_or_default();
+        knot.deleted_prompt(&strand_filename, sections)
+    } else {
+        knot.prompt_template.instructions.clone()
+    };
+
+    // Build listener context (per-invocation, not cached).
+    // Scans all knots' strand_source entries and injects event
+    // instructions at the beginning of the prompt, including
+    // pending events from the dispatch directory.
+    let all_knots = ProcessStrand::collect_all_knots(&ps.store);
+    let build_ctx = BuildContext {
+        knot: knot.clone(),
+        loom_id: loom_id.clone(),
+        all_knots: all_knots.clone(),
+        rig_dir: ps.rig_dir.clone(),
+        strand_queue: ps.strand_queue.clone(),
+    };
+    let listener_context =
+        AgentEventsContextProvider.build_context(&build_ctx);
+
+    let prompt = if listener_context.is_empty() {
+        base_prompt
+    } else {
+        format!("{}\n\n{}", listener_context, base_prompt)
+    };
+
+    // Execute agent with session-resume retry logic.
+    let strand_file_ref = if is_deleted {
+        None
+    } else {
+        Some(strand_path.clone())
+    };
+    let mut session_id: Option<String> = None;
+    let result = session_resume::execute_with_resume(
+        &*ps.agent_runner,
+        &*ps.log_port,
+        loom_id,
+        &knot.id,
+        strand_path,
+        &mut session_id,
+        agent_config,
+        prompt,
+        strand_file_ref,
+        profile.profile_prompt,
+        event_label,
+        Some(knot.id.0.clone()),
+        profile_timeout.clone(),
+    );
+
+    // Derive outcome from execution result — domain rule.
+    let outcome = TieOffOutcome::derive(result);
+
+    Ok(ResolvedExecution {
+        outcome,
+        session_id,
+        listener_context,
+        all_knots,
+        profile_timeout,
+    })
 }
 
 /// Handle success outcome: event dispatch, KnotCompleted, StrandProcessed,
