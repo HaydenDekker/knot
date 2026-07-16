@@ -224,7 +224,13 @@ Full test suite, clippy, and build verification:
 
 ## Notes
 
-- **Tests stay inline with their code.** Tests for orchestration flow remain in `process_strand.rs`. Tests for extracted helpers move with the code into `strand_event_metadata.rs`. This follows Rust convention — tests live `#[cfg(test)]` in the same file as the code they exercise.
+## Implementation Status: ✅ Complete (2026-07-16)
+
+## Notes
+- Phase 6 added `process_strand_helpers.rs` (399 lines) containing 4 extracted helpers + `ResolvedExecution` struct
+- Phase 5 decomposed `execute()` into staged methods; Phase 6 extracted them to standalone module
+- Full test suite passes (670 tests, 0 failures)
+- Version bumped to 0.28.2
 - **Dependency on Plan 61:** Plan 61 (consolidate `build_process_strand` integration test helpers) is a separate concern — it covers integration test helpers in `tests/`. This plan covers the use case module. They can proceed independently.
 - **ADR-010 already did domain extraction:** ADR-010 extracted domain rules (`should_process`, `resolve_for_knot`, `deleted_prompt`, `TieOffOutcome::derive`) from the use case. This plan works with the already-extracted domain layer — it does not extract further domain rules. The remaining code in `execute()` is orchestration (coordinating ports and domain results), not business rules.
 - **No behavioural changes:** Every phase is purely structural. Tests that pass before a phase must pass after it. If any test fails, the phase is incorrect.
