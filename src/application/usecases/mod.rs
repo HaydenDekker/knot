@@ -10,6 +10,7 @@ mod manage_knot;
 mod process_strand;
 pub mod query;
 pub mod test_fixtures;
+mod strand_event_metadata;
 pub mod types;
 mod write_state;
 
