@@ -258,6 +258,41 @@ impl ProcessStrand {
         })
     }
 
+    /// Construct a `TieOff` from execution outcome and write it.
+    ///
+    /// Skipped for timeout outcomes (tie-off preserved unchanged).
+    fn write_tie_off(
+        &self,
+        outcome: &TieOffOutcome,
+        knot: &Knot,
+        tie_off_path: &TieOffPath,
+        strand_path: &StrandPath,
+        event_label: &str,
+    ) {
+        if !outcome.should_write_tie_off() {
+            return;
+        }
+
+        // Extract event metadata if this strand is an event file
+        // (dispatched by intent-based routing).
+        let event_metadata = extract_event_metadata(strand_path);
+
+        let tie_off = TieOff {
+            content: outcome.tie_off_content().unwrap_or_default(),
+            path: tie_off_path.clone(),
+            status: outcome
+                .tie_off_status()
+                .unwrap_or(crate::domain::entities::TieOffStatus::Produced),
+            knot_name: Some(knot.id.0.clone()),
+            event_type: Some(event_label.to_string()),
+            strand_path: Some(strand_path.0.display().to_string()),
+            timestamp: None,
+            agent_events: Vec::new(),
+            event_metadata: event_metadata.unwrap_or_default(),
+        };
+        let _ = self.tie_off_sink.append(tie_off);
+    }
+
     /// Execute the strand processing pipeline.
     ///
     /// Appends lifecycle events to loom-log: KnotProcessing, then
@@ -391,27 +426,8 @@ impl ProcessStrand {
         };
         let outcome = resolved.outcome;
 
-        // Extract event metadata if this strand is an event file
-        // (dispatched by intent-based routing).
-        let event_metadata = extract_event_metadata(&strand_path);
-
         // Write tie-off (skipped for timeout).
-        if outcome.should_write_tie_off() {
-            let tie_off = TieOff {
-                content: outcome.tie_off_content().unwrap_or_default(),
-                path: tie_off_path.clone(),
-                status: outcome
-                    .tie_off_status()
-                    .unwrap_or(crate::domain::entities::TieOffStatus::Produced),
-                knot_name: Some(knot.id.0.clone()),
-                event_type: Some(event_label.clone()),
-                strand_path: Some(strand_path.0.display().to_string()),
-                timestamp: None,
-                agent_events: Vec::new(),
-                event_metadata: event_metadata.unwrap_or_default(),
-            };
-            let _ = self.tie_off_sink.append(tie_off);
-        }
+        self.write_tie_off(&outcome, knot, &tie_off_path, &strand_path, &event_label);
 
         // Write rig-log for timeout (preserve unchanged).
         if outcome.is_timeout() {
