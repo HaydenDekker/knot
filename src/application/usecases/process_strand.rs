@@ -166,68 +166,8 @@ impl ProcessStrand {
         let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
         // Strand file check: skip binary/temp/missing files.
-        // Domain rule lives in StrandPath::should_process().
-        let is_deleted = matches!(event, StrandEvent::Deleted { .. });
-        let check = strand_path
-            .should_process(is_deleted, &*self.file_checker)
-            .map_err(|e| PortError::StrandCheckFailed(e.message))?;
-
-        match check {
-            StrandCheckResult::Proceed | StrandCheckResult::ProceedWithWarning => {
-                if matches!(check, StrandCheckResult::ProceedWithWarning) {
-                    eprintln!(
-                        "WARN: cannot determine if strand '{}' is text, \
-                         proceeding with processing (knot={})",
-                        strand_path.0.display(),
-                        knot_id.0,
-                    );
-                }
-            }
-            StrandCheckResult::SkipBinary => {
-                eprintln!(
-                    "WARN: strand '{}' is a binary file, skipping \
-                     processing (knot={})",
-                    strand_path.0.display(),
-                    knot_id.0,
-                );
-                self.log_port.append(LoomEvent::StrandIgnored {
-                    loom_id: loom_id.clone(),
-                    knot_id: knot_id.clone(),
-                    strand_path: strand_path.clone(),
-                    reason: "binary file".to_string(),
-                    timestamp: format_timestamp(),
-                })?;
-                return Ok(());
-            }
-            StrandCheckResult::SkipTemp => {
-                // Known temp file pattern (e.g. sedXXXXXXX)
-                // — skip silently. No loom-log entry, no agent invocation.
-                logging::log_strand_event(
-                    &format!(
-                        "{} skipped known temp file (knot={})",
-                        strand_kind, knot_id.0,
-                    ),
-                    &strand_path.0,
-                );
-                return Ok(());
-            }
-            StrandCheckResult::SkipMissing => {
-                eprintln!(
-                    "WARN: strand '{}' not found on disk (unknown \
-                     pattern), skipping processing (knot={})",
-                    strand_path.0.display(),
-                    knot_id.0,
-                );
-                self.log_port.append(LoomEvent::StrandSkipped {
-                    loom_id: loom_id.clone(),
-                    knot_id: knot_id.clone(),
-                    strand_path: strand_path.clone(),
-                    reason: "missing file (unknown pattern)"
-                        .to_string(),
-                    timestamp: format_timestamp(),
-                })?;
-                return Ok(());
-            }
+        if !self.validate_strand(&event, strand_kind, &loom_id, &knot_id, &strand_path)? {
+            return Ok(());
         }
 
         // 1. Append KnotProcessing to loom-log
@@ -698,6 +638,85 @@ impl ProcessStrand {
         let filename = format!("tie-off-{}.md", knot.id.0);
         let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.rig_dir);
         TieOffPath(base.join(filename))
+    }
+
+    /// Validate the strand file before processing.
+    ///
+    /// Checks file existence, binary/temp detection via `StrandPath::should_process()`.
+    /// Returns `Ok(true)` to continue processing, `Ok(false)` to skip
+    /// (after logging the skip), or `Err` for check failures.
+    fn validate_strand(
+        &self,
+        event: &StrandEvent,
+        strand_kind: &str,
+        loom_id: &LoomId,
+        knot_id: &KnotId,
+        strand_path: &StrandPath,
+    ) -> Result<bool, PortError> {
+        // Domain rule lives in StrandPath::should_process().
+        let is_deleted = matches!(event, StrandEvent::Deleted { .. });
+        let check = strand_path
+            .should_process(is_deleted, &*self.file_checker)
+            .map_err(|e| PortError::StrandCheckFailed(e.message))?;
+
+        match check {
+            StrandCheckResult::Proceed | StrandCheckResult::ProceedWithWarning => {
+                if matches!(check, StrandCheckResult::ProceedWithWarning) {
+                    eprintln!(
+                        "WARN: cannot determine if strand '{}' is text, \
+                         proceeding with processing (knot={})",
+                        strand_path.0.display(),
+                        knot_id.0,
+                    );
+                }
+                Ok(true)
+            }
+            StrandCheckResult::SkipBinary => {
+                eprintln!(
+                    "WARN: strand '{}' is a binary file, skipping \
+                     processing (knot={})",
+                    strand_path.0.display(),
+                    knot_id.0,
+                );
+                self.log_port.append(LoomEvent::StrandIgnored {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    reason: "binary file".to_string(),
+                    timestamp: format_timestamp(),
+                })?;
+                Ok(false)
+            }
+            StrandCheckResult::SkipTemp => {
+                // Known temp file pattern (e.g. sedXXXXXXX)
+                // — skip silently. No loom-log entry, no agent invocation.
+                logging::log_strand_event(
+                    &format!(
+                        "{} skipped known temp file (knot={})",
+                        strand_kind, knot_id.0,
+                    ),
+                    &strand_path.0,
+                );
+                Ok(false)
+            }
+            StrandCheckResult::SkipMissing => {
+                eprintln!(
+                    "WARN: strand '{}' not found on disk (unknown \
+                     pattern), skipping processing (knot={})",
+                    strand_path.0.display(),
+                    knot_id.0,
+                );
+                self.log_port.append(LoomEvent::StrandSkipped {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    reason: "missing file (unknown pattern)"
+                        .to_string(),
+                    timestamp: format_timestamp(),
+                })?;
+                Ok(false)
+            }
+        }
     }
 
     /// Collect all knots from all registered looms in the store.
