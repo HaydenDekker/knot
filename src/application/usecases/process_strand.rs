@@ -14,7 +14,7 @@ use crate::domain::entities::{
     EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
     StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
-use crate::domain::events::{BuildContext, ContextProvider, LoomEvent, StrandEvent, StrandQueueAccessor};
+use crate::domain::events::{AgentEvent, BuildContext, ContextProvider, LoomEvent, StrandEvent, StrandQueueAccessor};
 use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
@@ -457,64 +457,13 @@ impl ProcessStrand {
 
                                     if !followup_events.is_empty() {
                                         // Dispatch follow-up events
-                                        for event in &followup_events {
-                                            for loom in &all_looms_for_dispatch {
-                                                for consumer_knot in
-                                                    &loom.knots
-                                                {
-                                                    let resolved =
-                                                        consumer_knot
-                                                            .strand_source
-                                                            .resolve_for_producer(
-                                                                &knot.id.0,
-                                                                &loom_id.0,
-                                                                &all_knot_ids,
-                                                            );
-                                                    if let Some(sub) =
-                                                        resolved
-                                                    {
-                                                        let matches_event =
-                                                            match &sub {
-                                                                EventSubscription::KnotLevel {
-                                                                    event_id:
-                                                                        sub_event_id,
-                                                                    ..
-                                                                } => {
-                                                                    sub_event_id
-                                                                        == &event
-                                                                            .event_id
-                                                                }
-                                                                EventSubscription::LoomLevel {
-                                                                    event_id:
-                                                                        sub_event_id,
-                                                                    ..
-                                                                } => {
-                                                                    sub_event_id
-                                                                        == &event
-                                                                            .event_id
-                                                                }
-                                                            };
-                                                        if matches_event {
-                                                            let _path = self
-                                                                .event_dispatcher
-                                                                .dispatch(
-                                                                    event,
-                                                                    consumer_knot,
-                                                                    &knot
-                                                                        .id
-                                                                        .0,
-                                                                    &loom
-                                                                        .id,
-                                                                    &self
-                                                                        .rig_dir,
-                                                                );
-                                                            // dispatch failures
-                                                            // are non-fatal
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        // (dispatch failures are non-fatal)
+                                        let _ = self.dispatch_events_to_consumers(
+                                            &followup_events,
+                                            knot,
+                                            &loom_id,
+                                            &all_knot_ids,
+                                        );
                                     } else {
                                         // Still no events — log again
                                         let _ = self.log_port.append(
@@ -719,6 +668,65 @@ impl ProcessStrand {
         }
     }
 
+    /// Match and dispatch a set of agent events to consumer knots.
+    ///
+    /// For each event, scans all looms' knots for `strand_source` subscriptions
+    /// that target this producer knot and match the event ID. Dispatches event
+    /// files to each matching consumer.
+    ///
+    /// Returns the list of `(event_id, consumer_loom_id)` dispatches performed.
+    fn dispatch_events_to_consumers(
+        &self,
+        events: &[AgentEvent],
+        producer_knot: &Knot,
+        loom_id: &LoomId,
+        all_knot_ids: &[&str],
+    ) -> Result<Vec<(String, String)>, PortError> {
+        let all_looms = self.store.list();
+        let mut dispatches: Vec<(String, String)> = Vec::new();
+
+        for event in events {
+            for loom in &all_looms {
+                for consumer_knot in &loom.knots {
+                    let resolved = consumer_knot
+                        .strand_source
+                        .resolve_for_producer(
+                            &producer_knot.id.0,
+                            &loom_id.0,
+                            all_knot_ids,
+                        );
+                    if let Some(sub) = resolved {
+                        let matches_event = match &sub {
+                            EventSubscription::KnotLevel {
+                                event_id: sub_event_id,
+                                ..
+                            } => sub_event_id == &event.event_id,
+                            EventSubscription::LoomLevel {
+                                event_id: sub_event_id,
+                                ..
+                            } => sub_event_id == &event.event_id,
+                        };
+                        if matches_event {
+                            let _path = self.event_dispatcher.dispatch(
+                                event,
+                                consumer_knot,
+                                &producer_knot.id.0,
+                                &loom.id,
+                                &self.rig_dir,
+                            )?;
+                            dispatches.push((
+                                event.event_id.clone(),
+                                loom.id.0.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(dispatches)
+    }
+
     /// Collect all knots from all registered looms in the store.
     ///
     /// Used to build listener context — scanning all knots' strand_source
@@ -772,49 +780,12 @@ impl ProcessStrand {
             .flat_map(|l| l.knots.iter())
             .map(|k| k.id.0.as_str())
             .collect();
-        let mut dispatches: Vec<(String, String)> = Vec::new();
-        for event in &events {
-            for loom in &all_looms {
-                for consumer_knot in &loom.knots {
-                    let resolved = consumer_knot
-                        .strand_source
-                        .resolve_for_producer(
-                            &knot.id.0,
-                            &loom_id.0,
-                            &all_knot_ids,
-                        );
-                    if let Some(sub) = resolved {
-                        let matches_event = match &sub {
-                            EventSubscription::KnotLevel {
-                                event_id: sub_event_id,
-                                ..
-                            } => sub_event_id == &event.event_id,
-                            EventSubscription::LoomLevel {
-                                event_id: sub_event_id,
-                                ..
-                            } => sub_event_id == &event.event_id,
-                        };
-                        if matches_event {
-                            // Dispatch event file to consumer's tie-off dir.
-                            // knot.id.0 is passed as the producer knot ID so
-                            // event files include it in frontmatter, even
-                            // though it's not in AgentEvent.
-                            let _path = self.event_dispatcher.dispatch(
-                                event,
-                                consumer_knot,
-                                &knot.id.0,
-                                &loom.id,
-                                &self.rig_dir,
-                            )?;
-                            dispatches.push((
-                                event.event_id.clone(),
-                                loom.id.0.clone(),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let dispatches = self.dispatch_events_to_consumers(
+            &events,
+            knot,
+            loom_id,
+            &all_knot_ids,
+        )?;
 
         if dispatches.is_empty() {
             return Ok(None);
