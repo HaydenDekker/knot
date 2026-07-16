@@ -64,8 +64,9 @@ All tests use mock ports from `test_fixtures.rs` (shared). Integration tests in 
 | Phase 2 | ✅ Done | `a0c30aa` | Extracted `dispatch_events_to_consumers()` — shared by both call sites |
 | Phase 3 | ✅ Done | `aef7a76` | Single profile load + single `StrandEvent` match |
 | Phase 4 | ✅ Done | `bf8a0aa` | Bug fix was done in Phase 0; added 2 regression tests (670 tests total) |
-| Phase 5 | 🔄 In Progress | — | Decomposing `execute()` into staged methods |
-| Phase 6 | ⏳ Pending | — | Final verification |
+| Phase 5 | ✅ Done | `e68aae5` | Decomposed `execute()` into staged methods |
+| Phase 6 | 🔄 In Progress | — | Extract helpers to `process_strand_helpers.rs` |
+| Phase 7 | ⏳ Pending | — | Final verification |
 
 ## Phases
 
@@ -188,7 +189,29 @@ All existing inline test modules remain in `process_strand.rs` — they test the
 
 **Verification:** `cargo test --lib` — all tests pass. `execute()` is ~30 lines of orchestration.
 
-### Phase 6: Final verification
+### Phase 6: Extract helpers to `process_strand_helpers.rs`
+
+Move the four helper methods (`resolve_config_and_build()`, `write_tie_off()`, `handle_failure()`, `handle_success()`) and the `ResolvedExecution` struct from the `ProcessStrand` impl into free functions in a new module `src/application/usecases/process_strand_helpers.rs`.
+
+Each helper becomes a free function accepting `&ProcessStrand` as the first parameter (plus its existing arguments). Since `handle_success()` calls `self.dispatch_agent_events()`, `self.resolve_agent_config()`, and `self.dispatch_events_to_consumers()`, and `resolve_config_and_build()` calls `self.resolve_agent_config()` and `Self::collect_all_knots()`, these methods need to be made `pub(crate)` in `ProcessStrand`.
+
+All existing inline test modules remain in `process_strand.rs` — they exercise the helpers through `execute()` end-to-end.
+
+`execute()` is updated to call the free functions: `helpers::resolve_config_and_build(self, ...)`, etc.
+
+**Module structure after Phase 6:**
+
+```
+src/application/usecases/
+├── process_strand.rs          (orchestration + orchestration tests)
+├── process_strand_helpers.rs  (helpers + ResolvedExecution struct)
+├── strand_event_metadata.rs   (metadata helpers + tests)
+├── ...
+```
+
+**Verification:** `cargo test --lib` — all tests pass. `process_strand.rs` production code reduced to ~200 lines.
+
+### Phase 7: Final verification
 
 Full test suite, clippy, and build verification:
 
