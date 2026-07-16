@@ -195,7 +195,7 @@ pub fn build_listener_context(
     output.push_str("---\n");
     output.push_str("event: <EventId>\n");
     output.push_str("description: <short summary of what happened>\n");
-    output.push_str("timestamp: <ISO 8601 timestamp>\n");
+    output.push_str("timestamp: <ISO 8601 timestamp (local time)>\n");
     output.push_str("<additional fields as relevant>\n");
     output.push_str("---\n\n");
     output.push_str("Freeform narrative context about the event.\n");
@@ -279,19 +279,19 @@ pub enum LoomEvent {
     KnotRegistered {
         loom_id: LoomId,
         knot_id: KnotId,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// The Loom began processing its strands.
     LoomStarted {
         loom_id: LoomId,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// The Loom stopped processing.
     LoomStopped {
         loom_id: LoomId,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A strand was processed (either produced output or failed).
@@ -300,7 +300,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// Error message if processing failed. `None` on success.
         error: Option<String>,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot started processing a strand.
@@ -308,7 +308,7 @@ pub enum LoomEvent {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot completed processing a strand successfully.
@@ -317,7 +317,7 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         tie_off_path: TieOffPath,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot failed while processing a strand.
@@ -326,14 +326,14 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         error: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot was deregistered from the loom.
     KnotDeregistered {
         loom_id: LoomId,
         knot_id: KnotId,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot file contained unknown YAML properties (accepted but not used).
@@ -341,7 +341,7 @@ pub enum LoomEvent {
         loom_id: LoomId,
         knot_file_name: String,
         message: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// The strand directory for a knot was auto-created.
@@ -350,7 +350,7 @@ pub enum LoomEvent {
         knot_id: KnotId,
         /// Absolute path of the directory that was created.
         directory: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A strand file was ignored (not a text file).
@@ -364,7 +364,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// Reason the file was ignored (e.g. "binary file").
         reason: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A strand file was skipped because it could not be found on disk.
@@ -381,7 +381,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// Reason the file was skipped (e.g. "missing file (unknown pattern)").
         reason: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A failed agent invocation was resumed using the same Pi session.
@@ -395,7 +395,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         session_id: String,
         attempt: u32,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// The agent completed within its timeout but produced no response.
@@ -411,7 +411,7 @@ pub enum LoomEvent {
         /// Number of the attempt that produced the empty response
         /// (1 = first attempt, 2 = first retry, etc.).
         attempt: u32,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// One or more agent events were dispatched to consumer knots.
@@ -425,7 +425,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// List of (event-id, consumer-loom-id) pairs dispatched.
         dispatches: Vec<(String, String)>,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// A knot completed successfully but was instructed to emit events
@@ -436,7 +436,7 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         /// Description of what events were expected.
         expected_events: Vec<String>,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
 }
@@ -462,12 +462,12 @@ pub enum RigLogEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         error: String,
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
     /// All pending events have been processed and the queue is idle.
     QueueIdle {
-        /// ISO 8601 UTC timestamp.
+        /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
 }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
+use crate::adapters::logging;
 use crate::application::ports::{PortError, TieOffSink};
 use crate::domain::entities::{TieOff, TieOffPath};
 
@@ -68,7 +68,7 @@ impl TieOffSink for FileSystemTieOffSink {
             .clone()
             .unwrap_or_else(|| "knot".to_string());
         let timestamp = tie_off.timestamp.clone().unwrap_or_else(|| {
-            Self::format_timestamp(SystemTime::now())
+            logging::format_timestamp()
         });
 
         let mut new_content = String::new();
@@ -110,45 +110,7 @@ impl TieOffSink for FileSystemTieOffSink {
     }
 }
 
-impl FileSystemTieOffSink {
-    /// Format a SystemTime as ISO 8601 UTC string.
-    fn format_timestamp(time: SystemTime) -> String {
-        let duration = time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = duration.as_secs();
 
-        // Compute UTC date/time components from Unix epoch seconds
-        let days = secs / 86400;
-        let remaining = secs % 86400;
-        let hours = remaining / 3600;
-        let minutes = (remaining % 3600) / 60;
-        let seconds = remaining % 60;
-
-        // Convert days since epoch to year/month/day
-        let (year, month, day) = Self::days_to_ymd(days);
-
-        format!(
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-            year, month, day, hours, minutes, seconds
-        )
-    }
-
-    /// Convert days since Unix epoch (1970-01-01) to (year, month, day).
-    fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-        let d = days as i64 + 719468; // Adjust for algorithm
-        let era = if d >= 0 { d } else { d - 146096 } / 146097;
-        let doe = d - era * 146097;
-        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-        let y = yoe as u64 + era as u64 * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let day = doy - (153 * mp + 2) / 5 + 1;
-        let month = mp + if mp < 10 { 3 } else { -9 };
-        let year = y + if month <= 2 { 1 } else { 0 };
-        (year, month as u64, day as u64)
-    }
-}
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 

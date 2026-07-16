@@ -6,7 +6,7 @@ use crate::adapters::logging;
 use crate::application::ports::ProcessingStatus;
 use crate::domain::entities::{KnotId, LoomId, StrandPath, TieOffPath};
 
-/// Generate an ISO 8601 UTC timestamp string.
+/// Generate an ISO 8601 timestamp string (local time).
 pub fn format_timestamp() -> String {
     logging::format_timestamp()
 }

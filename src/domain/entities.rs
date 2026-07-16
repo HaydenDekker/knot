@@ -275,7 +275,7 @@ pub struct RigState {
     /// Pending strand events waiting in the processing queue.
     /// Empty array when no events are queued.
     pub strand_queue: Vec<RigStateStrandQueueEntry>,
-    /// ISO 8601 UTC timestamp of the last state write.
+    /// ISO 8601 timestamp (local time) of the last state write.
     pub updated_at: String,
 }
 
@@ -304,7 +304,7 @@ pub struct RigStateKnot {
     /// Error message from the last failed processing (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// ISO 8601 UTC timestamp of the last event for this knot.
+    /// ISO 8601 timestamp (local time) of the last event for this knot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<String>,
 }
@@ -339,7 +339,7 @@ pub struct RigStateStrandQueueEntry {
     /// The event type: `"created"`, `"modified"`, or `"deleted"`.
     #[serde(rename = "event_type")]
     pub event_kind: String,
-    /// ISO 8601 UTC timestamp when the event entered the processing queue.
+    /// ISO 8601 timestamp (local time) when the event entered the processing queue.
     pub queued_at: String,
 }
 

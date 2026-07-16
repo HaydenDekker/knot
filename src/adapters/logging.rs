@@ -3,46 +3,12 @@
 //! Produces `[TIMESTAMP] [KNOT]` prefixed lines to stderr.
 //! Volume is low (a few hundred events/day) so every event is logged.
 
-/// Generate an ISO 8601 UTC timestamp string.
+/// Generate an ISO 8601 timestamp string in local time.
 ///
-/// Converts Unix epoch seconds to Gregorian calendar date.
-/// Uses a well-tested days-since-epoch to date conversion.
+/// Uses the system timezone (e.g. `/etc/localtime` on Unix, registry on
+/// Windows). Output includes the timezone offset (e.g. `+01:00`, `-05:00`).
 pub fn format_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-    let ss = time_of_day % 60;
-
-    let (year, month, day) = days_to_ymd(days_since_epoch);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hh, mm, ss
-    )
-}
-
-/// Convert days since 1970-01-01 to (year, month, day).
-///
-/// Algorithm from "Calendrical Calculations" by Dershowitz & Reingold.
-/// 1970-01-01 corresponds to civil day 719468.
-fn days_to_ymd(days: u64) -> (i32, i32, i32) {
-    let z = days as i64 + 719468;
-    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = mp + if mp < 10 { 3 } else { -9 };
-    let y = y + if m <= 2 { 1 } else { 0 };
-
-    (y as i32, m as i32, d as i32)
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
 
 /// Log a notify event (raw file system event mapped to domain type).
@@ -100,4 +66,50 @@ pub fn log_watch_event(action: &str, path: &std::path::Path, watch_type: &str, e
         format_timestamp(),
         path.display(),
     );
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `format_timestamp()` produces ISO 8601 with a timezone offset
+    /// (not the `Z` UTC suffix).
+    #[test]
+    fn format_timestamp_contains_timezone_offset() {
+        let ts = format_timestamp();
+        // Shape: YYYY-MM-DDTHH:MM:SS+HH:MM or YYYY-MM-DDTHH:MM:SS-HH:MM
+        assert!(
+            ts.contains('+') || ts.contains("-T"),
+            "timestamp should contain a timezone offset (+ or - after T), got: {}",
+            ts
+        );
+        // Must NOT end with 'Z' (that would be UTC)
+        assert!(
+            !ts.ends_with('Z'),
+            "timestamp should NOT end with Z (UTC), got: {}",
+            ts
+        );
+    }
+
+    /// `format_timestamp()` output matches ISO 8601 date-time pattern.
+    #[test]
+    fn format_timestamp_matches_iso8601_shape() {
+        let ts = format_timestamp();
+        // Example: 2026-07-17T14:30:00+01:00
+        assert!(
+            ts.len() == 25,
+            "timestamp should be 25 chars (YYYY-MM-DDTHH:MM:SS±HH:MM), got {} chars: {}",
+            ts.len(),
+            ts
+        );
+        // Date portion: YYYY-MM-DDT
+        assert!(ts.chars().nth(4) == Some('-'));
+        assert!(ts.chars().nth(7) == Some('-'));
+        assert!(ts.chars().nth(10) == Some('T'));
+        // Time portion: HH:MM:SS
+        assert!(ts.chars().nth(13) == Some(':'));
+        assert!(ts.chars().nth(16) == Some(':'));
+    }
 }

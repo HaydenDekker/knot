@@ -23,7 +23,7 @@ struct PendingEvent {
     description: Option<String>,
     /// Filename of the dispatched event (e.g. `event-2026-07-14T10-00-00Z.md`).
     filename: String,
-    /// ISO 8601 timestamp from the frontmatter.
+    /// ISO 8601 timestamp (local time) from the frontmatter.
     timestamp: Option<String>,
 }
 

@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-16 (plan 61 completed, plan 63 added)
+> **Last Updated:** 2026-07-17 (plan 64 added)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ⬜ Planned | 2026-07-17 |
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
 | 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | ✅ Complete | 2026-07-16 |
 | 61 | [Consolidate `build_process_strand` Test Helpers](061-consolidate-build-process-strand/consolidate-build-process-strand-plan.md) | ✅ Complete | 2026-07-15 |
@@ -88,6 +89,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 64. Local Time Timestamps
+
+**Status:** ⬜ Planned
+**Created:** 2026-07-17
+**Goal:** Replace UTC timestamps with local-time timestamps (ISO 8601 with timezone offset) across all Knot output — logs, loom-logs, event files, tie-offs, and state.
+
+Full details in [064-local-timestamps/local-timestamps-plan.md](064-local-timestamps/local-timestamps-plan.md).
 
 ### 63. Spurious Delete Suppression
 

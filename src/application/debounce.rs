@@ -87,7 +87,7 @@ pub fn dedup_key(event: &StrandEvent) -> DedupKey {
 #[derive(Debug, Clone)]
 pub struct TimestampedStrandEvent {
     pub event: StrandEvent,
-    /// ISO 8601 UTC timestamp when the event was emitted from the debounce
+    /// ISO 8601 timestamp (local time) when the event was emitted from the debounce
     /// window (ready for processing).
     pub queued_at: String,
 }
