@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-07-14
+> **Last Updated:** 2026-07-16
 
 ## How to Add a PRD
 
@@ -19,6 +19,8 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [Spurious Delete Suppression — Burst Event Deduplication](prd-spurious-delete-suppression.md) | 🔵 Open | 2026-07-16 |
+| [Persistent Events — Disk-Backed Event Queue](prd-persistent-events.md) | 🔵 Open | 2026-07-15 |
 | [Tie-Off Event Enforcement](prd-tie-off-event-enforcement.md) | 🔵 Open | 2026-07-14 |
 | [Demand Control — Concurrency, Throughput and Service Tuning](prd-demand-control.md) | 🔵 Open | 2026-06-26 |
 | [System Reliability — Messaging Control, Replay and Rollback](prd-system-reliability.md) | 🔵 Open | 2026-06-09 |
@@ -28,6 +30,22 @@ To add it to this index:
 ---
 
 ## PRD Summaries
+
+### Spurious Delete Suppression — Burst Event Deduplication
+
+**Status:** 🔵 Open
+**Created:** 2026-07-16
+**Summary:** Suppress spurious DELETE strand events caused by atomic save patterns (truncate+write) so the agent pipeline is not invoked for transient file deletions that are immediately followed by CREATE or MODIFY.
+
+Full details in [prd-spurious-delete-suppression.md](prd-spurious-delete-suppression.md).
+
+### Persistent Events — Disk-Backed Event Queue
+
+**Status:** 🔵 Open
+**Created:** 2026-07-15
+**Summary:** Persist strand events to `rig/events/` as JSON files so pending work survives restarts, and expose HTTP endpoints to list and delete queued events.
+
+Full details in [prd-persistent-events.md](prd-persistent-events.md).
 
 ### Tie-Off Event Enforcement
 
