@@ -4,7 +4,7 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "Knot 0.26.0+"
 ---
 
@@ -211,6 +211,269 @@ obvious: it reads plans (source) and architects (acts on) ADRs (target).
 
 ---
 
+## Events as Signals — One Reason to Change
+
+Events are the primary mechanism for knots in one loom to inform knots
+in another. They are **signals**, not commands. The event announces
+that something happened; the target knot owns all investigation and
+reaction.
+
+### The Event Contract
+
+An event strand is a markdown file with frontmatter carrying **facts**
+and a body carrying **context**. The target knot reads the event and
+then investigates whatever state it is responsible for.
+
+**Frontmatter — the signal (immutable facts):**
+
+```yaml
+---
+event-id: <EventName>
+target-knot: <knot-name-or-loom>
+timestamp: <ISO-8601>
+<fact-key>: <fact-value>
+---
+```
+
+**Body — the context (read-only narrative):**
+
+```markdown
+## Event: <EventName> from <source-knot>
+
+<Narrative explanation of what happened. The target knot can use this
+for context but must not treat it as an instruction.>
+```
+
+### Events Carry Facts, Not Instructions
+
+**❌ Bad — the event tells the target what to do:**
+
+```markdown
+---
+event-id: NonConformance
+---
+
+## Event
+
+Go look up the plan and create a rectification plan.
+You should make the plan at R-005-browse-common-rectify.
+Then update the master plan index.
+```
+
+The event has become a command. It has absorbed the target knot's
+responsibility. If the target knot changes its process, the event
+format also needs to change — two things changing for one reason.
+
+**✅ Good — the event states what happened:**
+
+```markdown
+---
+event-id: NonConformance
+plan: 005-browse-common
+ci-job: frontend
+scenarios: Remove a member, Create a 1-to-1 private Common
+result: NOT RUN
+---
+
+## Event: NonConformance from completion-validator
+
+TestReady event declared 6 scenarios as delivered. Vitest validation
+found only 2 covered by tests. 4 scenarios are NOT RUN.
+```
+
+The event announces facts. The target knot (e.g. `nonconformance-planner`)
+reads these facts, reads the plan, reads the BDD spec, and decides
+what kind of rectification is needed. The event has **one reason to
+change**: the validation result. The target knot has **one reason to
+change**: the rectification process.
+
+### Why This Matters — SOLID Applied
+
+The **Single Responsibility Principle** applies to events as well as
+to code. An event should have **one reason to change**: the state it
+represents. It should not encode the reaction logic of its consumer.
+
+```
+Event (source knot)      Target knot
+─────────────             ─────────────────
+States a fact             Reads the fact
+One reason to change:     One reason to change:
+the thing that happened    the reaction process
+```
+
+If the event contained instructions for the target, then any change
+in the target's process would also require changing the event format.
+Two things changing for one reason — a SOLID violation.
+
+### The Source Loom Owns Event Emission
+
+The knot that emits an event lives in the loom where the **mutation
+that caused the event** occurred. The event is a record of that
+mutation. It does not contain the target's reaction.
+
+Crucially, the producer knot does not declare its events. It does not
+know it has consumers. The consumer declares the subscription via
+`strand-dir`, and Knot injects the emission instructions at runtime.
+This is a fundamental asymmetry:
+
+```
+Consumer side  (declares):
+  strand-dir: "event:completion-validator:NonConformance"
+  event-description: "Triggered when validation fails"
+
+Producer side  (runtime — injected by Knot):
+  ## Agent Events
+  Other knots are listening for events you may emit.
+  Events you may emit: NonConformance
+  If an event occurred, emit in your tie-off:
+    event: NonConformance
+```
+
+The producer's `.md` file contains no reference to `NonConformance`.
+If you change your mind about who listens, you edit only the consumer.
+The producer never needs to change.
+
+For example:
+- `completion-validator` emits `NonConformance` → lives in `validation-loom`
+  because validation is where the non-conformance was discovered
+- The event carries `plan`, `ci-job`, `scenarios`, `result` → facts about
+  what validation found
+- The event does NOT contain "create plan R-005-rectify" → that is the
+  `nonconformance-planner` knot's job
+
+### Designing an Event — Checklist
+
+When designing an event between two knots:
+
+- [ ] The event frontmatter carries **facts only** (identifiers, values)
+- [ ] The event body provides **context** (narrative), not instructions
+- [ ] The event has **one reason to change** (the state it represents)
+- [ ] The target knot can **reproduce the full picture** from its own state
+- [ ] The event does **not encode the target's process**
+- [ ] If the target's process changes, the event format **does not need to change**
+- [ ] The event name describes **what happened**, not what should be done
+  (`NonConformance`, not `CreateRectificationPlan`)
+- [ ] The target knot is named after what it reads and what it does
+  (`nonconformance-planner`, not `plan-creator`)
+
+---
+
+## Event Subscription Design
+
+When designing knots that consume events, choose the right subscription
+level to keep your rig maintainable.
+
+### How Event Wiring Works
+
+Events are a **Knot runtime mechanism**, not something knots hardcode
+in their instructions. The wiring is entirely declarative:
+
+1. **Consumer declares the subscription** using `strand-dir` in its
+   frontmatter:
+
+   ```yaml
+   strand-dir: "event:<producer-target>:<EventName>"
+   ```
+
+   This means: "listen for `<EventName>` events emitted by knots in
+   `<producer-target>`." The `<producer-target>` is either a knot ID
+   (knot-level) or a loom ID ending in `-loom` (loom-level).
+
+2. **Knot discovers the subscription** and creates a dispatch directory
+   at `rig/tie-offs/{consumer-loom-id}/{EventName}/`.
+
+3. **Knot injects event instructions** into the producer's prompt at
+   runtime — grouped by event ID, deduplicated across consumers. The
+   producer knot does not need to know it has consumers; Knot tells it
+   how and when to emit.
+
+4. **Producer emits in its tie-off** (`event: EventName` or
+   `event: None`). Knot parses it and writes event files into the
+   consumer's dispatch directory.
+
+5. **Consumer processes the event** as a strand.
+
+```yaml
+# Consumer declaration — this is the ONLY wiring needed
+strand-dir: "event:completion-validator:DependencyIncomplete"
+event-description: >
+  Trigger if development skips a CI where the SAD defines an order.
+```
+
+Multiple knots can listen to the same event. Each knot in its own
+loom processes it independently according to its own responsibility.
+
+| Event | Listeners | Each Does |
+|-------|-----------|----------|
+| `ProgressReport` | `documentation-loom/progress-journalist`, `review-loom/implementation-review` | One writes docs, one reviews code |
+| `TestReady` | `validation-loom/completion-validator` | Validates against BDD |
+| `TestReady` | `planning-loom/dep-order-planner` | Checks CI dependency order, creates upstream plans |
+| `NonConformance` | `planning-loom/nonconformance-planner` | Creates rectification plan |
+
+### Knot-Level vs Loom-Level Subscriptions
+
+**Knot-level** (`event:<knot-name>:<EventId>`) subscribes to events
+from a *specific* producer knot. Use when:
+- You need events from exactly one known producer.
+- Different knots in the same loom emit different event types.
+- You want precise control over which producer triggers the consumer.
+
+**Loom-level** (`event:<loom-name>:<EventId>`) subscribes to events
+from *any knot* within a loom. Use when:
+- Multiple knots in a loom can emit the same event type.
+- You expect knots to be added to the loom over time.
+- The consumer doesn't care which specific knot produced the event,
+  only that the event occurred within that domain.
+
+### When to Prefer Loom-Level
+
+```
+# ❌ Knot-level — repetitive when multiple producers exist
+strand-dir: "event:prd-planner:PlanCreated"
+strand-dir: "event:adr-planner:PlanCreated"   # separate knot needed!
+strand-dir: "event:goal-planner:PlanCreated"   # another one!
+
+# ✅ Loom-level — one subscription covers the whole loom
+strand-dir: "event:planning-loom:PlanCreated"
+```
+
+With loom-level, adding a new knot to `planning-loom` that emits
+`PlanCreated` automatically triggers the consumer — no subscription
+changes needed.
+
+### Loom-Level Design Checklist
+
+When choosing a loom-level subscription:
+
+- [ ] Multiple knots in the loom *can* emit the same event type
+- [ ] The consumer's logic is *producer-agnostic* (doesn't need to know which knot produced it)
+- [ ] The loom's knot set might grow over time
+- [ ] The target loom name ends in `-loom` (required by convention)
+
+### Event Injection Scope
+
+With a loom-level subscription to `event:planning-loom:PlanCreated`:
+- **Every knot** inside `planning-loom` receives event injection
+  instructions in its prompt.
+- This means every knot knows it should emit an `event:` block in its
+  tie-off if the event occurred during its turn.
+- Events from knots that *don't* actually trigger the event simply
+  emit `event: None` — no harm.
+
+### Resolution Precedence
+
+If a target name matches both a knot name and a loom name:
+- Loom-level takes precedence if the target ends in `-loom`.
+- This is a naming constraint: knot names should not end in `-loom`.
+
+### Backward Compatibility
+
+All existing `event:<knot-name>:<EventId>` URIs continue to work
+unchanged. The loom-level feature is additive — no migration needed
+for existing subscriptions.
+
+---
+
 ## Loop Design
 
 When you have knots flowing in opposite directions, you create a
@@ -356,75 +619,6 @@ When designing a pair of knots that form a loop:
 - [ ] Tie-off files provide an **audit trail** of iterations
 - [ ] A **stale-strand check** exists (skip if strand content unchanged)
 - [ ] A **human-escalation path** exists (max iterations or oscillation detection)
-
----
-
-## Event Subscription Design
-
-When designing knots that consume events, choose the right subscription
-level to keep your rig maintainable.
-
-### Knot-Level vs Loom-Level Subscriptions
-
-**Knot-level** (`event:<knot-name>:<EventId>`) subscribes to events
-from a *specific* producer knot. Use when:
-- You need events from exactly one known producer.
-- Different knots in the same loom emit different event types.
-- You want precise control over which producer triggers the consumer.
-
-**Loom-level** (`event:<loom-name>:<EventId>`) subscribes to events
-from *any knot* within a loom. Use when:
-- Multiple knots in a loom can emit the same event type.
-- You expect knots to be added to the loom over time.
-- The consumer doesn't care which specific knot produced the event,
-  only that the event occurred within that domain.
-
-### When to Prefer Loom-Level
-
-```
-# ❌ Knot-level — repetitive when multiple producers exist
-strand-dir: "event:prd-planner:PlanCreated"
-strand-dir: "event:adr-planner:PlanCreated"   # separate knot needed!
-strand-dir: "event:goal-planner:PlanCreated"   # another one!
-
-# ✅ Loom-level — one subscription covers the whole loom
-strand-dir: "event:planning-loom:PlanCreated"
-```
-
-With loom-level, adding a new knot to `planning-loom` that emits
-`PlanCreated` automatically triggers the consumer — no subscription
-changes needed.
-
-### Loom-Level Design Checklist
-
-When choosing a loom-level subscription:
-
-- [ ] Multiple knots in the loom *can* emit the same event type
-- [ ] The consumer's logic is *producer-agnostic* (doesn't need to know which knot produced it)
-- [ ] The loom's knot set might grow over time
-- [ ] The target loom name ends in `-loom` (required by convention)
-
-### Event Injection Scope
-
-With a loom-level subscription to `event:planning-loom:PlanCreated`:
-- **Every knot** inside `planning-loom` receives event injection
-  instructions in its prompt.
-- This means every knot knows it should emit an `event:` block in its
-  tie-off if the event occurred during its turn.
-- Events from knots that *don't* actually trigger the event simply
-  emit `event: None` — no harm.
-
-### Resolution Precedence
-
-If a target name matches both a knot name and a loom name:
-- Loom-level takes precedence if the target ends in `-loom`.
-- This is a naming constraint: knot names should not end in `-loom`.
-
-### Backward Compatibility
-
-All existing `event:<knot-name>:<EventId>` URIs continue to work
-unchanged. The loom-level feature is additive — no migration needed
-for existing subscriptions.
 
 ---
 
