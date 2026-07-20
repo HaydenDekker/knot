@@ -234,6 +234,8 @@ impl FileSystemLoomRepository {
 
     /// Resolve a path value relative to a base directory.
     ///
+    /// - If the value starts with `~`, expand it to the user's home directory
+    ///   first.
     /// - If the value is an absolute path, canonicalise it.
     /// - If the value is a relative path, join it to `loom_dir`, then
     ///   canonicalise.
@@ -241,10 +243,35 @@ impl FileSystemLoomRepository {
     /// On canonicalisation failure (e.g. directory does not exist yet),
     /// returns the path normalised by resolving `.` and `..` components.
     pub fn resolve_path(loom_dir: &Path, value: &PathBuf) -> PathBuf {
-        let path = if value.is_absolute() {
-            value.clone()
+        let path = if let Some(home) = std::env::var_os("HOME") {
+            // Expand `~` prefix to user's home directory.
+            let value_str = value.to_string_lossy();
+            if let Some(rest) = value_str.strip_prefix('~') {
+                if rest.is_empty() || rest.starts_with('/') {
+                    // `~` or `~/path` — expand to $HOME
+                    let home_path = PathBuf::from(home);
+                    if rest.is_empty() {
+                        home_path
+                    } else {
+                        // rest starts with `/` — append the remainder
+                        // to home_path (trim the leading `/`).
+                        home_path.join(rest.trim_start_matches('/'))
+                    }
+                } else {
+                    // Not a home-path prefix (e.g. `~tilde` without `/`)
+                    value.clone()
+                }
+            } else {
+                value.clone()
+            }
         } else {
-            loom_dir.join(value)
+            value.clone()
+        };
+
+        let path = if path.is_absolute() {
+            path
+        } else {
+            loom_dir.join(&path)
         };
 
         fs::canonicalize(&path).unwrap_or_else(|_| {
@@ -1287,6 +1314,83 @@ Review
             warnings[0].contains("tie-off-dir"),
             "warning should mention 'tie-off-dir', got: {}",
             warnings[0]
+        );
+    }
+
+    // ── Tilde expansion tests ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_path_expands_tilde_to_home() {
+        let rig = tempfile::tempdir().unwrap();
+        let loom_dir = rig.path().join("my-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let home = std::env::var("HOME").expect("HOME should be set");
+        let resolved =
+            FileSystemLoomRepository::resolve_path(
+                &loom_dir,
+                &PathBuf::from("~/.agents/skills"),
+            );
+
+        // Should expand ~ to $HOME, not join to loom_dir.
+        assert!(
+            resolved.is_absolute(),
+            "tilde-expanded path should be absolute, got: {}",
+            resolved.display()
+        );
+        assert!(
+            resolved.starts_with(&home),
+            "path should start with home dir '{}', got: {}",
+            home,
+            resolved.display()
+        );
+        assert!(
+            resolved.to_string_lossy().contains(".agents/skills"),
+            "path should contain .agents/skills, got: {}",
+            resolved.display()
+        );
+    }
+
+    #[test]
+    fn resolve_path_expands_bare_tilde() {
+        let rig = tempfile::tempdir().unwrap();
+        let loom_dir = rig.path().join("my-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let home = std::env::var("HOME").expect("HOME should be set");
+        let resolved =
+            FileSystemLoomRepository::resolve_path(&loom_dir, &PathBuf::from("~"));
+
+        assert!(
+            resolved.is_absolute(),
+            "bare tilde should expand to absolute home path"
+        );
+        assert_eq!(
+            resolved.to_string_lossy(),
+            home,
+            "bare tilde should resolve to $HOME"
+        );
+    }
+
+    #[test]
+    fn resolve_path_tilde_not_at_start_is_relative() {
+        // A path like "foo/~" is NOT a home-path prefix — the
+        // tilde is not at the start. Should be treated as relative.
+        let rig = tempfile::tempdir().unwrap();
+        let loom_dir = rig.path().join("my-loom");
+        fs::create_dir(&loom_dir).unwrap();
+
+        let resolved =
+            FileSystemLoomRepository::resolve_path(
+                &loom_dir,
+                &PathBuf::from("foo/~"),
+            );
+
+        // Should be joined to loom_dir (relative), not expanded.
+        assert!(
+            resolved.to_string_lossy().contains("foo/~"),
+            "tilde not at start should not be expanded, got: {}",
+            resolved.display()
         );
     }
 }
