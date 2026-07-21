@@ -95,7 +95,7 @@ pub struct PendingEvent {
 
 /// The value type produced by the queue.
 ///
-/// Replaces `Option<TimestampedStrandEvent>` so the shutdown sentinel
+/// Replaces `Option<StrandEvent>` so the shutdown sentinel
 /// is an explicit variant rather than `None`.
 #[derive(Debug, Clone)]
 pub enum PendingEventOrShutdown {

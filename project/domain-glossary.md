@@ -1,6 +1,6 @@
 # Domain Glossary
 
-> **Last Updated:** 2026-07-10
+> **Last Updated:** 2026-07-21
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -201,6 +201,34 @@ A background task that periodically polls the rig's in-memory state and writes i
 
 ---
 
+### Events Directory
+
+The disk-backed event queue at `rig/events/`. Each pending strand event is stored as a single JSON file named `{unix_timestamp_ms}-{4-hex-chars}.json`. The directory is flat (no subdirectories) and files are ordered by filename sort (FIFO). The disk **is** the queue — there is no separate in-memory index.
+
+**Lifecycle:**
+- A file is created when an event is pushed (atomic: write to `.json.tmp`, then rename to `.json`)
+- A file is removed when an event is popped (processed) or deleted (by ID)
+- On Knot startup, all `.json` files are scanned and re-queued before the file-watcher begins emitting new events
+- Malformed JSON files are skipped with a warning logged to stderr
+- Non-`.json` files are silently ignored
+
+**Why files, not a single queue file?** Each event is an independent unit — it can be inspected, edited, or deleted on disk at any time. `pop()` reads the file fresh from disk, so on-disk edits are honoured when the event is processed. The shutdown sentinel is NOT persisted (it is a runtime-only signal).
+
+**JSON schema per file:**
+
+```json
+{
+  "id": "1750000000000-a3f7",
+  "kind": "Created",
+  "loom_id": "review-loom",
+  "knot_id": "reviewer",
+  "strand_path": "/home/user/project/src/main.rs",
+  "queued_at": "2026-07-21T10:30:00+01:00"
+}
+```
+
+---
+
 ### StrandSource
 
 The single input-direction primitive for a knot. Replaces the previous dual-input model (`strand-dir` filesystem path + `listens-for` event intents). A knot has exactly **one** `StrandSource`, expressed as `strand-dir` in the knot's YAML frontmatter.
@@ -225,6 +253,7 @@ An optional `event-description` frontmatter field on consumer knots provides the
 Rig (`./rig/`)
  ├── state.json (complete state snapshot — written by State Writer every 5s)
  ├── .rig-log (operational event log — TimeoutExceeded, QueueIdle)
+ ├── events/ (disk-backed event queue — `{timestamp-ms}-{hex}.json` files)
  ├── profiles/ (shared agent profile definitions)
  ├── tie-offs/
  │     └── <loom-id>/

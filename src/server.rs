@@ -284,9 +284,6 @@ pub fn build_app_context(
     )
 }
 
-/// Type alias for the strand event queue used throughout the pipeline.
-type StrandQueue = Arc<dyn StrandEventQueue>;
-
 /// Start the event processing pipeline.
 ///
 /// Wires:
@@ -305,14 +302,13 @@ pub fn start_event_pipeline(
     ctx: &AppContext,
     event_rx: mpsc::Receiver<domain::events::StrandEvent>,
     join_set: &mut tokio::task::JoinSet<()>,
-) -> StrandQueue {
+) -> Arc<dyn StrandEventQueue> {
     // Wire event_rx into the debounce engine, spawned into the join set.
     //
-    // `spawn_with_receiver` creates an InspectQueue<Option<StrandEvent>>
-    // and returns an Arc to it. The debounce engine pushes `Some(event)`
-    // for debounced events and `None` as a shutdown sentinel after
-    // flushing pending entries. ProcessStrand reads from the queue
-    // directly using pop() + notified().await, breaking on `None`.
+    // The debounce engine pushes `PendingEvent` for debounced events
+    // and calls `push_shutdown()` as a sentinel after flushing pending
+    // entries. ProcessStrand reads from the queue directly using
+    // pop() + notified().await, breaking on Shutdown.
     // Read test debounce timing from env vars (set by test helpers),
     // falling back to production defaults.
     let debounce_window = std::env::var("KNOT_TEST_DEBOUNCE_MS")
