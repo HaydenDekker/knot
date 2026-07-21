@@ -81,9 +81,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 65. Persistent Event Queue
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete
 **Created:** 2026-07-21
+**Completed:** 2026-07-21
 **Goal:** Replace the in-memory `InspectQueue` with a trait-based `StrandEventQueue` backed by `rig/events/*.json` files — atomic writes, startup scan-and-restore, and queue operations for listing, deleting, and modifying pending events.
+
+**Result:** `StrandEventQueue` trait defined in ports with `push`, `push_or_replace`, `pop`, `snapshot`, `delete`, `pending_event`, `len`, `is_empty`, `push_shutdown`, and `notified`. `DiskBackedEventQueue` adapter implements the trait using `rig/events/*.json` files (disk is the queue — no in-memory index). `PendingEvent` domain model with unique ID (`{timestamp-ms}-{4-hex}`), JSON serialisation, and `PendingEventOrShutdown` enum replacing `Option<T>`. `FileSystemEventStore` handles atomic writes (temp → rename) and file CRUD. Startup scans `rig/events/` and re-queues persisted events before file-watcher begins. `InMemoryEventQueue` retained for tests. Phase 1 ported entire pipeline to trait before any disk I/O was introduced. 17 new unit tests (Phase 0), 32 new tests (Phase 2), 6 new tests (Phase 3), 8 new integration tests (Phase 4). 1134 total tests pass, 0 failures. Version bumped to 0.30.0.
 
 Full details in [065-persistent-event-queue/persistent-event-queue-plan.md](065-persistent-event-queue/persistent-event-queue-plan.md).
 
