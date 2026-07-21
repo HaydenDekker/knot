@@ -1,6 +1,6 @@
 # Master PRD — Feature Index
 
-> **Last Updated:** 2026-07-16
+> **Last Updated:** 2026-07-20
 
 ## How to Add a PRD
 
@@ -19,6 +19,7 @@ To add it to this index:
 
 | PRD | Status | Created |
 |-----|--------|---------|
+| [Input Reconciliation — Automatic Ledger for Completeness Checking](prd-input-reconciliation.md) | 🔵 Open | 2026-07-20 |
 | [Spurious Delete Suppression — Burst Event Deduplication](prd-spurious-delete-suppression.md) | 🔵 Open | 2026-07-16 |
 | [Persistent Events — Disk-Backed Event Queue](prd-persistent-events.md) | 🔵 Open | 2026-07-15 |
 | [Tie-Off Event Enforcement](prd-tie-off-event-enforcement.md) | 🔵 Open | 2026-07-14 |
@@ -30,6 +31,14 @@ To add it to this index:
 ---
 
 ## PRD Summaries
+
+### Input Reconciliation — Automatic Ledger for Completeness Checking
+
+**Status:** 🔵 Open
+**Created:** 2026-07-20
+**Summary:** Automatic input reconciliation via per-loom ledger files — agents declare what documents they process, Knot diffs against current state, injects gaps into prompts, and updates ledgers after successful turns.
+
+Full details in [prd-input-reconciliation.md](prd-input-reconciliation.md).
 
 ### Spurious Delete Suppression — Burst Event Deduplication
 

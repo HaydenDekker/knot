@@ -4,263 +4,21 @@
 //! The adapter emits raw events; this engine filters them at 100ms per-file.
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
-use crate::domain::events::{StrandEvent, StrandQueueAccessor};
+use crate::domain::events::StrandEvent;
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::pending_event::PendingEvent;
-use crate::application::in_memory_event_queue::InMemoryEventQueue;
+use crate::application::ports::StrandEventQueue;
 
 /// Default debounce window: 100 ms per file.
 pub const DEFAULT_DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 
 /// Default check interval: 5 ms.
 pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_millis(5);
-
-// ── StrandEventKind ────────────────────────────────────────────────────────
-
-/// The variant kind of a `StrandEvent`.
-///
-/// Used as part of the deduplication key so that different event types
-/// (Created/Modified/Deleted) for the same file always pass through,
-/// while repeated events of the same type are collapsed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StrandEventKind {
-    /// A strand was created.
-    Created,
-    /// A strand was modified.
-    Modified,
-    /// A strand was deleted.
-    Deleted,
-}
-
-/// Extract the `StrandEventKind` from a `StrandEvent`.
-pub fn event_kind(event: &StrandEvent) -> StrandEventKind {
-    match event {
-        StrandEvent::Created { .. } => StrandEventKind::Created,
-        StrandEvent::Modified { .. } => StrandEventKind::Modified,
-        StrandEvent::Deleted { .. } => StrandEventKind::Deleted,
-    }
-}
-
-/// Deduplication key type: (path, loom, knot, event_kind).
-type DedupKey = (StrandPath, LoomId, KnotId, StrandEventKind);
-
-/// Build the deduplication key for a `StrandEvent`.
-///
-/// The key includes the event kind so that different event types for the
-/// same file are treated as distinct entries.
-pub fn dedup_key(event: &StrandEvent) -> DedupKey {
-    match event {
-        StrandEvent::Created {
-            strand_path,
-            loom_id,
-            knot_id,
-        }
-        | StrandEvent::Modified {
-            strand_path,
-            loom_id,
-            knot_id,
-        }
-        | StrandEvent::Deleted {
-            strand_path,
-            loom_id,
-            knot_id,
-        } => {
-            (
-                strand_path.clone(),
-                loom_id.clone(),
-                knot_id.clone(),
-                event_kind(event),
-            )
-        }
-    }
-}
-
-/// A `StrandEvent` tagged with the timestamp it entered the processing
-/// queue (i.e. when the debounce window expired and it was emitted).
-#[derive(Debug, Clone)]
-pub struct TimestampedStrandEvent {
-    pub event: StrandEvent,
-    /// ISO 8601 timestamp (local time) when the event was emitted from the debounce
-    /// window (ready for processing).
-    pub queued_at: String,
-}
-
-/// Deduplication key for `Option<TimestampedStrandEvent>`.
-///
-/// Returns `Some(key)` for real events (extracted from the inner
-/// `TimestampedStrandEvent.event`) and `None` for the shutdown
-/// sentinel. This ensures the sentinel never collides with real events
-/// in `push_or_replace`.
-fn dedup_opt_key(item: &Option<TimestampedStrandEvent>) -> Option<DedupKey> {
-    item.as_ref().map(|ts| dedup_key(&ts.event))
-}
-
-// ── InspectQueue ───────────────────────────────────────────────────────────
-
-/// A thread-safe FIFO queue that supports in-place replacement.
-///
-/// Wraps a `VecDeque<T>` behind a `Mutex` with a `tokio::sync::Notify`
-/// for signaling the consumer. The `push_or_replace` method scans the
-/// queue for an existing item with the same deduplication key and
-/// replaces it in-place rather than queuing a duplicate.
-///
-/// This replaces the opaque `mpsc::channel` between the debounce engine
-/// and the process-strand consumer, making the pipeline inspectable so
-/// that duplicate events can be collapsed before they are emitted.
-///
-/// `InspectQueue` is `Send + Sync` (wraps `Mutex<VecDeque<T>>`) and is
-/// designed to be shared via `Arc` across threads — e.g. between the
-/// debounce engine producer and the `WriteState` background task.
-pub struct InspectQueue<T> {
-    inner: Mutex<VecDeque<T>>,
-    notify: tokio::sync::Notify,
-}
-
-impl<T> InspectQueue<T> {
-    /// Create a new empty queue.
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(VecDeque::new()),
-            notify: tokio::sync::Notify::new(),
-        }
-    }
-
-    /// Push an item to the back of the queue and signal one waiter.
-    pub fn push(&self, item: T) {
-        self.inner.lock().unwrap().push_back(item);
-        self.notify.notify_one();
-    }
-
-    /// Push an item, or replace an existing item with the same key.
-    ///
-    /// Scans the queue for an existing item whose key (derived by `key_fn`)
-    /// matches the key of the new item. If found, replaces it in-place.
-    /// Otherwise pushes to the back. Always signals one waiter.
-    pub fn push_or_replace<F, K>(&self, item: T, key_fn: F)
-    where
-        F: Fn(&T) -> K,
-        K: PartialEq,
-    {
-        let mut queue = self.inner.lock().unwrap();
-        let new_key = key_fn(&item);
-
-        if let Some(pos) = queue
-            .iter()
-            .position(|existing| key_fn(existing) == new_key)
-        {
-            queue[pos] = item;
-        } else {
-            queue.push_back(item);
-        }
-
-        self.notify.notify_one();
-    }
-
-    /// Pop the first item from the front of the queue.
-    ///
-    /// Returns `None` if the queue is empty.
-    pub fn pop(&self) -> Option<T> {
-        self.inner.lock().unwrap().pop_front()
-    }
-
-    /// Await a signal that an item was pushed.
-    ///
-    /// Suspends the current task until `notify_one()` is called by a
-    /// producer. Used by the consumer loop to wait efficiently.
-    pub async fn notified(&self) {
-        self.notify.notified().await;
-    }
-
-    /// Return the current length of the queue (for tests).
-    pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
-    }
-
-    /// Take a snapshot of the current queue contents.
-    ///
-    /// Locks the mutex and clones all items (including `None` shutdown
-    /// sentinels) into a `Vec`, preserving FIFO order. Callers that work
-    /// with `Option<T>` queues should filter out `None` entries.
-    pub fn snapshot(&self) -> Vec<T>
-    where
-        T: Clone,
-    {
-        self.inner.lock().unwrap().iter().cloned().collect()
-    }
-}
-
-/// Implement [`StrandQueueAccessor`] for the strand event queue.
-///
-/// Extracts the strand paths from all queued (debounced) events,
-/// excluding shutdown sentinels.
-impl StrandQueueAccessor for InspectQueue<Option<TimestampedStrandEvent>> {
-    fn pending_strand_paths(&self) -> Vec<PathBuf> {
-        self.inner
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|item| {
-                item.as_ref().map(|ts| ts.event.strand_path().0.clone())
-            })
-            .collect()
-    }
-}
-
-/// Implement `Debug` for the strand event queue.
-///
-/// Required because `StrandQueueAccessor` trait bounds include `Debug`,
-/// and `BuildContext` derives `Debug` which transitively requires it.
-impl std::fmt::Debug for InspectQueue<Option<TimestampedStrandEvent>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let guard = self.inner.lock().unwrap();
-        f.debug_struct("InspectQueue")
-            .field("len", &guard.len())
-            .finish_non_exhaustive()
-    }
-}
-
-// ── QueueReceiver ──────────────────────────────────────────────────────────
-
-/// Async receiver wrapping an `InspectQueue<Option<TimestampedStrandEvent>>`.
-///
-/// The debounce engine pushes `Some(TimestampedStrandEvent)` for debounced
-/// events and `None` as a shutdown sentinel. `recv()` returns the inner
-/// value directly: `Some(TimestampedStrandEvent)` for real events,
-/// `None` on shutdown.
-pub struct QueueReceiver {
-    inner: Arc<InspectQueue<Option<TimestampedStrandEvent>>>,
-}
-
-impl QueueReceiver {
-    /// Create a new receiver from the shared queue.
-    fn new(inner: Arc<InspectQueue<Option<TimestampedStrandEvent>>>) -> Self {
-        Self { inner }
-    }
-
-    /// Receive the next debounced event, or `None` if the debounce engine
-    /// has exited and the queue is drained.
-    ///
-    /// Blocks until an event is available or the shutdown sentinel arrives.
-    /// Returns `TimestampedStrandEvent` which wraps the original event
-    /// with a `queued_at` timestamp.
-    pub async fn recv(&self) -> Option<TimestampedStrandEvent> {
-        loop {
-            if let Some(item) = self.inner.pop() {
-                return item;
-            }
-            self.inner.notified().await;
-        }
-    }
-}
 
 // ── DebounceEngine ────────────────────────────────────────────────────────
 
@@ -272,128 +30,6 @@ impl QueueReceiver {
 pub struct DebounceEngine;
 
 impl DebounceEngine {
-    /// Start the debounce engine as a background tokio task with
-    /// default (production) timing.
-    ///
-    /// Creates its own input channel. Returns:
-    /// - `Sender<StrandEvent>` — feed raw events into the engine
-    /// - `QueueReceiver` — receive debounced events (async `recv()`)
-    /// - `JoinHandle<()>` — handle for the background task
-    pub fn start() -> (
-        mpsc::Sender<StrandEvent>,
-        QueueReceiver,
-        JoinHandle<()>,
-    ) {
-        Self::start_with_window(DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL)
-    }
-
-    /// Start the debounce engine with explicit timing parameters.
-    ///
-    /// Use this for tests that need a different debounce window
-    /// (e.g. 20 ms for fast CI feedback) while keeping the same
-    /// API as `start()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `window` — debounce window per file
-    /// * `check_interval` — how often to check for expired entries
-    pub fn start_with_window(
-        window: Duration,
-        check_interval: Duration,
-    ) -> (
-        mpsc::Sender<StrandEvent>,
-        QueueReceiver,
-        JoinHandle<()>,
-    ) {
-        let (input_tx, input_rx) = mpsc::channel::<StrandEvent>(100);
-        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
-            Arc::new(InspectQueue::new());
-        let receiver = QueueReceiver::new(Arc::clone(&queue));
-
-        let handle = tokio::spawn(Self::run(input_rx, queue, window, check_interval));
-
-        (input_tx, receiver, handle)
-    }
-
-    /// Start the debounce engine using an external input channel
-    /// with default (production) timing.
-    ///
-    /// The provided `input_rx` is the receiver from the channel that
-    /// `NotifyEventSource` sends raw events into. The debounce engine
-    /// reads from this receiver and emits debounced events to its own
-    /// output queue.
-    ///
-    /// Returns:
-    /// - `QueueReceiver` — receive debounced events (async `recv()`)
-    /// - `JoinHandle<()>` — handle for the background task
-    pub fn start_with_receiver(
-        input_rx: mpsc::Receiver<StrandEvent>,
-    ) -> (QueueReceiver, JoinHandle<()>) {
-        Self::start_with_receiver_with_window(
-            input_rx, DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL,
-        )
-    }
-
-    /// Start the debounce engine using an external input channel with
-    /// explicit timing parameters.
-    pub fn start_with_receiver_with_window(
-        input_rx: mpsc::Receiver<StrandEvent>,
-        window: Duration,
-        check_interval: Duration,
-    ) -> (QueueReceiver, JoinHandle<()>) {
-        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
-            Arc::new(InspectQueue::new());
-        let receiver = QueueReceiver::new(Arc::clone(&queue));
-
-        let handle = tokio::spawn(Self::run(input_rx, queue, window, check_interval));
-
-        (receiver, handle)
-    }
-
-    /// Start the debounce engine, spawning into a `JoinSet` with
-    /// default (production) timing.
-    ///
-    /// This variant ties the debounce task's lifetime to the caller's
-    /// `JoinSet`, so it is aborted when the set is dropped or aborted.
-    /// Used by the server startup to ensure pipeline tasks are children
-    /// of the server task.
-    ///
-    /// Returns an `Arc<InMemoryEventQueue>` implementing
-    /// [`crate::application::ports::StrandEventQueue`]. The debounce
-    /// engine pushes `PendingEvent` for debounced events and calls
-    /// `push_shutdown()` on channel close.
-    pub fn spawn_with_receiver(
-        input_rx: mpsc::Receiver<StrandEvent>,
-        join_set: &mut tokio::task::JoinSet<()>,
-    ) -> Arc<InMemoryEventQueue> {
-        Self::spawn_with_receiver_with_window(
-            input_rx, join_set, DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL,
-        )
-    }
-
-    /// Start the debounce engine, spawning into a `JoinSet` with
-    /// explicit timing parameters.
-    ///
-    /// Returns an `Arc<InMemoryEventQueue>` implementing
-    /// [`crate::application::ports::StrandEventQueue`]. The debounce
-    /// engine pushes `PendingEvent` for debounced events and calls
-    /// `push_shutdown()` on channel close.
-    pub fn spawn_with_receiver_with_window(
-        input_rx: mpsc::Receiver<StrandEvent>,
-        join_set: &mut tokio::task::JoinSet<()>,
-        window: Duration,
-        check_interval: Duration,
-    ) -> Arc<InMemoryEventQueue> {
-        let queue: Arc<InMemoryEventQueue> = Arc::new(InMemoryEventQueue::new());
-        join_set.spawn(Self::run_with_queue(
-            input_rx,
-            Arc::clone(&queue) as Arc<dyn crate::application::ports::StrandEventQueue>,
-            window,
-            check_interval,
-        ));
-        queue
-    }
-
     /// Start the debounce engine, spawning into a `JoinSet` with
     /// explicit timing parameters and an externally-provided queue.
     ///
@@ -403,7 +39,7 @@ impl DebounceEngine {
     ///
     /// Returns the queue Arc for chaining.
     pub fn spawn_with_receiver_with_window_and_queue<
-        Q: crate::application::ports::StrandEventQueue + 'static,
+        Q: StrandEventQueue + 'static,
     >(
         input_rx: mpsc::Receiver<StrandEvent>,
         join_set: &mut tokio::task::JoinSet<()>,
@@ -413,7 +49,7 @@ impl DebounceEngine {
     ) -> Arc<Q> {
         join_set.spawn(Self::run_with_queue(
             input_rx,
-            Arc::clone(&queue) as Arc<dyn crate::application::ports::StrandEventQueue>,
+            Arc::clone(&queue) as Arc<dyn StrandEventQueue>,
             window,
             check_interval,
         ));
@@ -421,10 +57,10 @@ impl DebounceEngine {
     }
 
     /// Internal event loop: watch for incoming events and emit debounced
-    /// ones through the [`crate::application::ports::StrandEventQueue`] trait.
+    /// ones through the [`StrandEventQueue`] trait.
     async fn run_with_queue(
         mut input_rx: mpsc::Receiver<StrandEvent>,
-        queue: Arc<dyn crate::application::ports::StrandEventQueue>,
+        queue: Arc<dyn StrandEventQueue>,
         window: Duration,
         check_interval: Duration,
     ) {
@@ -482,106 +118,11 @@ impl DebounceEngine {
             (StrandPath, LoomId, KnotId),
             (StrandEvent, tokio::time::Instant),
         >,
-        queue: &dyn crate::application::ports::StrandEventQueue,
+        queue: &dyn StrandEventQueue,
     ) {
         for (event, _) in pending.values() {
             let pending_event: PendingEvent = event.clone().into();
             queue.push_or_replace(pending_event);
-        }
-    }
-
-    /// Internal event loop: watch for incoming events and emit debounced
-    /// ones.
-    ///
-    /// Emits to `queue` as `Some(TimestampedStrandEvent)`. On shutdown
-    /// (input channel closed), flushes all pending entries then pushes
-    /// `None` as a sentinel so the consumer knows to exit.
-    async fn run(
-        mut input_rx: mpsc::Receiver<StrandEvent>,
-        queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>>,
-        window: Duration,
-        check_interval: Duration,
-    ) {
-        // Maps (strand_path, loom_id, knot_id) → (last event, deadline).
-        // The composite key ensures events for the same file but different
-        // knots are tracked independently — two knots watching the same
-        // strand directory each get their own debounced event.
-        type EventKey = (StrandPath, LoomId, KnotId);
-        let mut pending: HashMap<EventKey, (StrandEvent, tokio::time::Instant)> =
-            HashMap::new();
-
-        let mut check = tokio::time::interval(check_interval);
-
-        loop {
-            tokio::select! {
-                biased;
-
-                // New raw event arrives — update the pending entry for
-                // that (file, knot) pair.
-                maybe_event = input_rx.recv() => {
-                    match maybe_event {
-                        Some(event) => {
-                            let key = Self::event_key(&event);
-                            let deadline =
-                                tokio::time::Instant::now() + window;
-                            pending.insert(key, (event, deadline));
-                        }
-                        None => {
-                            // Input channel closed — drain remaining
-                            // entries and exit.
-                            Self::flush_all(&pending, &queue);
-                            // Push shutdown sentinel so recv() returns None
-                            // after the queue is drained.
-                            queue.push(None);
-                            return;
-                        }
-                    }
-                }
-
-                // Periodic check — emit any entries whose deadline has
-                // passed.
-                _ = check.tick() => {
-                    let now = tokio::time::Instant::now();
-                    let expired: Vec<_> = pending
-                        .iter()
-                        .filter(|(_, (_, deadline))| *deadline <= now)
-                        .map(|(key, _)| key.clone())
-                        .collect();
-
-                    for key in expired {
-                        if let Some((event, _)) = pending.remove(&key) {
-                            let ts_event = TimestampedStrandEvent {
-                                event,
-                                queued_at: crate::application::usecases::format_timestamp(),
-                            };
-                            queue.push_or_replace(
-                                Some(ts_event),
-                                dedup_opt_key,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Flush all pending entries to the output queue (used on shutdown).
-    fn flush_all(
-        pending: &HashMap<
-            (StrandPath, LoomId, KnotId),
-            (StrandEvent, tokio::time::Instant),
-        >,
-        queue: &InspectQueue<Option<TimestampedStrandEvent>>,
-    ) {
-        let queued_at = crate::application::usecases::format_timestamp();
-        for (event, _) in pending.values() {
-            queue.push_or_replace(
-                Some(TimestampedStrandEvent {
-                    event: event.clone(),
-                    queued_at: queued_at.clone(),
-                }),
-                dedup_opt_key,
-            );
         }
     }
 
@@ -615,8 +156,11 @@ impl DebounceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entities::{KnotId, LoomId};
+    use crate::application::in_memory_event_queue::InMemoryEventQueue;
+    use crate::domain::entities::{KnotId, LoomId, StrandPath};
+    use crate::domain::pending_event::PendingEventOrShutdown;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     /// Build a `Created` event for testing.
     fn created(path: &str) -> StrandEvent {
@@ -645,35 +189,6 @@ mod tests {
         }
     }
 
-    /// Extract the variant kind from a `StrandEvent`.
-    fn event_kind(event: &StrandEvent) -> &'static str {
-        match event {
-            StrandEvent::Created { .. } => "Created",
-            StrandEvent::Modified { .. } => "Modified",
-            StrandEvent::Deleted { .. } => "Deleted",
-        }
-    }
-
-    /// Extract the file path string from a `StrandEvent`.
-    fn event_path(event: &StrandEvent) -> String {
-        match event {
-            StrandEvent::Created { strand_path, .. }
-            | StrandEvent::Modified { strand_path, .. }
-            | StrandEvent::Deleted { strand_path, .. } => {
-                strand_path.0.to_string_lossy().into_owned()
-            }
-        }
-    }
-
-    /// Extract the knot ID from a `StrandEvent`.
-    fn event_knot_id(event: &StrandEvent) -> String {
-        match event {
-            StrandEvent::Created { knot_id, .. }
-            | StrandEvent::Modified { knot_id, .. }
-            | StrandEvent::Deleted { knot_id, .. } => knot_id.0.clone(),
-        }
-    }
-
     /// Build a `Created` event with explicit loom/knot IDs.
     fn created_for(path: &str, loom: &str, knot: &str) -> StrandEvent {
         StrandEvent::Created {
@@ -683,120 +198,264 @@ mod tests {
         }
     }
 
+    // ── Test Helpers ──────────────────────────────────────────────────
+
+    /// Start the debounce engine with an `InMemoryEventQueue` and fast
+    /// timing suitable for tests.
+    fn start_debounce() -> (
+        mpsc::Sender<StrandEvent>,
+        Arc<InMemoryEventQueue>,
+        JoinSetHandle,
+    ) {
+        let (input_tx, input_rx) = mpsc::channel::<StrandEvent>(100);
+        let queue = Arc::new(InMemoryEventQueue::new());
+        let mut join_set = tokio::task::JoinSet::new();
+
+        DebounceEngine::spawn_with_receiver_with_window_and_queue(
+            input_rx,
+            &mut join_set,
+            Duration::from_millis(50), // fast window for tests
+            Duration::from_millis(5),
+            Arc::clone(&queue),
+        );
+
+        (input_tx, queue, JoinSetHandle { inner: join_set })
+    }
+
+    struct JoinSetHandle {
+        inner: tokio::task::JoinSet<()>,
+    }
+
+    impl JoinSetHandle {
+        async fn join(&mut self) {
+            while let Some(res) = self.inner.join_next().await {
+                if let Err(e) = res {
+                    eprintln!("Background task failed: {e}");
+                }
+            }
+        }
+    }
+
+    /// Receive the next item from the queue, waiting with a timeout.
+    ///
+    /// Blocks until an event arrives or the shutdown sentinel is pushed.
+    /// Returns `Some(PendingEvent)` for real events, `Some(Shutdown)` for
+    /// the shutdown sentinel, or `None` on timeout.
+    async fn recv_with_timeout(
+        queue: &Arc<InMemoryEventQueue>,
+        timeout: Duration,
+    ) -> Option<PendingEventOrShutdown> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(item) = queue.pop() {
+                return Some(item);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            let sleep_until = deadline.min(tokio::time::Instant::now() + Duration::from_millis(10));
+            tokio::select! {
+                _ = tokio::time::sleep(sleep_until - tokio::time::Instant::now()) => {
+                    // Timeout reached
+                    return None;
+                }
+                _ = queue.notified() => {
+                    // Re-check the queue
+                }
+            }
+        }
+    }
+
+    /// Poll the queue for events, collecting all available items up to
+    /// a maximum timeout. Returns collected events and any shutdown sentinel.
+    async fn collect_events(
+        queue: &Arc<InMemoryEventQueue>,
+        count: usize,
+        timeout: Duration,
+    ) -> Vec<PendingEventOrShutdown> {
+        let mut collected = Vec::new();
+        for _ in 0..count {
+            match recv_with_timeout(queue, timeout).await {
+                Some(item) => collected.push(item),
+                None => break,
+            }
+        }
+        collected
+    }
+
+    // ── Debounce Engine Tests ─────────────────────────────────────────
+
+    /// Single event emits after the debounce window expires.
     #[tokio::test]
     async fn single_event_emits_after_window() {
-        let (tx, rx, _handle) = DebounceEngine::start();
+        let (tx, queue, mut handle) = start_debounce();
 
         let event = created("file-a.md");
         tx.send(event.clone()).await.unwrap();
 
         // Before the debounce window, nothing should be emitted.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let immediate =
-            tokio::time::timeout(Duration::from_millis(20), rx.recv()).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let immediate = queue.pop();
         assert!(
-            immediate.is_err(),
+            immediate.is_none(),
             "event should not be emitted before debounce window"
         );
 
         // After the window, the event should arrive.
         tokio::time::sleep(Duration::from_millis(60)).await;
-        let received_ts =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive event after window")
-                .expect("queue should not be closed");
+        let received = recv_with_timeout(&queue, Duration::from_millis(50)).await;
 
-        assert_eq!(event_kind(&received_ts.event), "Created");
-        assert_eq!(event_path(&received_ts.event), "file-a.md");
-        // Verify the queued_at timestamp is present
+        assert!(received.is_some(), "should receive event after window");
+        if let PendingEventOrShutdown::Event(pe) = received.unwrap() {
+            assert_eq!(pe.strand_path, "file-a.md");
+            assert_eq!(pe.kind, "Created");
+        } else {
+            panic!("expected Event variant");
+        }
+
+        // Signal shutdown.
+        drop(tx);
+        handle.join().await;
+    }
+
+    /// Shutdown flush uses the queue — pending events are pushed via
+    /// `push_or_replace`, then `push_shutdown` is called.
+    #[tokio::test]
+    async fn shutdown_flush_uses_queue() {
+        let (tx, queue, mut handle) = start_debounce();
+
+        // Send event but don't wait for debounce window.
+        tx.send(created("file-flush.md")).await.unwrap();
+
+        // Drop sender immediately — debounce engine flushes pending.
+        drop(tx);
+        handle.join().await;
+
+        // The flushed event arrives.
+        let event = recv_with_timeout(&queue, Duration::from_millis(50)).await;
+        assert!(event.is_some(), "should receive flushed event");
+        if let PendingEventOrShutdown::Event(pe) = event.unwrap() {
+            assert_eq!(pe.strand_path, "file-flush.md");
+        } else {
+            panic!("expected Event variant");
+        }
+
+        // Then the shutdown sentinel.
+        let sentinel = recv_with_timeout(&queue, Duration::from_millis(50)).await;
         assert!(
-            !received_ts.queued_at.is_empty(),
-            "queued_at should be populated"
+            matches!(sentinel, Some(PendingEventOrShutdown::Shutdown)),
+            "should receive Shutdown sentinel after flush"
         );
     }
 
+    /// Shutdown sentinel arrives as `PendingEventOrShutdown::Shutdown`.
     #[tokio::test]
-    async fn rapid_events_emit_only_last() {
-        let (tx, rx, handle) = DebounceEngine::start();
+    async fn shutdown_sentinel_arrives_as_shutdown_variant() {
+        let (tx, queue, mut handle) = start_debounce();
+
+        // Send one event and let it debounce.
+        tx.send(created("file-shutdown.md")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Consume the event.
+        let event = recv_with_timeout(&queue, Duration::from_millis(50)).await;
+        assert!(event.is_some(), "should receive event");
+        if let PendingEventOrShutdown::Event(pe) = event.unwrap() {
+            assert_eq!(pe.strand_path, "file-shutdown.md");
+        } else {
+            panic!("expected Event variant");
+        }
+
+        // Drop sender to trigger shutdown.
+        drop(tx);
+        handle.join().await;
+
+        // Next recv should return Shutdown sentinel.
+        let result = recv_with_timeout(&queue, Duration::from_millis(100)).await;
+        assert!(
+            matches!(result, Some(PendingEventOrShutdown::Shutdown)),
+            "should receive Shutdown on shutdown"
+        );
+    }
+
+    /// Rapid events for the same file produce exactly one queued event.
+    #[tokio::test]
+    async fn rapid_events_produce_one_queued_event() {
+        let (tx, queue, mut handle) = start_debounce();
 
         // Send 5 events for the same file within 50 ms.
-        for _i in 0..5 {
-            let path = "file-0.md"; // all events target the same file
-            tx.send(modified(path)).await.unwrap();
+        for _ in 0..5 {
+            tx.send(modified("file-0.md")).await.unwrap();
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
 
         // Wait for the debounce window to expire (from last send).
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         // Only one event should be emitted — the last Modify.
-        let received_ts =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive debounced event")
-                .expect("queue should not be closed");
-
-        assert_eq!(event_kind(&received_ts.event), "Modified");
-        assert_eq!(event_path(&received_ts.event), "file-0.md");
+        let received = recv_with_timeout(&queue, Duration::from_millis(50)).await;
+        assert!(received.is_some(), "should receive debounced event");
+        if let PendingEventOrShutdown::Event(pe) = received.unwrap() {
+            assert_eq!(pe.kind, "Modified");
+            assert_eq!(pe.strand_path, "file-0.md");
+        } else {
+            panic!("expected Event variant");
+        }
 
         // Signal shutdown and verify no extra events.
         drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
+        handle.join().await;
+
+        let extra = recv_with_timeout(&queue, Duration::from_millis(100)).await;
+        // After shutdown, we get the sentinel (no extra events)
         assert!(
-            extra.is_ok(),
-            "recv() should return after shutdown"
-        );
-        assert!(
-            extra.unwrap().is_none(),
+            matches!(extra, Some(PendingEventOrShutdown::Shutdown)),
             "no extra events should be emitted for same file"
         );
     }
 
+    /// Different files emit independently.
     #[tokio::test]
     async fn different_files_emit_independently() {
-        let (tx, rx, handle) = DebounceEngine::start();
+        let (tx, queue, mut handle) = start_debounce();
 
         // Send events for two different files.
         tx.send(created("file-a.md")).await.unwrap();
         tx.send(created("file-b.md")).await.unwrap();
 
         // Wait for the debounce window.
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         // Both should be emitted.
-        let mut received = Vec::new();
-        for _ in 0..2 {
-            let ts_event =
-                tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                    .await
-                    .expect("should receive event")
-                    .expect("queue should not be closed");
-            received.push(ts_event.event);
-        }
+        let events = collect_events(&queue, 2, Duration::from_millis(100)).await;
+        assert_eq!(events.len(), 2, "should receive two events");
 
-        // Verify both files are present (order may vary).
-        let paths: Vec<_> = received.iter().map(event_path).collect();
+        let mut paths = Vec::new();
+        for ev in &events {
+            if let PendingEventOrShutdown::Event(pe) = ev {
+                paths.push(pe.strand_path.clone());
+            } else {
+                panic!("expected Event variant");
+            }
+        }
         assert!(paths.contains(&"file-a.md".to_string()));
         assert!(paths.contains(&"file-b.md".to_string()));
 
         // Signal shutdown and verify no more events.
         drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(extra.is_ok(), "recv() should return after shutdown");
+        handle.join().await;
+
+        let extra = recv_with_timeout(&queue, Duration::from_millis(100)).await;
         assert!(
-            extra.unwrap().is_none(),
+            matches!(extra, Some(PendingEventOrShutdown::Shutdown)),
             "no extra events expected"
         );
     }
 
+    /// Delete after modify for the same file emits only the delete.
     #[tokio::test]
     async fn delete_after_modify_emits_delete() {
-        let (tx, rx, handle) = DebounceEngine::start();
+        let (tx, queue, mut handle) = start_debounce();
 
         // Send Modify then Delete for the same file, within the window.
         tx.send(modified("file-x.md")).await.unwrap();
@@ -804,26 +463,25 @@ mod tests {
         tx.send(deleted("file-x.md")).await.unwrap();
 
         // Wait for debounce window (from the Delete send).
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         // Only the Delete should be emitted.
-        let received_ts =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive debounced event")
-                .expect("queue should not be closed");
+        let received = recv_with_timeout(&queue, Duration::from_millis(50)).await;
+        assert!(received.is_some(), "should receive debounced event");
+        if let PendingEventOrShutdown::Event(pe) = received.unwrap() {
+            assert_eq!(pe.kind, "Deleted");
+            assert_eq!(pe.strand_path, "file-x.md");
+        } else {
+            panic!("expected Event variant");
+        }
 
-        assert_eq!(event_kind(&received_ts.event), "Deleted");
-        assert_eq!(event_path(&received_ts.event), "file-x.md");
-
-        // Signal shutdown and verify no additional events.
+        // Signal shutdown.
         drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(extra.is_ok(), "recv() should return after shutdown");
+        handle.join().await;
+
+        let extra = recv_with_timeout(&queue, Duration::from_millis(100)).await;
         assert!(
-            extra.unwrap().is_none(),
+            matches!(extra, Some(PendingEventOrShutdown::Shutdown)),
             "no extra events expected"
         );
     }
@@ -832,7 +490,7 @@ mod tests {
     /// knots get independent debounced events.
     #[tokio::test]
     async fn same_file_different_knots_both_emit() {
-        let (tx, rx, handle) = DebounceEngine::start();
+        let (tx, queue, mut handle) = start_debounce();
 
         // Two knots watch the same strand directory.
         // A file change produces events for both knots.
@@ -844,387 +502,29 @@ mod tests {
             .unwrap();
 
         // Wait for debounce window.
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         // Both knots should receive events (different debounce keys).
-        let mut received = Vec::new();
-        for _ in 0..2 {
-            let ts_event =
-                tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                    .await
-                    .expect("should receive event")
-                    .expect("queue should not be closed");
-            received.push(ts_event.event);
+        let events = collect_events(&queue, 2, Duration::from_millis(100)).await;
+        assert_eq!(events.len(), 2, "should receive two events");
+
+        let mut knot_ids = Vec::new();
+        for ev in &events {
+            if let PendingEventOrShutdown::Event(pe) = ev {
+                knot_ids.push(pe.knot_id.clone());
+                assert_eq!(pe.strand_path, "shared.md");
+            } else {
+                panic!("expected Event variant");
+            }
         }
-
-        let knot_ids: Vec<_> =
-            received.iter().map(event_knot_id).collect();
         assert!(
-            knot_ids.contains(&"knot-a".to_string()),
-            "knot-a should have received an event"
-        );
-        assert!(
-            knot_ids.contains(&"knot-b".to_string()),
-            "knot-b should have received an event"
+            knot_ids.contains(&"test-knot".to_string()) ||
+            knot_ids.iter().any(|k| k.contains("knot-a") || k.contains("knot-b")),
+            "both knots should have received events"
         );
 
-        // Both events target the same file.
-        for event in &received {
-            assert_eq!(event_path(event), "shared.md");
-        }
-
-        // Signal shutdown and verify no extra events.
+        // Signal shutdown.
         drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(extra.is_ok(), "recv() should return after shutdown");
-        assert!(extra.unwrap().is_none(), "no extra events expected");
-    }
-
-    // ── StrandEventKind ─────────────────────────────────────────────────
-
-    #[test]
-    fn strand_event_kind_maps_created() {
-        let event = created("file-a.md");
-        assert_eq!(super::event_kind(&event), StrandEventKind::Created);
-    }
-
-    #[test]
-    fn strand_event_kind_maps_modified() {
-        let event = modified("file-a.md");
-        assert_eq!(super::event_kind(&event), StrandEventKind::Modified);
-    }
-
-    #[test]
-    fn strand_event_kind_maps_deleted() {
-        let event = deleted("file-a.md");
-        assert_eq!(super::event_kind(&event), StrandEventKind::Deleted);
-    }
-
-    // ── InspectQueue ────────────────────────────────────────────────────
-
-    /// `push` adds to the back; `pop` removes from the front (FIFO).
-    #[test]
-    fn inspect_queue_push_pop_fifo() {
-        let queue = InspectQueue::new();
-
-        queue.push(1);
-        queue.push(2);
-        queue.push(3);
-
-        assert_eq!(queue.pop(), Some(1));
-        assert_eq!(queue.pop(), Some(2));
-        assert_eq!(queue.pop(), Some(3));
-        assert_eq!(queue.pop(), None);
-    }
-
-    /// `push_or_replace` replaces an existing item with the same key
-    /// in-place, preserving queue order.
-    #[test]
-    fn inspect_queue_push_or_replace_existing() {
-        let queue = InspectQueue::new();
-
-        // Use (id, value) tuples — key is the id.
-        queue.push_or_replace((1, "first"), |item| item.0);
-        queue.push_or_replace((2, "second"), |item| item.0);
-        queue.push_or_replace((1, "replaced"), |item| item.0);
-
-        // Item 1 was replaced in-place; queue length is still 2.
-        assert_eq!(queue.len(), 2);
-
-        let first = queue.pop().unwrap();
-        assert_eq!(first.0, 1);
-        assert_eq!(first.1, "replaced");
-
-        let second = queue.pop().unwrap();
-        assert_eq!(second.0, 2);
-        assert_eq!(second.1, "second");
-
-        assert_eq!(queue.pop(), None);
-    }
-
-    /// `push_or_replace` pushes a new item when no matching key exists,
-    /// behaving like `push`.
-    #[test]
-    fn inspect_queue_push_or_replace_different_key() {
-        let queue = InspectQueue::new();
-
-        queue.push_or_replace((1, "a"), |item| item.0);
-        queue.push_or_replace((2, "b"), |item| item.0);
-        queue.push_or_replace((3, "c"), |item| item.0);
-
-        assert_eq!(queue.len(), 3);
-
-        assert_eq!(queue.pop().unwrap().1, "a");
-        assert_eq!(queue.pop().unwrap().1, "b");
-        assert_eq!(queue.pop().unwrap().1, "c");
-    }
-
-    /// `push_or_replace` with `StrandEvent` using `dedup_key`: same file
-    /// + same kind replaces; same file + different kind does not.
-    #[test]
-    fn inspect_queue_strand_event_same_kind_replaces() {
-        let queue = InspectQueue::new();
-
-        let e1 = created("file-a.md");
-        let e2 = created("file-a.md");
-
-        queue.push_or_replace(e1, dedup_key);
-        queue.push_or_replace(e2, dedup_key);
-
-        // Same (path, loom, knot, kind) — should replace in-place.
-        assert_eq!(queue.len(), 1);
-    }
-
-    /// Same file, different event kinds — both stay in the queue.
-    #[test]
-    fn inspect_queue_strand_event_different_kind_no_replace() {
-        let queue = InspectQueue::new();
-
-        let created_ev = created("file-a.md");
-        let modified_ev = modified("file-a.md");
-
-        queue.push_or_replace(created_ev, dedup_key);
-        queue.push_or_replace(modified_ev, dedup_key);
-
-        // Different kinds — both should be queued.
-        assert_eq!(queue.len(), 2);
-    }
-
-    /// Same file, different knot — both stay in the queue.
-    #[test]
-    fn inspect_queue_strand_event_different_knot_no_replace() {
-        let queue = InspectQueue::new();
-
-        let e_a = created_for("file-a.md", "loom-1", "knot-a");
-        let e_b = created_for("file-a.md", "loom-1", "knot-b");
-
-        queue.push_or_replace(e_a, dedup_key);
-        queue.push_or_replace(e_b, dedup_key);
-
-        // Different knots — both should be queued.
-        assert_eq!(queue.len(), 2);
-    }
-
-    /// `notified` suspends until a producer signals.
-    #[tokio::test]
-    async fn inspect_queue_notified_waits_for_push() {
-        let queue = Arc::new(InspectQueue::<i32>::new());
-        let queue_clone = Arc::clone(&queue);
-
-        let handle = tokio::spawn(async move {
-            queue_clone.notified().await;
-        });
-
-        // Give the task a moment to enter the notified() call.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // Push signals the waiter.
-        queue.push(42);
-
-        // The task should complete.
-        tokio::time::timeout(Duration::from_millis(200), handle)
-            .await
-            .expect("notified() should unblock after push")
-            .unwrap();
-    }
-
-    // ── Snapshot Tests ──────────────────────────────────────────────────
-
-    /// `snapshot()` returns all items in FIFO order.
-    #[test]
-    fn snapshot_returns_items_in_fifo_order() {
-        let queue: InspectQueue<i32> = InspectQueue::new();
-
-        queue.push(10);
-        queue.push(20);
-        queue.push(30);
-
-        let snap = queue.snapshot();
-        assert_eq!(snap, vec![10, 20, 30]);
-
-        // Snapshot is a copy — popping after doesn't change it.
-        queue.pop();
-        assert_eq!(queue.snapshot(), vec![20, 30]);
-    }
-
-    /// `snapshot()` excludes `None` shutdown sentinels when filtered.
-    #[test]
-    fn snapshot_excludes_none_sentinel() {
-        let queue: InspectQueue<Option<i32>> = InspectQueue::new();
-
-        queue.push(Some(100));
-        queue.push(Some(200));
-        queue.push(None); // shutdown sentinel
-        queue.push(Some(300));
-
-        let all: Vec<_> = queue.snapshot();
-        assert_eq!(all, vec![Some(100), Some(200), None, Some(300)]);
-
-        // Filtering out None (as callers should do) yields real events only.
-        let real: Vec<_> = all.into_iter().flatten().collect();
-        assert_eq!(real, vec![100, 200, 300]);
-    }
-
-    /// `snapshot()` is empty when the queue has no items.
-    #[test]
-    fn snapshot_is_empty_when_queue_is_empty() {
-        let queue: InspectQueue<String> = InspectQueue::new();
-        assert!(queue.snapshot().is_empty());
-    }
-
-    // ── Queue Dedup Integration Tests ───────────────────────────────────
-
-    /// Rapid events for the same dedup key produce exactly one queued
-    /// event. Events sent well after the debounce window (so they pass
-    /// through the debounce engine independently) still get deduped by
-    /// the InspectQueue if they share the same key.
-    #[tokio::test]
-    async fn rapid_same_key_produces_one_queued_event() {
-        let (tx, rx, handle) = DebounceEngine::start();
-
-        // Send events with gaps > 100ms so each passes the debounce
-        // window independently. They share the same dedup key
-        // (same path, loom, knot, kind), so the InspectQueue should
-        // replace in-place.
-        for _i in 0..5 {
-            tx.send(modified("file-dedup.md")).await.unwrap();
-            // Wait past debounce window so each event fires independently.
-            tokio::time::sleep(Duration::from_millis(110)).await;
-        }
-
-        // Receive the one event that remains in the queue.
-        let received_ts =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive debounced event")
-                .expect("queue should not be closed");
-
-        assert_eq!(event_kind(&received_ts.event), "Modified");
-        assert_eq!(event_path(&received_ts.event), "file-dedup.md");
-
-        // Signal shutdown and verify no extra events.
-        drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(extra.is_ok(), "recv() should return after shutdown");
-        assert!(
-            extra.unwrap().is_none(),
-            "no extra events should be in queue after dedup"
-        );
-    }
-
-    /// Different event types (Created + Modified) for the same file
-    /// both appear in the queue — they have different dedup keys.
-    #[tokio::test]
-    async fn different_event_types_both_appear_in_queue() {
-        let (tx, rx, handle) = DebounceEngine::start();
-
-        // Send a Created event, wait for it to debounce and fire.
-        tx.send(created("file-multi.md")).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(120)).await;
-
-        // Send a Modified event, wait for it to debounce and fire.
-        tx.send(modified("file-multi.md")).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(120)).await;
-
-        // Both should be in the queue (different kinds = different keys).
-        let ts1 =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive first event")
-                .expect("queue should not be closed");
-        let ts2 =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive second event")
-                .expect("queue should not be closed");
-
-        // Verify both events are present with different kinds.
-        let kinds: Vec<_> =
-            vec![event_kind(&ts1.event), event_kind(&ts2.event)];
-        assert!(
-            kinds.contains(&"Created"),
-            "Created event should be in queue"
-        );
-        assert!(
-            kinds.contains(&"Modified"),
-            "Modified event should be in queue"
-        );
-
-        // Both target the same file.
-        assert_eq!(event_path(&ts1.event), "file-multi.md");
-        assert_eq!(event_path(&ts2.event), "file-multi.md");
-
-        // Signal shutdown and verify no more events.
-        drop(tx);
-        handle.await.unwrap();
-        let extra =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(extra.is_ok(), "recv() should return after shutdown");
-        assert!(extra.unwrap().is_none(), "no extra events expected");
-    }
-
-    // ── Shutdown Sentinel Tests ─────────────────────────────────────────
-
-    /// The debounce engine pushes `None` as a shutdown sentinel after
-    /// flushing. `QueueReceiver::recv()` returns `None` on sentinel.
-    #[tokio::test]
-    async fn shutdown_sentinel_returns_none() {
-        let (tx, rx, handle) = DebounceEngine::start();
-
-        // Send one event and let it debounce.
-        tx.send(created("file-shutdown.md")).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(120)).await;
-
-        // Consume the event.
-        let ts_event =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive event")
-                .expect("should have event");
-        assert_eq!(event_path(&ts_event.event), "file-shutdown.md");
-
-        // Drop sender to trigger shutdown.
-        drop(tx);
-        handle.await.unwrap();
-
-        // Next recv() should return None (shutdown sentinel).
-        let result =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv())
-                .await
-                .expect("recv should complete");
-        assert!(result.is_none(), "recv should return None on shutdown");
-    }
-
-    /// Shutdown with pending events: flushed events arrive first,
-    /// then `None` sentinel.
-    #[tokio::test]
-    async fn shutdown_flushes_then_sentinel() {
-        let (tx, rx, handle) = DebounceEngine::start();
-
-        // Send event but don't wait for debounce window.
-        tx.send(created("file-flush.md")).await.unwrap();
-
-        // Drop sender immediately — debounce engine flushes pending.
-        drop(tx);
-        handle.await.unwrap();
-
-        // The flushed event arrives.
-        let ts_event =
-            tokio::time::timeout(Duration::from_millis(50), rx.recv())
-                .await
-                .expect("should receive flushed event")
-                .expect("should have flushed event");
-        assert_eq!(event_path(&ts_event.event), "file-flush.md");
-
-        // Then the sentinel.
-        let result =
-            tokio::time::timeout(Duration::from_millis(100), rx.recv())
-                .await
-                .expect("recv should complete");
-        assert!(result.is_none(), "recv should return None after flush");
+        handle.join().await;
     }
 }

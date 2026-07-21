@@ -326,8 +326,10 @@ pub fn start_event_pipeline(
         .map(Duration::from_millis)
         .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
 
-    let debounce_queue = application::debounce::DebounceEngine::spawn_with_receiver_with_window(
-        event_rx, join_set, debounce_window, check_interval,
+    let debounce_queue: Arc<crate::application::in_memory_event_queue::InMemoryEventQueue> =
+        Arc::new(crate::application::in_memory_event_queue::InMemoryEventQueue::new());
+    let debounce_queue = application::debounce::DebounceEngine::spawn_with_receiver_with_window_and_queue(
+        event_rx, join_set, debounce_window, check_interval, debounce_queue,
     );
 
     // Store the queue Arc in AppContext so WriteState can snapshot it.
