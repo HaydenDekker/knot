@@ -284,25 +284,28 @@ pub fn build_app_context(
     )
 }
 
-/// Start the event processing pipeline.
+/// Set up the event processing pipeline (queue + debounce engine).
 ///
 /// Wires:
 /// NotifyEventSource → event_sender → event_rx → DebounceEngine
-/// → ProcessStrand loop (tokio task)
+/// → StrandEventQueue (disk-backed)
 ///
 /// The `event_rx` parameter is the receiver from the channel that
 /// `NotifyEventSource` sends raw events into.
 ///
-/// Spawns both the debounce engine and process strand into the provided
-/// `JoinSet`. This ensures the pipeline tasks are children of the server
-/// task and are aborted when the server stops.
+/// This creates the queue, loads persisted events, and spawns the
+/// debounce engine into the provided `JoinSet`. The process-strand
+/// loop is **not** spawned here — call `spawn_process_strand_loop()`
+/// after `run_startup()` completes so that persisted events are only
+/// processed after looms have been discovered.
+///
 /// Returns the `Arc<dyn StrandEventQueue>` so it can be shared with
 /// `start_state_writer` for queue visibility.
 pub fn start_event_pipeline(
     ctx: &AppContext,
     event_rx: mpsc::Receiver<domain::events::StrandEvent>,
     join_set: &mut tokio::task::JoinSet<()>,
-) -> Arc<dyn StrandEventQueue> {
+) -> Arc<DiskBackedEventQueue> {
     // Wire event_rx into the debounce engine, spawned into the join set.
     //
     // The debounce engine pushes `PendingEvent` for debounced events
@@ -346,6 +349,23 @@ pub fn start_event_pipeline(
         *guard = Some(Arc::clone(&debounce_queue) as Arc<dyn StrandEventQueue>);
     }
 
+    debounce_queue
+}
+
+/// Spawn the process-strand loop as a background task.
+///
+/// Call this **after** `run_startup()` completes so that looms are
+/// discovered before any persisted events are processed. If called
+/// before discovery, persisted events referencing those looms will
+/// fail with "loom not found".
+///
+/// Wires the process-strand loop to read from the disk-backed queue,
+/// execute agent invocations, and log queue idle events.
+pub fn spawn_process_strand_loop(
+    ctx: &AppContext,
+    debounce_queue: Arc<DiskBackedEventQueue>,
+    join_set: &mut tokio::task::JoinSet<()>,
+) {
     // ProcessStrand loop: read debounced events and process them.
     let store = ctx.store.clone();
     let log_port = Arc::clone(&ctx.loom_log_port);
@@ -366,8 +386,7 @@ pub fn start_event_pipeline(
         crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
     );
 
-    // Clone debounce_queue before moving into the closure — we return
-    // the original Arc from this function for WriteState to use.
+    // Clone debounce_queue before moving into the closure.
     let debounce_queue_inner = Arc::clone(&debounce_queue);
     join_set.spawn(async move {
         let use_case = Arc::new(application::usecases::ProcessStrand::new(
@@ -509,8 +528,6 @@ pub fn start_event_pipeline(
             }
         }
     });
-
-    debounce_queue
 }
 
 /// Run the startup discovery and registration sequence.
@@ -683,18 +700,28 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // Start the config event pipeline: ConfigEventHandler (child of this task)
     start_config_pipeline(&ctx, config_rx, &mut join_set);
 
-    // Start the strand event pipeline: debounce + ProcessStrand (child of this task)
-    // The queue Arc is stored in ctx.strand_queue via interior mutability.
-    let _ = start_event_pipeline(&ctx, strand_rx, &mut join_set);
+    // Start the strand event pipeline: creates the queue, loads persisted
+    // events, and spawns the debounce engine.
+    // The process-strand loop is NOT spawned yet — it is deferred until
+    // after run_startup() so that looms are discovered before persisted
+    // events referencing them are processed.
+    let debounce_queue = start_event_pipeline(&ctx, strand_rx, &mut join_set);
 
     // Start the state writer: writes rig/state.json every 5 seconds
     start_state_writer(&ctx, &mut join_set);
 
-    // Startup: discover looms, create state files, start watchers
+    // Startup: discover looms, create state files, start watchers.
+    // Must complete before the process-strand loop is spawned, so that
+    // persisted events referencing these looms can be resolved.
     let looms = run_startup(&ctx, &config.rig_dir).unwrap_or_else(|e| {
         eprintln!("WARNING: startup discovery failed: {e}");
         Vec::new()
     });
+
+    // Now that looms are discovered, spawn the process-strand loop.
+    // Persisted events loaded during start_event_pipeline can now be
+    // processed safely since their target looms are registered.
+    spawn_process_strand_loop(&ctx, debounce_queue, &mut join_set);
 
     // Store loom IDs in context for graceful shutdown logging.
     {

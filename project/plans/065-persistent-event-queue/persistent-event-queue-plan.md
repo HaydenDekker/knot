@@ -500,3 +500,15 @@ Remove obsolete types and wire final state.
 - Full test suite: 725 unit tests + 409 integration tests = 1,134 passed, 0 failures
 - Version bumped to 0.30.0 (MINOR — new feature, backwards compatible)
 - Domain glossary updated with `Events Directory` term
+
+## Bugfix: 2026-07-21 — Startup ordering: persisted events processed before looms discovered
+
+**Problem:** After restarting Knot with events in the queue, the process-strand loop processed them before `DiscoverLooms` had run, causing `loom 'X-loom' not found` errors for every persisted event.
+
+**Root cause:** `start_event_pipeline()` both loaded persisted events AND spawned the process-strand loop. This was called before `run_startup()`, so the loop started consuming events before looms were registered in the store.
+
+**Fix:** Split `start_event_pipeline()` into two functions:
+- `start_event_pipeline()` — creates the queue, loads persisted events, spawns the debounce engine (but NOT the process-strand loop)
+- `spawn_process_strand_loop()` — spawns the process-strand loop
+
+`spawn_process_strand_loop()` is now called after `run_startup()` completes, ensuring looms are discovered before any persisted events are processed.
