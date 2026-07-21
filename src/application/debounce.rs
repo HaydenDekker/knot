@@ -15,6 +15,8 @@ use tokio::task::JoinHandle;
 
 use crate::domain::events::{StrandEvent, StrandQueueAccessor};
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
+use crate::domain::pending_event::PendingEvent;
+use crate::application::in_memory_event_queue::InMemoryEventQueue;
 
 /// Default debounce window: 100 ms per file.
 pub const DEFAULT_DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
@@ -356,14 +358,14 @@ impl DebounceEngine {
     /// Used by the server startup to ensure pipeline tasks are children
     /// of the server task.
     ///
-    /// Returns an `Arc<InspectQueue<Option<TimestampedStrandEvent>>>` for the
-    /// ProcessStrand consumer to read from directly using `pop()` +
-    /// `notified()`. The debounce engine pushes `Some(TimestampedStrandEvent)`
-    /// for debounced events and `None` as a shutdown sentinel.
+    /// Returns an `Arc<InMemoryEventQueue>` implementing
+    /// [`crate::application::ports::StrandEventQueue`]. The debounce
+    /// engine pushes `PendingEvent` for debounced events and calls
+    /// `push_shutdown()` on channel close.
     pub fn spawn_with_receiver(
         input_rx: mpsc::Receiver<StrandEvent>,
         join_set: &mut tokio::task::JoinSet<()>,
-    ) -> Arc<InspectQueue<Option<TimestampedStrandEvent>>> {
+    ) -> Arc<InMemoryEventQueue> {
         Self::spawn_with_receiver_with_window(
             input_rx, join_set, DEFAULT_DEBOUNCE_WINDOW, DEFAULT_CHECK_INTERVAL,
         )
@@ -371,16 +373,121 @@ impl DebounceEngine {
 
     /// Start the debounce engine, spawning into a `JoinSet` with
     /// explicit timing parameters.
+    ///
+    /// Returns an `Arc<InMemoryEventQueue>` implementing
+    /// [`crate::application::ports::StrandEventQueue`]. The debounce
+    /// engine pushes `PendingEvent` for debounced events and calls
+    /// `push_shutdown()` on channel close.
     pub fn spawn_with_receiver_with_window(
         input_rx: mpsc::Receiver<StrandEvent>,
         join_set: &mut tokio::task::JoinSet<()>,
         window: Duration,
         check_interval: Duration,
-    ) -> Arc<InspectQueue<Option<TimestampedStrandEvent>>> {
-        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
-            Arc::new(InspectQueue::new());
-        join_set.spawn(Self::run(input_rx, Arc::clone(&queue), window, check_interval));
+    ) -> Arc<InMemoryEventQueue> {
+        let queue: Arc<InMemoryEventQueue> = Arc::new(InMemoryEventQueue::new());
+        join_set.spawn(Self::run_with_queue(
+            input_rx,
+            Arc::clone(&queue) as Arc<dyn crate::application::ports::StrandEventQueue>,
+            window,
+            check_interval,
+        ));
         queue
+    }
+
+    /// Start the debounce engine, spawning into a `JoinSet` with
+    /// explicit timing parameters and an externally-provided queue.
+    ///
+    /// The `queue` is shared with the ProcessStrand consumer and
+    /// `WriteState`. The debounce engine pushes `PendingEvent` for
+    /// debounced events and calls `push_shutdown()` on channel close.
+    ///
+    /// Returns the queue Arc for chaining.
+    pub fn spawn_with_receiver_with_window_and_queue<
+        Q: crate::application::ports::StrandEventQueue + 'static,
+    >(
+        input_rx: mpsc::Receiver<StrandEvent>,
+        join_set: &mut tokio::task::JoinSet<()>,
+        window: Duration,
+        check_interval: Duration,
+        queue: Arc<Q>,
+    ) -> Arc<Q> {
+        join_set.spawn(Self::run_with_queue(
+            input_rx,
+            Arc::clone(&queue) as Arc<dyn crate::application::ports::StrandEventQueue>,
+            window,
+            check_interval,
+        ));
+        queue
+    }
+
+    /// Internal event loop: watch for incoming events and emit debounced
+    /// ones through the [`crate::application::ports::StrandEventQueue`] trait.
+    async fn run_with_queue(
+        mut input_rx: mpsc::Receiver<StrandEvent>,
+        queue: Arc<dyn crate::application::ports::StrandEventQueue>,
+        window: Duration,
+        check_interval: Duration,
+    ) {
+        // Maps (strand_path, loom_id, knot_id) → (last event, deadline).
+        type EventKey = (StrandPath, LoomId, KnotId);
+        let mut pending: HashMap<EventKey, (StrandEvent, tokio::time::Instant)> =
+            HashMap::new();
+
+        let mut check = tokio::time::interval(check_interval);
+
+        loop {
+            tokio::select! {
+                biased;
+
+                maybe_event = input_rx.recv() => {
+                    match maybe_event {
+                        Some(event) => {
+                            let key = Self::event_key(&event);
+                            let deadline =
+                                tokio::time::Instant::now() + window;
+                            pending.insert(key, (event, deadline));
+                        }
+                        None => {
+                            // Input channel closed — drain remaining
+                            // entries and exit.
+                            Self::flush_all_with_queue(&pending, &*queue);
+                            queue.push_shutdown();
+                            return;
+                        }
+                    }
+                }
+
+                _ = check.tick() => {
+                    let now = tokio::time::Instant::now();
+                    let expired: Vec<_> = pending
+                        .iter()
+                        .filter(|(_, (_, deadline))| *deadline <= now)
+                        .map(|(key, _)| key.clone())
+                        .collect();
+
+                    for key in expired {
+                        if let Some((event, _)) = pending.remove(&key) {
+                            let pending_event: PendingEvent = event.into();
+                            (*queue).push_or_replace(pending_event);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flush all pending entries to the output queue (used on shutdown).
+    fn flush_all_with_queue(
+        pending: &HashMap<
+            (StrandPath, LoomId, KnotId),
+            (StrandEvent, tokio::time::Instant),
+        >,
+        queue: &dyn crate::application::ports::StrandEventQueue,
+    ) {
+        for (event, _) in pending.values() {
+            let pending_event: PendingEvent = event.clone().into();
+            queue.push_or_replace(pending_event);
+        }
     }
 
     /// Internal event loop: watch for incoming events and emit debounced

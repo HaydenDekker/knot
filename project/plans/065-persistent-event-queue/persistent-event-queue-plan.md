@@ -309,9 +309,18 @@ Define the persisted event data model, file naming convention, and conversion to
 - `dedup_key` produces different key for same path but different kind
 - `PendingEventOrShutdown` variant matching
 
-### Phase 1: StrandEventQueue Trait and Port Error
+**Implementation notes:**
+- Module registered in `src/domain/mod.rs` as `pub mod pending_event`
+- `generate_event_id()` uses `std::time::SystemTime` for timestamp and `/dev/urandom` via `File::open` + `read_exact` for randomness
+- `UnknownEventKind` error type added with `Display` + `Error` impl
+- 17 tests all passing, 0 existing tests affected
 
-Define the application-layer port trait and error type.
+**Bug discovered and fixed:**
+- `std::fs::read("/dev/urandom")` blocks forever (infinite stream, no EOF) — replaced with bounded `File::open` + `read_exact` reading exactly `n/2` bytes
+
+### Phase 1: StrandEventQueue Trait and In-Memory Adapter
+
+Define the trait and port the existing in-memory queue behind it. This is the **trait-first** step — the trait is introduced and the entire pipeline is switched to use it, backed by an in-memory implementation that preserves current behaviour. This way all existing tests are adapted to the trait before any disk I/O is introduced, minimising integration risk in later phases.
 
 **Changes to `src/application/ports.rs`:**
 - Add `PortError::EventStoreFailed(String)` variant for file I/O errors
@@ -319,10 +328,37 @@ Define the application-layer port trait and error type.
 
 **New file:** `src/application/event_queue.rs` — re-exports the trait and types
 
+**New file:** `src/application/in_memory_event_queue.rs` — `InMemoryEventQueue`:
+- Internal state: `Mutex<VecDeque<PendingEvent>>` + `Mutex<bool>` for shutdown sentinel + `tokio::sync::Notify`
+- Implements `StrandEventQueue` trait with in-memory semantics (no disk I/O)
+- `push()` — enqueue, signal Notify
+- `push_or_replace()` — scan deque for dedup key, remove match if found, always enqueue new
+- `pop()` — dequeue front item; if empty and shutdown flag set, return `Shutdown`
+- `snapshot()` — clone deque contents
+- `delete()` — scan deque, remove by ID
+- `pending_event()` — scan deque, return by ID
+- `push_shutdown()` — set sentinel flag, signal Notify
+- `notified()` — delegate to Notify
+
+**Changes to `server.rs` / `write_state.rs`:**
+- Replace `InspectQueue<Option<TimestampedStrandEvent>>` with `Arc<dyn StrandEventQueue>` (backed by `InMemoryEventQueue`)
+- `AppContext.strand_queue` type updated to `Option<Arc<dyn StrandEventQueue>>`
+- `WriteState` adapted to use the trait (call `snapshot()` on `dyn StrandEventQueue`)
+- Process-strand loop adapted to match `PendingEventOrShutdown`
+
+**Changes to `debounce.rs`:**
+- Replace `InspectQueue` usage with `Arc<dyn StrandEventQueue>`
+- Add `spawn_with_receiver_with_window_and_queue()` accepting the trait
+- Keep existing method signatures for now (they internally create an `InMemoryEventQueue`) so this phase is a **pure refactor** — behaviour unchanged, but the pipeline now talks through the trait
+
 **Tests:**
 - Trait is object-safe (`&dyn StrandEventQueue` compiles)
-- `PortError::EventStoreFailed` displays correctly
-- `PortError::EventStoreFailed` implements `std::error::Error`
+- `PortError::EventStoreFailed` displays correctly and implements `std::error::Error`
+- **All existing `InspectQueue` tests (12) re-run against `InMemoryEventQueue`** — push/pop FIFO, dedup, snapshot, notified
+- **All existing debounce engine tests (8) pass** — behaviour unchanged, but queue is now trait-backed
+- All server composition tests pass — pipeline uses trait throughout
+
+**Goal:** zero behavioural change, but the entire pipeline now speaks `StrandEventQueue`. When Phase 2 introduces `DiskBackedEventQueue`, we only swap the constructor — everything else already talks through the trait.
 
 ### Phase 2: DiskBackedEventQueue Implementation
 
@@ -377,51 +413,40 @@ Implement the file-backed queue adapter.
 - Modify event file on disk, `pop` returns updated content
 - `snapshot` after modify returns updated content
 
-### Phase 3: Debounce Engine Integration
+### Phase 3: Debounce Engine Cleanup
 
-Modify `DebounceEngine` to accept a `StrandEventQueue` instead of creating its own `InspectQueue`.
+Remove the legacy in-memory compat shims from Phase 1. Now that the pipeline uses the trait and `DiskBackedEventQueue` is available, strip out the old `InspectQueue`-backed convenience methods.
 
 **Changes to `debounce.rs`:**
-- Remove `InspectQueue` and `QueueReceiver` (replaced by trait)
-- Add `spawn_with_receiver_with_window_and_queue(input_rx, join_set, window, check_interval, queue: Arc<dyn StrandEventQueue>)`
-- Internal event loop calls `queue.push_or_replace(PendingEventOrShutdown::Event(event))` for expired events
-- On channel close, flushes all pending via `push_or_replace`, then calls `queue.push_shutdown()`
-- Remove `start()`, `start_with_window()`, `start_with_receiver()`, `start_with_receiver_with_window()`, `spawn_with_receiver()`, `spawn_with_receiver_with_window()` (all replaced by queue-accepting variants)
+- Remove `start()`, `start_with_window()`, `start_with_receiver()`, `start_with_receiver_with_window()`, `spawn_with_receiver()`, `spawn_with_receiver_with_window()` — all replaced by `spawn_with_receiver_with_window_and_queue()` which accepts the trait
+- Remove `QueueReceiver` type (replaced by trait)
 - `TimestampedStrandEvent` replaced by `PendingEvent` (which already has `queued_at`)
 - `dedup_opt_key` replaced by `dedup_key` on `PendingEvent`
 
 **Tests:**
-- Debounce engine with disk queue: events are pushed through the queue
-- Debounce engine with mock queue: existing dedup behaviour preserved
+- Debounce engine with `DiskBackedEventQueue`: events are pushed through the queue correctly
 - Shutdown flush uses the queue
 - Shutdown sentinel arrives as `PendingEventOrShutdown::Shutdown`
 - Rapid events for same file produce exactly one queued event
 - Different files emit independently
 - Delete-after-modify emits delete
 
-### Phase 4: Server Startup and Pipeline Integration
+### Phase 3b: Swap to DiskBackedEventQueue
 
-Wire `DiskBackedEventQueue` into `server.rs` startup and pipeline.
+Replace `InMemoryEventQueue` with `DiskBackedEventQueue` as the default queue implementation.
 
 **Changes to `server.rs`:**
-- `build_app_context()`: create `DiskBackedEventQueue`, store as `Arc<dyn StrandEventQueue>` in `AppContext`
-- `AppContext`: replace `strand_queue: Arc<Mutex<Option<StrandQueue>>>` with `strand_queue: Option<Arc<dyn StrandEventQueue>>`
+- `build_app_context()`: create `DiskBackedEventQueue` (pointing at `rig/events/`) instead of `InMemoryEventQueue`
 - `run_startup()`: after creating rig directory, create `rig/events/`, call `queue.load_persisted()` and log count
-- `start_event_pipeline()`: pass `Arc<dyn StrandEventQueue>` to `DebounceEngine::spawn_with_receiver_with_window_and_queue()`
-- Process-strand loop: match on `PendingEventOrShutdown::Event` (convert to `StrandEvent`, process) or `PendingEventOrShutdown::Shutdown` (break)
-- `start_state_writer()`: pass queue to `WriteState`
-
-**Changes to `write_state.rs`:**
-- Replace `StrandQueueRef` type alias with `Option<Arc<dyn StrandEventQueue>>`
-- `build_queue_entries()`: call `queue.snapshot()`, map `PendingEvent` to `RigStateStrandQueueEntry`
 
 **Tests:**
-- `run_startup` creates `rig/events/` directory
-- `run_startup` loads persisted events (pre-written files in temp rig)
-- `start_event_pipeline` wires queue to debounce engine
+- Startup creates `rig/events/` directory
+- Startup loads persisted events from pre-written files
+- Pipeline processes events from disk-backed queue end-to-end
+- Shutdown sentinel works correctly with disk queue
 - `WriteState` builds queue entries from `DiskBackedEventQueue` snapshot
 
-### Phase 5: Integration Test — Full Persistence Cycle
+### Phase 4: Integration Test — Full Persistence Cycle
 
 End-to-end test using the full pipeline with real filesystem.
 
@@ -436,7 +461,7 @@ End-to-end test using the full pipeline with real filesystem.
 - Delete from queue: push event, call `queue.delete(id)`, verify event removed from queue and disk, not processed
 - Modify on disk: push event, edit file on disk, process event → verify event processed with updated content
 
-### Phase 6: Cleanup
+### Phase 5: Cleanup
 
 Remove obsolete types and wire final state.
 
@@ -452,7 +477,8 @@ Remove obsolete types and wire final state.
 ## Notes
 
 - **No new dependencies** — all functionality uses standard library + existing dependencies (chrono, tokio, serde).
-- **`InspectQueue` is removed** — not kept alongside the trait. The trait is the abstraction; `DiskBackedEventQueue` is the implementation. Tests use a mock implementation.
+- **Trait-first strategy** — Phase 1 introduces `StrandEventQueue` and ports the entire pipeline to use it via `InMemoryEventQueue`. All existing tests are adapted to the trait before any disk I/O is introduced. Phase 3b simply swaps the constructor from `InMemoryEventQueue` to `DiskBackedEventQueue` — the pipeline code is unchanged because it already speaks the trait.
+- **`InspectQueue` is removed** — not kept alongside the trait. `InMemoryEventQueue` serves as the test implementation in Phase 1; `DiskBackedEventQueue` becomes the production implementation in Phase 3b.
 - **Dedup is preserved** — `push_or_replace()` uses the same `(strand_path, loom_id, knot_id, kind)` key. When replacing, the old disk file is removed and a new one written.
 - **Atomic writes** prevent partial files from being read on startup. `FileSystemEventStore` writes to `{id}.json.tmp` then renames to `{id}.json`.
 - **Shutdown sentinel** — `PendingEventOrShutdown::Shutdown` replaces `Option<T>`. It is NOT persisted to disk (it's a runtime signal only). On startup, only `Event` files are loaded.

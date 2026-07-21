@@ -68,6 +68,8 @@ pub enum PortError {
     StrandCheckFailed(String),
     /// Failed to dispatch an agent event to a consumer.
     EventDispatchFailed(String),
+    /// Failed to read/write a persisted event file.
+    EventStoreFailed(String),
 }
 
 impl std::fmt::Display for PortError {
@@ -138,6 +140,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::EventDispatchFailed(msg) => {
                 write!(f, "event dispatch failed: {msg}")
+            }
+            PortError::EventStoreFailed(msg) => {
+                write!(f, "event store failed: {msg}")
             }
         }
     }
@@ -547,6 +552,58 @@ pub trait GitVersioningPort: Send + Sync {
 pub trait StateWriterPort: Send + Sync {
     /// Write the given `RigState` to disk atomically.
     fn write_state(&self, state: &RigState) -> Result<(), PortError>;
+}
+
+/// Port for the strand event queue.
+///
+/// Defines the contract for pushing, popping, snapshotting, and managing
+/// strand events. The primary production implementation is disk-backed
+/// (`DiskBackedEventQueue`); an in-memory implementation exists for
+/// testing and as a Phase-1 compat shim.
+///
+/// Every operation is safe to call from any thread (`Send + Sync`).
+///
+/// `notified()` returns a `Pin<Box<dyn Future>>` to keep the trait
+/// dyn-compatible (async trait methods are not dyn-compatible in stable
+/// Rust without the `async-trait` crate).
+pub trait StrandEventQueue: Send + Sync {
+    /// Push an event. Returns the assigned ID.
+    fn push(&self, event: crate::domain::pending_event::PendingEvent) -> crate::domain::pending_event::PendingEventId;
+
+    /// Push an event, or replace an existing one with the same dedup key.
+    /// Returns the ID of the (new or replaced) entry.
+    fn push_or_replace(&self, event: crate::domain::pending_event::PendingEvent) -> crate::domain::pending_event::PendingEventId;
+
+    /// Pop the next event from the queue (FIFO).
+    ///
+    /// Returns `Some(PendingEventOrShutdown::Event)` for real events,
+    /// `Some(PendingEventOrShutdown::Shutdown)` for the shutdown sentinel,
+    /// or `None` if the queue is empty (no sentinel, no events).
+    fn pop(&self) -> Option<crate::domain::pending_event::PendingEventOrShutdown>;
+
+    /// Take a snapshot of all pending events (excludes shutdown sentinel).
+    fn snapshot(&self) -> Vec<crate::domain::pending_event::PendingEvent>;
+
+    /// Delete a specific pending event by ID.
+    /// Returns `true` if the event was found and removed, `false` otherwise.
+    fn delete(&self, id: &crate::domain::pending_event::PendingEventId) -> bool;
+
+    /// Get a single pending event by ID.
+    fn pending_event(&self, id: &crate::domain::pending_event::PendingEventId) -> Option<crate::domain::pending_event::PendingEvent>;
+
+    /// Return the number of pending events (excludes shutdown sentinel).
+    fn len(&self) -> usize;
+
+    /// Check if the queue is empty (no events, no sentinel).
+    fn is_empty(&self) -> bool;
+
+    /// Push a shutdown sentinel (called by debounce engine on channel close).
+    fn push_shutdown(&self);
+
+    /// Await a signal that an item was pushed.
+    ///
+    /// Returns a boxed future to keep the trait dyn-compatible.
+    fn notified(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 
 /// Port for dispatching agent events to consumer knots.
@@ -1357,5 +1414,19 @@ mod tests {
         let session_id = Some("sess-ghi".to_string());
         let err = PortError::CommandNotFound("pi not found".to_string());
         assert!(!is_session_resumable(&session_id, &err));
+    }
+
+    // ── EventStoreFailed Tests ──────────────────────────────────
+
+    #[test]
+    fn port_error_event_store_failed_display() {
+        let err = PortError::EventStoreFailed("disk full".to_string());
+        assert_eq!(err.to_string(), "event store failed: disk full");
+    }
+
+    #[test]
+    fn port_error_event_store_failed_is_std_error() {
+        let err = PortError::EventStoreFailed("io error".to_string());
+        let _: &dyn std::error::Error = &err;
     }
 }

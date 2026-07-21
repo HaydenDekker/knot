@@ -7,9 +7,10 @@ use crate::adapters::outbound::FileSystemStateWriter;
 use crate::adapters::pi_json::PiJsonAgentRunner;
 use crate::adapters::pi_stdio::PiStdioAgentRunner;
 use crate::application;
-use crate::application::ports::{GitVersioningPort, StateWriterPort};
+use crate::application::ports::{GitVersioningPort, StateWriterPort, StrandEventQueue};
 use crate::domain;
 use crate::domain::entities::Loom;
+use crate::domain::pending_event::PendingEventOrShutdown;
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::{AgentAdapter, RigAgentConfig};
@@ -19,11 +20,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-
-/// Type alias for the strand event queue used throughout the pipeline.
-type StrandQueue = Arc<
-    application::debounce::InspectQueue<Option<application::debounce::TimestampedStrandEvent>>,
->;
 
 // ── AppContext ────────────────────────────────────────────────────────────
 
@@ -60,7 +56,7 @@ pub struct AppContext {
     /// State writer port — writes rig/state.json.
     pub state_writer: Arc<dyn StateWriterPort>,
     /// Strand event queue — shared with WriteState for queue visibility.
-    pub strand_queue: Arc<std::sync::Mutex<Option<StrandQueue>>>,
+    pub strand_queue: Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -288,6 +284,9 @@ pub fn build_app_context(
     )
 }
 
+/// Type alias for the strand event queue used throughout the pipeline.
+type StrandQueue = Arc<dyn StrandEventQueue>;
+
 /// Start the event processing pipeline.
 ///
 /// Wires:
@@ -300,9 +299,7 @@ pub fn build_app_context(
 /// Spawns both the debounce engine and process strand into the provided
 /// `JoinSet`. This ensures the pipeline tasks are children of the server
 /// task and are aborted when the server stops.
-/// Returns the `Arc<InspectQueue>` so it can be shared with
-/// `start_state_writer` for queue visibility.
-/// Returns the `Arc<InspectQueue>` so it can be shared with
+/// Returns the `Arc<dyn StrandEventQueue>` so it can be shared with
 /// `start_state_writer` for queue visibility.
 pub fn start_event_pipeline(
     ctx: &AppContext,
@@ -329,14 +326,14 @@ pub fn start_event_pipeline(
         .map(Duration::from_millis)
         .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
 
-    let debounce_rx = application::debounce::DebounceEngine::spawn_with_receiver_with_window(
+    let debounce_queue = application::debounce::DebounceEngine::spawn_with_receiver_with_window(
         event_rx, join_set, debounce_window, check_interval,
     );
 
     // Store the queue Arc in AppContext so WriteState can snapshot it.
     {
         let mut guard = ctx.strand_queue.lock().unwrap();
-        *guard = Some(Arc::clone(&debounce_rx));
+        *guard = Some(Arc::clone(&debounce_queue) as Arc<dyn StrandEventQueue>);
     }
 
     // ProcessStrand loop: read debounced events and process them.
@@ -359,9 +356,9 @@ pub fn start_event_pipeline(
         crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
     );
 
-    // Clone debounce_rx before moving into the closure — we return
+    // Clone debounce_queue before moving into the closure — we return
     // the original Arc from this function for WriteState to use.
-    let debounce_rx_inner = Arc::clone(&debounce_rx);
+    let debounce_queue_inner = Arc::clone(&debounce_queue);
     join_set.spawn(async move {
         let use_case = Arc::new(application::usecases::ProcessStrand::new(
             store,
@@ -379,7 +376,7 @@ pub fn start_event_pipeline(
             Arc::new(
                 crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
             ),
-            Some(Arc::clone(&debounce_rx_inner) as Arc<dyn domain::events::StrandQueueAccessor>),
+            Some(debounce_queue_inner.clone() as Arc<dyn domain::events::StrandQueueAccessor>),
         ));
 
         // Process strand events with queue idle detection.
@@ -391,27 +388,30 @@ pub fn start_event_pipeline(
         // (idle, wait for first event) or timed (drain check, detect end
         // of burst). This keeps a single flat loop with no nesting.
         //
-        // The queue holds `Option<TimestampedStrandEvent>`:
-        // `Some(TimestampedStrandEvent)` for real events, `None` for the
-        // shutdown sentinel from the debounce engine. The inner
-        // pop+notified loop drains the queue; the outer match handles
-        // events vs. shutdown vs. timeout.
+        // The queue holds `PendingEventOrShutdown`:
+        // `PendingEventOrShutdown::Event` for real events,
+        // `PendingEventOrShutdown::Shutdown` for the shutdown sentinel
+        // from the debounce engine. The inner pop+notified loop drains
+        // the queue; the outer match handles events vs. shutdown vs.
+        // timeout.
         let poll_window = Duration::from_millis(500);
         let mut is_burst_active = false;
+        let mut shutdown_signaled = false;
 
         loop {
-            // Read next item from the InspectQueue.
-            // queue.pop() returns Option<Option<TimestampedStrandEvent>>:
-            //   Some(Some(ts_event)) → real event
-            //   Some(None) → shutdown sentinel
-            //   None → queue empty, wait for notification
-            let next_ts_event: Option<application::debounce::TimestampedStrandEvent> = if is_burst_active {
+            // Read next item from the StrandEventQueue.
+            // pop() returns Option<PendingEventOrShutdown>:
+            //   Some(Event) → real event
+            //   Some(Shutdown) → shutdown sentinel
+            //   None → queue empty (no sentinel), wait for notification
+            let next_item: Option<PendingEventOrShutdown> = if is_burst_active {
                 match tokio::time::timeout(poll_window, async {
                     loop {
-                        if let Some(item) = debounce_rx_inner.pop() {
+                        let item = debounce_queue_inner.pop();
+                        if item.is_some() {
                             break item;
                         }
-                        debounce_rx_inner.notified().await;
+                        debounce_queue_inner.notified().await;
                     }
                 }).await {
                     Ok(item) => item,
@@ -439,49 +439,68 @@ pub fn start_event_pipeline(
                 // Queue is idle; block until a fresh event arrives.
                 async {
                     loop {
-                        if let Some(item) = debounce_rx_inner.pop() {
+                        let item = debounce_queue_inner.pop();
+                        if item.is_some() {
                             break item;
                         }
-                        debounce_rx_inner.notified().await;
+                        debounce_queue_inner.notified().await;
                     }
                 }.await
             };
 
-            // Handle the event (or shutdown sentinel).
-            match next_ts_event {
-                Some(ts_event) => {
-                    is_burst_active = true;
-                    // Unwrap the inner StrandEvent from the timestamped wrapper.
-                    let event = ts_event.event;
-                    // Run agent execution on a blocking thread so the tokio
-                    // task yields. This allows the task to be aborted during
-                    // shutdown — without this, the synchronous execute() call
-                    // blocks the tokio thread with no yield point, preventing
-                    // graceful shutdown (process hangs on Ctrl+C).
-                    let use_case = Arc::clone(&use_case);
-                    let result = tokio::task::spawn_blocking(
-                        move || use_case.execute(event),
-                    ).await;
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => {
-                            eprintln!("[pipeline] ProcessStrand error: {e}");
-                        }
-                        Err(e) => {
-                            eprintln!("[pipeline] ProcessStrand blocking task failed: {e}");
-                        }
+            // Handle shutdown sentinel — if received but queue might have
+            // more events, keep draining. Break only when shutdown + empty.
+            if matches!(next_item, Some(PendingEventOrShutdown::Shutdown)) {
+                if !shutdown_signaled {
+                    shutdown_signaled = true;
+                    // Don't break yet — queue might have more events.
+                    // Next pop() will return None (empty) or Shutdown again.
+                    continue;
+                }
+                // Shutdown already signaled and queue is empty.
+                break;
+            }
+            // If pop() returned None but shutdown was previously signaled,
+            // the queue is empty — exit.
+            if next_item.is_none() && shutdown_signaled {
+                break;
+            }
+
+            // Handle the event.
+            if let Some(PendingEventOrShutdown::Event(pending)) = next_item {
+                is_burst_active = true;
+                // Convert PendingEvent → StrandEvent for processing.
+                let event: domain::events::StrandEvent = match pending.try_into() {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("[pipeline] invalid pending event: {e}");
+                        continue;
                     }
-                    // Loop continues — next poll will use timeout (drain check).
+                };
+                // Run agent execution on a blocking thread so the tokio
+                // task yields. This allows the task to be aborted during
+                // shutdown — without this, the synchronous execute() call
+                // blocks the tokio thread with no yield point, preventing
+                // graceful shutdown (process hangs on Ctrl+C).
+                let use_case = Arc::clone(&use_case);
+                let result = tokio::task::spawn_blocking(
+                    move || use_case.execute(event),
+                ).await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        eprintln!("[pipeline] ProcessStrand error: {e}");
+                    }
+                    Err(e) => {
+                        eprintln!("[pipeline] ProcessStrand blocking task failed: {e}");
+                    }
                 }
-                None => {
-                    // Shutdown sentinel — pipeline shutting down.
-                    break;
-                }
+                // Loop continues — next poll will use timeout (drain check).
             }
         }
     });
 
-    debounce_rx
+    debounce_queue
 }
 
 /// Run the startup discovery and registration sequence.

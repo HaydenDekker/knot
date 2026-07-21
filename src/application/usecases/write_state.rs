@@ -3,17 +3,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::application::debounce::InspectQueue;
-use crate::application::debounce::TimestampedStrandEvent;
 use crate::application::ports::{
     AgentProfileRepository, LoomLogPort, PortError, StateWriterPort,
+    StrandEventQueue,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
     KnotId, LoomId, RigState, RigStateKnot, RigStateLoom, RigStateProfile,
     RigStateStrandQueueEntry,
 };
-use crate::domain::events::{LoomEvent, StrandEvent};
+use crate::domain::events::LoomEvent;
+use crate::domain::pending_event::PendingEvent;
 
 use super::types::format_timestamp;
 
@@ -25,9 +25,7 @@ use super::types::format_timestamp;
 /// `StateWriterPort` for atomic write.
 ///
 /// Type alias for the strand queue held by WriteState.
-type StrandQueueRef = Arc<std::sync::Mutex<
-    Option<Arc<InspectQueue<Option<TimestampedStrandEvent>>>>,
->>;
+type StrandQueueRef = Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>;
 
 /// This is the core logic called by the background state writer task.
 pub struct WriteState {
@@ -42,7 +40,7 @@ pub struct WriteState {
 impl WriteState {
     /// Create a new `WriteState` use case.
     ///
-    /// `strand_queue` is an `Arc<Mutex<Option<Arc<InspectQueue<...>>>>>`
+    /// `strand_queue` is an `Arc<Mutex<Option<Arc<dyn StrandEventQueue>>>>`
     /// shared with the event pipeline. When `Some`, `build_state()` takes
     /// a fresh snapshot of the queue on each call.
     pub fn new(
@@ -116,10 +114,9 @@ impl WriteState {
 
     /// Build the strand queue entries from the current queue snapshot.
     ///
-    /// Locks the outer mutex to get the inner `Arc<InspectQueue>`,
-    /// then takes a snapshot of the queue contents, filters out `None`
-    /// shutdown sentinels, and maps each `TimestampedStrandEvent` to a
-    /// `RigStateStrandQueueEntry`.
+    /// Locks the outer mutex to get the inner `Arc<dyn StrandEventQueue>`,
+    /// then takes a snapshot of the queue contents and maps each
+    /// `PendingEvent` to a `RigStateStrandQueueEntry`.
     fn build_queue_entries(&self) -> Vec<RigStateStrandQueueEntry> {
         let Some(queue_ref) = &self.strand_queue else {
             return Vec::new();
@@ -133,44 +130,20 @@ impl WriteState {
         queue
             .snapshot()
             .into_iter()
-            .flatten() // filter out None (shutdown sentinel)
-            .map(|ts_event| {
-                let event = &ts_event.event;
-                let (path, loom_id, knot_id, kind) = match event {
-                    StrandEvent::Created {
-                        strand_path,
-                        loom_id,
-                        knot_id,
-                    }
-                    | StrandEvent::Modified {
-                        strand_path,
-                        loom_id,
-                        knot_id,
-                    }
-                    | StrandEvent::Deleted {
-                        strand_path,
-                        loom_id,
-                        knot_id,
-                    } => {
-                        (
-                            strand_path.0.display().to_string(),
-                            loom_id.0.clone(),
-                            knot_id.0.clone(),
-                            match event {
-                                StrandEvent::Created { .. } => "created",
-                                StrandEvent::Modified { .. } => "modified",
-                                StrandEvent::Deleted { .. } => "deleted",
-                            },
-                        )
-                    }
+            .map(|pending| {
+                let kind = match pending.kind.as_str() {
+                    "Created" => "created",
+                    "Modified" => "modified",
+                    "Deleted" => "deleted",
+                    other => other,
                 };
 
                 RigStateStrandQueueEntry {
-                    strand_path: path,
-                    loom_id,
-                    knot_id,
+                    strand_path: pending.strand_path,
+                    loom_id: pending.loom_id,
+                    knot_id: pending.knot_id,
                     event_kind: kind.to_string(),
-                    queued_at: ts_event.queued_at,
+                    queued_at: pending.queued_at,
                 }
             })
             .collect()
@@ -778,8 +751,8 @@ mod write_state_tests {
             Arc::new(MockStateWriterForState::default());
         let rig_dir = PathBuf::from("/test/rig");
 
-        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
-            Arc::new(InspectQueue::new());
+        let queue: Arc<dyn StrandEventQueue> =
+            Arc::new(crate::application::in_memory_event_queue::InMemoryEventQueue::new());
         let strand_queue: StrandQueueRef =
             Arc::new(std::sync::Mutex::new(Some(queue)));
 
@@ -799,6 +772,26 @@ mod write_state_tests {
         );
     }
 
+    /// Build a `PendingEvent` for testing.
+    fn make_pending(
+        kind: &str,
+        loom: &str,
+        knot: &str,
+        path: &str,
+        queued_at: &str,
+    ) -> PendingEvent {
+        PendingEvent {
+            id: crate::domain::pending_event::PendingEventId(format!(
+                "1000-{}", kind
+            )),
+            kind: kind.to_string(),
+            loom_id: loom.to_string(),
+            knot_id: knot.to_string(),
+            strand_path: path.to_string(),
+            queued_at: queued_at.to_string(),
+        }
+    }
+
     #[test]
     fn build_state_with_queued_events() {
         // Queue has events — strand_queue should be populated
@@ -810,35 +803,31 @@ mod write_state_tests {
             Arc::new(MockStateWriterForState::default());
         let rig_dir = PathBuf::from("/test/rig");
 
-        let queue: Arc<InspectQueue<Option<TimestampedStrandEvent>>> =
-            Arc::new(InspectQueue::new());
+        let queue: Arc<dyn StrandEventQueue> =
+            Arc::new(crate::application::in_memory_event_queue::InMemoryEventQueue::new());
 
-        // Push two events and a None sentinel
-        queue.push(Some(TimestampedStrandEvent {
-            event: StrandEvent::Created {
-                loom_id: LoomId("review-loom".to_string()),
-                knot_id: KnotId("review".to_string()),
-                strand_path: StrandPath(PathBuf::from("src/main.rs")),
-            },
-            queued_at: "2026-06-30T12:00:00Z".to_string(),
-        }));
-        queue.push(Some(TimestampedStrandEvent {
-            event: StrandEvent::Modified {
-                loom_id: LoomId("review-loom".to_string()),
-                knot_id: KnotId("review".to_string()),
-                strand_path: StrandPath(PathBuf::from("src/lib.rs")),
-            },
-            queued_at: "2026-06-30T12:00:01Z".to_string(),
-        }));
-        queue.push(None); // shutdown sentinel — should be filtered out
-        queue.push(Some(TimestampedStrandEvent {
-            event: StrandEvent::Deleted {
-                loom_id: LoomId("docs-loom".to_string()),
-                knot_id: KnotId("docs".to_string()),
-                strand_path: StrandPath(PathBuf::from("docs/old.md")),
-            },
-            queued_at: "2026-06-30T12:00:02Z".to_string(),
-        }));
+        // Push three events
+        queue.push(make_pending(
+            "Created",
+            "review-loom",
+            "review",
+            "src/main.rs",
+            "2026-06-30T12:00:00Z",
+        ));
+        queue.push(make_pending(
+            "Modified",
+            "review-loom",
+            "review",
+            "src/lib.rs",
+            "2026-06-30T12:00:01Z",
+        ));
+        queue.push(make_pending(
+            "Deleted",
+            "docs-loom",
+            "docs",
+            "docs/old.md",
+            "2026-06-30T12:00:02Z",
+        ));
 
         let strand_queue: StrandQueueRef =
             Arc::new(std::sync::Mutex::new(Some(queue)));
@@ -854,7 +843,7 @@ mod write_state_tests {
 
         let state = uc.build_state().unwrap();
 
-        // Should have 3 entries (None sentinel filtered out)
+        // Should have 3 entries
         assert_eq!(state.strand_queue.len(), 3);
 
         // First entry: Created
@@ -876,7 +865,7 @@ mod write_state_tests {
         assert_eq!(state.strand_queue[1].knot_id, "review");
         assert_eq!(state.strand_queue[1].event_kind, "modified");
 
-        // Third entry: Deleted (sentinel was filtered)
+        // Third entry: Deleted
         assert_eq!(
             state.strand_queue[2].strand_path, "docs/old.md",
         );

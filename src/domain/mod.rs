@@ -1,6 +1,7 @@
 pub mod entities;
 pub mod events;
 pub mod knot_file;
+pub mod pending_event;
 pub mod rig_discovery;
 pub mod temp_file;
 pub mod tieoff_parser;
