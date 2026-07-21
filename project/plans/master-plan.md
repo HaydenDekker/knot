@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-17 (plan 64 completed, old plans purged)
+> **Last Updated:** 2026-07-21 (plan 65 added)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 65 | [Persistent Event Queue](065-persistent-event-queue/persistent-event-queue-plan.md) | ⬜ Planned | 2026-07-21 |
 | 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ✅ Complete | 2026-07-17 |
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
 | 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | ✅ Complete | 2026-07-16 |
@@ -77,6 +78,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 65. Persistent Event Queue
+
+**Status:** ⬜ Planned
+**Created:** 2026-07-21
+**Goal:** Replace the in-memory `InspectQueue` with a trait-based `StrandEventQueue` backed by `rig/events/*.json` files — atomic writes, startup scan-and-restore, and queue operations for listing, deleting, and modifying pending events.
+
+Full details in [065-persistent-event-queue/persistent-event-queue-plan.md](065-persistent-event-queue/persistent-event-queue-plan.md).
 
 ### 64. Local Time Timestamps
 
