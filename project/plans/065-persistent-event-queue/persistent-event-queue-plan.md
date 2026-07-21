@@ -484,3 +484,11 @@ Remove obsolete types and wire final state.
 - **Shutdown sentinel** — `PendingEventOrShutdown::Shutdown` replaces `Option<T>`. It is NOT persisted to disk (it's a runtime signal only). On startup, only `Event` files are loaded.
 - **File modification while running** — `pop()` reads the file fresh from disk, so any on-disk edits are honoured when the event is processed. `snapshot()` also reads fresh for accurate listing.
 - **Performance** — file I/O on every push/pop is acceptable. Knot is not a high-throughput queue; it processes events at human timescales (agent invocations take seconds to minutes). The debounce window (100ms) already serialises rapid bursts.
+
+## Implementation Status: ✅ Complete (2026-07-21)
+
+## Completion Notes
+- All 6 phases (0–5) implemented and tested
+- Full test suite: 725 unit tests + 409 integration tests = 1,134 passed, 0 failures
+- Version bumped to 0.30.0 (MINOR — new feature, backwards compatible)
+- Domain glossary updated with `Events Directory` term

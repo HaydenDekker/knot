@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 65 | [Persistent Event Queue](065-persistent-event-queue/persistent-event-queue-plan.md) | ⬜ Planned | 2026-07-21 |
+| 65 | [Persistent Event Queue](065-persistent-event-queue/persistent-event-queue-plan.md) | ✅ Complete | 2026-07-21 |
 | 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ✅ Complete | 2026-07-17 |
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
 | 62 | [Decompose `ProcessStrand::execute()`](062-process-strand-decomposition/process-strand-decomposition-plan.md) | ✅ Complete | 2026-07-16 |
