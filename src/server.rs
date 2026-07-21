@@ -3,7 +3,7 @@
 //! Wires all hexagonal layers together and manages the server lifecycle
 //! (startup, event pipeline, graceful shutdown).
 
-use crate::adapters::outbound::FileSystemStateWriter;
+use crate::adapters::outbound::{DiskBackedEventQueue, FileSystemStateWriter};
 use crate::adapters::pi_json::PiJsonAgentRunner;
 use crate::adapters::pi_stdio::PiStdioAgentRunner;
 use crate::application;
@@ -326,8 +326,20 @@ pub fn start_event_pipeline(
         .map(Duration::from_millis)
         .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
 
-    let debounce_queue: Arc<crate::application::in_memory_event_queue::InMemoryEventQueue> =
-        Arc::new(crate::application::in_memory_event_queue::InMemoryEventQueue::new());
+    let events_dir = ctx.rig_dir.join("events");
+    std::fs::create_dir_all(&events_dir).unwrap_or_else(|e| {
+        eprintln!("WARNING: failed to create events dir {}: {e}", events_dir.display());
+    });
+    let debounce_queue: Arc<DiskBackedEventQueue> =
+        Arc::new(DiskBackedEventQueue::new(events_dir));
+    // Load persisted events from disk before starting the debounce engine.
+    // This ensures any events left over from a previous run are re-queued
+    // before new file-watcher events arrive.
+    let loaded = debounce_queue.load_persisted();
+    if loaded > 0 {
+        eprintln!("[startup] loaded {} persisted event(s) from disk", loaded);
+    }
+
     let debounce_queue = application::debounce::DebounceEngine::spawn_with_receiver_with_window_and_queue(
         event_rx, join_set, debounce_window, check_interval, debounce_queue,
     );
