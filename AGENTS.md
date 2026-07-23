@@ -40,8 +40,10 @@ This project maintains agent skills in `.agents/skills/`. Pi discovers these as 
 
 - **knot-analyst** — Analyse rig productivity and project progress at runtime
 - **knot-design** — Design looms and knots (idempotency, naming, loops, responsibility)
+- **knot-dispatch** — Trigger knots into action (strand files, event dispatch)
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
+- **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
 - **knot-create** — Create, modify, delete looms, knots, and agent profiles
 
 ### Workflow
@@ -52,8 +54,7 @@ Skills are developed and tested at the project level (`.agents/skills/`) before 
 cp -r .agents/skills/<skill-name> ~/.agents/skills/<skill-name>
 ```
 
-## Domain Glossary
+## Knot Glossary
 
-Domain terms used throughout the project are defined in [project/domain-glossary.md](project/domain-glossary.md). Read it before starting work on any feature.
-
-> **Agent instruction:** When `project/domain-glossary.md` is updated, also update this section of AGENTS.md to keep them in sync. The authoritative source is `project/domain-glossary.md`.
+Knot domain terms are defined in the Knot glossary at
+[.agents/skills/knot-init/knot-glossary.md](.agents/skills/knot-init/knot-glossary.md).

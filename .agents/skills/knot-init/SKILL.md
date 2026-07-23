@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.2.0"
+  version: "3.3.0"
   compatibility: "Knot 0.22.0+"
 ---
 
@@ -73,6 +73,64 @@ When asked to initialise a Knot rig:
 4. **Ensure rig directory structure exists**:
    - Create `rig/profiles/` if it doesn't exist.
    - These directories are managed on disk — Knot auto-discovers them.
+
+4a. **Ensure Knot section in AGENTS.md** (idempotent):
+    - Read `AGENTS.md` from the project root if it exists.
+    - Check if it already contains Knot information (search for
+      `knot-init`, `knot-create`, or "## Agent Skills" with Knot
+      skills listed). If present, skip this step entirely.
+    - If `AGENTS.md` does NOT exist, create it with a full document
+      containing a project header, build/run instructions, and the
+      Knot sections below.
+    - If `AGENTS.md` exists but has no Knot information, append the
+      following sections after any existing content:
+      ```markdown
+
+      ## Rig
+
+      This project uses **Knot** for agent orchestration. Knot runs as a
+      local service and manages AI agent workflows through looms and
+      knots defined in `rig/`.
+
+      ### Running
+
+      Start the Knot service:
+
+      ```bash
+      cargo run
+      ```
+
+      ### Agent Skills
+
+      This project uses the following Knot skills:
+
+      - **knot-init** — Initialise the rig
+      - **knot-create** — Create, modify, delete looms, knots, and profiles
+      - **knot-dispatch** — Trigger knots into action (strand files, events)
+      - **knot-inspect** — Inspect rig state (looms, knots, activity)
+      - **knot-manage** — Review rig work via git and tie-offs
+      - **knot-design** — Design looms and knots (idempotency, naming, loops)
+      - **knot-analyst** — Analyse rig productivity and project progress
+      - **knot-update** — Migrate project documents between Knot versions
+      ```
+    - Read the Knot glossary from this skill's directory at
+      `knot-glossary.md`. It covers Knot domain terms (rig, loom,
+      knot, strand, tie-off, etc.) and must be read before working
+      on any Knot feature. Do NOT write a glossary section into the
+      project's AGENTS.md — the glossary lives in the skill and is
+      always available to agents that have Knot skills installed.
+    - If the project also has a `project/domain-glossary.md` (a
+      project-specific glossary separate from the Knot glossary),
+      include a domain glossary reference at the end of the
+      appended content:
+      ```markdown
+
+      ### Domain Glossary
+
+      Project-specific domain terms are defined in
+      [project/domain-glossary.md](project/domain-glossary.md). Read
+      it before starting work on any feature.
+      ```
 
 5. **Agent adapter configuration** (`rig/.workspace-agent-config.yaml`):
    - Knot auto-creates this file on first startup if it doesn't exist.
