@@ -120,6 +120,10 @@ Monitor live state:
 watch -n 2 'cat rig/state.json | python3 -m json.tool'
 ```
 
+Or use the `knot-inspect` skill — ask your agent *"show me the rig
+state"* and it reads `rig/state.json` and reports looms, knots,
+profiles, and processing status in plain language.
+
 ## Log Locations
 
 ### Rig-Log

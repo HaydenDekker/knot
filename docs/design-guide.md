@@ -251,3 +251,13 @@ The markdown body **is** the prompt instructions. There is no separate
 Does another knot read the target domain and write back to the source
 domain? If yes, document the loop and ensure a convergence mechanism
 exists (see loop breaking patterns above).
+
+---
+
+## The `knot-design` Skill
+
+The [`knot-design`](../.agents/skills/knot-design/SKILL.md) skill
+captures these design principles as agent-readable instructions. When
+your AI agent is asked to design looms or knots, it runs `knot-design`
+behind the scenes. This ensures consistent naming, idempotency,
+responsibility boundaries, and loop-breaking patterns across your rig.

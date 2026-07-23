@@ -50,8 +50,30 @@ its skill discovery path. For `pi`, copy them to `~/.agents/skills/`:
 ```bash
 cp -r knot/.agents/skills/knot-init     ~/.agents/skills/
 cp -r knot/.agents/skills/knot-create   ~/.agents/skills/
+cp -r knot/.agents/skills/knot-dispatch ~/.agents/skills/
 cp -r knot/.agents/skills/knot-inspect  ~/.agents/skills/
+cp -r knot/.agents/skills/knot-manage   ~/.agents/skills/
 cp -r knot/.agents/skills/knot-design   ~/.agents/skills/
+cp -r knot/.agents/skills/knot-analyst  ~/.agents/skills/
+cp -r knot/.agents/skills/knot-update   ~/.agents/skills/
+```
+
+Knot also ships a glossary of domain terms:
+
+```bash
+cp knot/.agents/skills/knot-init/knot-glossary.md \
+   ~/.agents/skills/knot-init/knot-glossary.md
+```
+
+Verify every copy — `cp` can silently fail:
+
+```bash
+for skill in knot-init knot-create knot-dispatch knot-inspect
+              knot-manage knot-design knot-analyst knot-update; do
+  diff knot/.agents/skills/$skill/SKILL.md \
+       ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+    echo "$skill: OK" || echo "$skill: FAILED"
+done
 ```
 
 For other agent CLIs, your agent will need to place these skills
@@ -161,3 +183,17 @@ routed to the knot's tie-off.
 - **[Configuration: Rig Structure](configuration/rig-structure.md)** — Rig layout and state
 - **[Design Guide](design-guide.md)** — Best practices for knot design
 - **[Troubleshooting](troubleshooting.md)** — Common issues and fixes
+
+### Working with Skills
+
+Once your rig is running, use the Knot skills to manage it:
+
+| Skill | What it does | When to use |
+|-------|-------------|-------------|
+| **knot-create** | Create, modify, delete looms and knots | Setting up new workflows |
+| **knot-dispatch** | Trigger knots into action | Starting processing manually |
+| **knot-inspect** | View rig state, looms, knots, profiles | Checking current status |
+| **knot-manage** | Review completed work, interaction chains | Quality review of output |
+| **knot-analyst** | Analyse rig productivity and blockers | Diagnosing health and progress |
+| **knot-design** | Design looms and knots | Planning new workflows |
+| **knot-update** | Migrate documents between versions | After Knot binary updates |

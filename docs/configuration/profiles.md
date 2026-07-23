@@ -133,6 +133,14 @@ Knot discovers the removal automatically. Note: any knots referencing
 the deleted profile will fail on their next processing run with a
 `ProfileNotFound` error.
 
+### Using Skills
+
+Ask your agent to manage profiles using `knot-create`:
+
+- *"create a profile called `fast` with openai/gpt-4o"*
+- *"list all profiles"* — runs `knot-inspect` to read `rig/state.json`
+- *"update the default profile timeout to 600s"*
+
 ## Session Resume
 
 If an agent invocation fails (timeout, network error, process crash),

@@ -83,6 +83,10 @@ EOF
 
 The knot reads this PRD and generates `project/plans/auth-redesign.md`.
 
+For manual triggering (e.g. reprocessing an existing strand without
+modifying it), use the `knot-dispatch` skill. It creates or touches
+strand files to fire the knot on demand.
+
 ### 5. Verify the Output
 
 Check the tie-off to see what the agent did:

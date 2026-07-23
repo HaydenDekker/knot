@@ -39,7 +39,13 @@ git clone <repo> && cd knot
 cargo install --path .
 ```
 
-Then tell your agent: *"init a knot rig"* (runs the `knot-init` skill), then *"create a loom called `<name>-loom`"* (runs `knot-create`). Create a file in the strand directory and Knot will trigger the agent automatically.
+Then tell your agent:
+
+1. *"init a knot rig"* — runs `knot-init` (sets up `rig/`, profiles, and installs skills globally)
+2. *"create a loom called `<name>-loom`"* — runs `knot-create`
+3. *"trigger the knot"* — runs `knot-dispatch` (creates strand files to start processing)
+4. *"review the rig's work"* — runs `knot-manage` (examines tie-offs and interaction quality)
+5. *"analyse rig health"* — runs `knot-analyst` (assesses productivity, blockers, and progress)
 
 See the [Getting Started guide](https://knot.hdekker.com/getting-started) for a complete walkthrough.
 

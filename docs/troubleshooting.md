@@ -236,3 +236,39 @@ delay between an event and its reflection in the state file.
 
 Wait a few seconds and check again, or read the loom-log directly for
 real-time events.
+
+---
+
+## Using the Diagnostic Skills
+
+Knot ships with two skills that help diagnose and review rig issues:
+
+### `knot-analyst` — Live rig health and productivity
+
+Use `knot-analyst` to get a structured assessment of your rig's health.
+It checks:
+
+- **Operational activity** — timeouts, failures, retries, idle periods
+- **Git history** — commit frequency and direction
+- **Project progress** — plan completion, phase status
+- **Stagnation** — stale strands, loop oscillation
+- **Blockers** — timeout walls, missing profiles, dead subscriptions
+
+Run it when:
+- The rig seems stuck or unproductive
+- You want a health check with a traffic-light score
+- You need to identify blockers
+
+### `knot-manage` — Review completed work
+
+Use `knot-manage` to review what the rig has produced:
+
+- **Tie-off quality** — substantive output vs. "no changes needed"
+- **Interaction chains** — did producer→consumer communication work?
+- **Git commit quality** — are commits meaningful and well-scoped?
+- **Communication gaps** — unanswered events, dead subscriptions, oscillation
+
+Run it when:
+- You want to assess the quality of the rig's output
+- You need to trace why a producer→consumer chain didn't work
+- You are reviewing the rig's work after a run

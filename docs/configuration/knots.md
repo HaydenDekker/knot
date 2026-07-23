@@ -121,6 +121,9 @@ rm rig/prd-review-loom/non-goals-review.md
 
 Knot discovers the removal automatically.
 
+Alternatively, use the `knot-create` skill — ask your agent
+*"delete the `non-goals-review` knot in `prd-review-loom`"*.
+
 ## Multiple Knots Per Loom
 
 A single loom can contain multiple knot files, each watching the same or

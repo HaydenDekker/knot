@@ -182,3 +182,24 @@ needed. This makes them idempotent — safe to re-run on the same input.
 
 See the [Design Guide](design-guide.md) for details on designing
 idempotent knots.
+
+## Agent Skills
+
+Knot ships with a set of agent skills that let your AI agent manage
+the rig. Each skill is a `.md` file discovered by the agent framework
+(pi or others) and invoked by natural language.
+
+| Skill | Purpose |
+|-------|---------|
+| **knot-init** | Initialise a rig, create profiles, install skills globally |
+| **knot-create** | Create, modify, delete looms, knots, and profiles |
+| **knot-dispatch** | Trigger knots into action by creating or touching strands |
+| **knot-inspect** | View rig state, looms, knots, profiles, and activity logs |
+| **knot-manage** | Review completed work — tie-off quality, interaction chains, commit quality |
+| **knot-analyst** | Analyse rig productivity, project progress, and blockers |
+| **knot-design** | Design looms and knots following idempotency and loop patterns |
+| **knot-update** | Migrate project documents between Knot versions |
+
+Skills are stored at `.agents/skills/` in the Knot repository and
+installed to `~/.agents/skills/` for global use. The `knot-init` skill
+handles this installation automatically during rig setup.

@@ -100,6 +100,11 @@ Or check the rig state:
 cat rig/state.json | python3 -m json.tool
 ```
 
+For a structured quality review of the rig's output, use the
+`knot-manage` skill. It examines tie-off files, assesses output
+quality, checks idempotency, and traces producer→consumer interaction
+chains to verify communication was effective.
+
 ## Idempotent Reviews
 
 Reviews should be idempotent. If the same file is reviewed twice (e.g.

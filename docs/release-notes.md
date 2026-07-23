@@ -1,5 +1,37 @@
 # Release Notes
 
+## v0.23.0 — 2026-07-24
+
+### Feature — `knot-manage` skill
+
+New skill for retrospective review of completed rig work. Examines
+tie-off files, assesses output quality, traces producer→consumer
+interaction chains, and reviews git commit quality. Complements
+`knot-analyst` which focuses on live operational health.
+
+### Feature — `knot-dispatch` skill
+
+New skill for triggering knots into action. Creates or touches strand
+files, dispatches events manually, and follows the full event pipeline
+from strand creation to tie-off completion.
+
+### Feature — `knot-analyst` skill updated
+
+`knot-analyst` (v1.1.0) now includes six analysis dimensions:
+operational activity, git history, project document progress, stagnation
+detection, blocker identification, and a traffic-light productivity
+score.
+
+### Documentation
+
+- `getting-started.md` — updated skill installation to include all 8
+  skills with verification step
+- `concepts.md` — new "Agent Skills" section
+- `design-guide.md` — references `knot-design` skill
+- `troubleshooting.md` — new section on diagnostic skills
+- `workflows/` — references to `knot-dispatch` and `knot-manage`
+- `README.md` — expanded Quick Start with workflow steps
+
 ## v0.22.1 — 2026-07-03
 
 ### Bugfix
