@@ -32,6 +32,38 @@ After `project-plan-completion` bumps the binary version, reinstall the updated 
 cargo install --path .
 ```
 
+### Skill Installation
+
+Knot skills are developed at the project level (`.agents/skills/`) and
+published globally for use by other projects. After updating a skill at
+project level, install it globally:
+
+```bash
+for skill in knot-init knot-create knot-dispatch knot-inspect
+              knot-manage knot-design knot-analyst knot-update; do
+  cp -r .agents/skills/$skill ~/.agents/skills/$skill
+done
+# Copy non-SKILL.md files (e.g. glossary)
+if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
+  cp .agents/skills/knot-init/knot-glossary.md \
+     ~/.agents/skills/knot-init/knot-glossary.md
+fi
+```
+
+**Always verify after copying** — `cp` can silently fail:
+
+```bash
+for skill in knot-init knot-create knot-dispatch knot-inspect
+              knot-manage knot-design knot-analyst knot-update; do
+  diff .agents/skills/$skill/SKILL.md \
+       ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+    echo "$skill: OK" || echo "$skill: FAILED"
+done
+```
+
+The `knot-init` skill also performs this installation automatically
+(step 4a) when initialising a rig.
+
 ## Agent Skills
 
 This project maintains agent skills in `.agents/skills/`. Pi discovers these as project-local skills, which override any same-named global skills in `~/.agents/skills/`.
