@@ -423,8 +423,8 @@ pub enum LoomEvent {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
-        /// List of (event-id, consumer-loom-id) pairs dispatched.
-        dispatches: Vec<(String, String)>,
+        /// List of (event-id, consumer-knot-id, consumer-loom-id) triples dispatched.
+        dispatches: Vec<(String, String, String)>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },

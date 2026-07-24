@@ -403,16 +403,16 @@ impl ProcessStrand {
     /// that target this producer knot and match the event ID. Dispatches event
     /// files to each matching consumer.
     ///
-    /// Returns the list of `(event_id, consumer_loom_id)` dispatches performed.
+    /// Returns the list of `(event_id, consumer_knot_id, consumer_loom_id)` dispatches performed.
     pub(crate) fn dispatch_events_to_consumers(
         &self,
         events: &[AgentEvent],
         producer_knot: &Knot,
         loom_id: &LoomId,
         all_knot_ids: &[&str],
-    ) -> Result<Vec<(String, String)>, PortError> {
+    ) -> Result<Vec<(String, String, String)>, PortError> {
         let all_looms = self.store.list();
-        let mut dispatches: Vec<(String, String)> = Vec::new();
+        let mut dispatches: Vec<(String, String, String)> = Vec::new();
 
         for event in events {
             for loom in &all_looms {
@@ -445,6 +445,7 @@ impl ProcessStrand {
                             )?;
                             dispatches.push((
                                 event.event_id.clone(),
+                                consumer_knot.id.0.clone(),
                                 loom.id.0.clone(),
                             ));
                         }
@@ -3178,7 +3179,8 @@ mod event_dispatch_tests {
         if let LoomEvent::EventsDispatched { dispatches: d, .. } = dispatch_log.unwrap() {
             assert_eq!(d.len(), 1);
             assert_eq!(d[0].0, "PlanCreated");
-            assert_eq!(d[0].1, "consumer-loom");
+            assert_eq!(d[0].1, "plan-watcher");
+            assert_eq!(d[0].2, "consumer-loom");
         }
     }
 
