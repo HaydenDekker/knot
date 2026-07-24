@@ -357,7 +357,7 @@ pub enum StrandCheckResult {
     ProceedWithWarning,
     /// File is binary — skip, log `StrandIgnored`.
     SkipBinary,
-    /// File is a known temp file (e.g. sedXXXXXXX) — skip silently.
+    /// File is a known temp file (e.g. sedXXXXXXX) — skip with loom-log entry.
     SkipTemp,
     /// File is missing and not a known temp pattern — skip, log `StrandSkipped`.
     SkipMissing,
@@ -476,9 +476,10 @@ impl StrandPath {
     ///
     /// For **Deleted** events the check is skipped (file is gone) — always
     /// returns `Proceed`. For **Created**/**Modified** events the file is
-    /// inspected: binary files are `SkipBinary`, known temp files are
-    /// `SkipTemp`, missing unknown files are `SkipMissing`, and text files
-    /// are `Proceed` (or `ProceedWithWarning` on read errors).
+    /// inspected: known temp files are `SkipTemp` (checked by filename
+    /// regardless of existence), missing unknown files are `SkipMissing`,
+    /// binary files are `SkipBinary`, and text files are `Proceed`
+    /// (or `ProceedWithWarning` on read errors).
     pub fn should_process(
         &self,
         is_deleted: bool,
@@ -488,13 +489,16 @@ impl StrandPath {
             return Ok(StrandCheckResult::Proceed);
         }
 
-        // File doesn't exist — check for known temp file pattern
+        // Check filename against known temp file patterns first.
+        // Catches both: files that exist briefly, and files that
+        // already vanished (e.g. `sed -i` temp files renamed away).
+        if crate::domain::temp_file::is_known_temp_file(&self.0) {
+            return Ok(StrandCheckResult::SkipTemp);
+        }
+
+        // File doesn't exist and not a known temp pattern
         if !self.0.exists() {
-            return if crate::domain::temp_file::is_known_temp_file(&self.0) {
-                Ok(StrandCheckResult::SkipTemp)
-            } else {
-                Ok(StrandCheckResult::SkipMissing)
-            };
+            return Ok(StrandCheckResult::SkipMissing);
         }
 
         // File exists — check if text
@@ -1265,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn strand_check_temp_file_skips_silently() {
+    fn strand_check_temp_file_returns_skip_temp() {
         // sedXXXXXXX pattern — path doesn't need to exist
         let path =
             StrandPath(std::path::PathBuf::from("/project/sedXXXXXXX"));

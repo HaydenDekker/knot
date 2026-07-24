@@ -367,14 +367,21 @@ impl ProcessStrand {
             }
             StrandCheckResult::SkipTemp => {
                 // Known temp file pattern (e.g. sedXXXXXXX)
-                // — skip silently. No loom-log entry, no agent invocation.
+                // — skip with loom-log entry for completeness.
                 logging::log_strand_event(
                     &format!(
-                        "{} skipped known temp file (knot={})",
+                        "{} filtered temp file (knot={})",
                         strand_kind, knot_id.0,
                     ),
                     &strand_path.0,
                 );
+                self.log_port.append(LoomEvent::StrandSkipped {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    reason: "filtered temp file".to_string(),
+                    timestamp: format_timestamp(),
+                })?;
                 Ok(false)
             }
             StrandCheckResult::SkipMissing => {
@@ -2732,12 +2739,12 @@ mod file_existence_tests {
     // ── Tests ────────────────────────────────────────────────────────
 
     /// Known temp file (sedXXXXXXX pattern) on Created event:
-    /// - No loom-log entries (not even StrandSkipped)
+    /// - StrandSkipped loom-log entry with reason "filtered temp file"
     /// - Agent runner is NOT called
     /// - No tie-off written
     /// - Returns Ok(())
     #[test]
-    fn known_temp_file_skipped_silently_on_created() {
+    fn known_temp_file_logs_filtered_on_created() {
         let dir = TempDir::new().unwrap();
         // Create a file with sed temp name, then delete it
         let temp_path = dir.path().join("sedXXXXXXX");
@@ -2766,15 +2773,26 @@ mod file_existence_tests {
 
         let result = use_case.execute(event);
 
-        // Should succeed silently
+        // Should succeed
         assert!(result.is_ok());
 
-        // No loom-log entries
+        // StrandSkipped loom-log entry
         let events = log_events.lock().unwrap();
-        assert!(
-            events.is_empty(),
-            "known temp file should produce no loom-log entries"
+        assert_eq!(
+            events.len(),
+            1,
+            "known temp file should produce one StrandSkipped entry"
         );
+        match &events[0] {
+            LoomEvent::StrandSkipped { reason, .. } => {
+                assert_eq!(
+                    reason.as_str(),
+                    "filtered temp file",
+                    "reason should be 'filtered temp file'"
+                );
+            }
+            other => panic!("Expected StrandSkipped, got: {other:?}"),
+        }
 
         // Agent runner NOT called
         let was_called = !captured.get_captured_contexts().is_empty();
@@ -2791,9 +2809,9 @@ mod file_existence_tests {
         );
     }
 
-    /// Known temp file on Modified event: same silent skip behaviour.
+    /// Known temp file on Modified event: logs StrandSkipped too.
     #[test]
-    fn known_temp_file_skipped_silently_on_modified() {
+    fn known_temp_file_logs_filtered_on_modified() {
         let dir = TempDir::new().unwrap();
         let temp_path = dir.path().join("sedAbCdEfG");
         std::fs::write(&temp_path, "temp").unwrap();
@@ -2813,9 +2831,15 @@ mod file_existence_tests {
         let result = use_case.execute(event);
         assert!(result.is_ok());
 
-        // No loom-log entries
+        // StrandSkipped loom-log entry
         let events = log_events.lock().unwrap();
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::StrandSkipped { reason, .. } => {
+                assert_eq!(reason.as_str(), "filtered temp file");
+            }
+            other => panic!("Expected StrandSkipped, got: {other:?}"),
+        }
 
         // Agent runner NOT called
         let was_called = !captured.get_captured_contexts().is_empty();

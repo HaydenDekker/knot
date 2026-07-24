@@ -672,10 +672,10 @@ fn delete_event_large_tieoff_bounded_context() {
 
 // ── Strand Skip Tests (temp file / missing file) ────────────────────────
 
-/// Known temp files (sedXXXXXXX) are silently skipped by the pipeline.
-/// No loom-log entry, no agent invocation, no error.
+/// Known temp files (sedXXXXXXX) produce a StrandSkipped loom-log entry
+/// with reason "filtered temp file". No agent invocation, no error.
 #[test]
-fn pipeline_silently_skips_known_temp_file() {
+fn pipeline_logs_strand_skipped_for_known_temp_file() {
     let dir = tempfile::tempdir().unwrap();
     let normal_path = create_strand_file(&dir, "normal.md", "normal content");
     let temp_path = dir.path().join("sedXXXXXXX");
@@ -724,7 +724,7 @@ fn pipeline_silently_skips_known_temp_file() {
 
     // Key verifications for the temp file scenario:
     // - No KnotFailed (temp file handling should not produce errors)
-    // - No StrandSkipped (known temp files are silently skipped)
+    // - StrandSkipped is present (known temp files are logged for completeness)
     // - No StrandIgnored (temp files are not binary files)
     assert!(
         !types.contains(&"KnotFailed"),
@@ -732,14 +732,30 @@ fn pipeline_silently_skips_known_temp_file() {
         types
     );
     assert!(
-        !types.contains(&"StrandSkipped"),
-        "should NOT have StrandSkipped for known temp file. Events: {:?}",
+        types.contains(&"StrandSkipped"),
+        "should have StrandSkipped for known temp file. Events: {:?}",
         types
     );
     assert!(
         !types.contains(&"StrandIgnored"),
         "should NOT have StrandIgnored for known temp file. Events: {:?}",
         types
+    );
+
+    // Verify the StrandSkipped reason is "filtered temp file"
+    let skipped_reasons: Vec<_> = events.iter()
+        .filter_map(|e| {
+            if let LoomEvent::StrandSkipped { reason, .. } = e {
+                Some(reason.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        skipped_reasons.contains(&"filtered temp file"),
+        "StrandSkipped reason should be 'filtered temp file'. Reasons: {:?}",
+        skipped_reasons
     );
 }
 

@@ -159,6 +159,41 @@ When asked to review what a specific knot has produced:
    strand has not been updated since last processing.
    ```
 
+### Tie-off Events vs. Dispatched Event Strands
+
+When reviewing interaction chains, distinguish between two different
+artifacts — confusing them is a common source of false "dead
+subscription" diagnoses:
+
+**Event blocks in the producer's tie-off body** (`tie-off-{knot-name}.md`):
+These are ```markdown fenced code blocks the producer agent writes as
+part of its output. They *declare* that an event occurred. Knot parses
+these blocks **after** the producer completes and dispatches matching
+events to consumers. If the producer writes `event: None` or omits
+an expected event, nothing is dispatched — the producer agent simply
+didn't emit it (either no event was warranted, or the agent was not
+instructed to emit that event type).
+
+**Dispatched event strand files** (`{event-id}/` subdirectory):
+These are separate `.md` files created by Knot's event parser — **not**
+by the producer agent. They appear in the consumer's dispatch directory
+and are what the consumer knot actually processes as strands. If the
+directory exists but is empty (only a `DirectoryCreated` loom-log entry),
+it means Knot created the watch directory for the subscription but no
+event has been dispatched yet.
+
+The producer **never writes to the dispatch directory directly**.
+The flow is:
+
+1. Producer agent writes event block in its tie-off body
+2. Knot parses the tie-off after agent completes
+3. Knot creates a dispatched strand file in the consumer's dispatch directory
+4. Consumer watches that directory and processes the new strand file
+
+If step 1 never happened, steps 2–4 never occur.
+
+---
+
 ### Review an Interaction Chain (Producer → Consumer)
 
 When asked to review how well two knots communicated, or whether an
@@ -356,6 +391,22 @@ dispatched to consumers.
 | Tie-off file missing | Knot has not yet produced output. Not an error — knot may not have been triggered. |
 | Tie-off file is empty | Knot may have started processing but not completed. Check loom-log for `KnotProcessing` without `KnotCompleted`. |
 | Git user not configured | Commits may fail silently. Check `git config user.email` and `git config user.name`. |
+
+## Loom-Log Entries to Ignore During Review
+
+When reviewing loom-logs (`rig/tie-offs/{loom-id}/.loom-log`), these entries
+are expected and do not indicate problems:
+
+- **`StrandSkipped` with reason `"filtered temp file"`** — A temp file from
+  `sed -i` (macOS/Linux), or similar in-place editor triggered a filesystem
+  event but was filtered by name before processing. These are recorded for
+  completeness only. The strand was never a real input file. Count them to
+  gauge filesystem noise levels, but do not flag as issues.
+
+- **`StrandIgnored` with reason `"binary file"`** — A binary file appeared in
+  a strand directory. Knot skips non-text files to avoid passing binary data
+  to the agent. Not an error unless binary files should not be in the strand
+  directory at all (e.g. a build artifact leaked in).
 
 ---
 

@@ -9,7 +9,7 @@ This is expected noise — the temp file was never a real strand. But currently 
 ## Target
 
 - File existence is checked **before** agent invocation
-- Known temp file patterns (initially `sed`) are silently skipped — no loom-log entry, no agent invocation
+- Known temp file patterns (initially `sed`) are filtered — `LoomEvent::StrandSkipped` with reason `"filtered temp file"` is logged for completeness, no agent invocation
 - Unknown missing files produce a new `LoomEvent::StrandSkipped` loom-log entry + console warning — the user can investigate if it's a real issue
 - Deleted events skip the check (file is expected to be gone)
 
@@ -58,10 +58,10 @@ This is expected noise — the temp file was never a real strand. But currently 
 
 - [x] In `ProcessStrand::execute()`, add file existence check **after** text-file check but **before** agent invocation (before step 5)
 - [x] Only applies to `Created` and `Modified` events (`Deleted` already expects file to be gone)
-- [x] If file doesn't exist:
-  - Check `temp_file::is_known_temp_file(&strand_path)`
-  - **Known temp file**: skip silently (debug-level console log only). No loom-log entry, no agent invocation, return `Ok(())`
-  - **Unknown missing file**: log `LoomEvent::StrandSkipped` to loom-log + `eprintln!` console warning. No agent invocation, no tie-off write, return `Ok(())`
+- [x] If file doesn't match as valid text strand:
+  - Check `temp_file::is_known_temp_file(&strand_path)` (filename check, regardless of file existence)
+  - **Known temp file**: log `LoomEvent::StrandSkipped` with reason `"filtered temp file"` + debug-level console log. No agent invocation, no tie-off write, return `Ok(false)`
+  - **Unknown missing file**: log `LoomEvent::StrandSkipped` to loom-log + `eprintln!` console warning. No agent invocation, no tie-off write, return `Ok(false)`
 - [x] Unit tests with `MockAgentRunner` (never called) and `MockLoomLogPort`:
   - Known temp file: no log events, no agent call, returns Ok
   - Unknown missing file: StrandSkipped in loom-log, no agent call, returns Ok
@@ -79,6 +79,18 @@ This is expected noise — the temp file was never a real strand. But currently 
   - Verify: `StrandSkipped` in loom-log, no agent invocation
 
 ## Bugfixes
+
+### 2026-07-24: Temp File Skips Not Logged in Loom-Log
+
+**Symptom:** Knot-manage and knot-analyst reviewing loom-logs could not distinguish between temp file noise and real missing file events, because known temp files (`sedXXXXXXX`) were skipped silently with no loom-log entry at all. When reviewing loom activity, there was no record of how many temp file events were filtered.
+
+**Root cause:** Phase 2 of this plan specified known temp files should be "silently skipped" with no loom-log entry. This was intentional to avoid noise, but meant the loom-log had no completeness record of filtered events. Additionally, `should_process()` only checked temp file patterns when the file was missing on disk — if the temp file briefly existed, it would be processed as a normal text file.
+
+**Fix:** Changed `SkipTemp` handling in `process_strand.rs` to append `LoomEvent::StrandSkipped` with reason `"filtered temp file"` to the loom-log. This provides a completeness record without the noise of full error entries. Also moved temp file pattern check to the top of `should_process()` in `entities.rs` so it catches temp files whether they exist or not (filename-only check). Updated unit tests in `process_strand.rs` and integration test in `tests/pipeline.rs`. Updated knot-manage and knot-analyst skills with guidance on recognising filtered temp file entries in loom-logs.
+
+**Impact:** Loom-logs now record `StrandSkipped` entries for known temp files. Agents reviewing loom-logs can identify these by the reason field `"filtered temp file"` and ignore them as expected filesystem noise.
+
+---
 
 ### 2026-06-27: Linux `sed -i` Temp Files Not Detected
 

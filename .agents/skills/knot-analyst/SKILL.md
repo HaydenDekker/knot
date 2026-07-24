@@ -100,6 +100,8 @@ Tail the last 30 lines per loom. Look for:
 | `KnotParseWarning` events | Knot definition has issues (unknown frontmatter fields) |
 | Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
 | `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
+| `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
+| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file that was not a known temp pattern vanished before processing. If frequent, investigate what is creating and deleting files in strand directories. |
 
 **Produce a summary:**
 
