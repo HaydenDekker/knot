@@ -47,6 +47,50 @@ If multiple changes occur to the same file within the debounce window
 This prevents re-processing mid-edit. The final processed state
 reflects the last saved content.
 
+### The Event Queue Is the Disk
+
+Between the file watcher and the processor sits a **disk-backed event
+queue**. The queue lives in `rig/events/*.json` — each pending event
+is a JSON file on disk. There is no separate in-memory event store.
+
+```
+rig/events/{timestamp}-{rand}.json
+```
+
+Key properties:
+
+- **Persisted across restarts**: If Knot stops and restarts, all
+  queued `.json` files are reloaded (`load_persisted`) before the
+  file watcher begins emitting new events. This preserves FIFO ordering
+  across restart boundaries.
+- **Auto-removed on processing**: When `ProcessStrand` pops an event
+  from the queue, the `.json` file is deleted from disk. The event is
+  processed once — it does not linger.
+- **Deduplicated**: If the same file generates multiple events before
+  processing (e.g. rapid saves), the older event is replaced. The
+  dedup key is `(strand_path, loom_id, knot_id, event_kind)`.
+- **Viewable in state**: `rig/state.json` includes a `strand_queue`
+  array showing all currently pending events.
+
+### Event Queue vs. Dispatch Directories
+
+These are two separate mechanisms:
+
+**Event queue** (`rig/events/*.json`):
+- Holds pending filesystem change events (`Created`, `Modified`,
+  `Deleted`) from the file watcher
+- Each `.json` file is a queue entry — removed when popped for processing
+- `StrandSkipped` entries in the loom-log relate to this queue: the file
+  referenced by a queued event was missing when processing reached it
+
+**Dispatch directories** (`rig/tie-offs/{loom-id}/{EventId}/`):
+- Hold event strand files created by Knot's event dispatcher
+- Used for producer→consumer intent-based routing
+- Each `.md` file is a one-shot event with YAML frontmatter and body
+- The consumer knot watches these directories as its `strand-dir`
+- These are **not** the event queue — they are regular strand files
+  that the consumer knot processes as normal strands
+
 ---
 
 ## Prerequisites
@@ -247,7 +291,26 @@ After triggering any knot:
 | `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check `rig/.rig-log` for `TimeoutExceeded`. Increase profile `timeout`. |
 | `KnotFailed` in loom-log | Read the error message in the log entry. Common causes: missing profile, parse errors, agent crash. |
 | File created but no event at all | The strand directory may not be watched. Check `rig/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
+| `StrandSkipped` in loom-log | See the table below. The strand event was queued but the file was not available when processing reached it. |
 | Event file created but consumer did not fire | Verify the event file has valid YAML frontmatter with `event-id`. Check the dispatch directory path matches the consumer's `strand-dir` event URI. |
+
+### StrandSkipped — File Vanished Before Processing
+
+`StrandSkipped` appears in the loom-log when a strand event was queued
+but the file could not be processed. Two variants exist:
+
+| Reason | Cause | Action |
+|--------|-------|--------|
+| `"filtered temp file"` | A known temp file pattern (e.g. `sedXXXXXXX` from `sed -i`) triggered the watcher. The file was never a real input — it's normal filesystem noise. | No action needed. Count these to gauge noise levels. |
+| `"missing file (unknown pattern)"` | A real file triggered a `Created` or `Modified` event but was deleted before `ProcessStrand` reached it. This is a race condition: the file watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). | If one-off: no action — the event auto-removes from the queue on pop. If recurring for the same path: investigate what is creating and deleting files in the strand directory. |
+
+The event file in `rig/events/*.json` is removed when popped — the
+`StrandSkipped` does not recur from the same queued event. It only
+repeats if the file watcher generates a *new* event for the same path.
+
+For `Deleted` strand events, the file check is skipped entirely
+(the file being gone is expected), so `StrandSkipped` never fires
+for `Deleted` events.
 
 ### Triggering Too Frequently
 

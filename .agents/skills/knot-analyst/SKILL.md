@@ -101,7 +101,7 @@ Tail the last 30 lines per loom. Look for:
 | Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
 | `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
 | `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
-| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file that was not a known temp pattern vanished before processing. If frequent, investigate what is creating and deleting files in strand directories. |
+| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `rig/events/*.json` and auto-removed on pop — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
 
 **Produce a summary:**
 

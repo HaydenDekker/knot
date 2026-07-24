@@ -403,10 +403,43 @@ are expected and do not indicate problems:
   completeness only. The strand was never a real input file. Count them to
   gauge filesystem noise levels, but do not flag as issues.
 
+- **`StrandSkipped` with reason `"missing file (unknown pattern)"`** — A file
+  triggered a filesystem event (created or modified) but was deleted before
+  Knot got to process it. This is a normal race condition: the file watcher
+  fires instantly when a file appears, but the file may be short-lived
+  (e.g. a script creates it, reads it, and deletes it within milliseconds).
+  The event is persisted in the queue (`rig/events/*.json`), and when
+  `ProcessStrand` pops it, the file is already gone. The event file is
+  auto-removed from the queue on pop, so this does not recur from the same
+  event. If you see many of these for the same path, investigate what is
+  creating and deleting files in the strand directory.
+
 - **`StrandIgnored` with reason `"binary file"`** — A binary file appeared in
   a strand directory. Knot skips non-text files to avoid passing binary data
   to the agent. Not an error unless binary files should not be in the strand
   directory at all (e.g. a build artifact leaked in).
+
+## Event Queue vs. Dispatch Directories
+
+These are two separate mechanisms — confusing them is a common source of
+misdiagnosis:
+
+**Event queue** (`rig/events/*.json`):
+- Disk-backed — the `.json` files on disk **are** the queue
+- Holds pending filesystem change events (`Created`, `Modified`, `Deleted`)
+  triggered by the file watcher watching strand directories
+- Each event file is removed from disk when popped for processing
+- On Knot restart, persisted event files are reloaded (`load_persisted`)
+- `StrandSkipped` entries relate to this queue — the file referenced by a
+  queued event was missing when processing reached it
+
+**Dispatch directories** (`rig/tie-offs/{loom-id}/{EventId}/`):
+- Hold event strand files created by Knot's event dispatcher
+- Used for producer→consumer intent-based routing
+- Each `.md` file is a one-shot event with YAML frontmatter and body
+- The consumer knot watches these directories as its `strand-dir`
+- These are **not** the event queue — they are regular strand files that
+  the consumer knot processes normally
 
 ---
 
