@@ -1,6 +1,13 @@
 # Release Notes
 
-## v0.23.0 — 2026-07-24
+## v0.30.1 — 2026-07-24
+
+### Bugfix — Startup ordering: persisted events processed after loom discovery
+
+After restarting Knot with events in the queue, the process-strand loop
+processed them before `DiscoverLooms` had run, causing
+`loom 'X-loom' not found` errors for every persisted event. Fixed by
+deferring the process-strand loop until after `run_startup()` completes.
 
 ### Feature — `knot-manage` skill
 
@@ -15,13 +22,6 @@ New skill for triggering knots into action. Creates or touches strand
 files, dispatches events manually, and follows the full event pipeline
 from strand creation to tie-off completion.
 
-### Feature — `knot-analyst` skill updated
-
-`knot-analyst` (v1.1.0) now includes six analysis dimensions:
-operational activity, git history, project document progress, stagnation
-detection, blocker identification, and a traffic-light productivity
-score.
-
 ### Documentation
 
 - `getting-started.md` — updated skill installation to include all 8
@@ -31,6 +31,54 @@ score.
 - `troubleshooting.md` — new section on diagnostic skills
 - `workflows/` — references to `knot-dispatch` and `knot-manage`
 - `README.md` — expanded Quick Start with workflow steps
+
+## v0.30.0 — 2026-07-21
+
+### Feature — Persistent Event Queue (Disk-Backed)
+
+Strand events are now persisted to `rig/events/{id}.json` on disk
+instead of held in memory. Events survive process restarts (Ctrl+C,
+crashes) and are restored before processing resumes.
+
+**How it works:**
+
+- Every event pushed is written atomically (temp file → rename) to
+  `rig/events/`
+- On startup, `rig/events/*.json` files are scanned and re-queued
+  before the debounce engine starts
+- When an event is processed (popped), its file is removed from disk
+- The disk is the source of truth — editing a pending event file on
+  disk is honoured when the event is processed
+- Malformed JSON files are skipped with a warning; non-`.json` files
+  are silently ignored
+
+**Architecture changes:**
+
+- `InspectQueue<Option<TimestampedStrandEvent>>` replaced by
+  `StrandEventQueue` trait with `DiskBackedEventQueue` as the primary
+  implementation
+- `PendingEvent` domain model with unique IDs
+  (`{unix_timestamp_ms}-{4-hex-chars}`)
+- `PendingEventOrShutdown` enum replaces `Option<T>` for the shutdown
+  sentinel
+- Dedup key preserved: `(strand_path, loom_id, knot_id, kind)`
+
+**Migration:**
+
+No migration needed. On first start, `rig/events/` is created
+automatically. Existing rigs continue working without changes.
+
+### New: Events Directory glossary term
+
+The Knot glossary now documents the `rig/events/` directory layout
+and purpose.
+
+### Testing
+
+- 8 new integration tests in `tests/persistent_queue.rs` covering
+  full persistence cycle, restart survival, malformed file handling,
+  queue deletion, and on-disk modification
+- Full suite: 725 unit + 409 integration = 1,134 tests passing
 
 ## v0.22.1 — 2026-07-03
 
