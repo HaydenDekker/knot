@@ -265,10 +265,16 @@ watch -n 5 'cat rig/state.json | python3 -m json.tool'
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview. Understanding the rig/profile/skill/application
+boundary helps interpret state information meaningfully.
+
 Related skills:
 
-1. **knot-init skill** — initialise the rig
-2. **knot-create skill** — create, modify, or delete looms, knots, and profiles
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-init skill** — initialise the rig
+3. **knot-create skill** — create, modify, or delete looms, knots, and profiles
+4. **knot-analyst skill** — interpret rig state and activity for productivity insights
 
 This skill provides visibility into rig state. Use knot-create for
 changes.

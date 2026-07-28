@@ -454,12 +454,17 @@ grep EventsDispatched rig/tie-offs/review-loom/.loom-log
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview. Understanding how strands, events, dispatch
+directories, and ties work together is essential for triggering knots correctly.
+
 Related skills:
 
-1. **knot-create skill** — create looms, knots, and profiles (must exist before triggering)
-2. **knot-inspect skill** — inspect rig state and verify trigger results
-3. **knot-design skill** — design knots with correct event contracts
-4. **knot-manage skill** — review the work produced by triggered knots
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-create skill** — create looms, knots, and profiles (must exist before triggering)
+3. **knot-inspect skill** — inspect rig state and verify trigger results
+4. **knot-design skill** — design knots with correct event contracts
+5. **knot-manage skill** — review the work produced by triggered knots
 
 This skill covers **triggering** — getting knots to run. The other
 skills handle setup, monitoring, and design.

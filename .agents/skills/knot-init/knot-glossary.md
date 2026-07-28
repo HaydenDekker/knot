@@ -136,9 +136,31 @@ Statically derived path under `rig/tie-offs/{loom-id}/`. No longer configurable 
 
 ---
 
-### Tie-Off Events
+### Tie-off Events
 
-Typed subdirectories inside a loom's tie-off directory that carry event files for agent-to-agent communication. These directories are created automatically by Knot's event dispatch system when an event is emitted.
+The event dispatch pipeline has **two distinct artifacts** that are easy to confuse:
+
+1. **Event blocks in the producer's tie-off body** — ```markdown fenced code blocks that the producer agent writes inside its own `tie-off-{knot-name}.md`. These are the producer's *declaration* that an event occurred. The producer writes these because Knot injected event-emission instructions into its prompt.
+
+2. **Dispatched event strand files** — separate `.md` files that Knot *creates automatically* in the consumer's dispatch directory (`rig/tie-offs/{consumer-loom-id}/{event-id}/`). These are created by Knot's event parser reading the producer's tie-off, not written by the producer agent itself.
+
+The producer **never writes to the dispatch directory directly**. The producer writes event blocks in its tie-off; Knot reads those blocks and creates the dispatched strand files that the consumer watches.
+
+```text
+Producer agent writes event block in tie-off:
+  rig/tie-offs/producer-loom/tie-off-producer.md
+    └── (body contains) ```markdown block with event: SomeEvent
+
+          ↓  Knot parses tie-off after agent completes
+
+Knot creates dispatched strand file:
+  rig/tie-offs/consumer-loom/SomeEvent/event-1750000000.md
+    └── (standalone file — consumer watches this directory)
+
+          ↓  File watcher fires
+
+Consumer agent processes the strand file.
+```
 
 **Dynamic routing (current):** A consumer knot declares its subscription using an `event:` URI in its `strand-dir` (e.g. `event:quality-reviewer:ReviewCompleted`). Knot resolves this to `rig/tie-offs/{loom-id}/{event-id}/`, creates the directory, and watches it. When the producer emits a matching event, Knot creates an event file in that directory, triggering the consumer.
 

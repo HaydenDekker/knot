@@ -419,11 +419,16 @@ python3 -m json.tool rig/state.json | grep -A2 '"status"'
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview. Understanding the rig/profile/skill/application
+boundary is essential for correctly interpreting rig productivity signals.
+
 Related skills:
 
-1. **knot-inspect skill** — read raw rig state and loom activity
-2. **knot-create skill** — fix configuration issues found by analysis
-3. **knot-design skill** — redesign knots if oscillation or authority
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-inspect skill** — read raw rig state and loom activity
+3. **knot-create skill** — fix configuration issues found by analysis
+4. **knot-design skill** — redesign knots if oscillation or authority
    issues are detected
 
 This skill (`knot-analyst`) provides the **interpretive layer** over raw

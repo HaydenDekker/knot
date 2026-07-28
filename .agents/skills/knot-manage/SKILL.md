@@ -419,6 +419,25 @@ are expected and do not indicate problems:
   to the agent. Not an error unless binary files should not be in the strand
   directory at all (e.g. a build artifact leaked in).
 
+## File Watcher and Pre-Existing Files
+
+The `notify` file watcher only fires events for changes that occur *after*
+`watch()` is called. It does not scan the watched directory on startup.
+This means:
+
+- **Pre-existing files** in a watched directory (e.g., strand files created
+  by another process before Knot started, or event files left from a
+  previous run) will **not** trigger `StrandEvent::Created` when the
+  watcher starts.
+- **Touching the file** (updating its mtime, e.g. `touch path/to/file.md`)
+  is the reliable way to trigger processing of a file that the watcher
+  missed. This fires a `Modify` event which Knot processes normally.
+- This commonly affects **event dispatch directories**:
+  `rig/tie-offs/{loom-id}/{EventId}/` — if the directory was created in
+  a prior run and already contains event files, restarting Knot will start
+  a new watcher but won't retroactively process the existing files.
+  Touch any unprocessed event files to trigger them.
+
 ## Event Queue vs. Dispatch Directories
 
 These are two separate mechanisms — confusing them is a common source of
@@ -426,6 +445,12 @@ misdiagnosis:
 
 **Event queue** (`rig/events/*.json`):
 - Disk-backed — the `.json` files on disk **are** the queue
+- **Single shared queue across all looms** — events from all knots in all
+  looms coexist in the same queue (e.g., `documentation-loom`,
+  `review-loom`, `validation-loom` events all queued alongside
+  `coding-implementation-loom` events). Each event carries its own
+  `(loom_id, knot_id)` so `ProcessStrand` routes correctly, but there is
+  no per-loom queue isolation. The queue is strictly FIFO across all looms.
 - Holds pending filesystem change events (`Created`, `Modified`, `Deleted`)
   triggered by the file watcher watching strand directories
 - Each event file is removed from disk when popped for processing
@@ -476,18 +501,27 @@ git log --oneline --grep="knot: " --format="%s" | \
 
 # Check for Knot commits in last 24h
 git log --oneline --since="24 hours ago" --grep="knot: "
+
+# Trigger processing of a file the watcher missed (touch updates mtime)
+touch path/to/strand.md
 ```
 
 ---
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview (especially the tie-off dispatch mechanism
+and producer→consumer interaction model).
+
 Related skills:
 
-1. **knot-inspect skill** — inspect current rig state and loom activity
-2. **knot-dispatch skill** — trigger knots into action
-3. **knot-analyst skill** — analyse live rig productivity and blockers
-4. **knot-design skill** — review knot design for authority boundaries and loop patterns
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-inspect skill** — inspect current rig state and loom activity
+3. **knot-dispatch skill** — trigger knots into action
+4. **knot-analyst skill** — analyse live rig productivity and blockers
+5. **knot-design skill** — review knot design for authority boundaries and loop patterns
+6. **knot-create skill** — create or modify looms, knots, and profiles
 
 This skill (`knot-manage`) provides the **retrospective review** of
 completed work. Use knot-inspect for current state and knot-dispatch

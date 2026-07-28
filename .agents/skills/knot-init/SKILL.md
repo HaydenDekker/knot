@@ -87,6 +87,7 @@ When asked to initialise a Knot rig:
       cp -r .agents/skills/knot-design ~/.agents/skills/
       cp -r .agents/skills/knot-analyst ~/.agents/skills/
       cp -r .agents/skills/knot-update ~/.agents/skills/
+      cp -r .agents/skills/knot-abstractions ~/.agents/skills/
       ```
     - Also copy any non-SKILL.md files in skill directories
       (e.g. `.agents/skills/knot-init/knot-glossary.md`).
@@ -94,7 +95,8 @@ When asked to initialise a Knot rig:
       permissions or stale handles. After copying, diff each skill:
       ```bash
       for skill in knot-init knot-create knot-dispatch knot-inspect
-                    knot-manage knot-design knot-analyst knot-update; do
+                    knot-manage knot-design knot-analyst knot-update
+                    knot-abstractions; do
         diff .agents/skills/$skill/SKILL.md \
              ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
           echo "$skill: OK" || echo "$skill: FAILED"
@@ -337,12 +339,17 @@ cat rig/state.json | python3 -c "import sys,json; [print(l['id'], len(l['knots']
 
 ## Cross-Reference
 
+**Before using other Knot skills:** Read the `knot-abstractions` skill
+for the layered architecture overview. Understanding the rig/profile/
+skill/application boundary is essential for effective work.
+
 After initialisation, the workflow continues with:
 
+- **knot-abstractions skill** — foundational architecture overview
 1. **knot-create skill** — create looms, knots, and profiles (file-first)
-2. **knot-dispatch skill** — trigger knots into action
-3. **knot-inspect skill** — inspect rig, loom, and knot state
-4. **knot-manage skill** — review completed rig work
+3. **knot-dispatch skill** — trigger knots into action
+4. **knot-inspect skill** — inspect rig, loom, and knot state
+5. **knot-manage skill** — review completed rig work
 
 This skill prepares the rig and installs Knot skills globally. The
 other skills manage the content.
@@ -359,7 +366,8 @@ level):
 
 ```bash
 for skill in knot-init knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update; do
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
   cp -r .agents/skills/$skill ~/.agents/skills/$skill
 done
 # Copy any extra files (e.g. glossary)
@@ -373,7 +381,8 @@ Always verify after copying — `cp` can silently fail:
 
 ```bash
 for skill in knot-init knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update; do
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \
        ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"

@@ -40,7 +40,8 @@ project level, install it globally:
 
 ```bash
 for skill in knot-init knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update; do
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
   cp -r .agents/skills/$skill ~/.agents/skills/$skill
 done
 # Copy non-SKILL.md files (e.g. glossary)
@@ -54,7 +55,8 @@ fi
 
 ```bash
 for skill in knot-init knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update; do
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \
        ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
@@ -70,6 +72,7 @@ This project maintains agent skills in `.agents/skills/`. Pi discovers these as 
 
 ### Knot Skills
 
+- **knot-abstractions** — Understand the layered architecture (rig, profiles, skills, application)
 - **knot-analyst** — Analyse rig productivity and project progress at runtime
 - **knot-design** — Design looms and knots (idempotency, naming, loops, responsibility)
 - **knot-dispatch** — Trigger knots into action (strand files, event dispatch)

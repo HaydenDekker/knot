@@ -691,11 +691,17 @@ domain? If yes:
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview. Understanding the abstraction boundaries
+between the rig engine, profiles, skills, and project layer is essential
+for designing knots that respect separation of concerns.
+
 Related skills:
 
-1. **knot-create skill** — create the `.md` files for looms and knots
-2. **knot-inspect skill** — verify loom state and knot processing
-3. **knot-init skill** — initialise the rig (prerequisite)
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-create skill** — create the `.md` files for looms and knots
+3. **knot-inspect skill** — verify loom state and knot processing
+4. **knot-init skill** — initialise the rig (prerequisite)
 
 This skill covers the **design** decisions. Use `knot-create` for the
 actual file writing and verification.

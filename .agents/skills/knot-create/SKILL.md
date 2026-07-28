@@ -772,10 +772,16 @@ rm -rf rig/prd-review-loom
 
 ## Cross-Reference
 
+**Before using this skill:** Read the `knot-abstractions` skill for the
+layered architecture overview. Understanding the rig/profile/skill/application
+boundary helps ensure you design knots with proper separation of concerns.
+
 Related skills:
 
-1. **knot-init skill** — initialise the rig (prerequisite for this skill)
-2. **knot-inspect skill** — inspect loom activity and knot processing state
+1. **knot-abstractions skill** — foundational architecture overview
+2. **knot-init skill** — initialise the rig (prerequisite for this skill)
+3. **knot-inspect skill** — inspect loom activity and knot processing state
+4. **knot-design skill** — design principles for idempotent, loop-safe knots
 
 This skill (`knot-create`) manages the full loom, knot, and profile
 lifecycle through direct file operations. Use knot-inspect for
