@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
+  version: "1.4.1"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,30 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Guidance — Terminology Rule Relaxed (skill version 1.4.0)
+
+The `knot-design` skill relaxes its "Never Leak Internal
+Terminology" rule from a strict prohibition to a guideline.
+Knot-specific terms (`strand`, `tie-off`, `knot`, `loom`, `event`)
+are **encouraged** in knot body instructions, profiles,
+`event-description` fields, and tie-offs — because every agent
+invocation includes `AGENTS.md` referencing the Knot glossary, these
+terms are always defined.
+
+**No migration required** — the rule was universally violated in
+practice (all 24 knot files and 12 event descriptions already used
+knot terminology). Relaxing the rule makes existing practice compliant.
+
+**Scope boundary preserved:** knot terminology remains **forbidden**
+in skill documents (`.agents/skills/*`) and project-space documents
+(`project/`). These remain orchestrator-agnostic per the
+`knot-abstractions` layering.
+
+**Affected documents:** none — no frontmatter fields or body
+semantics change. Only authoring guidance changes.
 
 ---
 
