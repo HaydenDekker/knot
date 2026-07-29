@@ -4,7 +4,7 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
+  version: "1.4.0"
   compatibility: "Knot 0.26.0+"
 ---
 
@@ -19,64 +19,91 @@ or diagnosing loop behaviour.
 
 ---
 
-## ⚠️ Never Leak Internal Terminology Into Prompts or Event Descriptions
+## Terminology in Knots, Profiles, and the Rig
 
-The markdown body of a knot (its instructions) and the `event-description`
-frontmatter field are **injected directly into the agent's prompt**. They
-are **not** internal documentation — they are what the agent reads and
-follows. Therefore:
+The markdown body of a knot (its instructions), the `event-description`
+frontmatter field, and profile system prompts are **injected directly into
+the agent's prompt**. Every agent invocation also includes `AGENTS.md`,
+which references the Knot glossary (`knot-glossary.md` installed as a
+skill). Because knot-specific terms are always defined and always
+available in context, their use inside the rig **improves clarity of
+scope, data flow, and responsibility** — it does not harm portability.
 
-**Never use knot-specific internal terms in prompts or event descriptions.**
-Use generic, domain-agnostic language instead. Workflows should be reusable
-across different orchestration systems, not tied to Knot's terminology.
+Therefore knot-specific terms are **encouraged** inside the rig:
 
-| ❌ Knot-specific (do NOT use in prompts) | ✅ Generic (use instead) |
-|------------------------------------------|--------------------------|
-| tie-off                                  | final response |
-| strand                                   | input file, work item, trigger file |
-| knot                                     | task |
-| loom                                     | workspace |
-| strand-dir                               | input directory, source path |
-| tie-off directory                        | output directory |
-| tie-off file                             | output document, result file |
-| event                                    | message, notification, signal |
-| event-description                        | (use a plain `description:` or `summary` field) |
+1. **Knot body instructions** — use "strand," "tie-off," "knot," "loom,"
+   and "event" to convey precise scope and data flow.
+2. **`event-description` fields** — use "Emitted" and other knot
+   terminology naturally; these terms are always defined via the glossary.
+3. **Profiles** — knot terminology in system prompts is fine because the
+   glossary is always available to the agent.
+
+### Style Reference
+
+| Term (encouraged inside the rig) | Meaning |
+|---|---|
+| strand | the input file or event that triggers this knot |
+| tie-off | this knot's final output document |
+| knot | this specific task/agent workflow |
+| loom | the domain work area grouping related knots |
+| event | a message a producer knot may emit for consumers |
+
+### Where Terminology is Forbidden
+
+Knot-specific terms must **not** appear in:
+
+- **Skill documents** (`.agents/skills/*`) — skills are orchestrator-agnostic per the `knot-abstractions` layering; they describe generic behaviours, not Knot-specific wiring.
+- **Project-space documents** (`project/`) — domain/application knowledge that must remain portable and domain-pure.
+- **Any shared/reusable artifact** intended for cross-rig or cross-orchestrator reuse.
 
 ### Template for Generic Instructions
+
+The generic template below is a **valid option** — but it is no longer the
+only permitted style. Inside the rig, knot terminology is the **preferred**
+style because it conveys precise meaning that generic alternatives cannot.
 
 When writing knot instructions, follow this pattern:
 
 ```markdown
 You are a <role>. <Goal statement>.
 
-1. Read the <input file>.
+1. Read the <input file> (the strand).
 2. Inspect current state of <target domain>.
 3. Determine if the goal is already met.
 4. If yes, report "no changes needed" with explanation.
 5. If no, apply minimal changes to achieve the goal.
-6. Write your <output document> at the expected output path.
+6. Write your <output document> (the tie-off).
 
 ## Constraints
 - Never overwrite work in <other domain> — only append observations.
-- Re-running on the same <input file> must produce no additional changes.
+- Re-running on the same strand must produce no additional changes.
 ```
 
 ### Examples
 
-**❌ Bad — leaks internal terminology:**
+**❌ Bad — leaks terminology into skill documents:**
 
 ```markdown
-Read the strand. Process it. Append to the tie-off file.
-Emit an event in your tie-off if one occurs.
+You are a task agent. Read the input file, inspect the workspace,
+and write your final response. This guidance is reusable across
+orchestrators.
 ```
 
-**✅ Good — uses generic terms:**
+> The above might be fine for a skill, but when it appears in a knot body
+> inside the rig, it loses precise scope information ("task" could be any
+> of several validation knots; "input file" doesn't convey the event
+> trigger semantics).
+
+**✅ Good — uses knot terminology inside the rig:**
 
 ```markdown
-Read the input file. Process it. Write your final response
-to the output document. Emit a notification in your output
-document if one occurs.
+Read the strand. Inspect current state. Append findings to the tie-off
+file. Emit an event in your tie-off if a producer knot should know about
+your output.
 ```
+
+> Inside the rig, these terms are always defined via the Knot glossary
+> in AGENTS.md, so they enhance clarity, not harm it.
 
 ---
 
