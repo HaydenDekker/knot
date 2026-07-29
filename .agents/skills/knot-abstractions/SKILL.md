@@ -4,7 +4,7 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
+  version: "1.1.0"
   compatibility: "Knot 0.26.0+"
 ---
 
@@ -29,7 +29,7 @@ Read this before working deeply with any other knot skills.
 │  Profiles (rig/profiles/*.md) — Agent Identities         │
 │  • Declare a role and set of skills                      │
 │  • Reference a model/provider configuration              │
-│  • Do NOT know about Knot — only their workflow          │
+│  • May use Knot terminology (terms always in glossary)  │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -73,10 +73,21 @@ Located at `borrow-my-stuff-rig/profiles/*.md`, profiles declare:
 - **A role** the agent session plays
 - **Skills** available to the agent
 
-Key principle: **Profiles don't know about Knot.** A profile like
-`coding.md` says "I am a phase implementer with tools X, Y, Z" but
-never references looms, strands, or events. This makes profiles
-portable — the same profile could run under a different orchestrator.
+Key principle: **Profiles don't encode orchestration mechanics.** A
+profile like `coding.md` says "I am a phase implementer with tools X,
+Y, Z" and handles role, model, and tool declaration. Profiles **may
+use Knot terminology** (`strand`, `tie-off`, `knot`, `loom`, `event`)
+in their system prompt — because every agent invocation includes
+`AGENTS.md` referencing the Knot glossary, these terms are always
+defined. Per the `knot-design` skill's relaxed terminology guideline,
+this terminology improves clarity of scope and data flow inside the
+rig.
+
+*Note:* While profiles *could* theoretically be ported to another
+orchestrator if stripped of Knot terminology, this portability is
+currently theoretical — the rig's event injection, dispatch directory,
+and tie-off mechanics are deeply coupled to Knot's execution model
+regardless of terminology.
 
 ### 3. Skills (Generic Behaviors)
 
