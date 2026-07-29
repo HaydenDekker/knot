@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.3.0"
+  version: "3.4.0"
   compatibility: "Knot 0.22.0+"
 ---
 
@@ -132,6 +132,12 @@ When asked to initialise a Knot rig:
       This project uses **Knot** for agent orchestration. Knot runs as a
       local service and manages AI agent workflows through looms and
       knots defined in `rig/`.
+
+      Knot terminology (`strand`, `tie-off`, `knot`, `loom`, `event`) is
+      encouraged inside rig files — the Knot glossary is installed as a
+      skill and is always available, so these terms are always defined.
+      Keep this terminology out of skill documents and project-space
+      documents.
 
       ### Running
 
