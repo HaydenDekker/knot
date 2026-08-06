@@ -3398,11 +3398,6 @@ mod event_dispatch_tests {
             prompt
         );
         assert!(
-            prompt.contains("Events you may emit:"),
-            "prompt should contain event header: {}",
-            prompt
-        );
-        assert!(
             prompt.contains("`PlanCreated`"),
             "prompt should contain event-id: {}",
             prompt

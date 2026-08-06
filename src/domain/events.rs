@@ -168,12 +168,8 @@ pub fn build_listener_context(
 
     let mut output = String::from(
         "## Agent Events\n\n\
-         Other processors are listening for events you may emit. If an event occurs\n\
-         during your work, include an explicit event block in your final response using\n\
-         the format shown.\n\n\
-         You may emit **multiple events** in one final response — each event as its own\n\
-         ```markdown code block.\n\n\
-         Events you may emit:\n",
+         Subscribers have requested to be notified of the following events. You must emit\n\
+         an event for each one that occurs during this session:\n\n",
     );
 
     for (event_id, consumer) in &seen_ids {
@@ -189,33 +185,39 @@ pub fn build_listener_context(
         ));
     }
 
+    // Concrete example with real values
+    let first_event_id = seen_ids.keys().next().map(|s| s.as_str()).unwrap_or("EventId");
     output.push_str(
-        "\nIf events occurred, emit one ```markdown block per event:\n");
-    output.push_str("\n```markdown\n");
+        "\n### Event Format\n\n\
+         Emit one ```markdown block per event. Use `---` frontmatter delimiters\n\
+         with `event`, `description`, and `timestamp` as required fields:\n\n",
+    );
+    output.push_str("```markdown\n");
     output.push_str("---\n");
-    output.push_str("event: <EventId>\n");
-    output.push_str("description: <short summary of what happened>\n");
-    output.push_str("timestamp: <ISO 8601 timestamp (local time)>\n");
-    output.push_str("<additional fields as relevant>\n");
+    output.push_str(&format!("event: {}\n", first_event_id));
+    output.push_str("description: Short summary of what happened\n");
+    output.push_str("timestamp: 2026-08-06T14:30:00\n");
+    output.push_str("
+         <optional fields if specified in the event description above>\n");
+
     output.push_str("---\n\n");
     output.push_str("Freeform narrative context about the event.\n");
     output.push_str("```\n");
 
     output.push_str(
-        "\nThe `event`, `description`, and `timestamp` fields are required.\n\n");
-    output.push_str(
-        "You may not edit dispatched events. If you need to adjust an event,\n");
-    output.push_str(
-        "emit a new event with additional context — but only if critical, as\n");
-    output.push_str(
-        "this results in an additional event to be processed later.\n\n");
-
-    output.push_str("\nIf no events occurred, emit:\n");
-    output.push_str("\n```markdown\n");
-    output.push_str("---\n");
-    output.push_str("event: None\n");
-    output.push_str("---\n");
-    output.push_str("```\n");
+        "\nYou may emit **multiple events** in one response — each as its own block.\n\n\
+         ### No Events\n\n\
+         If no events occurred, emit:\n\n\
+         ```markdown\n\
+         ---\n\
+         event: None\n\
+         ---\n\
+         ```\n\n\
+         ### Rules\n\n\
+         - The `event`, `description`, and `timestamp` fields are required.\n\
+         - You may not edit dispatched events. If you need to adjust, emit a new event\n\
+           with additional context — but only if critical.\n",
+    );
 
     output
 }
@@ -655,8 +657,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
-            context.contains("description:")
-                && context.contains("<short summary"),
+            context.contains("description:"),
             "context should require description field: {}",
             context
         );
@@ -876,8 +877,8 @@ mod tests {
             context
         );
         assert!(
-            context.contains("ISO 8601 timestamp"),
-            "prompt should mention ISO 8601 format: {}",
+            context.contains("2026-"),
+            "prompt should show a concrete ISO 8601 timestamp example: {}",
             context
         );
     }

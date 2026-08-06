@@ -56,32 +56,9 @@ Knot-specific terms must **not** appear in:
 - **Project-space documents** (`project/`) — domain/application knowledge that must remain portable and domain-pure.
 - **Any shared/reusable artifact** intended for cross-rig or cross-orchestrator reuse.
 
-### Template for Generic Instructions
-
-The generic template below is a **valid option** — but it is no longer the
-only permitted style. Inside the rig, knot terminology is the **preferred**
-style because it conveys precise meaning that generic alternatives cannot.
-
-When writing knot instructions, follow this pattern:
-
-```markdown
-You are a <role>. <Goal statement>.
-
-1. Read the <input file> (the strand).
-2. Inspect current state of <target domain>.
-3. Determine if the goal is already met.
-4. If yes, report "no changes needed" with explanation.
-5. If no, apply minimal changes to achieve the goal.
-6. Write your <output document> (the tie-off).
-
-## Constraints
-- Never overwrite work in <other domain> — only append observations.
-- Re-running on the same strand must produce no additional changes.
-```
-
 ### Examples
 
-**❌ Bad — leaks terminology into skill documents:**
+**❌ Bad — vauge terminology **
 
 ```markdown
 You are a task agent. Read the input file, inspect the workspace,
