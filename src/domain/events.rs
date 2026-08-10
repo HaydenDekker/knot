@@ -14,14 +14,26 @@ use std::collections::HashMap;
 
 /// A structured agent-to-agent event emitted in a tie-off.
 ///
-/// When a target knot is instructed to emit an event (via intent-based routing
-/// context injection), it writes a structured block in its tie-off body. The
-/// `event:` key signals that the block contains event data. All other keys
-/// (except `target-knot`, which is derived from context) become the payload.
+/// When a producer knot is instructed to emit events (via intent-based routing
+/// context injection), it writes one structured block per subscriber event
+/// in its tie-off body. Each block carries an `occurred` flag indicating
+/// whether the event actually happened during the session.
+///
+/// Events with `occurred = false` are not dispatched to consumers but still
+/// count as acknowledgement of the subscriber requirement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentEvent {
     /// Unique event identifier (e.g. `PlanCreated`).
     pub event_id: String,
+    /// Whether the event actually occurred during the session.
+    ///
+    /// `false` events are not dispatched to consumers but still count as
+    /// acknowledgement of the subscriber requirement.
+    ///
+    /// Defaults to `true` for backwards compatibility with events that
+    /// omit this field.
+    #[serde(default = "default_occurred")]
+    pub occurred: bool,
     /// Arbitrary key-value pairs carrying event data.
     /// Includes fields like `plan`, `description`, `source`, etc.
     #[serde(default)]
@@ -33,6 +45,10 @@ pub struct AgentEvent {
     /// captured here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+}
+
+fn default_occurred() -> bool {
+    true
 }
 
 
@@ -112,12 +128,10 @@ pub trait ContextProvider {
 ///
 /// ## Multi-event format
 ///
-/// A producer may emit **multiple events** in a single tie-off (one
-/// ```markdown code block per event). Each event block contains
-/// YAML-style frontmatter between `---` delimiters and an optional
-/// freeform body. Each event block is independently parsed and
-/// dispatched. If no events occurred, emit `event: None` inside a
-/// ```markdown block with `---` delimiters.
+/// A producer must emit **one event block per subscriber event** in its
+/// tie-off. Each block carries `event`, `occurred`, `description`, and
+/// `timestamp` (when occurred) as frontmatter. Events with `occurred: false`
+/// are not dispatched but still count as acknowledgement.
 ///
 pub fn build_listener_context(
     knot: &Knot,
@@ -168,8 +182,8 @@ pub fn build_listener_context(
 
     let mut output = String::from(
         "# Subscriber Events\n\n\
-         You have a number of subscribers that have requested to be notified if certain events occur during this session. You\n\n\
-         must acknolowedge each event in the tie-off. Subscribers can't begin there work until your events are delivered to\n\n\
+         You have a number of subscribers that have requested to be notified if certain events occur during this session. You\n\
+         must acknolowedge each event in the tie-off. Subscribers can't begin there work until your events are delivered to\n\
          them via your tie-off.\n\n\
          The following event/s have been declared by subscribers:\n\n",
     );
@@ -191,12 +205,13 @@ pub fn build_listener_context(
     let first_event_id = seen_ids.keys().next().map(|s| s.as_str()).unwrap_or("EventId");
     output.push_str(
         "\n## Event Format\n\n\
-         Emit one ```markdown block per event. Use `---` frontmatter delimiters\n\
-         with `event`, `description`, and `timestamp` as required fields:\n\n",
+         Emit one ```markdown block **per subscriber event** listed above.\n\
+         Each block must have `---` frontmatter delimiters:\n\n",
     );
     output.push_str("```markdown\n");
     output.push_str("---\n");
     output.push_str(&format!("event: {}\n", first_event_id));
+    output.push_str("occurred: true\n");
     output.push_str("description: Short summary of what happened\n");
     output.push_str("timestamp: 2026-08-06T14:30:00\n");
     output.push_str("
@@ -207,24 +222,20 @@ pub fn build_listener_context(
     output.push_str("```\n");
 
     output.push_str(
-        "\nTo emit multiple events in one response — place each in its own block.\n\n\
-         ### No Events\n\n\
-         If no events occurred, emit:\n\n\
-         ```markdown\n\
-         ---\n\
-         event: None\n\
-         description: <Rationale on why the event types did not occur during this session. One per event subscription>\n\n\
-         ---\n\
-         ```\n\n\
-         ## Rules\n\n\
-         - The `event`, `description`, and `timestamp` fields are required.\n\
-         - You may not edit dispatched events. If you need to adjust, emit a new event\n\
-           with additional context — but only if critical.\n\
-         - If there are multiple event subscriptions, you must emit one event for per event subscription, \n\
-           i.e. two events, both occured, emit both in separate blocks. \n\
-         - 'event: none' may include multiple event type descriptions for why they weren't triggered during the session.\n\n\
+        "\n## Rules\n\n\
+         - Emit exactly one event block per subscriber event listed above.\n\
+         - The `event` and `occurred` fields are required in every block.\n\
+         - The `description` field must explain why the event was or wasn't\n\
+           triggered, plus any additional requested information.\n\
+         - When `occurred: true`, include the `timestamp` field and any\n\
+           additional fields specified in the event description above.\n\
+         - When `occurred: false`, the event is not dispatched but still\n\
+           counts as acknowledgement.\n\
+         - You may not edit dispatched events. If you need to adjust,\n\
+           emit a new event with additional context — but only if critical.\n\n\
          ---\n\n",
     );
+
 
     output
 }
@@ -634,9 +645,9 @@ mod tests {
         );
     }
 
-    /// Output contains instructions for emitting `event: None`.
+    /// Output contains instructions for `occurred` field.
     #[test]
-    fn build_listener_context_output_instructs_event_none() {
+    fn build_listener_context_output_instructs_occurred_field() {
         let producer = make_test_knot("plan-creator");
         let consumer = make_event_knot(
             "plan-validator",
@@ -646,8 +657,13 @@ mod tests {
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
-            context.contains("event: None"),
-            "context should instruct to emit 'event: None': {}",
+            context.contains("occurred:"),
+            "context should instruct to use 'occurred' field: {}",
+            context
+        );
+        assert!(
+            context.contains("occurred: true"),
+            "context should show 'occurred: true' in example: {}",
             context
         );
     }
@@ -685,7 +701,7 @@ mod tests {
         assert!(context.contains("# Subscriber Events"));
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("When a plan is created"));
-        assert!(context.contains("event: None"));
+        assert!(context.contains("occurred:"));
         assert!(context.contains("description:"));
     }
 
@@ -842,9 +858,9 @@ mod tests {
         );
     }
 
-    /// Prompt shows event: None in the new frontmatter format.
+    /// Prompt instructs `occurred: false` as the way to signal no event.
     #[test]
-    fn build_listener_context_event_none_uses_frontmatter_format() {
+    fn build_listener_context_occurred_false_instruction() {
         let producer = make_test_knot("plan-creator");
         let consumer = make_event_knot(
             "plan-validator",
@@ -853,15 +869,23 @@ mod tests {
             Some("When a plan is created".to_string()),
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
-        // event: None should be inside a ```markdown block with --- delimiters
-        assert!(context.contains("```markdown"));
-        assert!(context.contains("event: None"));
-        // The event: None block should have --- on both sides
-        let none_section = context.split("event: None").nth(1).unwrap();
+        // Prompt should NOT contain event: None anymore
         assert!(
-            none_section.contains("---"),
-            "event: None should be wrapped in frontmatter (---): {}",
-            none_section
+            !context.contains("event: None"),
+            "context should NOT contain 'event: None': {}",
+            context
+        );
+        // Prompt should contain occurred: true in the example
+        assert!(
+            context.contains("occurred: true"),
+            "context should show 'occurred: true' in example: {}",
+            context
+        );
+        // Prompt should contain occurred: false in the rules
+        assert!(
+            context.contains("occurred: false"),
+            "context should mention 'occurred: false' in rules: {}",
+            context
         );
     }
 
@@ -1057,11 +1081,13 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         };
 
         assert_eq!(event.event_id, "PlanCreated");
+        assert_eq!(event.occurred, true);
         assert_eq!(event.payload.len(), 2);
         assert_eq!(
             event.payload.get("plan"),
@@ -1077,6 +1103,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         };
@@ -1090,6 +1117,7 @@ mod tests {
     fn agent_event_empty_payload_defaults() {
         let event = AgentEvent {
             event_id: "Something".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
@@ -1103,11 +1131,13 @@ mod tests {
 
     #[test]
     fn agent_event_missing_payload_in_json_defaults_to_empty() {
-        // JSON without a payload field should deserialize with empty HashMap
+        // JSON without a payload or occurred field should deserialize
+        // with defaults (empty HashMap, occurred=true)
         let json = r#"{"event_id":"Test"}"#;
         let event: AgentEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_id, "Test");
         assert!(event.payload.is_empty());
+        assert!(event.occurred, "occurred should default to true");
     }
 
     #[test]
@@ -1117,6 +1147,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: Some(
                 "The plan covers three phases: planning, review, and approval.".to_string(),
@@ -1142,6 +1173,7 @@ mod tests {
     fn agent_event_with_none_body_survives_serialisation() {
         let event = AgentEvent {
             event_id: "NoBodyEvent".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
@@ -1165,12 +1197,14 @@ mod tests {
         let event: AgentEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_id, "Test");
         assert_eq!(event.body, None);
+        assert!(event.occurred, "occurred should default to true");
     }
 
     #[test]
     fn agent_event_with_empty_string_body_preserved() {
         let event = AgentEvent {
             event_id: "EmptyBody".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: Some(String::new()),
         };
@@ -1184,6 +1218,35 @@ mod tests {
         let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, event);
         assert_eq!(deserialized.body.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn agent_event_occurred_false_roundtrips() {
+        let event = AgentEvent {
+            event_id: "PlanCreated".to_string(),
+            occurred: false,
+            payload: HashMap::new(),
+            body: None,
+        };
+
+        assert!(!event.occurred);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            json.contains("\"occurred\":false"),
+            "JSON should contain occurred:false: {}",
+            json
+        );
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        assert!(!deserialized.occurred);
+    }
+
+    #[test]
+    fn agent_event_occurred_defaults_to_true_in_json() {
+        // JSON without occurred field should deserialize with occurred=true
+        let json = r#"{"event_id":"Test","payload":{}}"#;
+        let event: AgentEvent = serde_json::from_str(json).unwrap();
+        assert!(event.occurred, "occurred should default to true");
     }
 
     #[test]

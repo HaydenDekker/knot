@@ -147,10 +147,14 @@ pub fn extract_last_n(
 ///
 /// Multiple events are emitted as separate ```markdown blocks.
 ///
+/// Each block carries `event`, `occurred`, `description`, and optionally
+/// `timestamp` and other payload fields. Events with `occurred: false`
+/// are still returned by the parser (they are filtered at dispatch time).
+///
 /// ## Graceful handling
 ///
 /// - Only ```markdown blocks are parsed (other language tags ignored).
-/// - `event: None` produces no `AgentEvent` for that block (skipped).
+/// - `occurred` defaults to `true` if absent (backwards compat).
 /// - Missing closing `---` in frontmatter: body is None, frontmatter still
 ///   parsed.
 /// - Empty body after `---` is allowed (body is None).
@@ -174,8 +178,8 @@ pub fn extract_agent_events(
 
 /// Determine if the tie-off content contains any agent events.
 ///
-/// Returns `true` if zero event blocks were found (not even `event: None`).
-/// Returns `false` if at least one event block (including `event: None`) was found.
+/// Returns `true` if zero event blocks were found.
+/// Returns `false` if at least one event block was found.
 ///
 /// This is a lightweight check — it does not call `extract_agent_events()`
 /// (which fully parses events). It only checks for the presence of
@@ -244,8 +248,10 @@ fn extract_markdown_blocks(content: &str) -> Vec<String> {
 ///
 /// Returns `None` if:
 /// - `event:` key is missing
-/// - `event:` value is `None`
 /// - No `---` delimiter found (not valid frontmatter)
+///
+/// The `occurred` field defaults to `true` if absent (backwards compat).
+/// Boolean is parsed case-insensitively from the string value.
 fn parse_event_block(
     content: &str,
 ) -> Option<crate::domain::events::AgentEvent> {
@@ -295,16 +301,20 @@ fn parse_event_block(
     // Extract event_id from payload
     let event_id = payload.get("event")?.clone();
 
-    // `event: None` — no event to dispatch
-    if event_id == "None" {
-        return None;
-    }
+    // Extract `occurred` field (defaults to true for backwards compat)
+    let occurred = payload
+        .get("occurred")
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
 
-    // Remove `event` from payload (it's the identifier, not payload data)
+    // Remove `event` and `occurred` from payload
+    // (they are struct fields, not payload data)
     payload.remove("event");
+    payload.remove("occurred");
 
     Some(crate::domain::events::AgentEvent {
         event_id,
+        occurred,
         payload,
         body,
     })
@@ -618,16 +628,40 @@ mod tests {
     }
 
     #[test]
-    fn extract_agent_events_event_none_in_markdown_block() {
+    fn extract_agent_events_occurred_false_not_dispatched() {
+        // occurred: false events are still parsed but should not be
+        // dispatched (filtering happens at dispatch time, not parse time).
+        // The parser returns them so enforcement can count them.
         let content = concat!(
             "```markdown\n",
             "---\n",
-            "event: None\n",
+            "event: PlanCreated\n",
+            "occurred: false\n",
+            "description: No plan was created this session\n",
             "---\n",
             "```",
         );
         let events = extract_agent_events(content);
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert!(!events[0].occurred, "occurred should be false");
+    }
+
+    #[test]
+    fn extract_agent_events_occurred_true_default() {
+        // When occurred is omitted, it defaults to true (backwards compat)
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "description: Plan was created\n",
+            "---\n",
+            "```",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert!(events[0].occurred, "occurred should default to true");
     }
 
     #[test]
@@ -815,34 +849,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_agent_events_event_none_between_real_events_skipped() {
+    fn extract_agent_events_mixed_occurred_true_and_false() {
         let content = concat!(
             "```markdown\n",
             "---\n",
-            "event: FirstEvent\n",
-            "data: one\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "plan: PLAN-001\n",
             "---\n",
-            "First.\n",
+            "Plan created.\n",
             "```\n",
             "\n",
             "```markdown\n",
             "---\n",
-            "event: None\n",
+            "event: ValidationFailed\n",
+            "occurred: false\n",
+            "description: Validation did not fail\n",
             "---\n",
             "```\n",
-            "\n",
-            "```markdown\n",
-            "---\n",
-            "event: SecondEvent\n",
-            "data: two\n",
-            "---\n",
-            "Second.\n",
-            "```",
         );
         let events = extract_agent_events(content);
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_id, "FirstEvent");
-        assert_eq!(events[1].event_id, "SecondEvent");
+        assert_eq!(events[0].event_id, "PlanCreated");
+        assert!(events[0].occurred);
+        assert_eq!(events[1].event_id, "ValidationFailed");
+        assert!(!events[1].occurred);
     }
 
     #[test]
@@ -1003,11 +1034,14 @@ mod tests {
     }
 
     #[test]
-    fn has_no_events_with_event_none_returns_false() {
+    fn has_no_events_with_occurred_false_returns_false() {
+        // occurred: false still counts as an event block (acknowledgement)
         let content = concat!(
             "```markdown\n",
             "---\n",
-            "event: None\n",
+            "event: PlanCreated\n",
+            "occurred: false\n",
+            "description: No plan created\n",
             "---\n",
             "```",
         );

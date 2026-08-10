@@ -477,8 +477,8 @@ impl ProcessStrand {
     /// After a knot completes successfully, this extracts any structured
     /// agent events from the tie-off content, matches them against consumer
     /// `strand_source` entries (EventUri), and dispatches event files to
-    /// each matching consumer. `event: None` signals (skipped by parser)
-    /// produce no dispatch. Multiple events in a single tie-off are each
+    /// each matching consumer. Events with `occurred: false` are filtered
+    /// out before dispatch. Multiple events in a single tie-off are each
     /// dispatched independently to their matching consumers.
     ///
     /// Returns a `LoomEvent::EventsDispatched` log entry if any events
@@ -493,15 +493,23 @@ impl ProcessStrand {
         // Parse tie-off for agent events.
         // Returns a Vec of all events found (may be empty).
         // The producing knot's ID is available from the `knot` parameter.
-        let events =
+        let all_events =
             crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
 
-        let event_count = events.len();
-        let event_ids: Vec<&str> = events.iter().map(|e| e.event_id.as_str()).collect();
+        let total_count = all_events.len();
+        let all_event_ids: Vec<&str> = all_events.iter().map(|e| e.event_id.as_str()).collect();
         eprintln!(
             "event parse (knot={}): {} event(s) found — {:?}",
-            knot.id.0, event_count, event_ids,
+            knot.id.0, total_count, all_event_ids,
         );
+
+        // Only dispatch events that actually occurred.
+        // Events with `occurred: false` are acknowledgements — they count
+        // for enforcement but are not dispatched to consumers.
+        let events: Vec<_> = all_events
+            .into_iter()
+            .filter(|e| e.occurred)
+            .collect();
 
         if events.is_empty() {
             return Ok(None);
@@ -3408,8 +3416,8 @@ mod event_dispatch_tests {
             prompt
         );
         assert!(
-            prompt.contains("event: None"),
-            "prompt should instruct to emit event: None: {}",
+            prompt.contains("occurred:"),
+            "prompt should instruct to use occurred field: {}",
             prompt
         );
         // Listener context is at the beginning, before the knot's instructions
@@ -3466,9 +3474,9 @@ mod event_dispatch_tests {
         assert_eq!(prompt, "check it");
     }
 
-    /// `event: None` — no dispatch occurs.
+    /// `occurred: false` — no dispatch occurs.
     #[test]
-    fn event_none_produces_no_dispatch() {
+    fn event_occurred_false_produces_no_dispatch() {
         let dir = TempDir::new().unwrap();
         let strand_path = dir.path().join("strand.md");
         std::fs::write(&strand_path, "test content").unwrap();
@@ -3487,9 +3495,18 @@ mod event_dispatch_tests {
             )],
         );
 
-        // Agent output has `event: None` — should not dispatch
+        // Agent output has `occurred: false` — should not dispatch
         let output = Ok(AgentOutput {
-            stdout: "  event: None\n".to_string(),
+            stdout: concat!(
+                "```markdown\n",
+                "---\n",
+                "event: PlanCreated\n",
+                "occurred: false\n",
+                "description: Plan was not created this session\n",
+                "---\n",
+                "```",
+            )
+            .to_string(),
             stderr: String::new(),
             exit_code: 0,
             metadata: None,
@@ -3511,7 +3528,7 @@ mod event_dispatch_tests {
         let dispatched = dispatches.lock().unwrap();
         assert!(
             dispatched.is_empty(),
-            "'event: None' should produce no dispatch, got {} events",
+            "'occurred: false' should produce no dispatch, got {} events",
             dispatched.len()
         );
 
@@ -3521,7 +3538,7 @@ mod event_dispatch_tests {
         });
         assert!(
             !dispatch_log,
-            "should not log EventsDispatched for event: None"
+            "should not log EventsDispatched for occurred: false"
         );
     }
 
@@ -4892,12 +4909,14 @@ mod event_enforcement_tests {
 
     fn event_block(event_id: &str) -> String {
         format!(
-            "```markdown\n---\nevent: {event_id}\n---\n\nEvent body.\n```"
+            "```markdown\n---\nevent: {event_id}\noccurred: true\n---\n\nEvent body.\n```"
         )
     }
 
-    fn event_none_block() -> String {
-        "```markdown\n---\nevent: None\n---\n```".to_string()
+    fn event_occurred_false_block(event_id: &str) -> String {
+        format!(
+            "```markdown\n---\nevent: {event_id}\noccurred: false\ndescription: Did not occur\n---\n```"
+        )
     }
 
     /// No consumers listening for events from this knot — enforcement
@@ -5008,9 +5027,9 @@ mod event_enforcement_tests {
         assert_eq!(missing_count, 0, "no enforcement when events are present");
     }
 
-    /// Agent emits `event: None` — enforcement is skipped (valid outcome).
+    /// Agent emits `occurred: false` — enforcement is skipped (valid outcome).
     #[test]
-    fn process_strand_enforcement_event_none_skipped() {
+    fn process_strand_enforcement_occurred_false_skipped() {
         let dir = TempDir::new().unwrap();
         let strand_path = dir.path().join("strand.md");
         std::fs::write(&strand_path, "test content").unwrap();
@@ -5030,7 +5049,7 @@ mod event_enforcement_tests {
         );
 
         let output = Ok(AgentOutput {
-            stdout: event_none_block(),
+            stdout: event_occurred_false_block("PlanCreated"),
             stderr: String::new(),
             exit_code: 0,
             metadata: None,
@@ -5061,7 +5080,7 @@ mod event_enforcement_tests {
         assert_eq!(
             missing_count,
             0,
-            "no enforcement when event: None is emitted"
+            "no enforcement when occurred: false is emitted"
         );
     }
 

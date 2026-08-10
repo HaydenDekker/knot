@@ -155,6 +155,7 @@ mod tests {
 
         AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         }
@@ -302,6 +303,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "EmptyEvent".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
@@ -379,11 +381,13 @@ mod tests {
 
         let event1 = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
         let event2 = AgentEvent {
             event_id: "PlanApproved".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
@@ -487,6 +491,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: Some(
                 "The plan covers three phases: planning, review, and approval."
@@ -554,6 +559,7 @@ mod tests {
         // Event with no body and no payload — should show "No payload data."
         let event_empty = AgentEvent {
             event_id: "EmptyEvent".to_string(),
+            occurred: true,
             payload: HashMap::new(),
             body: None,
         };
@@ -584,6 +590,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         };
@@ -634,6 +641,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         };

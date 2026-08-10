@@ -757,6 +757,7 @@ mod tests {
 
         let event = AgentEvent {
             event_id: "PlanCreated".to_string(),
+            occurred: true,
             payload,
             body: None,
         };
