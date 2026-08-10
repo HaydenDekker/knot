@@ -3393,7 +3393,7 @@ mod event_dispatch_tests {
 
         // Prompt should contain listener context heading
         assert!(
-            prompt.contains("## Agent Events"),
+            prompt.contains("# Subscriber Events"),
             "prompt should contain Agent Events heading: {}",
             prompt
         );
@@ -3414,7 +3414,7 @@ mod event_dispatch_tests {
         );
         // Listener context is at the beginning, before the knot's instructions
         assert!(
-            prompt.starts_with("## Agent Events"),
+            prompt.starts_with("# Subscriber Events"),
             "listener context should be at the start of the prompt: {}",
             prompt
         );
@@ -4104,7 +4104,7 @@ mod event_dispatch_tests {
 
         // Should contain emission instructions
         assert!(
-            prompt.contains("## Agent Events"),
+            prompt.contains("# Subscriber Events"),
             "prompt should contain Agent Events heading: {}",
             prompt
         );
@@ -4180,7 +4180,7 @@ mod event_dispatch_tests {
 
         // Should contain emission instructions
         assert!(
-            prompt.contains("## Agent Events"),
+            prompt.contains("# Subscriber Events"),
             "prompt should contain Agent Events heading: {}",
             prompt
         );

@@ -436,7 +436,7 @@ mod tests {
 
         let result = provider.build_context(&ctx);
         assert!(
-            result.contains("## Agent Events"),
+            result.contains("# Subscriber Events"),
             "should contain emission instructions: {}",
             result
         );
@@ -489,7 +489,7 @@ mod tests {
             result
         );
         assert!(
-            result.contains("## Agent Events"),
+            result.contains("# Subscriber Events"),
             "should contain emission instructions: {}",
             result
         );
@@ -658,7 +658,7 @@ mod tests {
         let result = provider.build_context(&ctx);
 
         assert!(
-            result.contains("## Agent Events"),
+            result.contains("# Subscriber Events"),
             "should still contain emission instructions: {}",
             result
         );

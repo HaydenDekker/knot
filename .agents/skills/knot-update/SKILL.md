@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.1"
+  version: "1.5.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,64 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### 0.30.1 — EventsDispatched Dispatches Tuple Expanded (2026-07-24)
+
+The `EventsDispatched` loom-log event now records three-tuples in the
+`dispatches` array instead of two-tuples.
+
+**Why:** Previously the `dispatches` array was `(event-id, loom-id)`.
+When two knots in the same loom both subscribe to the same event,
+the duplicate was hard to debug. Now it is
+`(event-id, consumer-knot-id, consumer-loom-id)` so the consumer knot
+responsible for each dispatch is visible.
+
+This affects the `.loom-log` JSONL files written to
+`rig/tie-offs/{loom-id}/.loom-log`. It is an **internal runtime
+artifact** — no user-authored documents are affected.
+
+#### Affected Files
+
+| What Changed | Old Format | New Format |
+|---|---|---|
+| `EventsDispatched.dispatches` | `[["EventId","loom-id"]]` | `[["EventId","consumer-knot-id","loom-id"]]` |
+
+#### Migration
+
+The loom-log reader already skips unparseable lines with a warning:
+
+```
+WARN: loom-log {loom-id} line {N}: skipping non-JSONL content: invalid length 2, expected a tuple of size 3
+```
+
+These old entries are harmless noise — Knot continues reading the
+remaining lines. To eliminate the warnings, either:
+
+1. **Delete old events** — truncate the `.loom-log` file to remove
+   pre-migration entries:
+   ```bash
+   # Find the first line written by the new binary (has 3-element tuples)
+   grep -n 'EventsDispatched.*"dispatches":\[\[' rig/tie-offs/{loom-id}/.loom-log
+   # Check which lines have 2 vs 3 elements, then keep only new entries
+   ```
+
+2. **Let it settle** — old entries stay in the log, warnings appear
+   on each state read. They do not affect processing. As the log
+   grows, the noise becomes proportionally smaller.
+
+#### If Not Migrated
+
+- Old `EventsDispatched` lines are skipped with a warning on every
+  loom-log read (state write, activity endpoint, knot status endpoint)
+- No data loss — the skipped line is only an audit trail entry
+- New processing events produce correct 3-tuple entries
+
+#### Fields Unchanged by This Migration
+
+All profile and knot frontmatter fields are unchanged. Only the
+internal loom-log `EventsDispatched` event schema is affected.
 
 ---
 

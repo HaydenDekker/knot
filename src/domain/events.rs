@@ -167,9 +167,11 @@ pub fn build_listener_context(
     }
 
     let mut output = String::from(
-        "## Agent Events\n\n\
-         Subscribers have requested to be notified of the following events. You must emit\n\
-         an event for each one that occurs during this session:\n\n",
+        "# Subscriber Events\n\n\
+         You have a number of subscribers that have requested to be notified if certain events occur during this session. You\n\n\
+         must acknolowedge each event in the tie-off. Subscribers can't begin there work until your events are delivered to\n\n\
+         them via your tie-off.\n\n\
+         The following event/s have been declared by subscribers:\n\n",
     );
 
     for (event_id, consumer) in &seen_ids {
@@ -188,7 +190,7 @@ pub fn build_listener_context(
     // Concrete example with real values
     let first_event_id = seen_ids.keys().next().map(|s| s.as_str()).unwrap_or("EventId");
     output.push_str(
-        "\n### Event Format\n\n\
+        "\n## Event Format\n\n\
          Emit one ```markdown block per event. Use `---` frontmatter delimiters\n\
          with `event`, `description`, and `timestamp` as required fields:\n\n",
     );
@@ -205,18 +207,23 @@ pub fn build_listener_context(
     output.push_str("```\n");
 
     output.push_str(
-        "\nYou may emit **multiple events** in one response — each as its own block.\n\n\
+        "\nTo emit multiple events in one response — place each in its own block.\n\n\
          ### No Events\n\n\
          If no events occurred, emit:\n\n\
          ```markdown\n\
          ---\n\
          event: None\n\
+         description: <Rationale on why the event types did not occur during this session. One per event subscription>\n\n\
          ---\n\
          ```\n\n\
-         ### Rules\n\n\
+         ## Rules\n\n\
          - The `event`, `description`, and `timestamp` fields are required.\n\
          - You may not edit dispatched events. If you need to adjust, emit a new event\n\
-           with additional context — but only if critical.\n",
+           with additional context — but only if critical.\n\
+         - If there are multiple event subscriptions, you must emit one event for per event subscription, \n\
+           i.e. two events, both occured, emit both in separate blocks. \n\
+         - 'event: none' may include multiple event type descriptions for why they weren't triggered during the session.\n\n\
+         ---\n\n",
     );
 
     output
@@ -571,7 +578,7 @@ mod tests {
         );
     }
 
-    /// Output starts with the `## Agent Events` heading.
+    /// Output starts with the `# Subscriber Events` heading.
     #[test]
     fn build_listener_context_output_has_heading() {
         let producer = make_test_knot("plan-creator");
@@ -583,7 +590,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
-            context.starts_with("## Agent Events\n"),
+            context.starts_with("# Subscriber Events\n"),
             "context should start with heading: {}",
             context
         );
@@ -675,7 +682,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(!context.is_empty());
-        assert!(context.contains("## Agent Events"));
+        assert!(context.contains("# Subscriber Events"));
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("When a plan is created"));
         assert!(context.contains("event: None"));
@@ -950,7 +957,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &loom_id, &[consumer]);
         assert!(!context.is_empty());
-        assert!(context.contains("## Agent Events"));
+        assert!(context.contains("# Subscriber Events"));
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("When a plan is created"));
     }
