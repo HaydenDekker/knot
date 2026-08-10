@@ -183,7 +183,7 @@ pub fn build_listener_context(
     let mut output = String::from(
         "# Subscriber Events\n\n\
          You have a number of subscribers that have requested to be notified if certain events occur during this session. You\n\
-         must acknolowedge each event in the tie-off. Subscribers can't begin there work until your events are delivered to\n\
+         must acknolowedge each event in the your tie-off (final response). Subscribers can't begin there work until your events are delivered to\n\
          them via your tie-off.\n\n\
          The following event/s have been declared by subscribers:\n\n",
     );

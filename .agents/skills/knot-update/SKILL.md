@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.6.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,29 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Glossary — Tie-Off Definition Updated (skill version 1.6.0, 2026-08-10)
+
+The `Tie-off` entry in the Knot glossary has been reworded to clarify
+that the agent never needs to manually write to the tie-off directory.
+Knot automatically captures the agent's output and stores it.
+
+**No migration required** — the glossary is a reference document read by
+agents at invocation time. No project documents or frontmatter fields
+are affected.
+
+**Action required:** the glossary lives inside the `knot-init` skill at
+`knot-glossary.md`. After updating, copy it to the global skill location
+so agents on other projects see the change:
+
+```bash
+cp .agents/skills/knot-init/knot-glossary.md \
+   ~/.agents/skills/knot-init/knot-glossary.md
+```
+
+**Affected documents:** none — glossary text only.
 
 ---
 

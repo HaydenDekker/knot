@@ -196,7 +196,7 @@ A per-knot file that records processing events and status for that knot. Contain
 
 ### Tie-off
 
-The final response or error produced by a knot at the end of its session. Each processing event is appended to a single `tie-off-{knot-name}.md` file at `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`, so the document grows over time and tells the complete story of the knot's work. The event metadata in each section identifies which strand was processed. During processing the knot's agent may write files to any directories it has access to — the tie-off is what gets captured and filed away.
+During a session an agent may write files to any directories it has privilege to write to. Once finished it outputs a final response, the tie-off. Knot automatically parses and stores that response. The agent never needs to manually write to the tie-offs directory for any reason unless explicitly asked to.
 
 ---
 
