@@ -70,9 +70,10 @@ impl AgentEventsContextProvider {
             return emission_instructions;
         }
 
-        // Prepend pending events section before emission instructions.
+        // Append pending events section after emission instructions.
+        // Agent sees what it can emit first, then what is already pending.
         let pending_section = format_pending_events_section(&pending);
-        format!("{}\n\n{}", pending_section, emission_instructions)
+        format!("{}\n\n{}", emission_instructions, pending_section)
     }
 
     /// Scan the in-memory strand queue for pending events emitted by
@@ -292,9 +293,8 @@ fn extract_emitted_event_ids(instructions: &str) -> HashSet<String> {
 fn format_pending_events_section(pending: &[PendingEvent]) -> String {
     let mut output = String::from(
         "## Pending Events\n\n\
-         The following events have been emitted but may not yet have triggered their\n\
-         consumers. Check these before deciding to emit a new event — if a pending event\n\
-         covers the same outcome, you may not need to emit a duplicate.\n",
+         The following events have are queued awaiting processing. Do not emit a event if a queued event\n\
+         covers the same outcome, to avoid duplication.\n\n",
     );
 
     for event in pending {
