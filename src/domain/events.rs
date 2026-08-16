@@ -231,8 +231,9 @@ pub fn build_listener_context(
            additional fields specified in the event description above.\n\
          - When `occurred: false`, the event is not dispatched but still\n\
            counts as acknowledgement.\n\
-         - You may not edit dispatched events. If you need to adjust,\n\
-           emit a new event with additional context — but only if critical.\n\n\
+         - If a pendening event satisfies the event that has just occured set occured: false to avoid duplicated events.\n\
+         - You may conclude a pending event is already relevant but requires additonal context but do not edit the pending event and instead\n\
+           emit a new event of the same type with additional context.\n\n\
          ---\n\n",
     );
 

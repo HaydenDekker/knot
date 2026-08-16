@@ -59,6 +59,50 @@ date, and migration instructions for affected document types.
 
 ---
 
+### Init Appends Knot Terminology to AGENTS.md (skill version 1.7.0, 2026-08-10)
+
+The `knot-init` skill (step 4b) now appends a concise **Knot
+Terminology** section to the project's `AGENTS.md` when initialising a
+rig. It defines the six basic Knot terms — `rig`, `loom`, `knot`,
+`strand`, `tie-off`, and `event` — so the terminology is always
+available during any agent session (AGENTS.md is inspected for every
+task).
+
+**Why:** Agents explore the repository and encounter knot terminology
+in rig files, tie-offs, event blocks, and loom-logs regardless of how
+prompts are worded. Keeping the six basic terms in AGENTS.md ensures
+they are always defined, without carrying the full glossary into the
+project.
+
+**Action required for existing rigs:** if the project's `AGENTS.md` was
+created before this change and does not yet contain a `## Knot
+Terminology` section, append it:
+
+```markdown
+## Knot Terminology
+
+Basic Knot terms used throughout the rig:
+
+- **rig** — the top-level container holding looms, profiles, and rig state
+- **loom** — a domain work area (a directory ending in `-loom`) grouping related knots
+- **knot** — a configured task/agent workflow that processes input strands
+- **strand** — a file in a knot's strand-dir that triggers the knot to process it
+- **tie-off** — a knot's final output document, stored under `rig/tie-offs/`
+- **event** — a message a producer knot emits for consumer knots to process
+
+Knot terminology is encouraged inside rig files. Keep this
+terminology out of skill documents and project-space documents.
+```
+
+Alternatively, re-run `knot-init`, which appends the section
+idempotently.
+
+**Affected documents:** `AGENTS.md` (additive — no frontmatter or body
+semantics change). The complete glossary remains in the `knot-init`
+skill at `knot-glossary.md`.
+
+---
+
 ### Glossary — Tie-Off Definition Updated (skill version 1.6.0, 2026-08-10)
 
 The `Tie-off` entry in the Knot glossary has been reworded to clarify

@@ -118,8 +118,9 @@ When asked to initialise a Knot rig:
 4b. **Ensure Knot section in AGENTS.md** (idempotent):
     - Read `AGENTS.md` from the project root if it exists.
     - Check if it already contains Knot information (search for
-      `knot-init`, `knot-create`, or "## Agent Skills" with Knot
-      skills listed). If present, skip this step entirely.
+      `knot-init`, `knot-create`, "## Agent Skills" with Knot skills
+      listed, or `## Knot Terminology`). If present, skip this step
+      entirely.
     - If `AGENTS.md` does NOT exist, create it with a full document
       containing a project header, build/run instructions, and the
       Knot sections below.
@@ -133,12 +134,6 @@ When asked to initialise a Knot rig:
       local service and manages AI agent workflows through looms and
       knots defined in `rig/`.
 
-      Knot terminology (`strand`, `tie-off`, `knot`, `loom`, `event`) is
-      encouraged inside rig files — the Knot glossary is installed as a
-      skill and is always available, so these terms are always defined.
-      Keep this terminology out of skill documents and project-space
-      documents.
-
       ### Running
 
       Start the Knot service:
@@ -146,6 +141,20 @@ When asked to initialise a Knot rig:
       ```bash
       cargo run
       ```
+
+      ### Knot Terminology
+
+      Basic Knot terms used throughout the rig:
+
+      - **rig** — the top-level container holding looms, profiles, and rig state
+      - **loom** — a domain work area (a directory ending in `-loom`) grouping related knots
+      - **knot** — a configured task/agent workflow that processes input strands
+      - **strand** — a file in a knot's strand-dir that triggers the knot to process it
+      - **tie-off** — a knot's final output document, stored under `rig/tie-offs/`
+      - **event** — a message a producer knot emits for consumer knots to process
+
+      Knot terminology is encouraged inside rig files. Keep this
+      terminology out of skill documents and project-space documents.
 
       ### Agent Skills
 
@@ -161,11 +170,11 @@ When asked to initialise a Knot rig:
       - **knot-update** — Migrate project documents between Knot versions
       ```
     - Read the Knot glossary from this skill's directory at
-      `knot-glossary.md`. It covers Knot domain terms (rig, loom,
-      knot, strand, tie-off, etc.) and must be read before working
-      on any Knot feature. Do NOT write a glossary section into the
-      project's AGENTS.md — the glossary lives in the skill and is
-      always available to agents that have Knot skills installed.
+      `knot-glossary.md`. It covers the full set of Knot domain terms
+      and must be read before working on any Knot feature. The six
+      basic terms above are appended to AGENTS.md so they are always
+      available during any agent session; the complete glossary stays
+      in the skill for deeper reference.
     - If the project also has a `project/domain-glossary.md` (a
       project-specific glossary separate from the Knot glossary),
       include a domain glossary reference at the end of the
