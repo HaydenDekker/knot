@@ -463,6 +463,11 @@ impl Default for MockGitVersioningPort {
 }
 
 impl GitVersioningPort for MockGitVersioningPort {
+    fn ensure_rig_repo(&self, _rig_dir: &std::path::Path) -> Result<(), PortError> {
+        // No-op — the mock does not touch the filesystem.
+        Ok(())
+    }
+
     fn commit(
         &self,
         loom_id: &LoomId,

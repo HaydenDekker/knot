@@ -61,6 +61,9 @@ pub struct AppContext {
     pub runtime_root: PathBuf,
     /// State writer port — writes `state.json` at the runtime root.
     pub state_writer: Arc<dyn StateWriterPort>,
+    /// Git versioning port — commits agent work at the project root and
+    /// ensures the rig has its own git repository at startup.
+    pub git_versioning: Arc<dyn GitVersioningPort>,
     /// Strand event queue — shared with WriteState for queue visibility.
     pub strand_queue: Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>,
 }
@@ -246,14 +249,6 @@ pub fn build_app_context(
     let state_writer: Arc<dyn StateWriterPort> =
         Arc::new(FileSystemStateWriter::new(runtime_root.clone()));
 
-    // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
-    // Strand receiver is wired into the debounce engine.
-    // Config receiver is wired into the ConfigEventHandler.
-    let (strand_tx, strand_rx) = mpsc::channel(100);
-    let (config_tx, config_rx) = mpsc::channel(100);
-
-    // File-system event source — created once, shared via AppContext.
-    // Handlers can pass this to use cases for watch/unwatch.
     // Project root is the parent of the rig directory, matching the
     // resolution in FileSystemLoomRepository::scan(). This ensures
     // relative strand_dir paths resolve against the project root,
@@ -262,6 +257,21 @@ pub fn build_app_context(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config.rig_dir.clone());
+
+    // Git versioning: commits agent work at the project root and ensures
+    // the rig has its own git repository at startup (ensure_rig_repo).
+    let git_versioning: Arc<dyn GitVersioningPort> = Arc::new(
+        crate::adapters::outbound::FileSystemGitVersioner::new(project_root.clone()),
+    );
+
+    // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
+    // Strand receiver is wired into the debounce engine.
+    // Config receiver is wired into the ConfigEventHandler.
+    let (strand_tx, strand_rx) = mpsc::channel(100);
+    let (config_tx, config_rx) = mpsc::channel(100);
+
+    // File-system event source — created once, shared via AppContext.
+    // Handlers can pass this to use cases for watch/unwatch.
     let event_source: Arc<dyn application::ports::EventSource> =
         Arc::new(
             crate::adapters::outbound::NotifyEventSource::new(
@@ -287,6 +297,7 @@ pub fn build_app_context(
             rig_dir: config.rig_dir.clone(),
             runtime_root,
             state_writer,
+            git_versioning,
             strand_queue: Arc::new(std::sync::Mutex::new(None)),
         },
         strand_rx,
@@ -387,15 +398,8 @@ pub fn spawn_process_strand_loop(
     let profile_repo = Arc::clone(&ctx.profile_repo);
     let rig_log_port = Arc::clone(&ctx.rig_log_port);
 
-    // Git versioning: project root is the parent of the rig directory.
-    // Falls back to rig_dir itself if parent does not exist.
-    let project_root = rig_dir
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| rig_dir.clone());
-    let git_versioning_port: Arc<dyn GitVersioningPort> = Arc::new(
-        crate::adapters::outbound::FileSystemGitVersioner::new(project_root),
-    );
+    // Git versioning — wired in the composition root (project root).
+    let git_versioning_port = Arc::clone(&ctx.git_versioning);
 
     // Clone debounce_queue before moving into the closure.
     let debounce_queue_inner = Arc::clone(&debounce_queue);
@@ -575,6 +579,13 @@ agent-adapter: pi-stdio
             eprintln!("WARNING: failed to write {}: {e}", config_path.display());
             e
         })?;
+    }
+
+    // Ensure the rig has its own git repository and the parent project
+    // repo (if any) excludes it. Idempotent and non-fatal — runs after
+    // rig-dir creation and before any watcher registration.
+    if let Err(e) = ctx.git_versioning.ensure_rig_repo(rig_dir) {
+        eprintln!("WARNING: rig git init: {e}");
     }
 
     let discover = application::usecases::DiscoverLooms::new(
@@ -923,5 +934,31 @@ mod composition_tests {
             content.contains("agent-adapter: pi-json"),
             "existing config should be preserved"
         );
+    }
+
+    /// `run_startup()` initialises the rig git repository — verifies the
+    /// `GitVersioningPort::ensure_rig_repo` wiring (idempotent, non-fatal,
+    /// and no `.gitignore` written into the source-only rig dir).
+    #[test]
+    fn test_startup_ensures_rig_git_repository() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+
+        assert!(
+            rig_dir.join(".git").exists(),
+            "run_startup should git init the rig dir"
+        );
+        assert!(
+            !rig_dir.join(".gitignore").exists(),
+            "no .gitignore should be written into the rig dir"
+        );
+
+        // Idempotent — a second startup does not fail or re-write.
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        assert!(rig_dir.join(".git").exists());
     }
 }

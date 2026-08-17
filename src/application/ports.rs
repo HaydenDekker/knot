@@ -542,6 +542,20 @@ pub trait GitVersioningPort: Send + Sync {
         event_type: &str,
         tie_off_content: &str,
     ) -> Result<(), PortError>;
+
+    /// Ensure the rig directory is its own git repository and — when
+    /// the project root (parent of `rig_dir`) is inside a git repo —
+    /// excluded from that repo.
+    ///
+    /// Idempotent and non-fatal: runs `git init` in `rig_dir` when
+    /// `rig/.git` is absent (no `.gitignore` is written into the rig),
+    /// and appends a marked `<rig-basename>/` entry to the parent
+    /// `.gitignore` — unless the rig is already tracked by the parent,
+    /// in which case the manual `git rm -r --cached` command is logged
+    /// instead of editing the file. All failure modes (no git binary,
+    /// git init failure, no parent repo, already initialised) degrade
+    /// to a warning and `Ok(())`.
+    fn ensure_rig_repo(&self, rig_dir: &std::path::Path) -> Result<(), PortError>;
 }
 
 /// Port for writing the rig state snapshot file.
@@ -829,6 +843,10 @@ mod tests {
                     event_type.to_string(),
                     tie_off_content.to_string(),
                 ));
+            Ok(())
+        }
+
+        fn ensure_rig_repo(&self, _rig_dir: &std::path::Path) -> Result<(), PortError> {
             Ok(())
         }
     }

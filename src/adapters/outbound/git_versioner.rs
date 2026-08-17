@@ -13,6 +13,12 @@ use crate::domain::entities::{KnotId, LoomId, StrandPath};
 /// Prevents excessively large commit messages.
 const MAX_BODY_LINES: usize = 1000;
 
+/// Marker comment appended above the rig entry in the parent repo's
+/// `.gitignore` — makes the exclusion idempotent (Knot never appends
+/// it twice) and visible to humans.
+const GITIGNORE_MARKER: &str =
+    "# knot: rig has its own git repository (excluded from project repo)";
+
 /// Filesystem-backed git versioning adapter.
 ///
 /// Uses `std::process::Command` to run `git` directly — avoids the
@@ -22,12 +28,44 @@ const MAX_BODY_LINES: usize = 1000;
 pub struct FileSystemGitVersioner {
     /// Project root where git commands should run.
     repo_root: std::path::PathBuf,
+    /// Git binary name (overridable in tests to simulate git absence).
+    git_binary: String,
 }
 
 impl FileSystemGitVersioner {
     /// Create a new versioner targeting `repo_root`.
     pub fn new(repo_root: std::path::PathBuf) -> Self {
-        Self { repo_root }
+        Self {
+            repo_root,
+            git_binary: "git".to_string(),
+        }
+    }
+
+    /// Create a versioner with an explicit git binary name.
+    ///
+    /// Used in tests to simulate a git-absent environment.
+    pub fn with_git_binary(
+        repo_root: std::path::PathBuf,
+        git_binary: impl Into<String>,
+    ) -> Self {
+        Self {
+            repo_root,
+            git_binary: git_binary.into(),
+        }
+    }
+
+    /// Run a git command in `dir`. Returns `None` if the git binary
+    /// cannot be spawned.
+    fn run_git(
+        &self,
+        dir: &std::path::Path,
+        args: &[&str],
+    ) -> Option<std::process::Output> {
+        Command::new(&self.git_binary)
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .ok()
     }
 
     /// Check if `repo_root` is inside a git repository.
@@ -35,31 +73,27 @@ impl FileSystemGitVersioner {
     /// Returns `Ok(())` if `git rev-parse --git-dir` succeeds, or
     /// `Err(PortError::GitCommitFailed)` if it fails.
     fn is_git_repo(&self) -> Result<(), PortError> {
-        let output = Command::new("git")
-            .args(["rev-parse", "--git-dir"])
-            .current_dir(&self.repo_root)
-            .output()
-            .map_err(|e| {
+        match self.run_git(&self.repo_root, &["rev-parse", "--git-dir"]) {
+            Some(output) if output.status.success() => Ok(()),
+            Some(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 crate::adapters::logging::log_config_event(
                     "git_versioner",
-                    &format!("git binary not found: {e}"),
+                    &format!("not a git repo: {stderr}"),
                 );
-                PortError::GitCommitFailed(format!(
-                    "git binary not found: {e}"
+                Err(PortError::GitCommitFailed(format!(
+                    "not a git repo: {stderr}"
+                )))
+            }
+            None => {
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    "git binary not found",
+                );
+                Err(PortError::GitCommitFailed(
+                    "git binary not found".to_string(),
                 ))
-            })?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            crate::adapters::logging::log_config_event(
-                "git_versioner",
-                &format!("not a git repo: {stderr}"),
-            );
-            Err(PortError::GitCommitFailed(format!(
-                "not a git repo: {stderr}"
-            )))
+            }
         }
     }
 
@@ -181,6 +215,105 @@ impl GitVersioningPort for FileSystemGitVersioner {
             let _ = stdout; // captured for future use (e.g. short hash)
             Ok(())
         }
+    }
+
+    fn ensure_rig_repo(&self, rig_dir: &std::path::Path) -> Result<(), PortError> {
+        // 1. Rig's own git repository (idempotent). No `.gitignore` is
+        //    written into the rig — the rig directory is source-only.
+        if !rig_dir.join(".git").exists() {
+            match self.run_git(rig_dir, &["init"]) {
+                Some(output) if output.status.success() => {
+                    crate::adapters::logging::log_config_event(
+                        "git_versioner",
+                        "initialised rig git repository",
+                    );
+                }
+                Some(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    crate::adapters::logging::log_config_event(
+                        "git_versioner",
+                        &format!("git init in rig dir failed: {stderr}"),
+                    );
+                }
+                None => {
+                    crate::adapters::logging::log_config_event(
+                        "git_versioner",
+                        "git binary not available — rig git repository not initialised",
+                    );
+                }
+            }
+        }
+
+        // 2. Parent exclusion — only meaningful when the project root
+        //    (parent of the rig dir) is inside a git repository.
+        let Some(project_root) = rig_dir.parent() else {
+            return Ok(()); // degenerate: rig dir has no parent
+        };
+        match self.run_git(project_root, &["rev-parse", "--git-dir"]) {
+            Some(output) if output.status.success() => {}
+            _ => return Ok(()), // no git binary or parent not a git repo
+        }
+
+        let basename = rig_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "rig".to_string());
+        let entry = format!("{basename}/");
+        let gitignore = project_root.join(".gitignore");
+
+        // Already excluded (our marker or a pre-existing entry) — no-op.
+        if let Ok(content) = std::fs::read_to_string(&gitignore) {
+            let excluded = content.lines().any(|line| {
+                let line = line.trim();
+                line == entry || line == GITIGNORE_MARKER
+            });
+            if excluded {
+                return Ok(());
+            }
+        }
+
+        // Tracked by the parent? Do not edit — log the manual untrack
+        // command. Untracking rewrites the project's index, so it stays
+        // a user decision; the exclusion is applied on a later startup
+        // once the rig is untracked.
+        if let Some(ls) =
+            self.run_git(project_root, &["ls-files", "--", basename.as_str()])
+        {
+            if ls.status.success()
+                && !String::from_utf8_lossy(&ls.stdout).trim().is_empty()
+            {
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    &format!(
+                        "rig dir '{basename}' is tracked by the parent repo — run `git rm -r --cached {entry}` (from {}) to untrack it; the .gitignore exclusion is applied once untracked",
+                        project_root.display(),
+                    ),
+                );
+                return Ok(());
+            }
+        }
+
+        // Append the marked entry (create the file if missing).
+        let mut content = std::fs::read_to_string(&gitignore).unwrap_or_default();
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&format!("{GITIGNORE_MARKER}\n{entry}\n"));
+        if let Err(e) = std::fs::write(&gitignore, content) {
+            crate::adapters::logging::log_config_event(
+                "git_versioner",
+                &format!("failed to write {}: {e}", gitignore.display()),
+            );
+            return Ok(());
+        }
+        crate::adapters::logging::log_config_event(
+            "git_versioner",
+            &format!(
+                "excluded '{entry}' from parent repo via {}",
+                gitignore.display()
+            ),
+        );
+        Ok(())
     }
 }
 
@@ -478,6 +611,187 @@ mod tests {
         assert_eq!(
             body, "tie-off 3",
             "latest commit body should match tie-off 3"
+        );
+    }
+
+    // ── ensure_rig_repo tests ────────────────────────────────────────────
+
+    /// Helper: temp project dir with a git repo at the root and a rig
+    /// subdirectory (no git inside the rig yet).
+    fn setup_project_with_rig(rig_name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = setup_git_repo();
+        let rig_dir = dir.path().join(rig_name);
+        fs::create_dir_all(&rig_dir).unwrap();
+        (dir, rig_dir)
+    }
+
+    #[test]
+    fn ensure_rig_repo_initialises_rig_git() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+
+        assert!(!rig_dir.join(".git").exists());
+
+        let result = versioner.ensure_rig_repo(&rig_dir);
+        assert!(result.is_ok(), "ensure_rig_repo should not fail");
+
+        assert!(
+            rig_dir.join(".git").exists(),
+            "rig/.git should be created by git init"
+        );
+        assert!(
+            !rig_dir.join(".gitignore").exists(),
+            "no .gitignore should be written into the rig dir"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_is_idempotent() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let entry_count = content.lines().filter(|l| l.trim() == "rig/").count();
+        let marker_count = content
+            .lines()
+            .filter(|l| l.trim().starts_with("# knot:"))
+            .count();
+        assert_eq!(
+            entry_count, 1,
+            "entry should be appended exactly once: {content}"
+        );
+        assert_eq!(
+            marker_count, 1,
+            "marker should be appended exactly once: {content}"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_appends_marked_entry_preserving_existing() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+
+        // Pre-existing .gitignore content must be preserved.
+        fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.contains("target/"), "existing entries preserved");
+        assert!(content.lines().any(|l| l.trim() == "rig/"), "rig entry appended");
+        assert!(
+            content.contains(GITIGNORE_MARKER),
+            "entry is marked: {content}"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_uses_rig_basename_for_named_rigs() {
+        let (dir, rig_dir) = setup_project_with_rig("dev-rig");
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(
+            content.lines().any(|l| l.trim() == "dev-rig/"),
+            "named rig should be excluded by basename: {content}"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_noop_when_parent_not_git_repo() {
+        let dir = setup_plain_dir();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        assert!(
+            rig_dir.join(".git").exists(),
+            "rig git still initialised even without a parent repo"
+        );
+        assert!(
+            !dir.path().join(".gitignore").exists(),
+            "no .gitignore created when the parent is not a git repo"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_warns_without_editing_when_rig_tracked() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+
+        // Track a file under the rig in the parent repo (before the rig
+        // gets its own git).
+        let loom = rig_dir.join("review-loom");
+        fs::create_dir_all(&loom).unwrap();
+        write_file(&loom, "k.md", "knot");
+        run_git(dir.path(), &["add", "-A"]);
+        run_git(dir.path(), &["commit", "-m", "track rig"]);
+
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        assert!(
+            versioner.ensure_rig_repo(&rig_dir).is_ok(),
+            "tracked rig is a non-fatal condition"
+        );
+
+        assert!(
+            !dir.path().join(".gitignore").exists(),
+            "no .gitignore edit when the rig is tracked by the parent"
+        );
+        assert!(
+            rig_dir.join(".git").exists(),
+            "the rig git itself is still initialised"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_graceful_without_git_binary() {
+        let dir = setup_plain_dir();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+        let versioner = FileSystemGitVersioner::with_git_binary(
+            dir.path().to_path_buf(),
+            "definitely-not-a-git-binary",
+        );
+
+        let result = versioner.ensure_rig_repo(&rig_dir);
+        assert!(
+            result.is_ok(),
+            "git-absent environment degrades gracefully"
+        );
+        assert!(
+            !rig_dir.join(".git").exists(),
+            "no rig git created without the git binary"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_skips_existing_rig_git() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+
+        // Pre-existing rig repo with a sentinel file inside .git.
+        let git_dir = rig_dir.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        write_file(&git_dir, "sentinel", "keep");
+
+        let versioner =
+            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        assert!(
+            git_dir.join("sentinel").exists(),
+            "existing rig git repo is not clobbered"
         );
     }
 }
