@@ -87,6 +87,7 @@ fn build_app_context_wires_layers() {
 fn git_versioner_is_trait_object_safe() {
     let versioner = knot::adapters::outbound::FileSystemGitVersioner::new(
         std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from("/tmp/rig"),
     );
     let _obj: Arc<dyn GitVersioningPort> = Arc::new(versioner);
 }

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use helpers::ProcessStrandBuilder;
-use knot::application::ports::{AgentOutput, PortError};
+use knot::application::ports::{AgentOutput, GitVersioningPort, PortError};
 use knot::application::usecases::test_fixtures::*;
 use knot::domain::entities::{Knot, KnotId, Loom, LoomId, StrandPath};
 use knot::domain::events::{LoomEvent, StrandEvent};
@@ -211,6 +211,214 @@ fn git_multiple_commits_for_multiple_strands() {
     assert!(
         commits[1].2.contains("feature2.md"),
         "second commit should reference feature2.md"
+    );
+}
+
+// ── Git versioning: graceful error handling ──────────────────────────────
+
+// ── Rig-aware versioner: real nested repos ────────────────────────────────
+//
+// Integration tests for the gitlink/stale-file guard: after `git add -A`,
+// `commit()` runs `git reset -q -- <rig-dir>` so the rig (its own git
+// repo, or tracked leftovers) can never enter a project commit.
+
+use knot::adapters::outbound::FileSystemGitVersioner;
+
+/// Helper: run a git command in `dir`, asserting success.
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git should be available on test system");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Helper: run a git command in `dir`, returning stdout as a string.
+fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git should be available on test system");
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// Helper: create a git repo with a commit identity configured.
+fn init_git_repo(dir: &std::path::Path) {
+    git(dir, &["init", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@test.com"]);
+    git(dir, &["config", "user.name", "Test User"]);
+}
+
+/// Helper: names of all entries tracked at HEAD (includes gitlinks).
+fn tracked_at_head(dir: &std::path::Path) -> Vec<String> {
+    git_stdout(dir, &["ls-tree", "-r", "HEAD", "--name-only"])
+        .lines()
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Fresh rig (never tracked by the parent): after `commit()`, the rig is
+/// not committed as a gitlink and no rig paths enter the project commit.
+/// The rig's working tree is untouched — the reset only unstages.
+#[test]
+fn git_commit_excludes_fresh_rig_gitlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    std::fs::write(root.join("README.md"), "project").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "initial"]);
+
+    // Fresh rig: its own git repo with one commit — without a commit the
+    // parent's `git add -A` would fail instead of staging a gitlink, so
+    // the committed rig source is the realistic gitlink scenario.
+    let rig = root.join("rig");
+    let loom = rig.join("review-loom");
+    std::fs::create_dir_all(&loom).unwrap();
+    std::fs::write(loom.join("k.md"), "knot").unwrap();
+    git(&rig, &["init", "-b", "main"]);
+    git(&rig, &["config", "user.email", "rig@rig.com"]);
+    git(&rig, &["config", "user.name", "Rig User"]);
+    git(&rig, &["add", "-A"]);
+    git(&rig, &["commit", "-m", "rig source"]);
+
+    // One knot run: agent work in the project + rig source change.
+    std::fs::write(root.join("README.md"), "project v2").unwrap();
+    std::fs::write(loom.join("k.md"), "knot v2").unwrap();
+
+    let versioner = FileSystemGitVersioner::new(root.to_path_buf(), rig.clone());
+    let result = versioner.commit(
+        &LoomId("review-loom".to_string()),
+        &KnotId("k".to_string()),
+        &StrandPath(PathBuf::from("input/s.md")),
+        "Modified",
+        "tie-off",
+    );
+    assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
+
+    // The rig must not be in the commit — neither as a gitlink nor files.
+    let files = tracked_at_head(root);
+    assert!(
+        files.contains(&"README.md".to_string()),
+        "project file committed: {files:?}"
+    );
+    assert!(
+        !files.iter().any(|f| f == "rig" || f.starts_with("rig/")),
+        "rig must not enter the project commit: {files:?}"
+    );
+
+    // Nothing left staged (the gitlink was unstaged before committing).
+    let staged = git_stdout(root, &["diff", "--cached", "--name-only"]);
+    assert!(staged.trim().is_empty(), "nothing left staged: {staged}");
+
+    // The rig's working tree is untouched — the reset only unstages.
+    assert_eq!(
+        std::fs::read_to_string(loom.join("k.md")).unwrap(),
+        "knot v2"
+    );
+}
+
+/// Pre-tracked rig (rig files already in the parent's history): after
+/// `commit()`, modified tracked rig files and new rig files are excluded
+/// from the commit; the tracked rig file keeps its old committed content
+/// (the reset unstages — it does not untrack).
+#[test]
+fn git_commit_excludes_pre_tracked_rig_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    std::fs::write(root.join("README.md"), "project").unwrap();
+    let loom = root.join("rig").join("review-loom");
+    std::fs::create_dir_all(&loom).unwrap();
+    std::fs::write(loom.join("k.md"), "knot").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "initial with rig tracked"]);
+
+    // The rig later gets its own git repository (as ensure_rig_repo does).
+    let rig = root.join("rig");
+    git(&rig, &["init", "-b", "main"]);
+    git(&rig, &["config", "user.email", "rig@rig.com"]);
+    git(&rig, &["config", "user.name", "Rig User"]);
+    git(&rig, &["add", "-A"]);
+    git(&rig, &["commit", "-m", "rig source"]);
+
+    // One knot run: project change + modified tracked rig file + new file.
+    std::fs::write(root.join("README.md"), "project v2").unwrap();
+    std::fs::write(loom.join("k.md"), "knot v2").unwrap();
+    std::fs::write(loom.join("new.md"), "new knot").unwrap();
+
+    let versioner =
+        FileSystemGitVersioner::new(root.to_path_buf(), rig.clone());
+    let result = versioner.commit(
+        &LoomId("review-loom".to_string()),
+        &KnotId("k".to_string()),
+        &StrandPath(PathBuf::from("input/s.md")),
+        "Modified",
+        "tie-off",
+    );
+    assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
+
+    let files = tracked_at_head(root);
+    assert!(
+        files.contains(&"README.md".to_string()),
+        "project change committed: {files:?}"
+    );
+    assert!(
+        files.contains(&"rig/review-loom/k.md".to_string()),
+        "pre-tracked rig file remains tracked (unstaged, not untracked): {files:?}"
+    );
+    assert!(
+        !files.contains(&"rig/review-loom/new.md".to_string()),
+        "new rig file must not be committed: {files:?}"
+    );
+    let committed = git_stdout(root, &["show", "HEAD:rig/review-loom/k.md"]);
+    assert_eq!(
+        committed, "knot",
+        "committed rig file must keep its old content: {committed:?}"
+    );
+}
+
+/// Degenerate case: the rig dir is the repo root itself. The exclusion
+/// must be skipped — an empty pathspec would unstage everything — and the
+/// commit proceeds with all changes intact.
+#[test]
+fn git_commit_skips_rig_exclusion_when_rig_is_repo_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    std::fs::write(root.join("README.md"), "project").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "initial"]);
+
+    std::fs::write(root.join("README.md"), "project v2").unwrap();
+
+    let versioner =
+        FileSystemGitVersioner::new(root.to_path_buf(), root.to_path_buf());
+    let result = versioner.commit(
+        &LoomId("l".to_string()),
+        &KnotId("k".to_string()),
+        &StrandPath(PathBuf::from("input/s.md")),
+        "Modified",
+        "tie-off",
+    );
+    assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
+
+    let files = tracked_at_head(root);
+    assert!(
+        files.contains(&"README.md".to_string()),
+        "reset must not have unstaged everything: {files:?}"
+    );
+    let committed = git_stdout(root, &["show", "HEAD:README.md"]);
+    assert_eq!(
+        committed, "project v2",
+        "the change must be committed when the exclusion is skipped"
     );
 }
 

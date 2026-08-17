@@ -258,10 +258,15 @@ pub fn build_app_context(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config.rig_dir.clone());
 
-    // Git versioning: commits agent work at the project root and ensures
-    // the rig has its own git repository at startup (ensure_rig_repo).
+    // Git versioning: commits agent work at the project root, keeps the
+    // rig out of every project commit (gitlink/stale-file guard), and
+    // ensures the rig has its own git repository at startup
+    // (ensure_rig_repo).
     let git_versioning: Arc<dyn GitVersioningPort> = Arc::new(
-        crate::adapters::outbound::FileSystemGitVersioner::new(project_root.clone()),
+        crate::adapters::outbound::FileSystemGitVersioner::new(
+            project_root.clone(),
+            config.rig_dir.clone(),
+        ),
     );
 
     // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.

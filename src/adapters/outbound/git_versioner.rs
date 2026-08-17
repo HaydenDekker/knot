@@ -25,18 +25,31 @@ const GITIGNORE_MARKER: &str =
 /// `git2` C dependency. All failures are non-fatal: if git is
 /// unavailable, the directory is not a repo, or the commit fails for
 /// any other reason, the method returns `Ok(())` and logs a warning.
+///
+/// The versioner is rig-aware: after staging everything with
+/// `git add -A`, it unstages the rig directory (`git reset -q --
+/// <rig-dir>`) so the nested rig repository (gitlink) or any tracked
+/// rig leftovers can never enter a project commit.
 pub struct FileSystemGitVersioner {
     /// Project root where git commands should run.
     repo_root: std::path::PathBuf,
+    /// Rig directory to keep out of project commits (typically
+    /// `<repo_root>/<rig-basename>`).
+    rig_dir: std::path::PathBuf,
     /// Git binary name (overridable in tests to simulate git absence).
     git_binary: String,
 }
 
 impl FileSystemGitVersioner {
     /// Create a new versioner targeting `repo_root`.
-    pub fn new(repo_root: std::path::PathBuf) -> Self {
+    ///
+    /// `rig_dir` is the rig directory to exclude from project commits
+    /// — it must resolve to a path at or below `repo_root` for the
+    /// exclusion to apply.
+    pub fn new(repo_root: std::path::PathBuf, rig_dir: std::path::PathBuf) -> Self {
         Self {
             repo_root,
+            rig_dir,
             git_binary: "git".to_string(),
         }
     }
@@ -46,10 +59,12 @@ impl FileSystemGitVersioner {
     /// Used in tests to simulate a git-absent environment.
     pub fn with_git_binary(
         repo_root: std::path::PathBuf,
+        rig_dir: std::path::PathBuf,
         git_binary: impl Into<String>,
     ) -> Self {
         Self {
             repo_root,
+            rig_dir,
             git_binary: git_binary.into(),
         }
     }
@@ -66,6 +81,67 @@ impl FileSystemGitVersioner {
             .current_dir(dir)
             .output()
             .ok()
+    }
+
+    /// Unstage the rig directory after `git add -A` so it can never
+    /// enter a project commit.
+    ///
+    /// Runs `git reset -q -- <rig-dir-relative>` in the repo root. The
+    /// reset covers both rig-leakage scenarios: a staged gitlink (the
+    /// rig's nested repo, mode 160000) and tracked leftover files from
+    /// before the rig got its own repository. Returns `Ok(())` when
+    /// the reset succeeds or is skipped (rig not under the repo root,
+    /// or degenerate rig-is-repo-root case where an empty pathspec
+    /// would unstage everything); returns
+    /// `Err(PortError::GitCommitFailed)` when the reset fails, so the
+    /// caller aborts the commit rather than committing a staged rig.
+    fn unstage_rig(&self) -> Result<(), PortError> {
+        let relative = match self.rig_dir.strip_prefix(&self.repo_root) {
+            Ok(relative) => relative,
+            Err(_) => {
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    &format!(
+                        "rig dir {} is not under repo root {} — rig exclusion skipped",
+                        self.rig_dir.display(),
+                        self.repo_root.display(),
+                    ),
+                );
+                return Ok(());
+            }
+        };
+        if relative.as_os_str().is_empty() {
+            // Degenerate case: rig dir IS the repo root. Resetting an
+            // empty pathspec would unstage everything — skip.
+            crate::adapters::logging::log_config_event(
+                "git_versioner",
+                "rig dir is the repo root — rig exclusion skipped",
+            );
+            return Ok(());
+        }
+        let rel = relative.to_string_lossy();
+        match self.run_git(&self.repo_root, &["reset", "-q", "--", &rel]) {
+            Some(output) if output.status.success() => Ok(()),
+            Some(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    &format!("git reset -- {rel} failed: {stderr}"),
+                );
+                Err(PortError::GitCommitFailed(format!(
+                    "git reset -- {rel} failed: {stderr}"
+                )))
+            }
+            None => {
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    "git binary not available — cannot verify rig exclusion",
+                );
+                Err(PortError::GitCommitFailed(
+                    "git binary not available — cannot verify rig exclusion".to_string(),
+                ))
+            }
+        }
     }
 
     /// Check if `repo_root` is inside a git repository.
@@ -168,6 +244,12 @@ impl GitVersioningPort for FileSystemGitVersioner {
                 "git add failed: {stderr}"
             )));
         }
+
+        // 2b. Unstage the rig — the rig has its own git repository and
+        //     must never enter a project commit (gitlink or tracked
+        //     leftovers). A reset failure aborts the commit: committing
+        //     with a staged rig is exactly what this guard prevents.
+        self.unstage_rig()?;
 
         // 3. Build commit message
         let subject = Self::build_subject(knot_id, strand_path, event_type);
@@ -376,8 +458,10 @@ mod tests {
     #[test]
     fn git_versioner_creates_commit_in_git_repo() {
         let dir = setup_git_repo();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            dir.path().join("rig"),
+        );
 
         // Create an initial commit so the repo is in a clean state
         write_file(dir.path(), "initial.txt", "start");
@@ -407,8 +491,10 @@ mod tests {
     #[test]
     fn git_versioner_skips_when_not_git_repo() {
         let dir = setup_plain_dir();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            dir.path().join("rig"),
+        );
 
         let loom_id = LoomId("test-loom".to_string());
         let knot_id = KnotId("k1".to_string());
@@ -432,8 +518,10 @@ mod tests {
     #[test]
     fn git_versioner_commit_message_format() {
         let dir = setup_git_repo();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            dir.path().join("rig"),
+        );
 
         // Initial commit
         write_file(dir.path(), "initial.txt", "start");
@@ -487,8 +575,10 @@ mod tests {
     #[test]
     fn git_versioner_commit_body_contains_tieoff() {
         let dir = setup_git_repo();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            dir.path().join("rig"),
+        );
 
         // Initial commit
         write_file(dir.path(), "initial.txt", "start");
@@ -530,16 +620,20 @@ mod tests {
 
     #[test]
     fn git_versioner_trait_object_safe() {
-        let versioner =
-            FileSystemGitVersioner::new(std::path::PathBuf::from("/tmp"));
+        let versioner = FileSystemGitVersioner::new(
+            std::path::PathBuf::from("/tmp"),
+            std::path::PathBuf::from("/tmp/rig"),
+        );
         let _obj: &dyn GitVersioningPort = &versioner;
     }
 
     #[test]
     fn git_versioner_multiple_commits_in_sequence() {
         let dir = setup_git_repo();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            dir.path().join("rig"),
+        );
 
         // Initial commit
         write_file(dir.path(), "initial.txt", "start");
@@ -628,8 +722,10 @@ mod tests {
     #[test]
     fn ensure_rig_repo_initialises_rig_git() {
         let (dir, rig_dir) = setup_project_with_rig("rig");
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
 
         assert!(!rig_dir.join(".git").exists());
 
@@ -649,8 +745,10 @@ mod tests {
     #[test]
     fn ensure_rig_repo_is_idempotent() {
         let (dir, rig_dir) = setup_project_with_rig("rig");
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
 
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
@@ -674,8 +772,10 @@ mod tests {
     #[test]
     fn ensure_rig_repo_appends_marked_entry_preserving_existing() {
         let (dir, rig_dir) = setup_project_with_rig("rig");
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
 
         // Pre-existing .gitignore content must be preserved.
         fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
@@ -694,8 +794,10 @@ mod tests {
     #[test]
     fn ensure_rig_repo_uses_rig_basename_for_named_rigs() {
         let (dir, rig_dir) = setup_project_with_rig("dev-rig");
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
 
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
 
@@ -711,8 +813,10 @@ mod tests {
         let dir = setup_plain_dir();
         let rig_dir = dir.path().join("rig");
         fs::create_dir_all(&rig_dir).unwrap();
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
 
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
 
@@ -738,8 +842,10 @@ mod tests {
         run_git(dir.path(), &["add", "-A"]);
         run_git(dir.path(), &["commit", "-m", "track rig"]);
 
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
         assert!(
             versioner.ensure_rig_repo(&rig_dir).is_ok(),
             "tracked rig is a non-fatal condition"
@@ -762,6 +868,7 @@ mod tests {
         fs::create_dir_all(&rig_dir).unwrap();
         let versioner = FileSystemGitVersioner::with_git_binary(
             dir.path().to_path_buf(),
+            rig_dir.clone(),
             "definitely-not-a-git-binary",
         );
 
@@ -785,8 +892,10 @@ mod tests {
         fs::create_dir_all(&git_dir).unwrap();
         write_file(&git_dir, "sentinel", "keep");
 
-        let versioner =
-            FileSystemGitVersioner::new(dir.path().to_path_buf());
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
 
         assert!(
