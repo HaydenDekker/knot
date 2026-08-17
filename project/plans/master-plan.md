@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-07-29 (plan 066 added)
+> **Last Updated:** 2026-08-17 (plan 068 added)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 68 | [Rig Repository Separation](068-rig-repo-separation/rig-repo-separation-plan.md) | 📝 Draft | 2026-08-17 |
 | 66 | [Relax the Knot Terminology Rule](066-terminology-rule-relaxation/terminology-rule-relaxation-plan.md) | 📝 Draft | 2026-07-29 |
 | 65 | [Persistent Event Queue](065-persistent-event-queue/persistent-event-queue-plan.md) | ✅ Complete | 2026-07-21 |
 | 64 | [Local Time Timestamps](064-local-timestamps/local-timestamps-plan.md) | ✅ Complete | 2026-07-17 |
