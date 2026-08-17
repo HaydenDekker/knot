@@ -203,28 +203,57 @@ pub fn parse(
     ))
 }
 
+/// Derive the project-side runtime root for a rig.
+///
+/// Returns `<project-root>/tie-offs/<rig-basename>/` where
+/// `<project-root>` is the parent of the rig directory (the existing
+/// project-root convention) and `<rig-basename>` is the rig directory's
+/// file name (e.g. `rig`, `dev-rig`).
+///
+/// All runtime artifacts — tie-off files, event dispatch directories,
+/// loom-logs, `state.json`, `.rig-log`, and the `events/` queue — live
+/// under this root. The rig directory itself holds only reusable source
+/// (looms, knots, profiles, config), so it can be versioned independently.
+///
+/// Degenerate case: a rig directory at the filesystem root has no
+/// parent — the existing `project_root = rig_dir` fallback applies and
+/// the runtime root is derived from the rig dir itself.
+pub fn derive_runtime_root(rig_dir: &std::path::Path) -> std::path::PathBuf {
+    let project_root = rig_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| rig_dir.to_path_buf());
+    let mut root = project_root.join("tie-offs");
+    if let Some(basename) = rig_dir.file_name() {
+        root = root.join(basename);
+    }
+    root
+}
+
 /// Derive the tie-off output directory for a loom.
 ///
-/// Returns `rig/tie-offs/{loom-id}/`. Individual strand
-/// tie-off files (e.g. `tie-off-{knot-name}.md`) are placed flat
-/// inside this directory by `ProcessStrand`.
+/// Returns `tie-offs/<rig-basename>/{loom-id}/` (under the runtime root).
+/// Individual strand tie-off files (e.g. `tie-off-{knot-name}.md`) are
+/// placed flat inside this directory by `ProcessStrand`.
 pub fn derive_tieoff_path(
     loom_id: &str,
     _knot_name: &str,
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
-    rig.join("tie-offs").join(loom_id)
+    derive_runtime_root(rig).join(loom_id)
 }
 
 /// Derive the loom-log path for a loom.
 ///
-/// Returns `rig/tie-offs/{loom-id}/.loom-log`.
-/// Moved from `rig/{loom-id}/.loom-log` to separate outputs from definitions.
+/// Returns `tie-offs/<rig-basename>/{loom-id}/.loom-log` (under the
+/// runtime root). Moved from `rig/{loom-id}/.loom-log` to separate
+/// outputs from definitions, and from `rig/tie-offs/…` to separate the
+/// project runtime tree from the reusable rig source.
 pub fn derive_loom_log_path(
     loom_id: &str,
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
-    rig.join("tie-offs").join(loom_id).join(".loom-log")
+    derive_runtime_root(rig).join(loom_id).join(".loom-log")
 }
 
 /// Extract the YAML frontmatter and optional body from a markdown file.
@@ -527,11 +556,52 @@ Review the document
     }
 
     #[test]
+    fn derive_runtime_root_default_rig() {
+        let root = derive_runtime_root(Path::new("/workspace/rig"));
+        assert_eq!(root, PathBuf::from("/workspace/tie-offs/rig"));
+    }
+
+    /// Named rigs (e.g. `knot dev-rig`) namespace the runtime tree by the
+    /// rig basename, making multi-rig projects collision-free.
+    #[test]
+    fn derive_runtime_root_named_rig() {
+        let root = derive_runtime_root(Path::new("/workspace/dev-rig"));
+        assert_eq!(root, PathBuf::from("/workspace/tie-offs/dev-rig"));
+    }
+
+    /// Relative rig dir (e.g. `./rig` from the project root): the parent
+    /// is the empty path, so the runtime root is relative too.
+    #[test]
+    fn derive_runtime_root_relative_rig_dir() {
+        let root = derive_runtime_root(Path::new("rig"));
+        assert_eq!(root, PathBuf::from("tie-offs/rig"));
+    }
+
+    /// Degenerate case: a rig dir at the filesystem root has no parent —
+    /// the `project_root = rig_dir` fallback applies and the runtime root
+    /// is derived from the rig dir itself.
+    #[test]
+    fn derive_runtime_root_rig_at_filesystem_root() {
+        let root = derive_runtime_root(Path::new("/"));
+        assert_eq!(root, PathBuf::from("/tie-offs"));
+    }
+
+    #[test]
     fn derive_tieoff_path_builds_correct_path() {
         let path = derive_tieoff_path("my-loom", "review-knot", Path::new("/workspace/rig"));
         assert_eq!(
             path,
-            PathBuf::from("/workspace/rig/tie-offs/my-loom")
+            PathBuf::from("/workspace/tie-offs/rig/my-loom")
+        );
+    }
+
+    #[test]
+    fn derive_tieoff_path_named_rig() {
+        let path =
+            derive_tieoff_path("my-loom", "review-knot", Path::new("/workspace/dev-rig"));
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace/tie-offs/dev-rig/my-loom")
         );
     }
 
@@ -540,7 +610,16 @@ Review the document
         let path = derive_loom_log_path("my-loom", Path::new("/workspace/rig"));
         assert_eq!(
             path,
-            PathBuf::from("/workspace/rig/tie-offs/my-loom/.loom-log")
+            PathBuf::from("/workspace/tie-offs/rig/my-loom/.loom-log")
+        );
+    }
+
+    #[test]
+    fn derive_loom_log_path_named_rig() {
+        let path = derive_loom_log_path("my-loom", Path::new("/workspace/dev-rig"));
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace/tie-offs/dev-rig/my-loom/.loom-log")
         );
     }
 

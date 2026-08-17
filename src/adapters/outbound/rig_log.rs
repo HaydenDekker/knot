@@ -9,7 +9,8 @@ use crate::domain::events::RigLogEvent;
 /// Filesystem-backed implementation of `RigLogPort`.
 ///
 /// Writes rig-log events as JSONL (one JSON object per line) to
-/// `<rig_dir>/.rig-log`. Uses append mode for concurrent write safety.
+/// `<dir>/.rig-log` where `dir` is the rig's runtime root
+/// (`tie-offs/<rig-basename>/`). Uses append mode for concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemRigLog {
     rig_dir: PathBuf,
@@ -18,7 +19,8 @@ pub struct FileSystemRigLog {
 impl FileSystemRigLog {
     /// Create a new rig-log adapter backed by `rig_dir`.
     ///
-    /// The log file lives at `<rig_dir>/.rig-log`.
+    /// The log file lives at `<rig_dir>/.rig-log` (the rig's runtime
+    /// root — `tie-offs/<rig-basename>/` — is passed as `rig_dir`).
     pub fn new(rig_dir: PathBuf) -> Self {
         Self { rig_dir }
     }

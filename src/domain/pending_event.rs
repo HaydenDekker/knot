@@ -4,7 +4,8 @@
 //! identifier (`PendingEventId`), file naming convention, and
 //! conversions to/from the domain's [`StrandEvent`].
 //!
-//! Each pending event is stored as a JSON file in `rig/events/` with a
+//! Each pending event is stored as a JSON file in the rig's runtime-root
+//! events directory (`tie-offs/<rig-basename>/events/`) with a
 //! filename of `{unix_timestamp_ms}-{4-hex-chars}.json`. The timestamp
 //! ensures FIFO ordering by filename sort; the random suffix prevents
 //! collisions within the same millisecond.

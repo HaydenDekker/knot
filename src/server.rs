@@ -10,6 +10,7 @@ use crate::application;
 use crate::application::ports::{GitVersioningPort, StateWriterPort, StrandEventQueue};
 use crate::domain;
 use crate::domain::entities::Loom;
+use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::pending_event::PendingEventOrShutdown;
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
@@ -52,8 +53,13 @@ pub struct AppContext {
     /// Discovered loom IDs (populated at startup, used for shutdown logging).
     pub loom_ids: Vec<domain::entities::LoomId>,
     /// Rig directory path — used by discover and config endpoints.
+    /// Holds reusable rig source only (no runtime data).
     pub rig_dir: PathBuf,
-    /// State writer port — writes rig/state.json.
+    /// Project-side runtime root — `tie-offs/<rig-basename>/` under the
+    /// project root. Holds all runtime artifacts (tie-offs, dispatch
+    /// dirs, loom-logs, state.json, .rig-log, events/).
+    pub runtime_root: PathBuf,
+    /// State writer port — writes `state.json` at the runtime root.
     pub state_writer: Arc<dyn StateWriterPort>,
     /// Strand event queue — shared with WriteState for queue visibility.
     pub strand_queue: Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>,
@@ -225,17 +231,20 @@ pub fn build_app_context(
                 config.rig_dir.join("profiles"),
             ),
         );
-    let rig_log_port: Arc<dyn application::ports::RigLogPort> =
-        Arc::new(
-            crate::adapters::outbound::FileSystemRigLog::new(
-                config.rig_dir.clone(),
-            ),
-        );
 
-    // State writer: writes rig/state.json on a poll cycle.
-    let state_writer: Arc<dyn StateWriterPort> = Arc::new(
-        FileSystemStateWriter::new(config.rig_dir.clone()),
+    // Runtime root: all runtime artifacts (tie-offs, dispatch dirs,
+    // loom-logs, state.json, .rig-log, events/) live under
+    // tie-offs/<rig-basename>/ at the project level — the rig directory
+    // holds reusable source only.
+    let runtime_root = derive_runtime_root(&config.rig_dir);
+
+    let rig_log_port: Arc<dyn application::ports::RigLogPort> = Arc::new(
+        crate::adapters::outbound::FileSystemRigLog::new(runtime_root.clone()),
     );
+
+    // State writer: writes state.json at the runtime root on a poll cycle.
+    let state_writer: Arc<dyn StateWriterPort> =
+        Arc::new(FileSystemStateWriter::new(runtime_root.clone()));
 
     // Event channels: NotifyEventSource sends StrandEvents and ConfigEvents.
     // Strand receiver is wired into the debounce engine.
@@ -276,6 +285,7 @@ pub fn build_app_context(
             rig_config,
             loom_ids: Vec::new(),
             rig_dir: config.rig_dir.clone(),
+            runtime_root,
             state_writer,
             strand_queue: Arc::new(std::sync::Mutex::new(None)),
         },
@@ -325,7 +335,8 @@ pub fn start_event_pipeline(
         .map(Duration::from_millis)
         .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
 
-    let events_dir = ctx.rig_dir.join("events");
+    // Event queue lives at the runtime root (tie-offs/<rig-basename>/events/).
+    let events_dir = ctx.runtime_root.join("events");
     std::fs::create_dir_all(&events_dir).unwrap_or_else(|e| {
         eprintln!("WARNING: failed to create events dir {}: {e}", events_dir.display());
     });
@@ -632,7 +643,7 @@ pub fn start_config_pipeline(
 ///
 /// Spawns a `tokio::task` that polls every 5 seconds, builds a
 /// `RigState` snapshot from the current in-memory state, and writes
-/// it atomically to `{rig_dir}/state.json`. Includes the current
+/// it atomically to `{runtime-root}/state.json`. Includes the current
 /// strand event queue contents in the snapshot.
 ///
 /// The task writes immediately on start (so `state.json` exists right
@@ -707,7 +718,7 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // events referencing them are processed.
     let debounce_queue = start_event_pipeline(&ctx, strand_rx, &mut join_set);
 
-    // Start the state writer: writes rig/state.json every 5 seconds
+    // Start the state writer: writes state.json (runtime root) every 5 seconds
     start_state_writer(&ctx, &mut join_set);
 
     // Startup: discover looms, create state files, start watchers.

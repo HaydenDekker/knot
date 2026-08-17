@@ -1,7 +1,8 @@
 //! Disk-backed implementation of [`StrandEventQueue`].
 //!
 //! The disk **is** the queue — there is no in-memory event index. Every
-//! operation reads from `rig/events/*.json` and orders by filename sort
+//! operation reads from `tie-offs/<rig-basename>/events/*.json` (the rig's
+//! runtime root) and orders by filename sort
 //! (timestamp prefix ensures FIFO). This eliminates any dual-source-of-
 //! truth: the `.json` files are the queue.
 //!

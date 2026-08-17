@@ -469,11 +469,13 @@ mod loom_log_adapter {
     #[test]
     fn open_creates_directory_and_log_file() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("open-test-loom".to_string());
 
         assert!(log.open(&loom_id).is_ok());
-        let log_path = dir.path().join("tie-offs/open-test-loom/.loom-log");
+        // Log lives at the runtime root: tie-offs/<rig-basename>/{loom}/
+        let log_path = dir.path().join("tie-offs/rig/open-test-loom/.loom-log");
         assert!(
             log_path.exists(),
             "open should create the .loom-log file"
@@ -484,7 +486,8 @@ mod loom_log_adapter {
     #[test]
     fn append_writes_jsonl_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("append-test-loom".to_string());
 
         log.append(LoomEvent::LoomStarted {
@@ -493,7 +496,7 @@ mod loom_log_adapter {
         })
         .unwrap();
 
-        let log_path = dir.path().join("tie-offs/append-test-loom/.loom-log");
+        let log_path = dir.path().join("tie-offs/rig/append-test-loom/.loom-log");
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 1);
@@ -507,7 +510,8 @@ mod loom_log_adapter {
     #[test]
     fn read_all_returns_parsed_events() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("readall-test-loom".to_string());
 
         log.append(LoomEvent::LoomStarted {
@@ -532,7 +536,8 @@ mod loom_log_adapter {
     #[test]
     fn open_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("idempotent-loom".to_string());
 
         assert!(log.open(&loom_id).is_ok());

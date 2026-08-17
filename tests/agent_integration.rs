@@ -166,7 +166,7 @@ fn agent_execution_append_mode_tie_offs() {
     // Content map tracks the latest write
     let content = tie_off_content.lock().unwrap();
     let latest = content
-        .get("/rig/tie-offs/test-loom/tie-off-review.md")
+        .get("/tie-offs/rig/test-loom/tie-off-review.md")
         .expect("tie-off path should be in content map");
     assert!(
         latest.contains("review v1"),

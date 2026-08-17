@@ -1,7 +1,8 @@
 //! Shared test helpers for Knot integration tests.
 //!
 //! Provides file-based polling helpers to verify rig state via
-//! `rig/state.json`, replacing the previous HTTP-based verification.
+//! `tie-offs/<rig-basename>/state.json` (the rig's runtime root),
+//! replacing the previous HTTP-based verification.
 //! Also includes fixtures for creating knots, profiles, and mock agents.
 //!
 //! The [`ProcessStrandBuilder`] provides a fluent builder for constructing
@@ -358,7 +359,7 @@ const TEST_CHECK_MS: u64 = 2;
 /// of the production defaults (100ms/5ms).
 ///
 /// This allows integration tests to verify file-based state (reading
-/// `rig/state.json`) without needing an HTTP server.
+/// `tie-offs/<rig-basename>/state.json`) without needing an HTTP server.
 ///
 /// # Arguments
 ///
@@ -412,7 +413,10 @@ pub fn start_knot_with_config(config: knot::AppConfig) -> KnotHandle {
 
 // ── State File Polling Helpers ────────────────────────────────────────────
 
-/// Read and parse `rig/state.json` from the given rig directory.
+/// Read and parse the rig's `state.json` from its runtime root.
+///
+/// The state file lives at `tie-offs/<rig-basename>/state.json` under
+/// the project root (parent of the rig directory).
 ///
 /// # Arguments
 ///
@@ -423,7 +427,8 @@ pub fn start_knot_with_config(config: knot::AppConfig) -> KnotHandle {
 /// Parsed `serde_json::Value`, or `Err` if the file doesn't exist
 /// or isn't valid JSON.
 pub fn read_state_file(rig_dir: &Path) -> Result<Value, std::io::Error> {
-    let state_path = rig_dir.join("state.json");
+    let state_path = knot::domain::knot_file::derive_runtime_root(rig_dir)
+        .join("state.json");
     let content = fs::read_to_string(&state_path).map_err(|e| {
         std::io::Error::new(
             e.kind(),
@@ -661,10 +666,12 @@ pub fn create_strand(
 
 /// Read all events from a loom's activity log.
 ///
-/// Reads `{rig_dir}/tie-offs/{loom_id}/.loom-log` as JSONL and returns
-/// each line as a parsed JSON value.
+/// Reads `tie-offs/<rig-basename>/{loom_id}/.loom-log` (the rig's runtime
+/// root under the project root) as JSONL and returns each line as a
+/// parsed JSON value.
 ///
-/// The loom-log lives under `tie-offs/` (not in the loom directory itself).
+/// The loom-log lives under the project runtime tree `tie-offs/` (not in
+/// the rig directory itself).
 /// The `loom_id` parameter should include the `-loom` suffix
 /// (e.g. `"review-loom"`), matching the loom ID stored in state.json.
 ///
@@ -680,7 +687,9 @@ pub fn read_loom_log(
     rig_dir: &Path,
     loom_id: &str,
 ) -> Vec<Value> {
-    let log_path = rig_dir.join("tie-offs").join(loom_id).join(".loom-log");
+    let log_path = knot::domain::knot_file::derive_runtime_root(rig_dir)
+        .join(loom_id)
+        .join(".loom-log");
     let content = match fs::read_to_string(&log_path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
@@ -799,15 +808,18 @@ mod tests {
     #[test]
     fn read_state_file_parses_valid_json() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_dir = tmp.path();
+        let rig_dir = tmp.path().join("rig");
 
+        let state_path = knot::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("state.json");
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
         fs::write(
-            rig_dir.join("state.json"),
+            &state_path,
             r#"{"rig_path":"/test","looms":[],"profiles":[],"updated_at":"now"}"#,
         )
         .unwrap();
 
-        let state = read_state_file(rig_dir).unwrap();
+        let state = read_state_file(&rig_dir).unwrap();
         assert_eq!(
             state.get("rig_path").and_then(|v| v.as_str()),
             Some("/test")
@@ -826,9 +838,11 @@ mod tests {
     #[test]
     fn read_loom_log_parses_jsonl() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_dir = tmp.path();
-        // loom-log lives at rig/tie-offs/{loom_id}/.loom-log
-        let log_dir = rig_dir.join("tie-offs/test-loom");
+        // loom-log lives at tie-offs/<rig-basename>/{loom_id}/.loom-log
+        // (the runtime root under the project root)
+        let rig_dir = tmp.path().join("rig");
+        let log_dir = knot::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("test-loom");
         fs::create_dir_all(&log_dir).unwrap();
 
         // Events are stored as JSON with variant name as top-level key
@@ -840,7 +854,7 @@ mod tests {
         )
         .unwrap();
 
-        let events = read_loom_log(rig_dir, "test-loom");
+        let events = read_loom_log(&rig_dir, "test-loom");
         assert_eq!(events.len(), 2);
         assert_eq!(
             loom_log_event_type(&events[0]),

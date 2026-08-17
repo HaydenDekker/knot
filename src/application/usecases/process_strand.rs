@@ -305,8 +305,9 @@ impl ProcessStrand {
     }
 
     /// Compute the tie-off output path from knot + strand path.
-    /// Uses statically derived path: `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`.
-    /// Tie-off files are placed flat under the loom's tie-off directory.
+    /// Uses statically derived path: `tie-offs/<rig-basename>/{loom-id}/tie-off-{knot-name}.md`
+    /// (under the rig's runtime root). Tie-off files are placed flat under
+    /// the loom's tie-off directory.
     fn compute_tie_off_path(
         &self,
         loom: &Loom,
@@ -1238,7 +1239,7 @@ mod execution_deleted_tests {
         {
             let mut content = tie_off_content.lock().unwrap();
             content.insert(
-                "/rig/tie-offs/test-loom/tie-off-k1.md".to_string(),
+                "/tie-offs/rig/test-loom/tie-off-k1.md".to_string(),
                 concat!(
                     "## review triggered by Created input/strand.md\n",
                     "Timestamp: 2026-06-05T10:00:00Z\n",
@@ -3730,11 +3731,13 @@ mod event_dispatch_tests {
 
         // Verify that the event file would contain target-knot = producer
         // knot ID by constructing what the real dispatcher would write.
-        let event_path = std::path::PathBuf::from(rig_dir)
-            .join("tie-offs")
-            .join(consumer_loom_id)
-            .join(&evt.event_id)
-            .join("event-mock.md");
+        // (under the runtime root, not the rig dir)
+        let event_path = crate::domain::knot_file::derive_runtime_root(
+            std::path::Path::new(rig_dir),
+        )
+        .join(consumer_loom_id)
+        .join(&evt.event_id)
+        .join("event-mock.md");
         let _ = event_path;
 
         // The real dispatcher (FileSystemEventDispatcher) receives the
@@ -4039,8 +4042,8 @@ mod event_dispatch_tests {
         description: Option<&str>,
         filename: &str,
     ) {
-        let event_dir = rig_dir
-            .join("tie-offs")
+        // Event files live under the runtime root (not in the rig dir).
+        let event_dir = crate::domain::knot_file::derive_runtime_root(rig_dir)
             .join(consumer_loom)
             .join(event_id);
         std::fs::create_dir_all(&event_dir).unwrap();
@@ -4287,7 +4290,7 @@ mod tieoff_event_metadata_tests {
             knot_name: Some("event-consumer".to_string()),
             event_type: Some("Created".to_string()),
             strand_path: Some(
-                "rig/tie-offs/consumer-loom/PlanCreated/event-2026-07-09T12-00-00Z.md"
+                "tie-offs/rig/consumer-loom/PlanCreated/event-2026-07-09T12-00-00Z.md"
                     .to_string(),
             ),
             timestamp: Some("2026-07-09T12:05:00Z".to_string()),
@@ -5510,7 +5513,9 @@ mod phase4_integration_tests {
         // Simulate the dispatched event file that would have been created
         // by FileSystemEventDispatcher.
         let rig_dir = temp_dir.path().join("rig");
-        let event_dir = rig_dir.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        let event_dir = crate::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("consumer-loom")
+            .join("PlanCreated");
         std::fs::create_dir_all(&event_dir).unwrap();
         std::fs::write(
             event_dir.join("event-2026-07-14T10-00-00Z.md"),
@@ -5545,7 +5550,9 @@ mod phase4_integration_tests {
         // We need to reuse the same rig directory, so let's copy the
         // event file from step 1 into step 2's rig directory.
         let rig_dir2 = _temp_dir2.path().join("rig");
-        let event_dir2 = rig_dir2.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        let event_dir2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
+            .join("consumer-loom")
+            .join("PlanCreated");
         std::fs::create_dir_all(&event_dir2).unwrap();
         std::fs::write(
             event_dir2.join("event-2026-07-14T10-00-00Z.md"),
@@ -5640,7 +5647,9 @@ mod phase4_integration_tests {
 
         // Create pending events for both event types.
         let rig_dir = temp_dir.path().join("rig");
-        let event_dir1 = rig_dir.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        let event_dir1 = crate::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("consumer-loom")
+            .join("PlanCreated");
         std::fs::create_dir_all(&event_dir1).unwrap();
         std::fs::write(
             event_dir1.join("event-2026-07-14T10-00-00Z.md"),
@@ -5656,7 +5665,9 @@ mod phase4_integration_tests {
         )
         .unwrap();
 
-        let event_dir2 = rig_dir.join("tie-offs").join("consumer-loom").join("ValidationFailed");
+        let event_dir2 = crate::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("consumer-loom")
+            .join("ValidationFailed");
         std::fs::create_dir_all(&event_dir2).unwrap();
         std::fs::write(
             event_dir2.join("event-2026-07-14T11-00-00Z.md"),
@@ -5680,7 +5691,9 @@ mod phase4_integration_tests {
 
         // Copy event files to the new rig directory.
         let rig_dir2 = _temp_dir2.path().join("rig");
-        let event_dir1_2 = rig_dir2.join("tie-offs").join("consumer-loom").join("PlanCreated");
+        let event_dir1_2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
+            .join("consumer-loom")
+            .join("PlanCreated");
         std::fs::create_dir_all(&event_dir1_2).unwrap();
         std::fs::write(
             event_dir1_2.join("event-2026-07-14T10-00-00Z.md"),
@@ -5696,7 +5709,9 @@ mod phase4_integration_tests {
         )
         .unwrap();
 
-        let event_dir2_2 = rig_dir2.join("tie-offs").join("consumer-loom").join("ValidationFailed");
+        let event_dir2_2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
+            .join("consumer-loom")
+            .join("ValidationFailed");
         std::fs::create_dir_all(&event_dir2_2).unwrap();
         std::fs::write(
             event_dir2_2.join("event-2026-07-14T11-00-00Z.md"),

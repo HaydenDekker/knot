@@ -41,8 +41,9 @@ in the current working directory:
 ///
 /// Walks the rig directory, collects all `*-loom/` subdirectories
 /// and `profiles/`, writes `<rig-name>.zip` in `output_dir`.
-/// Excludes `tie-offs/`, `.rig-log`, and `.workspace-agent-config.yaml`
-/// (derived state not needed by the recipient).
+/// The rig directory holds reusable source only — runtime artifacts
+/// (tie-offs, logs, state, queue) live in the project-level
+/// `tie-offs/<rig-name>/` tree and are never part of the zip.
 fn share_rig(output_dir: &Path, rig_path: &Path, rig_name: &str) {
     let zip_path = output_dir.join(format!("{}.zip", rig_name));
 

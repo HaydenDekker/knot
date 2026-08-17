@@ -903,10 +903,11 @@ Review with custom dirs
         fs::create_dir(&loom_dir).unwrap();
         create_knot_file(&loom_dir, "knot1", VALID_KNOT_CONTENT).unwrap();
 
-        // Create a non-loom directory (e.g. tie-offs directory).
-        let tieoffs_dir = rig.path().join("tie-offs");
-        fs::create_dir(&tieoffs_dir).unwrap();
-        create_knot_file(&tieoffs_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
+        // Create a non-loom directory (e.g. a scratch output directory —
+        // the runtime tree no longer lives inside the rig at all).
+        let other_dir = rig.path().join("output");
+        fs::create_dir(&other_dir).unwrap();
+        create_knot_file(&other_dir, "knot2", VALID_KNOT_CONTENT).unwrap();
 
         let repo = FileSystemLoomRepository::new();
         let (looms, warnings) = repo.scan(rig.path()).unwrap();

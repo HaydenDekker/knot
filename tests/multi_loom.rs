@@ -92,7 +92,8 @@ fn multi_loom_independent_processing() {
 
 /// Loom-log files are isolated per loom.
 ///
-/// Each loom writes to its own \`{rig}/tie-offs/{loom-id}/.loom-log\`.
+/// Each loom writes to its own `tie-offs/<rig-basename>/{loom-id}/.loom-log`
+/// (the rig's runtime root under the project root).
 /// Review-loom's log should NOT contain planning-loom's knot events
 /// and vice versa.
 #[test]

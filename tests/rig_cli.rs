@@ -185,10 +185,11 @@ fn cli_share_creates_zip_with_looms_and_profiles() {
     let loom = create_loom(&rig, "definition");
     write_knot(&loom, "review");
 
-    // Create tie-off directory (should be excluded from zip)
-    let tie_offs = rig.join("tie-offs");
+    // Create the project-side runtime tree (tie-offs live outside the
+    // rig now, so they can never enter the zip)
+    let tie_offs = cwd.join("tie-offs").join("dev-rig").join("definition-loom");
     fs::create_dir_all(&tie_offs).unwrap();
-    fs::write(tie_offs.join("review.tie-off.json"), "{}").unwrap();
+    fs::write(tie_offs.join("tie-off-review.md"), "output").unwrap();
 
     // Run share command
     let output = Command::new(binary_path())

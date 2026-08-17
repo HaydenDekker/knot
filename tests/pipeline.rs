@@ -465,7 +465,7 @@ fn delete_event_agent_receives_context() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/rig/tie-offs/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
             concat!(
                 "## review triggered by Created strands/feature.md\n",
                 "Timestamp: 2026-06-05T10:00:00Z\n",
@@ -612,7 +612,7 @@ fn delete_event_large_tieoff_bounded_context() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/rig/tie-offs/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
             tie_off_entries.join("\n---\n"),
         );
     }

@@ -886,8 +886,8 @@ impl EventDispatcherPort for MockEventDispatcher {
             rig_dir.display().to_string(),
         ));
         // Return a synthetic path so callers can verify dispatch happened
-        Ok(rig_dir
-            .join("tie-offs")
+        // (under the runtime root, matching FileSystemEventDispatcher).
+        Ok(crate::domain::knot_file::derive_runtime_root(rig_dir)
             .join(&consumer_loom_id.0)
             .join(&event.event_id)
             .join("event-mock.md"))

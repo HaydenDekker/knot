@@ -11,8 +11,8 @@ use crate::domain::knot_file::derive_loom_log_path;
 /// Filesystem-backed implementation of `LoomLogPort`.
 ///
 /// Writes loom events as JSONL (one JSON object per line) to
-/// `<rig_dir>/tie-offs/<loom_id>/.loom-log`. Uses `Arc<Mutex<File>>` for
-/// concurrent write safety.
+/// `tie-offs/<rig-basename>/<loom_id>/.loom-log` (under the rig's runtime
+/// root). Uses `Arc<Mutex<File>>` for concurrent write safety.
 #[derive(Clone)]
 pub struct FileSystemLoomLog {
     rig_dir: PathBuf,
@@ -21,7 +21,8 @@ pub struct FileSystemLoomLog {
 impl FileSystemLoomLog {
     /// Create a new log adapter backed by `rig_dir`.
     ///
-    /// Log files live at `<rig_dir>/tie-offs/<loom_id>/.loom-log`.
+    /// Log files live at the rig's runtime root:
+    /// `<project-root>/tie-offs/<rig-basename>/<loom_id>/.loom-log`.
     pub fn new(rig_dir: PathBuf) -> Self {
         Self { rig_dir }
     }
@@ -208,7 +209,8 @@ mod tests {
     #[test]
     fn loom_log_create_and_append() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("test-loom".to_string());
 
         // open creates the file
@@ -223,8 +225,9 @@ mod tests {
         let result = log.append(event);
         assert!(result.is_ok(), "append should succeed");
 
-        // Verify the file has one JSONL entry (rig/tie-offs/{loom-id}/.loom-log)
-        let log_path = dir.path().join("tie-offs/test-loom/.loom-log");
+        // Verify the file has one JSONL entry at the runtime root
+        // (tie-offs/<rig-basename>/{loom-id}/.loom-log)
+        let log_path = dir.path().join("tie-offs/rig/test-loom/.loom-log");
         assert!(log_path.exists(), "log file should exist");
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
@@ -243,7 +246,8 @@ mod tests {
     #[test]
     fn loom_log_read_all() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("read-loom".to_string());
 
         // Append 3 events
@@ -289,7 +293,8 @@ mod tests {
     #[test]
     fn loom_log_multiple_events() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("multi-loom".to_string());
 
         // Append events of different types
@@ -328,7 +333,7 @@ mod tests {
         let loom_id = LoomId("concurrent-loom".to_string());
 
         // Shared writer for concurrent access
-        let shared = SharedLoomLog::new(dir.path().to_path_buf(), loom_id.clone())
+        let shared = SharedLoomLog::new(dir.path().join("rig"), loom_id.clone())
             .unwrap();
         let shared = Arc::new(shared);
 
@@ -378,7 +383,8 @@ mod tests {
     #[test]
     fn loom_log_read_all_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("empty-loom".to_string());
 
         // No events appended — should return empty vec
@@ -391,7 +397,8 @@ mod tests {
 
     #[test]
     fn loom_log_trait_object_safe() {
-        let log = FileSystemLoomLog::new(tempfile::tempdir().unwrap().path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
         // Verify trait is object-safe
         let _obj: &dyn LoomLogPort = &log;
     }
@@ -399,7 +406,8 @@ mod tests {
     #[test]
     fn loom_log_strand_skipped_routes_and_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("skip-loom".to_string());
 
         let event = LoomEvent::StrandSkipped {
@@ -437,7 +445,8 @@ mod tests {
     #[test]
     fn loom_log_knot_empty_response_routes_and_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let rig_dir = dir.path().join("rig");
+        let log = FileSystemLoomLog::new(rig_dir);
         let loom_id = LoomId("empty-loom".to_string());
 
         let event = LoomEvent::KnotEmptyResponse {
@@ -482,7 +491,7 @@ mod tests {
         // Create a log file with mixed content: valid JSONL lines
         // interleaved with non-JSON text (e.g. agent accident).
         let log_path =
-            dir.path().join("tie-offs/dirty-loom/.loom-log");
+            dir.path().join("tie-offs/rig/dirty-loom/.loom-log");
         fs::create_dir_all(log_path.parent().unwrap()).unwrap();
         let content = concat!(
             "# Tie-off: agent wrote markdown here\n",
@@ -494,7 +503,7 @@ mod tests {
         );
         fs::write(&log_path, content).unwrap();
 
-        let log = FileSystemLoomLog::new(dir.path().to_path_buf());
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
         let events = log.read_all(&loom_id).unwrap();
 
         // Should have 2 valid events, non-JSON lines skipped

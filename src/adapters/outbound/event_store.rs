@@ -2,7 +2,8 @@
 //!
 //! Provides low-level file CRUD operations: atomic write (temp → rename),
 //! file removal, directory scanning, and single-file reads. All event
-//! files live in a flat `rig/events/` directory as `{id}.json`.
+//! files live in a flat events directory (the rig's runtime root:
+//! `tie-offs/<rig-basename>/events/`) as `{id}.json`.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

@@ -1,4 +1,5 @@
-//! Use case: snapshot the rig's current state to `rig/state.json`.
+//! Use case: snapshot the rig's current state to
+//! `tie-offs/<rig-basename>/state.json` (the rig's runtime root).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,7 +18,8 @@ use crate::domain::pending_event::PendingEvent;
 
 use super::types::format_timestamp;
 
-/// Use case: snapshot the rig's current state to `rig/state.json`.
+/// Use case: snapshot the rig's current state to the runtime root's
+/// `state.json` (`tie-offs/<rig-basename>/state.json`).
 ///
 /// Reads from `LoomStore` (looms + knots), `AgentProfileRepository`
 /// (profiles), and `LoomLogPort` (knot processing status from logs),

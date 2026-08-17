@@ -637,8 +637,8 @@ mod tests {
 
     #[test]
     fn riglog_path_newtype() {
-        let p = RigLogPath(PathBuf::from("rig/.rig-log"));
-        assert_eq!(p.0, PathBuf::from("rig/.rig-log"));
+        let p = RigLogPath(PathBuf::from("tie-offs/rig/.rig-log"));
+        assert_eq!(p.0, PathBuf::from("tie-offs/rig/.rig-log"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::adapters::logging;
 use crate::application::ports::{EventSource, LoomLogPort, PortError};
 use crate::domain::entities::{KnotId, LoomId};
 use crate::domain::events::LoomEvent;
+use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::value_objects::StrandSource;
 
 use super::super::types::format_timestamp;
@@ -20,9 +21,10 @@ use super::super::types::format_timestamp;
 ///
 /// - **Filesystem**: creates the path if missing, starts a watcher.
 /// - **EventUri**: derives the event dispatch directory
-///   `{rig_dir}/tie-offs/{loom-id}/{event-id}/`, creates it if missing,
-///   and starts a watcher so dispatched event files trigger
-///   `StrandEvent::Created` for the consumer knot.
+///   `tie-offs/<rig-basename>/{loom-id}/{event-id}/` (under the rig's
+///   runtime root), creates it if missing, and starts a watcher so
+///   dispatched event files trigger `StrandEvent::Created` for the
+///   consumer knot.
 ///
 /// Logs `LoomEvent::DirectoryCreated` when a directory is auto-created,
 /// and always logs a `watch-started` event after the watcher is
@@ -119,8 +121,8 @@ fn ensure_filesystem_watch(
 
 /// Ensure an event URI strand source directory exists and is watched.
 ///
-/// Derives the event dispatch directory from the rig directory:
-/// `{rig_dir}/tie-offs/{loom-id}/{event-id}/`. Creates it if missing
+/// Derives the event dispatch directory from the rig's runtime root:
+/// `tie-offs/<rig-basename>/{loom-id}/{event-id}/`. Creates it if missing
 /// and starts a file watcher so dispatched event files trigger
 /// `StrandEvent::Created` for the consumer knot.
 fn ensure_event_uri_watch(
@@ -131,7 +133,9 @@ fn ensure_event_uri_watch(
     log_port: &dyn LoomLogPort,
     event_source: &dyn EventSource,
 ) -> Result<(), PortError> {
-    let event_dir = rig_dir.join("tie-offs").join(&loom_id.0).join(event_id);
+    let event_dir = derive_runtime_root(rig_dir)
+        .join(&loom_id.0)
+        .join(event_id);
 
     let dir_created = if !event_dir.exists() {
         std::fs::create_dir_all(&event_dir).map_err(|e| {
@@ -296,12 +300,12 @@ mod mod_watchers_tests {
 
     /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
     /// derives the event dispatch directory
-    /// `{rig_dir}/tie-offs/{loom-id}/{event-id}/`, creates it if missing,
-    /// and starts the watcher.
+    /// `tie-offs/<rig-basename>/{loom-id}/{event-id}/` (under the
+    /// runtime root), creates it if missing, and starts the watcher.
     #[test]
     fn event_uri_source_derives_and_creates_event_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().to_path_buf();
+        let rig_path = tmp.path().join("rig");
 
         let loom_id = LoomId("validation-loom".to_string());
         let knot_id = KnotId("validator-knot".to_string());
@@ -328,9 +332,10 @@ mod mod_watchers_tests {
         // Should succeed
         assert!(result.is_ok());
 
-        // Event directory was created
-        let expected_dir = rig_path
+        // Event directory was created (under the runtime root)
+        let expected_dir = tmp.path()
             .join("tie-offs")
+            .join("rig")
             .join(&loom_id.0)
             .join(event_id);
         assert!(
@@ -384,7 +389,7 @@ mod mod_watchers_tests {
     #[test]
     fn event_uri_source_watches_derived_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().to_path_buf();
+        let rig_path = tmp.path().join("rig");
 
         let loom_id = LoomId("event-loom".to_string());
         let knot_id = KnotId("event-knot".to_string());
@@ -411,8 +416,9 @@ mod mod_watchers_tests {
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 1);
 
-        let expected = rig_path
+        let expected = tmp.path()
             .join("tie-offs")
+            .join("rig")
             .join(&loom_id.0)
             .join("TestEvent");
         assert_eq!(watches[0], expected);
@@ -424,14 +430,15 @@ mod mod_watchers_tests {
     #[test]
     fn event_uri_source_existing_directory_starts_watcher() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().to_path_buf();
+        let rig_path = tmp.path().join("rig");
 
         let loom_id = LoomId("test-loom".to_string());
         let knot_id = KnotId("test-knot".to_string());
 
-        // Pre-create the event directory
-        let event_dir = rig_path
+        // Pre-create the event directory (under the runtime root)
+        let event_dir = tmp.path()
             .join("tie-offs")
+            .join("rig")
             .join(&loom_id.0)
             .join("PreEvent");
         std::fs::create_dir_all(&event_dir).unwrap();
@@ -469,14 +476,15 @@ mod mod_watchers_tests {
     }
 
     /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
-    /// missing `rig/tie-offs/` parent directories are created
+    /// missing runtime-root `tie-offs/` parent directories are created
     /// automatically.
     #[test]
     fn event_uri_creates_missing_rig_tieoffs_parents() {
         let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().to_path_buf();
-        // Do NOT create rig/tie-offs — it should be created automatically.
-        assert!(!rig_path.join("tie-offs").exists());
+        let rig_path = tmp.path().join("rig");
+        // Do NOT create the tie-offs runtime tree — it should be
+        // created automatically.
+        assert!(!tmp.path().join("tie-offs").exists());
 
         let loom_id = LoomId("parent-loom".to_string());
         let knot_id = KnotId("parent-knot".to_string());
@@ -500,8 +508,9 @@ mod mod_watchers_tests {
         .unwrap();
 
         // Parent directories were created
-        let expected = rig_path
+        let expected = tmp.path()
             .join("tie-offs")
+            .join("rig")
             .join(&loom_id.0)
             .join("ParentTest");
         assert!(
@@ -509,7 +518,7 @@ mod mod_watchers_tests {
             "event dir with parents should exist"
         );
         assert!(
-            rig_path.join("tie-offs").exists(),
+            tmp.path().join("tie-offs").exists(),
             "tie-offs parent should exist"
         );
 

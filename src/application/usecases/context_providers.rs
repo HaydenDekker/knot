@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::domain::entities::Knot;
 use crate::domain::events::{build_listener_context, BuildContext, StrandQueueAccessor};
+use crate::domain::knot_file::derive_runtime_root;
 pub use crate::domain::events::ContextProvider;
 
 // ── Pending Event Metadata ──────────────────────────────────────────────
@@ -169,7 +170,9 @@ impl AgentEventsContextProvider {
         rig_dir: &Path,
         event_ids: &HashSet<String>,
     ) -> Vec<std::path::PathBuf> {
-        let dispatch_base = rig_dir.join("tie-offs");
+        // Dispatch directories live under the rig's runtime root
+        // (tie-offs/<rig-basename>/), not inside the rig directory.
+        let dispatch_base = derive_runtime_root(rig_dir);
         let mut paths = Vec::new();
 
         let Ok(looms) = std::fs::read_dir(&dispatch_base) else {
@@ -372,8 +375,8 @@ mod tests {
         timestamp: &str,
         filename: &str,
     ) {
-        let event_dir = rig_dir
-            .join("tie-offs")
+        // Event files live under the runtime root (not in the rig dir).
+        let event_dir = crate::domain::knot_file::derive_runtime_root(rig_dir)
             .join(consumer_loom)
             .join(event_id);
         std::fs::create_dir_all(&event_dir).unwrap();

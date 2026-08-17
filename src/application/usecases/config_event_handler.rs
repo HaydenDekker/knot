@@ -1699,10 +1699,10 @@ mod phase2_tests {
             _set_ids_calls,
         ) = TrackingEventSource::new();
 
-        // Use a temp dir so the rig/tie-offs/{loom-id}/{event-id}/
-        // dispatch directory can be created.
+        // Use a temp dir so the runtime-root dispatch directory
+        // (tie-offs/<rig-basename>/{loom-id}/{event-id}/) can be created.
         let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().to_path_buf();
+        let rig_path = tmp.path().join("rig");
 
         let handler = ConfigEventHandler::new(
             repo,
@@ -1771,9 +1771,11 @@ mod phase2_tests {
         // Watcher started for the event dispatch directory.
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 1);
-        // The event dispatch path is rig/tie-offs/{loom-id}/{event-id}/
-        let expected = rig_path
+        // The event dispatch path is tie-offs/<rig-basename>/{loom-id}/{event-id}/
+        // under the runtime root (parent of the rig dir).
+        let expected = tmp.path()
             .join("tie-offs")
+            .join("rig")
             .join("test-loom")
             .join("PlanCreated");
         assert!(

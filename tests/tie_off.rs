@@ -68,9 +68,9 @@ fn create_strand_file(dir: &tempfile::TempDir, name: &str, content: &str) -> Pat
 
 // ── Tie-off path structure ───────────────────────────────────────────────
 
-/// Tie-off is written to the correct path under tie-offs/.
+/// Tie-off is written to the correct path under the runtime root.
 ///
-/// Path structure: `rig/tie-offs/{loom-id}/tie-off-{knot-id}.md`
+/// Path structure: `tie-offs/<rig-basename>/{loom-id}/tie-off-{knot-id}.md`
 #[test]
 fn tie_off_written_to_correct_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -95,10 +95,11 @@ fn tie_off_written_to_correct_path() {
     assert_eq!(appends.len(), 1, "should have 1 tie-off append");
     let tie_off = &appends[0];
 
-    // Path should be: /rig/tie-offs/review-loom/tie-off-review.md
+    // Path should be: /tie-offs/rig/review-loom/tie-off-review.md
+    // (builder rig dir is /rig → runtime root /tie-offs/rig)
     let path_str = tie_off.path.0.display().to_string();
     assert!(
-        path_str.contains("tie-offs/review-loom/tie-off-review.md"),
+        path_str.contains("tie-offs/rig/review-loom/tie-off-review.md"),
         "tie-off path should contain loom and knot ID: {}",
         path_str
     );
@@ -186,7 +187,7 @@ fn tie_off_append_mode_history() {
     // Content map tracks the latest write (same path, second overwrites)
     let content = tie_off_content.lock().unwrap();
     let latest = content
-        .get("/rig/tie-offs/review-loom/tie-off-review.md")
+        .get("/tie-offs/rig/review-loom/tie-off-review.md")
         .expect("tie-off path should be in content map");
     assert!(
         latest.contains("review v1"),
@@ -251,7 +252,7 @@ fn delete_event_context_extraction_reads_tieoff() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/rig/tie-offs/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
             concat!(
                 "## review triggered by Created strands/feature.md\n",
                 "Timestamp: 2026-06-05T10:00:00Z\n",

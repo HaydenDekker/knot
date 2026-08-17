@@ -1,7 +1,9 @@
 //! Filesystem-backed implementation of `StateWriterPort`.
 //!
-//! Writes `RigState` JSON to `{rig_dir}/state.json` using atomic
-//! write (write to `.state.json.tmp`, then rename).
+//! Writes `RigState` JSON to `{dir}/state.json` using atomic
+//! write (write to `.state.json.tmp`, then rename). The directory is
+//! the rig's runtime root (`tie-offs/<rig-basename>/`), not the rig
+//! directory itself.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -16,7 +18,8 @@ use crate::domain::entities::RigState;
 /// This prevents readers from seeing partially-written state.
 #[derive(Clone)]
 pub struct FileSystemStateWriter {
-    /// Directory where `state.json` is written (typically the rig directory).
+    /// Directory where `state.json` is written (the rig's runtime root,
+    /// `tie-offs/<rig-basename>/`).
     rig_dir: PathBuf,
 }
 
@@ -25,7 +28,8 @@ impl FileSystemStateWriter {
     ///
     /// # Arguments
     ///
-    /// * `rig_dir` - Path to the rig directory (e.g. `/project/rig`).
+    /// * `rig_dir` - Path to the directory where `state.json` is written
+    ///   (the rig's runtime root, e.g. `/project/tie-offs/rig`).
     pub fn new(rig_dir: PathBuf) -> Self {
         Self { rig_dir }
     }

@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::application::ports::{EventDispatcherPort, PortError};
 use crate::domain::entities::{Knot, LoomId};
 use crate::domain::events::AgentEvent;
+use crate::domain::knot_file::derive_runtime_root;
 
 // Re-export shared timestamp helper
 use crate::application::usecases::types::format_timestamp;
@@ -17,7 +18,8 @@ use crate::application::usecases::types::format_timestamp;
 /// Filesystem implementation of [`EventDispatcherPort`].
 ///
 /// Creates event files at:
-/// `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
+/// `tie-offs/<rig-basename>/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
+/// (under the rig's runtime root, not inside the rig directory).
 pub struct FileSystemEventDispatcher;
 
 impl FileSystemEventDispatcher {
@@ -44,8 +46,7 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         let timestamp = format_timestamp();
         let filename = format!("event-{}.md", timestamp.replace([':', ' '], "-"));
 
-        let event_dir = rig_dir
-            .join("tie-offs")
+        let event_dir = derive_runtime_root(rig_dir)
             .join(&consumer_loom_id.0)
             .join(&event.event_id);
 
@@ -190,9 +191,10 @@ mod tests {
         assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
         let path = result.unwrap();
 
-        // Path should be rig/tie-offs/consumer-loom/PlanCreated/event-*.md
+        // Path should be tie-offs/rig/consumer-loom/PlanCreated/event-*.md
+        // (runtime root = <project-root>/tie-offs/<rig-basename>)
         assert!(
-            path.starts_with(&rig_dir.join("tie-offs/consumer-loom/PlanCreated")),
+            path.starts_with(&dir.path().join("tie-offs/rig/consumer-loom/PlanCreated")),
             "path should be under correct event directory: {}",
             path.display()
         );
@@ -225,8 +227,8 @@ mod tests {
 
         assert!(result.is_ok(), "should create parent dirs: {:?}", result);
 
-        // Verify the full directory chain exists
-        let event_dir = rig_dir.join("tie-offs/new-loom/PlanCreated");
+        // Verify the full directory chain exists (under the runtime root)
+        let event_dir = dir.path().join("tie-offs/rig/new-loom/PlanCreated");
         assert!(
             event_dir.is_dir(),
             "event directory should exist: {}",

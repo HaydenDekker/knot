@@ -1,7 +1,8 @@
 //! Integration tests for the persistent (disk-backed) event queue.
 //!
 //! Verifies the full persistence lifecycle: events are written as JSON files
-//! in `rig/events/`, survive queue recreation (restart simulation), and are
+//! in the rig's runtime-root events directory (`tie-offs/<rig>/events/`),
+//! survive queue recreation (restart simulation), and are
 //! removed after processing. Uses `DiskBackedEventQueue` directly with
 //! `tempfile` for isolated filesystem state.
 //!
@@ -120,7 +121,8 @@ fn full_cycle_push_pop_disk_empty() {
 /// persisted events are loaded and processed.
 ///
 /// Simulates: Knot pushes events → process stops (Ctrl+C/crash) → Knot
-/// restarts → events are recovered from `rig/events/` and processed.
+/// restarts → events are recovered from the runtime-root events dir
+/// (`tie-offs/<rig>/events/`) and processed.
 #[test]
 fn restart_survival_events_load_after_recreation() {
     let tmp = tempfile::tempdir().unwrap();
@@ -226,7 +228,7 @@ fn restart_survival_events_load_after_recreation() {
 
 // ── Malformed File Handling ──────────────────────────────────────────────
 
-/// Write invalid JSON to `rig/events/`, scan → verify warning logged,
+/// Write invalid JSON to the events directory, scan → verify warning logged,
 /// processing continues with valid events.
 ///
 /// Malformed files (corrupted JSON, partial writes) must not crash the
