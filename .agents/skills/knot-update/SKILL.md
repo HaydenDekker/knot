@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.6.0"
+  version: "1.7.0"
   compatibility: "Knot 0.23.0+"
 ---
 
@@ -56,6 +56,85 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Rig/Project Repository Split — Runtime Tree Moves Out of the Rig (Knot 0.31.0, 2026-08-17)
+
+**What changed:** the rig no longer holds any runtime data. The runtime
+tree — tie-off directories, loom-logs, the event queue, the rig-log,
+and the state snapshot — moves from `rig/` to `tie-offs/<rig-basename>/`
+in the project root (default rig: `tie-offs/rig/`). The rig directory is
+now **source-only** (looms, knots, profiles, config) and is versioned in
+**its own git repository** (`rig/.git`), committed manually by the user.
+Project commits (including Knot's per-knot-run commits) touch the runtime
+tree but never the rig.
+
+| Path | Before | After |
+|---|---|---|
+| State snapshot | `rig/state.json` | `tie-offs/<rig>/state.json` |
+| Tie-off files | `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md` | `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` |
+| Loom-log | `rig/tie-offs/{loom-id}/.loom-log` | `tie-offs/<rig>/{loom-id}/.loom-log` |
+| Event dispatch dirs | `rig/tie-offs/{loom-id}/{EventId}/` | `tie-offs/<rig>/{loom-id}/{EventId}/` |
+| Event queue | `rig/events/` | `tie-offs/<rig>/events/` |
+| Rig-log | `rig/.rig-log` | `tie-offs/<rig>/.rig-log` |
+
+**Document format:** no frontmatter changes. Profiles, knots, and looms
+are unaffected — no file edits required. `last_tie_off_path` values in
+state change automatically (derived at runtime); `rig_path` still points
+at the rig (source) directory.
+
+**Auto-migration (done by Knot, not the agent):** on first startup with
+0.31.0, Knot moves the legacy runtime files:
+`rig/tie-offs/` → `tie-offs/<rig>/` (subtree preserved),
+`rig/state.json`, `rig/.rig-log`, and `rig/events/` → `tie-offs/<rig>/`.
+It logs a one-line `[startup] migrated …` notice. Migration is
+idempotent; if a destination already exists, the destination is kept and
+a warning is logged.
+
+**Rig repository (done by Knot, committed by the user):**
+
+- Knot initialises `rig/.git` on startup (idempotent) and appends a
+  marked `rig/` line to the project's `.gitignore` when the project root
+  is inside a git repo.
+- The user commits the rig git manually: `git -C rig add -A &&
+  git -C rig commit -m "…"`.
+
+**Manual step for pre-existing projects (agent action):** if `rig/` files
+were already tracked by the project's git before 0.31.0, the
+`.gitignore` entry alone does not untrack them. Run the one-time:
+
+```bash
+git rm -r --cached rig/
+git commit -m "Untrack rig/ — now versioned in its own repository"
+```
+
+Knot detects the tracked-rig case and logs a warning instead of doing
+this itself — untracking rewrites the project's index and is a
+project-history decision. The Knot binary never runs `git rm`.
+
+**Watcher re-trigger caveat:** `notify` does not rescan existing files
+when a watch starts. After migration, dispatch directories that already
+contained unprocessed event files are watched at their new path but the
+watcher never saw those files appear. **Touch** each unprocessed event
+file (`touch tie-offs/<rig>/{loom-id}/{EventId}/event-*.md`) after a
+post-migration restart to re-trigger processing.
+
+**Verification:**
+
+```bash
+# Runtime tree exists and is fresh
+cat tie-offs/rig/state.json | python3 -m json.tool
+
+# Rig is source-only
+ls rig/   # looms, profiles, config — no tie-offs/, state.json, events/
+
+# Project git ignores the rig
+git check-ignore -v rig/
+
+# Rig git exists (user commits it manually)
+git -C rig status
+```
 
 ---
 

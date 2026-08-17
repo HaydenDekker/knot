@@ -56,7 +56,7 @@ text-based document.
   containing `rig/`.
 - Absolute paths are also accepted and used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
+  `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
 
 ### Example Layout
 
@@ -78,10 +78,10 @@ project_root/
 
 ### Check a Knot's Status
 
-Read `rig/state.json` to see all looms and their knots:
+Read `tie-offs/<rig>/state.json` to see all looms and their knots:
 
 ```bash
-cat rig/state.json | python3 -m json.tool
+cat tie-offs/rig/state.json | python3 -m json.tool
 ```
 
 Each knot entry shows its current processing status (`idle`,
@@ -153,5 +153,5 @@ all produce or maintain plans.
 Check the loom activity log to diagnose issues:
 
 ```bash
-cat rig/tie-offs/prd-review-loom/.loom-log
+cat tie-offs/rig/prd-review-loom/.loom-log
 ```

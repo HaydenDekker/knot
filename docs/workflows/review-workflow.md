@@ -90,14 +90,14 @@ section and appends feedback to its tie-off file.
 Read the tie-off files:
 
 ```bash
-cat rig/tie-offs/prd-review-loom/tie-off-goals-review.md
-cat rig/tie-offs/prd-review-loom/non-tie-off-goals-review.md
+cat tie-offs/rig/prd-review-loom/tie-off-goals-review.md
+cat tie-offs/rig/prd-review-loom/non-tie-off-goals-review.md
 ```
 
 Or check the rig state:
 
 ```bash
-cat rig/state.json | python3 -m json.tool
+cat tie-offs/rig/state.json | python3 -m json.tool
 ```
 
 For a structured quality review of the rig's output, use the

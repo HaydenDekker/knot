@@ -1,5 +1,68 @@
 # Release Notes
 
+## v0.31.0 — 2026-08-17
+
+### Breaking — Rig/Project Repository Split (Plan 068)
+
+The rig no longer holds any runtime data. The runtime tree — tie-off
+directories, loom-logs, the event queue, the rig-log, and the state
+snapshot — moves from `rig/` to `tie-offs/<rig-basename>/` in the
+project root (default rig: `tie-offs/rig/`).
+
+| Path | Before | After |
+|---|---|---|
+| State snapshot | `rig/state.json` | `tie-offs/<rig>/state.json` |
+| Tie-off files | `rig/tie-offs/{loom-id}/…` | `tie-offs/<rig>/{loom-id}/…` |
+| Loom-log | `rig/tie-offs/{loom-id}/.loom-log` | `tie-offs/<rig>/{loom-id}/.loom-log` |
+| Event dispatch dirs | `rig/tie-offs/{loom-id}/{EventId}/` | `tie-offs/<rig>/{loom-id}/{EventId}/` |
+| Event queue | `rig/events/` | `tie-offs/<rig>/events/` |
+| Rig-log | `rig/.rig-log` | `tie-offs/<rig>/.rig-log` |
+
+**Rig repository:** Knot initialises `rig/.git` at startup (idempotent).
+The rig tracks exactly its source (looms, knots, profiles, config) and
+is committed **manually by the user**. When the project root is inside a
+git repo, Knot appends a marked `rig/` line to the project's
+`.gitignore`, and the git versioner unstages `rig/` before every commit
+so the rig can never leak into a project commit (gitlink or tracked
+leftovers).
+
+**Auto-migration:** on first 0.31.0 startup, legacy runtime files are
+moved automatically (`[startup] migrated …` notice). Idempotent;
+destination-exists conflicts keep the destination and warn.
+
+**Pre-existing projects (manual step):** if `rig/` was already tracked
+by the project git, run the one-time
+`git rm -r --cached rig/` + commit to untrack it. Knot logs a warning
+and never runs `git rm` itself.
+
+**Watcher caveat:** after migration, dispatch directories that already
+contain unprocessed event files are watched at their new path, but the
+file watcher does not rescan existing files — touch each unprocessed
+event file to re-trigger processing.
+
+**No document format changes:** profiles, knots, and looms are
+unaffected. `knot share` is unchanged — the zip now equals exactly the
+rig git's tracked content.
+
+### Skills and Docs Updated
+
+- `knot-init` (v4.0.0) — running-check path moves to
+  `tie-offs/<rig>/state.json`; new Rig Repository section
+- `knot-glossary` — new **Runtime Tree** term; all paths re-rooted
+- `knot-manage` (v1.1.0) — two-repo review workflow; post-migration
+  watcher caveat
+- `knot-inspect` (v3.3.0), `knot-analyst` (v1.2.0), `knot-dispatch`
+  (v1.1.0), `knot-create` (v5.5.0), `knot-design` (v1.5.0),
+  `knot-abstractions` (v1.2.0) — path references, diagrams, and
+  quick-reference commands updated
+- `knot-update` — 0.31.0 changelog entry with migration + verification
+  instructions
+- `docs/configuration/rig-structure.md` — new directory tree, Rig
+  Repository and Runtime Tree section; `docs/concepts.md`,
+  `docs/getting-started.md`, `docs/troubleshooting.md`,
+  `docs/workflows/*`, `docs/configuration/knots.md`,
+  `docs/configuration/profiles.md`, `README.md` — path references
+
 ## v0.30.1 — 2026-07-24
 
 ### Bugfix — Startup ordering: persisted events processed after loom discovery

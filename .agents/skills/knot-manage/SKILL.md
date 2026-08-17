@@ -4,8 +4,8 @@ description: "Review the rig's work using git history and tie-off files. Examine
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.26.0+"
+  version: "1.1.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Manage Skill
@@ -20,10 +20,23 @@ processing rates, blockers), this skill performs a **retrospective
 review** of completed work: what was written, what was communicated,
 and whether the interaction chain achieved its goal.
 
-**Tie-off files:** `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
-**Loom-logs:** `rig/tie-offs/{loom-id}/.loom-log`
+**Tie-off files:** `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
+**Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log`
 **Git commits:** Knot-generated commits follow the pattern
 `knot: <knot-id> — processed <strand-name> (<event-type>)`
+
+Since Knot 0.31.0 there are **two independent git repositories**:
+
+- **Project git** — the audit trail. Contains the runtime tree
+  (`tie-offs/<rig>/`: tie-offs, loom-logs, event queue, rig-log, state
+  snapshots) plus everything the knots wrote to the project domain.
+  Knot's per-knot-run commits live here.
+- **Rig git** (`rig/.git`) — the rig source (looms, knots, profiles,
+  config). Committed **manually by the user**; Knot never commits it and
+  project commits never touch it (parent `.gitignore` exclusion).
+
+When reviewing rig *definitions* (knot instructions, profile changes),
+look at the rig git: `git -C rig log --oneline -20`.
 
 ---
 
@@ -66,7 +79,7 @@ determines rig effectiveness. This skill reviews:
    Verify with: `git log --oneline --grep="knot: " | head -10`
    If no Knot commits exist, either `git-versioned` is `false` on
    knots or the rig has not produced successful output yet.
-2. Tie-off files must exist. Check `rig/tie-offs/` for content.
+2. Tie-off files must exist. Check `tie-offs/<rig>/` for content.
 
 ---
 
@@ -93,7 +106,8 @@ When asked to review what the rig has done, or check recent rig output:
    | Many commits from same knot on same strand | Knot is re-triggering frequently. Check tie-off for "no changes needed" (idempotent convergence) or actual repeated work (possible loop). |
    | Commits span multiple knots | Healthy — different knots are producing output. |
    | Commits touch expected output directories | Knots are doing their job (writing plans, docs, code). |
-   | Commits only touch `rig/tie-offs/` | Knots are producing tie-offs but not writing to their target domains. Check knot instructions — they may not be told where to write output. |
+   | Commits only touch `tie-offs/<rig>/` | Knots are producing tie-offs but not writing to their target domains. Check knot instructions — they may not be told where to write output. |
+   | `rig/` appears in a project commit | Should not happen since 0.31.0 (parent `.gitignore` + rig unstaging). The project predates the migration — run the one-time `git rm -r --cached rig/` untrack step. |
    | No Knot commits in last 24h | Rig is idle or all work is complete. |
 
 3. **Show files modified by Knot commits**:
@@ -118,7 +132,7 @@ When asked to review what the rig has done, or check recent rig output:
 When asked to review what a specific knot has produced:
 
 1. **Read the tie-off file**:
-   `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
+   `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
 
 2. **Parse the sections**: Each section has:
    ```
@@ -165,7 +179,7 @@ When reviewing interaction chains, distinguish between two different
 artifacts — confusing them is a common source of false "dead
 subscription" diagnoses:
 
-**Event blocks in the producer's tie-off body** (`tie-off-{knot-name}.md`):
+**Event blocks in the producer's tie-off body** (`tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`):
 These are ```markdown fenced code blocks the producer agent writes as
 part of its output. They *declare* that an event occurred. Knot parses
 these blocks **after** the producer completes and dispatches matching
@@ -210,7 +224,7 @@ event chain achieved its goal:
    the producer.
 
 2. **Trace the producer's tie-off**:
-   Read `rig/tie-offs/{producer-loom-id}/tie-off-{producer-knot-name}.md`
+   Read `tie-offs/<rig>/{producer-loom-id}/tie-off-{producer-knot-name}.md`
 
    For each section that contains an event block (a ```markdown code
    block with `event: <EventId>`):
@@ -218,22 +232,22 @@ event chain achieved its goal:
    - Note which strand triggered this processing event.
 
 3. **Trace the consumer's tie-off**:
-   Read `rig/tie-offs/{consumer-loom-id}/tie-off-{consumer-knot-name}.md`
+   Read `tie-offs/<rig>/{consumer-loom-id}/tie-off-{consumer-knot-name}.md`
 
    For each section:
    - Check the header's strand path — it should point to an event
-     file in `rig/tie-offs/{consumer-loom-id}/{EventId}/`.
+     file in `tie-offs/<rig>/{consumer-loom-id}/{EventId}/`.
    - Correlate the timestamp with the producer's event emission.
    - Assess the consumer's output: did it react meaningfully to
      the event?
 
 4. **Check the dispatch directory**:
-   List `rig/tie-offs/{consumer-loom-id}/{EventId}/` to see all
+   List `tie-offs/<rig>/{consumer-loom-id}/{EventId}/` to see all
    dispatched event files. Each file corresponds to one producer
    emission.
 
    ```bash
-   ls -la rig/tie-offs/{consumer-loom-id}/{EventId}/
+   ls -la tie-offs/<rig>/{consumer-loom-id}/{EventId}/
    ```
 
 5. **Assess interaction quality**:
@@ -386,7 +400,8 @@ dispatched to consumers.
 
 | Scenario | Action |
 |----------|--------|
-| No git repository | Project may not be in git. Skip git analysis, review tie-offs only. Note in report. |
+| No git repository | Project may not be in git. Skip git analysis, review tie-offs only. Note in report. (Independent: a missing `rig/.git` only means the rig source is unversioned — review still works.) |
+| `rig/` tracked by project git | Pre-0.31.0 layout. Run the one-time `git rm -r --cached rig/` + commit untrack step (see knot-init), then verify `git check-ignore -v rig/`. |
 | No Knot commits | Either `git-versioned: false` on all knots, or the rig has not produced successful output. Check tie-off files directly. |
 | Tie-off file missing | Knot has not yet produced output. Not an error — knot may not have been triggered. |
 | Tie-off file is empty | Knot may have started processing but not completed. Check loom-log for `KnotProcessing` without `KnotCompleted`. |
@@ -394,7 +409,7 @@ dispatched to consumers.
 
 ## Loom-Log Entries to Ignore During Review
 
-When reviewing loom-logs (`rig/tie-offs/{loom-id}/.loom-log`), these entries
+When reviewing loom-logs (`tie-offs/<rig>/{loom-id}/.loom-log`), these entries
 are expected and do not indicate problems:
 
 - **`StrandSkipped` with reason `"filtered temp file"`** — A temp file from
@@ -408,7 +423,7 @@ are expected and do not indicate problems:
   Knot got to process it. This is a normal race condition: the file watcher
   fires instantly when a file appears, but the file may be short-lived
   (e.g. a script creates it, reads it, and deletes it within milliseconds).
-  The event is persisted in the queue (`rig/events/*.json`), and when
+  The event is persisted in the queue (`tie-offs/<rig>/events/*.json`), and when
   `ProcessStrand` pops it, the file is already gone. The event file is
   auto-removed from the queue on pop, so this does not recur from the same
   event. If you see many of these for the same path, investigate what is
@@ -433,17 +448,23 @@ This means:
   is the reliable way to trigger processing of a file that the watcher
   missed. This fires a `Modify` event which Knot processes normally.
 - This commonly affects **event dispatch directories**:
-  `rig/tie-offs/{loom-id}/{EventId}/` — if the directory was created in
+  `tie-offs/<rig>/{loom-id}/{EventId}/` — if the directory was created in
   a prior run and already contains event files, restarting Knot will start
   a new watcher but won't retroactively process the existing files.
   Touch any unprocessed event files to trigger them.
+- **Post-migration caveat (0.31.0):** after the legacy layout migration
+  moves `rig/tie-offs/` → `tie-offs/<rig>/`, any dispatch directories that
+  already contain unprocessed event files are watched at their *new* path
+  but the watcher never saw the files appear. **Touch** each unprocessed
+  event file after a migration restart to re-trigger processing.
+  Knot logs the migration under `[startup] migrated …`.
 
 ## Event Queue vs. Dispatch Directories
 
 These are two separate mechanisms — confusing them is a common source of
 misdiagnosis:
 
-**Event queue** (`rig/events/*.json`):
+**Event queue** (`tie-offs/<rig>/events/*.json`):
 - Disk-backed — the `.json` files on disk **are** the queue
 - **Single shared queue across all looms** — events from all knots in all
   looms coexist in the same queue (e.g., `documentation-loom`,
@@ -458,7 +479,7 @@ misdiagnosis:
 - `StrandSkipped` entries relate to this queue — the file referenced by a
   queued event was missing when processing reached it
 
-**Dispatch directories** (`rig/tie-offs/{loom-id}/{EventId}/`):
+**Dispatch directories** (`tie-offs/<rig>/{loom-id}/{EventId}/`):
 - Hold event strand files created by Knot's event dispatcher
 - Used for producer→consumer intent-based routing
 - Each `.md` file is a one-shot event with YAML frontmatter and body
@@ -481,16 +502,19 @@ git log --name-only --grep="knot: " -5
 git log --oneline --grep="knot: goals-review " -10
 
 # Read a knot's tie-off history
-cat rig/tie-offs/planning-loom/tie-off-prd-planner.md
+cat tie-offs/rig/planning-loom/tie-off-prd-planner.md
 
 # Check event dispatch directory
-ls -la rig/tie-offs/planning-loom/ReviewCompleted/
+ls -la tie-offs/rig/planning-loom/ReviewCompleted/
 
 # Find all event subscriptions (consumer wiring)
 grep -r "strand-dir:.*event:" rig/*-loom/
 
 # Check loom-log for dispatched events
-grep EventsDispatched rig/tie-offs/review-loom/.loom-log
+grep EventsDispatched tie-offs/rig/review-loom/.loom-log
+
+# Rig source history (separate git repo, user-committed)
+git -C rig log --oneline -20
 
 # Review commit diff
 git show --stat $(git log --format="%H" --grep="knot: " -1)

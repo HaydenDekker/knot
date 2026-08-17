@@ -4,8 +4,8 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
-  compatibility: "Knot 0.26.0+"
+  version: "1.5.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Design Skill
@@ -384,7 +384,8 @@ in their instructions. The wiring is entirely declarative:
    (knot-level) or a loom ID ending in `-loom` (loom-level).
 
 2. **Knot discovers the subscription** and creates a dispatch directory
-   at `rig/tie-offs/{consumer-loom-id}/{EventName}/`.
+   at `tie-offs/<rig>/{consumer-loom-id}/{EventName}/` (in the runtime
+tree).
 
 3. **Knot injects event instructions** into the producer's prompt at
    runtime — grouped by event ID, deduplicated across consumers. The

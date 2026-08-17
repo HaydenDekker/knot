@@ -42,7 +42,8 @@ project level, install it globally:
 for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
-  cp -r .agents/skills/$skill ~/.agents/skills/$skill
+  mkdir -p ~/.agents/skills/$skill
+  cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
 done
 # Copy non-SKILL.md files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then

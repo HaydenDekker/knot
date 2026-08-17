@@ -23,11 +23,12 @@ Out of the box you get:
 
 | Term | Description |
 |------|-------------|
-| **Rig** | Your project's Knot configuration — lives at `./rig/` |
+| **Rig** | Your project's Knot configuration — source-only, lives at `./rig/`, versioned in its own git repo |
+| **Runtime tree** | The rig's runtime data (tie-offs, logs, event queue, state) at `tie-offs/<rig>/`, committed with the project |
 | **Loom** | A namespace for a domain of responsibility (e.g. `planning-loom`) |
 | **Knot** | A single processing task: agent + prompt + input directory |
 | **Strand** | An input file that triggers a knot when changed |
-| **Tie-off** | The append-only output log of a knot's work |
+| **Tie-off** | The append-only output log of a knot's work, under `tie-offs/<rig>/{loom-id}/` |
 | **Profile** | Agent configuration (model, tools, system prompt) |
 
 Read the full [Concepts guide](https://knot.hdekker.com/concepts) for the complete mental model and processing flow.

@@ -4,8 +4,8 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.26.0+"
+  version: "1.1.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Dispatch Skill
@@ -18,9 +18,10 @@ Knots are event-driven — they react to filesystem changes in their
 `strand-dir`. This skill covers how to trigger them, verify they fired,
 and troubleshoot when they don't.
 
-**State file:** `rig/state.json` (written every 5 seconds by Knot)
-**Activity logs:** `rig/tie-offs/{loom-id}/.loom-log` (append-only JSONL)
-**Tie-off output:** `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
+**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
+Knot; default rig: `tie-offs/rig/state.json`)
+**Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL)
+**Tie-off output:** `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
 
 ---
 
@@ -50,11 +51,12 @@ reflects the last saved content.
 ### The Event Queue Is the Disk
 
 Between the file watcher and the processor sits a **disk-backed event
-queue**. The queue lives in `rig/events/*.json` — each pending event
-is a JSON file on disk. There is no separate in-memory event store.
+queue**. The queue lives in `tie-offs/<rig>/events/*.json` — each
+pending event is a JSON file on disk. There is no separate in-memory
+event store.
 
 ```
-rig/events/{timestamp}-{rand}.json
+tie-offs/<rig>/events/{timestamp}-{rand}.json
 ```
 
 Key properties:
@@ -69,21 +71,21 @@ Key properties:
 - **Deduplicated**: If the same file generates multiple events before
   processing (e.g. rapid saves), the older event is replaced. The
   dedup key is `(strand_path, loom_id, knot_id, event_kind)`.
-- **Viewable in state**: `rig/state.json` includes a `strand_queue`
+- **Viewable in state**: `tie-offs/<rig>/state.json` includes a `strand_queue`
   array showing all currently pending events.
 
 ### Event Queue vs. Dispatch Directories
 
 These are two separate mechanisms:
 
-**Event queue** (`rig/events/*.json`):
+**Event queue** (`tie-offs/<rig>/events/*.json`):
 - Holds pending filesystem change events (`Created`, `Modified`,
   `Deleted`) from the file watcher
 - Each `.json` file is a queue entry — removed when popped for processing
 - `StrandSkipped` entries in the loom-log relate to this queue: the file
   referenced by a queued event was missing when processing reached it
 
-**Dispatch directories** (`rig/tie-offs/{loom-id}/{EventId}/`):
+**Dispatch directories** (`tie-offs/<rig>/{loom-id}/{EventId}/`):
 - Hold event strand files created by Knot's event dispatcher
 - Used for producer→consumer intent-based routing
 - Each `.md` file is a one-shot event with YAML frontmatter and body
@@ -96,11 +98,11 @@ These are two separate mechanisms:
 ## Prerequisites
 
 1. Knot must be running and the rig must be initialised.
-   Verify by checking `rig/state.json` exists and has fresh `updated_at`.
-   If not, use the `knot-init` skill.
+   Verify by checking `tie-offs/<rig>/state.json` exists and has fresh
+   `updated_at`. If not, use the `knot-init` skill.
 2. At least one loom with at least one knot must exist.
-   Check `rig/state.json` `looms` array. If empty, use `knot-create`
-   to create looms and knots first.
+   Check `tie-offs/<rig>/state.json` `looms` array. If empty, use
+   `knot-create` to create looms and knots first.
 
 ---
 
@@ -123,7 +125,7 @@ ProcessStrand picks up the event
     ↓
 Agent invoked with profile + knot instructions
     ↓
-Tie-off appended to rig/tie-offs/{loom-id}/tie-off-{knot-name}.md
+Tie-off appended to tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
     ↓
 Events in tie-off parsed → dispatched to consumer knots (fan-out)
 ```
@@ -149,11 +151,11 @@ git history hint, and any previous tie-off entries for that strand.
 When asked to trigger, fire, or dispatch a knot that reads from a
 filesystem directory:
 
-1. **Identify the strand directory**: Read `rig/state.json` and find
-   the target knot. Check its `strand-dir` field.
+1. **Identify the strand directory**: Read `tie-offs/<rig>/state.json`
+   and find the target knot. Check its `strand-dir` field.
 
-2. **Verify the knot is registered**: Find the knot in `rig/state.json`
-   `looms[].knots[]` array. Check its `status` is not `processing`
+2. **Verify the knot is registered**: Find the knot in
+   `tie-offs/<rig>/state.json` `looms[].knots[]` array. Check its `status` is not `processing`
    (if it is, the knot is already working).
 
 3. **Create or touch a strand file** in the strand directory:
@@ -172,12 +174,12 @@ filesystem directory:
    typically completes within seconds to minutes depending on the
    agent's work.
 
-5. **Verify the knot fired**: Read `rig/tie-offs/{loom-id}/.loom-log`
+5. **Verify the knot fired**: Read `tie-offs/<rig>/{loom-id}/.loom-log`
    and look for `KnotProcessing`, then `KnotCompleted` (or
    `KnotFailed`) for the target knot.
 
 6. **Check the tie-off output**: Read
-   `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md` and verify the
+   `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` and verify the
    latest section contains the expected output.
 
 ### Trigger an Event Consumer Knot
@@ -186,19 +188,19 @@ When asked to trigger a knot whose `strand-dir` is an `event:` URI
 (e.g. `event:quality-reviewer:ReviewCompleted`):
 
 The consumer knot watches a dispatch directory at
-`rig/tie-offs/{consumer-loom-id}/{EventId}/`. To trigger it manually:
+`tie-offs/<rig>/{consumer-loom-id}/{EventId}/`. To trigger it manually:
 
 1. **Identify the dispatch directory**: Read the consumer knot's
    definition file at `rig/{loom-id}/{knot-name}.md`. Extract the
    `strand-dir` event URI to determine the `EventId`.
 
    The dispatch directory is:
-   `rig/tie-offs/{consumer-loom-id}/{EventId}/`
+   `tie-offs/<rig>/{consumer-loom-id}/{EventId}/`
 
 2. **Create an event file** in the dispatch directory:
    ```bash
-   mkdir -p rig/tie-offs/{consumer-loom-id}/{EventId}
-   cat > rig/tie-offs/{consumer-loom-id}/{EventId}/event-manual.md << 'EOF'
+   mkdir -p tie-offs/<rig>/{consumer-loom-id}/{EventId}
+   cat > tie-offs/<rig>/{consumer-loom-id}/{EventId}/event-manual.md << 'EOF'
    ---
    event-id: {EventId}
    target-knot: manual-trigger
@@ -219,13 +221,13 @@ The consumer knot watches a dispatch directory at
 3. **Wait for processing** — the consumer knot should pick up the new
    event file as a strand event.
 
-4. **Verify via loom-log**: Read `rig/tie-offs/{consumer-loom-id}/.loom-log`
+4. **Verify via loom-log**: Read `tie-offs/<rig>/{consumer-loom-id}/.loom-log`
    for `KnotProcessing` and `KnotCompleted` entries.
 
 5. **Clean up** (optional): Remove the manual event file after
    processing if it was a one-off test:
    ```bash
-   rm rig/tie-offs/{consumer-loom-id}/{EventId}/event-manual.md
+   rm tie-offs/<rig>/{consumer-loom-id}/{EventId}/event-manual.md
    ```
 
 ### Trigger a Producer Knot (Which Emits Events to Consumers)
@@ -257,20 +259,20 @@ full producer→consumer chain:
 
 After triggering any knot:
 
-1. **Check `rig/state.json`**: The knot's `status` should be
+1. **Check `tie-offs/<rig>/state.json`**: The knot's `status` should be
    `completed` (or `failed` if something went wrong).
    The `last_event_at` field should have a recent timestamp.
    The `last_strand_path` should point to the file you created/touched.
 
 2. **Check the loom-log**: Tail
-   `rig/tie-offs/{loom-id}/.loom-log` and look for:
+   `tie-offs/<rig>/{loom-id}/.loom-log` and look for:
    ```json
    {"KnotProcessing": {"knot_id": "...", "strand_path": "...", ...}}
    {"KnotCompleted": {"knot_id": "...", "strand_path": "...", "tie_off_path": "...", ...}}
    ```
 
 3. **Check the tie-off**: Read
-   `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`. A new section
+   `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`. A new section
    should appear at the end of the file with a header like:
    ```
    ## {knot-name} triggered by Created {strand-filename}
@@ -287,10 +289,10 @@ After triggering any knot:
 
 | Symptom | Check |
 |---------|-------|
-| No `KnotProcessing` in loom-log | Verify Knot is running (`rig/state.json` `updated_at` is fresh). Check `rig/.rig-log` for errors. |
-| `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check `rig/.rig-log` for `TimeoutExceeded`. Increase profile `timeout`. |
+| No `KnotProcessing` in loom-log | Verify Knot is running (`tie-offs/<rig>/state.json` `updated_at` is fresh). Check `tie-offs/<rig>/.rig-log` for errors. |
+| `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check `tie-offs/<rig>/.rig-log` for `TimeoutExceeded`. Increase profile `timeout`. |
 | `KnotFailed` in loom-log | Read the error message in the log entry. Common causes: missing profile, parse errors, agent crash. |
-| File created but no event at all | The strand directory may not be watched. Check `rig/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
+| File created but no event at all | The strand directory may not be watched. Check `tie-offs/<rig>/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
 | `StrandSkipped` in loom-log | See the table below. The strand event was queued but the file was not available when processing reached it. |
 | Event file created but consumer did not fire | Verify the event file has valid YAML frontmatter with `event-id`. Check the dispatch directory path matches the consumer's `strand-dir` event URI. |
 
@@ -304,7 +306,7 @@ but the file could not be processed. Two variants exist:
 | `"filtered temp file"` | A known temp file pattern (e.g. `sedXXXXXXX` from `sed -i`) triggered the watcher. The file was never a real input — it's normal filesystem noise. | No action needed. Count these to gauge noise levels. |
 | `"missing file (unknown pattern)"` | A real file triggered a `Created` or `Modified` event but was deleted before `ProcessStrand` reached it. This is a race condition: the file watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). | If one-off: no action — the event auto-removes from the queue on pop. If recurring for the same path: investigate what is creating and deleting files in the strand directory. |
 
-The event file in `rig/events/*.json` is removed when popped — the
+The event file in `tie-offs/<rig>/events/*.json` is removed when popped — the
 `StrandSkipped` does not recur from the same queued event. It only
 repeats if the file watcher generates a *new* event for the same path.
 
@@ -419,8 +421,8 @@ events — Knot discovers them from consumer subscriptions.
 echo "work item" > project/prds/new-feature.md
 
 # Trigger an event consumer (manual event file)
-mkdir -p rig/tie-offs/planning-loom/ReviewCompleted
-cat > rig/tie-offs/planning-loom/ReviewCompleted/event-manual.md << 'EOF'
+mkdir -p tie-offs/rig/planning-loom/ReviewCompleted
+cat > tie-offs/rig/planning-loom/ReviewCompleted/event-manual.md << 'EOF'
 ---
 event-id: ReviewCompleted
 target-knot: quality-reviewer
@@ -433,10 +435,10 @@ Manual review trigger.
 EOF
 
 # Verify trigger worked — check loom-log
-tail -5 rig/tie-offs/planning-loom/.loom-log
+tail -5 tie-offs/rig/planning-loom/.loom-log
 
 # Verify trigger worked — check state
-cat rig/state.json | python3 -c "
+cat tie-offs/rig/state.json | python3 -c "
 import sys, json
 state = json.load(sys.stdin)
 for loom in state['looms']:
@@ -444,10 +446,10 @@ for loom in state['looms']:
     print(f\"{loom['id']}/{knot['id']}: {knot['status']} (last: {knot.get('last_event_at', 'never')})\")"
 
 # Check tie-off output
-cat rig/tie-offs/planning-loom/tie-off-refactor-planner.md | tail -20
+cat tie-offs/rig/planning-loom/tie-off-refactor-planner.md | tail -20
 
 # Check event dispatch in producer's loom-log
-grep EventsDispatched rig/tie-offs/review-loom/.loom-log
+grep EventsDispatched tie-offs/rig/review-loom/.loom-log
 ```
 
 ---

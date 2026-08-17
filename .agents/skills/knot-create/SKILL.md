@@ -1,18 +1,18 @@
 ---
 name: knot-create
-description: "Create looms, knots, and profiles by writing .md files directly. Knot auto-discovers looms (directories ending in `-loom`) and parses knot definition files (`.md` files inside loom directories). Profiles live in `rig/profiles/`. Read `rig/state.json` to verify state after file changes. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
+description: "Create looms, knots, and profiles by writing .md files directly. Knot auto-discovers looms (directories ending in `-loom`) and parses knot definition files (`.md` files inside loom directories). Profiles live in `rig/profiles/`. Read `tie-offs/<rig>/state.json` to verify state after file changes. USE FOR: create loom, add loom, new loom, delete loom, remove loom, modify loom, update loom, create knot, add knot, configure knot, loom CRUD, knot CRUD, loom management, knot management, create profile, agent profile, profile CRUD. DO NOT USE FOR: initialising a rig (use knot-init), inspecting state (use knot-inspect), triggering processing, running agent sessions."
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.4.0"
-  compatibility: "Knot 0.26.0+"
+  version: "5.5.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Create Skill
 
 Create and manage looms, knots, and agent profiles by writing `.md` files
 directly to disk. Knot auto-discovers changes through its file watcher —
-no registration is needed. Read `rig/state.json` to verify state after
+no registration is needed. Read `tie-offs/<rig>/state.json` to verify state after
 file changes.
 
 A **loom** is a directory inside the rig whose name ends in `-loom`.
@@ -21,7 +21,7 @@ definition files inside them. Each **knot** references a shared
 **agent profile** that provides the LLM provider, model, tools, and
 system prompt.
 
-**State file:** `rig/state.json` (written every 5 seconds by Knot)
+**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by Knot)
 
 ---
 
@@ -55,7 +55,7 @@ file. Summarise what will be removed.
 ## Prerequisites
 
 1. Knot must be running (use `knot-init` skill if not)
-2. A rig must be initialised (verified by checking `rig/state.json`
+2. A rig must be initialised (verified by checking `tie-offs/<rig>/state.json`
    exists and contains a `rig_path`)
 
 ---
@@ -63,22 +63,26 @@ file. Summarise what will be removed.
 ## Domain Model
 
 ```
-Rig (`./rig/`, top-level container)
- ├── state.json              ← runtime state snapshot (auto-generated)
- ├── profiles/
- │     └── {name}.md         ← shared agent profiles
- ├── tie-offs/
- │     └── {loom-id}/
- │           ├── .loom-log   ← activity log
- │           ├── tie-off-{knot-name}.md  ← append-only log
- │           └── {event-type}/           ← tie-off events
- │                 └── {event}.md        ← static event strand
- └── {name}-loom/            ← loom directory (must end in `-loom`)
-      ├── {knot-name}.md     ← knot definition files
-      └── ...
+Project root
+ ├── Rig (`./rig/`) — reusable source, its own git repo (user commits manually)
+ │     ├── profiles/
+ │     │     └── {name}.md         ← shared agent profiles
+ │     └── {name}-loom/            ← loom directory (must end in `-loom`)
+ │           ├── {knot-name}.md    ← knot definition files
+ │           └── ...
+ └── Runtime tree (`./tie-offs/<rig>/`) — project output, committed with project git
+       ├── state.json              ← runtime state snapshot (auto-generated)
+       └── {loom-id}/
+             ├── .loom-log         ← activity log
+             ├── tie-off-{knot-name}.md  ← append-only log
+             └── {event-id}/               ← dispatch subdirectory
+                   └── {event}.md          ← dispatched event strand
 ```
 
-- A **rig** is the top-level container for all looms and profiles.
+- A **rig** is the top-level container for all looms and profiles. It
+  holds **only reusable source** — no runtime data. Its runtime tree
+  (tie-offs, logs, event queue, state) lives at `tie-offs/<rig>/` in the
+  project root.
 - A **loom** is a directory inside `rig/` whose name ends in `-loom`
   (e.g. `prd-review-loom`). Knot discovers these automatically.
 - A **knot** is a `.md` file with YAML frontmatter inside a loom
@@ -93,7 +97,7 @@ Rig (`./rig/`, top-level container)
   the agent's system prompt (persona instructions). Multiple knots can
   reference the same profile.
 - **Event dispatch** subdirectories are created automatically by Knot
-  inside `rig/tie-offs/{loom-id}/{EventId}/` when a consumer knot uses
+  inside `tie-offs/<rig>/{loom-id}/{EventId}/` when a consumer knot uses
   an `event:` URI in its `strand-dir`. These carry dispatched event
   files that trigger consumer knots.
 
@@ -117,7 +121,7 @@ first, then create knots that reference it.
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
 
-2. **Check for existing profiles**: Read `rig/state.json` and check the
+2. **Check for existing profiles**: Read `tie-offs/<rig>/state.json` and check the
    `profiles` array. If a profile with the same name exists, ask the
    user whether to overwrite.
 
@@ -158,7 +162,7 @@ first, then create knots that reference it.
    - Ensure the `rig/profiles/` directory exists (create it if needed).
    - The `name` in frontmatter should match the filename stem.
 
-4. **Verify creation**: Read `rig/state.json` (wait up to 5 seconds
+4. **Verify creation**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds
    for the state writer to flush) and confirm the profile appears in
    the `profiles` array.
 
@@ -176,7 +180,7 @@ When asked to modify a profile, edit the `.md` file directly:
    values. Edit frontmatter for structural metadata (name, provider,
    model, tools, timeout) and the markdown body for the system prompt.
 
-3. **Verify the change**: Read `rig/state.json` and confirm the profile
+3. **Verify the change**: Read `tie-offs/<rig>/state.json` and confirm the profile
    entry is present. Note: the system prompt (body) is not in the state
    file — verify by re-reading the profile file. `timeout` is included
    in state.
@@ -193,7 +197,7 @@ When asked to delete a profile:
 
 2. **Delete the file** at `rig/profiles/{name}.md`.
 
-3. **Verify deletion**: Read `rig/state.json` and confirm the profile
+3. **Verify deletion**: Read `tie-offs/<rig>/state.json` and confirm the profile
    no longer appears in the `profiles` array.
 
 4. **Report success**: "Profile `fast` deleted."
@@ -202,7 +206,7 @@ When asked to delete a profile:
 
 When asked to show all profiles:
 
-1. Read `rig/state.json` and extract the `profiles` array.
+1. Read `tie-offs/<rig>/state.json` and extract the `profiles` array.
 2. Present a summary table with: Name, Provider, Model, Timeout (show
    "default" for null/missing values).
 
@@ -218,12 +222,12 @@ A loom is created by making a directory (ending in `-loom`) and writing
      (e.g. `prd-review-loom`, `docs-loom`)
    - At least one knot definition (see below)
 
-2. **Check for duplicates**: Read `rig/state.json` and check the
+2. **Check for duplicates**: Read `tie-offs/<rig>/state.json` and check the
    `looms` array. If a loom with the same ID exists, ask the user
    whether to modify the existing loom or choose a different ID.
 
 3. **Verify profiles exist**: For each knot's `agent_profile_ref`,
-   read `rig/state.json` and check the `profiles` array for the name.
+   read `tie-offs/<rig>/state.json` and check the `profiles` array for the name.
    If missing, ask the user to create it first.
 
 4. **Create the loom directory** at `rig/{id}/` (e.g. `rig/prd-review-loom/`).
@@ -251,7 +255,7 @@ A loom is created by making a directory (ending in `-loom`) and writing
    ```
    Write this to `rig/prd-review-loom/goals-review.md`.
 
-7. **Verify registration**: Read `rig/state.json` (wait up to 5 seconds
+7. **Verify registration**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds
    for the state writer to flush) and confirm the loom and its knots
    appear in the `looms` array.
 
@@ -261,10 +265,10 @@ A loom is created by making a directory (ending in `-loom`) and writing
 
 When asked to add a knot to an existing loom:
 
-1. **Verify the loom exists**: Read `rig/state.json` and find the loom
+1. **Verify the loom exists**: Read `tie-offs/<rig>/state.json` and find the loom
    in the `looms` array.
 
-2. **Verify the profile exists**: Read `rig/state.json` and check the
+2. **Verify the profile exists**: Read `tie-offs/<rig>/state.json` and check the
    `profiles` array for the knot's `agent_profile_ref`.
 
 3. **Determine event subscription**. Ask the user:
@@ -287,7 +291,7 @@ When asked to add a knot to an existing loom:
    Review the non-goals section.
    ```
 
-5. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+5. **Verify**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds) and confirm
    the new knot appears in the loom's `knots` array.
 
 5. **Report success**: "Knot `non-goals-review` added to loom
@@ -297,13 +301,13 @@ When asked to add a knot to an existing loom:
 
 When asked to modify a knot, edit its `.md` file directly:
 
-1. **Read the existing loom**: Read `rig/state.json` to see current
+1. **Read the existing loom**: Read `tie-offs/<rig>/state.json` to see current
    looms and knots.
 
 2. **Edit the file** at `rig/{loom-id}/{knot-name}.md` with updated
    frontmatter values.
 
-3. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+3. **Verify**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds) and confirm
    the knot entry is present.
 
 4. **Report what changed**.
@@ -312,12 +316,12 @@ When asked to modify a knot, edit its `.md` file directly:
 
 When asked to delete a knot:
 
-1. **Confirm with the user**: Read `rig/state.json` to show the loom's
+1. **Confirm with the user**: Read `tie-offs/<rig>/state.json` to show the loom's
    current knots. Ask the user to confirm deletion.
 
 2. **Delete the file** at `rig/{loom-id}/{knot-name}.md`.
 
-3. **Verify**: Read `rig/state.json` (wait up to 5 seconds) and confirm
+3. **Verify**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds) and confirm
    the knot no longer appears in the loom's `knots` array.
 
 4. **Report success**: "Knot `non-goals-review` deleted from loom
@@ -327,13 +331,13 @@ When asked to delete a knot:
 
 When asked to delete a loom:
 
-1. **Confirm with the user**: Read `rig/state.json` to show the loom's
+1. **Confirm with the user**: Read `tie-offs/<rig>/state.json` to show the loom's
    current configuration. Ask the user to confirm deletion.
    Note: this deletes the entire directory and all its knot files.
 
 2. **Remove the loom directory** at `rig/{id}/`.
 
-3. **Verify deletion**: Read `rig/state.json` (wait up to 5 seconds)
+3. **Verify deletion**: Read `tie-offs/<rig>/state.json` (wait up to 5 seconds)
    and confirm the loom no longer appears in the `looms` array.
 
 4. **Report success**: "Loom `prd-review-loom` deleted."
@@ -342,7 +346,7 @@ When asked to delete a loom:
 
 When asked to show all looms:
 
-1. Read `rig/state.json` and extract the `looms` array.
+1. Read `tie-offs/<rig>/state.json` and extract the `looms` array.
 2. Present a summary table with: ID, Knot Count.
 
 ---
@@ -391,7 +395,7 @@ will reject such files with a `KnotParseWarning`.
   (the directory containing the `rig/` folder).
 - Absolute paths are used as-is.
 - Tie-off paths are statically derived:
-  `rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`
+  `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
 
 ### Event Routing
 
@@ -497,7 +501,7 @@ event: None
 
 The producer writes the event block in its tie-off. Knot parses it,
 matches to consumer `event:` URIs, and creates event files in each
-consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
+consumer's dispatch directory (`tie-offs/<rig>/{loom-id}/{event-id}/`).
 
 **How it works:**
 
@@ -508,7 +512,7 @@ consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
 2. Consumer optionally provides `event-description` for the semantic
    contract injected into the producer's prompt.
 3. Knot creates and watches the dispatch directory:
-   `rig/tie-offs/{loom-id}/{event-id}/`.
+   `tie-offs/<rig>/{loom-id}/{event-id}/`.
 4. Before a producer knot runs, Knot injects event instructions into
    its prompt (grouped by `event-id`, deduplicated across consumers):
    - For **knot-level** subscriptions: instructions are injected only
@@ -527,7 +531,7 @@ consumer's dispatch directory (`rig/tie-offs/{loom-id}/{event-id}/`).
 **Layout:**
 
 ```
-rig/tie-offs/<loom-id>/
+tie-offs/<rig>/<loom-id>/
 ├── tie-off-<knot-name>.md      ← append-only log (always present)
 ├── tie-off-<another-knot>.md   ← another knot's tie-off (flat)
 └── <EventId>/                ← dispatch subdirectory (created by Knot)
@@ -540,7 +544,7 @@ its own dispatch directory in its loom's tie-off directory.
 **Loom-level vs knot-level — dispatch behaviour:**
 
 Both subscription levels write event files to the *same* dispatch
-directory (`rig/tie-offs/{consumer-loom-id}/{event-id}/`). The only
+directory (`tie-offs/<rig>/{consumer-loom-id}/{event-id}/`). The only
 difference is *which producers match*:
 
 - **Knot-level**: only the named knot's events match.
@@ -555,23 +559,24 @@ receives the event once regardless of how many subscriptions matched.
 ```
 project_root/              ← strand-dir resolves from here
 ├── project/prds/          ← strand-dir: "project/prds"
-└── rig/                   ← rig directory
-    ├── profiles/          ← shared agent profiles
-    │   ├── fast.md
-    │   └── coder.md
-    ├── tie-offs/          ← tie-off directory
-    │   ├── prd-review-loom/
-    │   │   ├── .loom-log
-    │   │   └── tie-off-prd-goals-review.md
-    │   └── planning-loom/
-    │       ├── .loom-log
-    │       ├── tie-off-refactor-planner.md
-    │       └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
-    │           └── event-2026-07-10T12-00-00.md
-    ├── prd-review-loom/   ← loom with normal knot
-    │   └── prd-goals-review.md  ← strand-dir: "project/prds"
-    └── planning-loom/     ← loom with event consumer knot
-        └── refactor-planner.md  ← strand-dir: "event:quality-reviewer:ReviewCompleted"
+├── rig/                   ← rig source (its own git repo, user-committed)
+│   ├── profiles/          ← shared agent profiles
+│   │   ├── fast.md
+│   │   └── coder.md
+│   ├── prd-review-loom/   ← loom with normal knot
+│   │   └── prd-goals-review.md  ← strand-dir: "project/prds"
+│   └── planning-loom/     ← loom with event consumer knot
+│       └── refactor-planner.md  ← strand-dir: "event:quality-reviewer:ReviewCompleted"
+└── tie-offs/rig/          ← runtime tree (committed with project git)
+    ├── state.json
+    ├── prd-review-loom/
+    │   ├── .loom-log
+    │   └── tie-off-prd-goals-review.md
+    └── planning-loom/
+        ├── .loom-log
+        ├── tie-off-refactor-planner.md
+        └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
+            └── event-2026-07-10T12-00-00.md
 ```
 
 ---
@@ -639,7 +644,7 @@ no restart needed.
 
 ## State File Schema
 
-`rig/state.json` is the source of truth for current rig state. It is
+`tie-offs/<rig>/state.json` is the source of truth for current rig state. It is
 written atomically every 5 seconds.
 
 ```json
@@ -692,11 +697,11 @@ written atomically every 5 seconds.
 
 | Scenario | Action |
 |----------|--------|
-| Loom `{id}` not in `rig/state.json` | Directory may not end in `-loom`, or file watcher hasn't picked it up yet. Wait up to 5 seconds and re-check. |
-| Profile `{name}` not in `rig/state.json` | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
-| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log at `rig/tie-offs/{loom-id}/.loom-log`. |
-| Knot file parse errors | Knot is skipped. Check `rig/tie-offs/{loom-id}/.loom-log` for `KnotParseWarning` events. |
-| `rig/state.json` does not exist | Knot is not running. Suggest `knot-init` skill. |
+| Loom `{id}` not in `tie-offs/<rig>/state.json` | Directory may not end in `-loom`, or file watcher hasn't picked it up yet. Wait up to 5 seconds and re-check. |
+| Profile `{name}` not in `tie-offs/<rig>/state.json` | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
+| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log at `tie-offs/<rig>/{loom-id}/.loom-log`. |
+| Knot file parse errors | Knot is skipped. Check `tie-offs/<rig>/{loom-id}/.loom-log` for `KnotParseWarning` events. |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running. Suggest `knot-init` skill. |
 
 ---
 
@@ -756,7 +761,7 @@ EOF
 
 # Verify Knot has discovered the changes
 # Wait up to 5 seconds, then:
-cat rig/state.json | python3 -m json.tool
+cat tie-offs/rig/state.json | python3 -m json.tool
 
 # Delete a knot (remove its file)
 rm rig/prd-review-loom/goals-review.md

@@ -1,30 +1,35 @@
 # Configuration: Rig Structure
 
 The rig is Knot's top-level configuration container. It lives at `./rig/`
-in your project directory and contains all looms, profiles, and
-processing output.
+in your project directory and contains all looms and profiles —
+**reusable source only**. All processing output and runtime data lives in
+the rig's **runtime tree** at `tie-offs/<rig-basename>/` in the project
+root (default rig: `tie-offs/rig/`), which is committed with the
+project's git history.
 
 ## Directory Tree
 
 ```
-rig/
-├── .rig-log                           ← Operational event log (JSONL)
-├── .workspace-agent-config.yaml       ← Agent adapter selection
-├── state.json                         ← Live rig state (written every 5s)
-├── profiles/                          ← Shared agent profiles
-│   ├── default.md
-│   ├── reviewer.md
-│   └── coder.md
-├── tie-offs/                          ← Processing output (append-only)
-│   └── {loom-id}/
-│       ├── .loom-log                  ← Per-loom activity log
-│       └── tie-off-{knot-name}.md     ← Knot output (appended per event)
-├── {name}-loom/                       ← Loom directory (must end in `-loom`)
-│   ├── {knot-name}.md                 ← Knot definition
-│   └── ...
-└── planning-loom/
-    ├── prd-planner.md
-    └── adr-planner.md
+project-root/
+├── rig/                               ← Rig source — its own git repo (user commits)
+│   ├── .workspace-agent-config.yaml   ← Agent adapter selection
+│   ├── profiles/                      ← Shared agent profiles
+│   │   ├── default.md
+│   │   ├── reviewer.md
+│   │   └── coder.md
+│   ├── {name}-loom/                   ← Loom directory (must end in `-loom`)
+│   │   ├── {knot-name}.md             ← Knot definition
+│   │   └── ...
+│   └── planning-loom/
+│       ├── prd-planner.md
+│       └── adr-planner.md
+└── tie-offs/rig/                      ← Runtime tree — committed with project git
+    ├── .rig-log                       ← Operational event log (JSONL)
+    ├── state.json                     ← Live rig state (written every 5s)
+    ├── events/                        ← Disk-backed event queue (FIFO .json files)
+    └── {loom-id}/
+        ├── .loom-log                  ← Per-loom activity log
+        └── tie-off-{knot-name}.md     ← Knot output (appended per event)
 ```
 
 ## Loom Discovery
@@ -53,14 +58,14 @@ Tie-off output paths are **statically derived** from the loom and knot
 names — no configuration is needed:
 
 ```
-rig/tie-offs/{loom-id}/tie-off-{knot-name}.md
+tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
 ```
 
 For example, the knot `goals-review` in loom `prd-review-loom` writes
 its tie-off to:
 
 ```
-rig/tie-offs/prd-review-loom/tie-off-goals-review.md
+tie-offs/rig/prd-review-loom/tie-off-goals-review.md
 ```
 
 Each processing event appends to this file. The file grows over time,
@@ -68,7 +73,8 @@ with event metadata identifying which strand was processed.
 
 ## Rig State File
 
-`rig/state.json` is the primary observability interface. It is written
+`tie-offs/<rig>/state.json` (default rig: `tie-offs/rig/state.json`) is
+the primary observability interface. It is written
 atomically every 5 seconds and contains:
 
 - **Looms** — all registered looms with their knots, each showing
@@ -88,7 +94,7 @@ atomically every 5 seconds and contains:
           "id": "goals-review",
           "status": "completed",
           "last_strand_path": "project/prds/goals.md",
-          "last_tie_off_path": "rig/tie-offs/prd-review-loom/tie-off-goals-review.md",
+          "last_tie_off_path": "tie-offs/rig/prd-review-loom/tie-off-goals-review.md",
           "last_error": null
         }
       ]
@@ -117,18 +123,18 @@ atomically every 5 seconds and contains:
 Monitor live state:
 
 ```bash
-watch -n 2 'cat rig/state.json | python3 -m json.tool'
+watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'
 ```
 
 Or use the `knot-inspect` skill — ask your agent *"show me the rig
-state"* and it reads `rig/state.json` and reports looms, knots,
-profiles, and processing status in plain language.
+state"* and it reads `tie-offs/<rig>/state.json` and reports looms,
+knots, profiles, and processing status in plain language.
 
 ## Log Locations
 
 ### Rig-Log
 
-`rig/.rig-log` — an append-only JSONL file that records serious
+`tie-offs/<rig>/.rig-log` — an append-only JSONL file that records serious
 operational events:
 
 - `TimeoutExceeded` — an agent session exceeded its deadline
@@ -139,7 +145,7 @@ safely.
 
 ### Loom-Log
 
-`rig/tie-offs/{loom-id}/.loom-log` — per-loom activity log recording:
+`tie-offs/<rig>/{loom-id}/.loom-log` — per-loom activity log recording:
 
 - `LoomStarted` / `LoomStopped`
 - `KnotRegistered` / `KnotDeregistered`
@@ -195,25 +201,32 @@ knot share myproject
 ```
 
 This creates a `.zip` containing loom definitions and profiles only.
+Since 0.31.0 the zip equals exactly the rig git's tracked content, so
+pushing the rig git to a remote is a natural sharing alternative.
 
-## Git-Friendly
+## Rig Repository and Runtime Tree
 
-All rig configuration is plain text. The recommended `.gitignore`
-entries depend on your workflow:
+Since 0.31.0 the rig and its runtime data are versioned separately:
 
-```gitignore
-# Tie-offs are generated output — typically committed for audit trail
-# (Knot creates git commits for these by default)
-# Uncomment if you prefer to exclude them:
-# rig/tie-offs/**/*.md
+- **Rig repository** — the rig is initialised with its own git
+  repository (`rig/.git`) at startup. It tracks exactly the reusable
+  rig source (looms, knots, profiles, config) — no runtime data. The
+  **user commits it manually** (`git -C rig add -A && git -C rig
+  commit -m "…"`); Knot never commits the rig.
+- **Runtime tree** — `tie-offs/<rig>/` holds all runtime data (tie-offs,
+  loom-logs, event queue, rig-log, state snapshots). It is project
+  output and is committed with the **project's** git history; Knot's
+  per-knot-run commits fold a state snapshot into each audit entry.
+- **Parent exclusion** — when the project root is inside a git repo,
+  Knot appends a marked `rig/` line to the project's `.gitignore` so
+  the rig can never be swept into project commits (gitlink or tracked
+  leftovers).
+- **Pre-existing projects** — if `rig/` files were already tracked by
+  the project git before 0.31.0, run the one-time
+  `git rm -r --cached rig/` + commit untrack step; the `.gitignore`
+  entry then holds. Knot logs a warning and does not run `git rm`
+  itself.
 
-# Logs can grow large — often excluded
-rig/.rig-log
-rig/tie-offs/**/.loom-log
-
-# State file is generated — typically excluded
-rig/state.json
-```
-
-Profiles, looms, and knot definitions are typically committed to git,
-since they represent your intentional configuration.
+The legacy `tie-offs/<rig>/state.json`, `tie-offs/<rig>/.rig-log`, `tie-offs/<rig>/events/`, and
+`tie-offs/<rig>/` locations are **auto-migrated** to the runtime tree on
+first 0.31.0 startup (`[startup] migrated …` notice).

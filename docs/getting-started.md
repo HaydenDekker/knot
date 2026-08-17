@@ -90,7 +90,7 @@ Ask your agent to run the `knot-init` skill. This will:
 2. If no profiles exist, read available models from
    `~/.pi/agent/models.json` and create a default profile at
    `rig/profiles/default.md`
-3. Verify setup by reading `rig/state.json`
+3. Verify setup by reading `tie-offs/<rig>/state.json`
 4. Report the current state back to you
 
 The `knot-init` skill is idempotent — safe to run multiple times.
@@ -112,13 +112,13 @@ Knot will:
 2. Scan for looms (any `*-loom/` subdirectory inside `rig/`)
 3. Parse knot definition files and agent profiles
 4. Start watching strand directories for file changes
-5. Begin writing `rig/state.json` every 5 seconds
+5. Begin writing `tie-offs/<rig>/state.json` every 5 seconds
 
-To verify Knot is running, check that `rig/state.json` exists and
+To verify Knot is running, check that `tie-offs/<rig>/state.json` exists and
 is being updated:
 
 ```bash
-watch -n 2 'cat rig/state.json | python3 -m json.tool'
+watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'
 ```
 
 You should see the file contain loom and profile information.
@@ -140,7 +140,7 @@ your IDE's file tree, containing the knot definition file.
 
 **Can't see the file?** Ask your agent to run `knot-inspect` to
 debug the rig state — it will report registered looms, knots, and
-any issues by reading `rig/state.json`.
+any issues by reading `tie-offs/<rig>/state.json`.
 
 ## Step 5: Run "Hello Knot"
 
@@ -159,7 +159,7 @@ Watch for two things:
 
 1. **The tie-off file appears** — Knot's file watcher detects the
    new strand and triggers the knot. The agent runs and writes its
-   result to `rig/tie-offs/hello-loom/tie-off-hello.md`. You should see this
+   result to `tie-offs/rig/hello-loom/tie-off-hello.md`. You should see this
    file appear in your IDE, containing the agent's greeting for
    Alice.
 

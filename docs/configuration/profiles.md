@@ -63,7 +63,7 @@ You are a code generation agent. Take your time to be thorough.
 ```
 
 When a session exceeds its timeout, a `TimeoutExceeded` event is
-recorded in the rig-log (`rig/.rig-log`) and the tie-off file is
+recorded in the rig-log (`tie-offs/<rig>/.rig-log`) and the tie-off file is
 preserved unchanged.
 
 ## How Profiles Are Used at Processing Time
@@ -92,10 +92,10 @@ Knot is needed.
 
 ### List All Profiles
 
-Read `rig/state.json` to see all registered profiles:
+Read `tie-offs/<rig>/state.json` to see all registered profiles:
 
 ```bash
-cat rig/state.json | python3 -m json.tool
+cat tie-offs/rig/state.json | python3 -m json.tool
 ```
 
 ### Create a New Profile
@@ -138,7 +138,7 @@ the deleted profile will fail on their next processing run with a
 Ask your agent to manage profiles using `knot-create`:
 
 - *"create a profile called `fast` with openai/gpt-4o"*
-- *"list all profiles"* — runs `knot-inspect` to read `rig/state.json`
+- *"list all profiles"* — runs `knot-inspect` to read `tie-offs/<rig>/state.json`
 - *"update the default profile timeout to 600s"*
 
 ## Session Resume

@@ -1,21 +1,23 @@
 ---
 name: knot-init
-description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `rig/state.json`, and creates the rig directory structure. If no profiles exist, creates a default profile by reading available models from ~/.pi/agent/models.json. Verifies setup by reading `rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
+description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, creates a default profile by reading available models from ~/.pi/agent/models.json. Verifies setup by reading `rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.4.0"
-  compatibility: "Knot 0.22.0+"
+  version: "4.0.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Init Skill
 
 Initialise a Knot rig in the current working directory. This skill detects
 whether a rig already exists, verifies that Knot is running by checking
-for `rig/state.json`, creates the rig directory structure, and sets up a
-default agent profile if none exist.
+for `tie-offs/<rig>/state.json`, creates the rig directory structure, and
+sets up a default agent profile if none exist.
 
-**State file:** `rig/state.json` (written every 5 seconds by Knot)
+**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
+Knot). For the default rig this is `tie-offs/rig/state.json`; for a named
+rig (e.g. `dev-rig`) it is `tie-offs/dev-rig/state.json`.
 
 ---
 
@@ -50,14 +52,15 @@ default profile with a real provider and model.
 
 When asked to initialise a Knot rig:
 
-1. **Check if Knot is running**: Check if `rig/state.json` exists.
+1. **Check if Knot is running**: Check if `tie-offs/<rig>/state.json`
+   exists (default rig: `tie-offs/rig/state.json`).
    - If the file exists and is valid JSON, Knot is running and the rig
      is initialised.
    - If the file does not exist, Knot may not be running or the rig has
      not been initialised yet.
 
 2. **If Knot is NOT running**:
-   - Check if `rig/state.json` exists:
+   - Check if `tie-offs/<rig>/state.json` exists:
      - If it exists but is older than 10 seconds (check `updated_at`),
        Knot may be slow to start. Wait and re-check.
      - If it does not exist, report that Knot is not reachable.
@@ -66,7 +69,7 @@ When asked to initialise a Knot rig:
    - Do NOT proceed further until the user confirms Knot is running.
 
 3. **If Knot IS running**, check rig state:
-   - Read `rig/state.json`.
+   - Read `tie-offs/<rig>/state.json`.
    - Extract `rig_path` to confirm the rig configuration is loaded
      (defaults or custom).
 
@@ -76,18 +79,16 @@ When asked to initialise a Knot rig:
 
 4a. **Install Knot skills globally** (idempotent):
     - Check `~/.agents/skills/` exists. Create it if missing.
-    - Copy each Knot skill directory from `.agents/skills/` to
-      `~/.agents/skills/`:
+    - Copy the *contents* of each Knot skill directory into
+      `~/.agents/skills/<skill>/` (the trailing `/.` is required —
+      copying onto an existing directory would nest it):
       ```bash
-      cp -r .agents/skills/knot-init ~/.agents/skills/
-      cp -r .agents/skills/knot-create ~/.agents/skills/
-      cp -r .agents/skills/knot-dispatch ~/.agents/skills/
-      cp -r .agents/skills/knot-inspect ~/.agents/skills/
-      cp -r .agents/skills/knot-manage ~/.agents/skills/
-      cp -r .agents/skills/knot-design ~/.agents/skills/
-      cp -r .agents/skills/knot-analyst ~/.agents/skills/
-      cp -r .agents/skills/knot-update ~/.agents/skills/
-      cp -r .agents/skills/knot-abstractions ~/.agents/skills/
+      for skill in knot-init knot-create knot-dispatch knot-inspect
+                    knot-manage knot-design knot-analyst knot-update
+                    knot-abstractions; do
+        mkdir -p ~/.agents/skills/$skill
+        cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
+      done
       ```
     - Also copy any non-SKILL.md files in skill directories
       (e.g. `.agents/skills/knot-init/knot-glossary.md`).
@@ -114,6 +115,26 @@ When asked to initialise a Knot rig:
           echo "glossary: OK" || echo "glossary: FAILED"
       fi
       ```
+
+4c. **Ensure the rig repository is healthy** (informational, idempotent):
+   - Knot initialises `rig/.git` on startup (idempotent). The rig has
+     its **own git repository** and is committed **manually by the user**
+     — Knot never commits the rig git.
+   - When the project root is inside a git repo, Knot appends a marked
+     `rig/` line to the project's `.gitignore` so the rig can never be
+     swept into project commits (gitlink or tracked leftovers).
+   - **Pre-existing projects** (where `rig/` files were already tracked
+     by the parent repo before the 0.31.0 migration): Knot logs a
+     warning. The user must run the one-time untrack step once:
+     ```bash
+     git rm -r --cached rig/
+     git commit -m "Untrack rig/ — now versioned in its own repository"
+     ```
+     After this, the `.gitignore` entry holds and Knot's project
+     commits never touch `rig/` again. The Knot binary must not run
+     `git rm` itself — untracking is a project-history decision.
+   - Verify with `git status` in the project root: `rig/` should be
+     untracked, and runtime data should appear under `tie-offs/<rig>/`.
 
 4b. **Ensure Knot section in AGENTS.md** (idempotent):
     - Read `AGENTS.md` from the project root if it exists.
@@ -146,11 +167,12 @@ When asked to initialise a Knot rig:
 
       Basic Knot terms used throughout the rig:
 
-      - **rig** — the top-level container holding looms, profiles, and rig state
+      - **rig** — the top-level container holding looms and profiles (reusable source; its own git repository)
+      - **runtime tree** — `tie-offs/<rig>/`: the rig's project-side runtime data (tie-offs, logs, event queue, state), committed with the project
       - **loom** — a domain work area (a directory ending in `-loom`) grouping related knots
       - **knot** — a configured task/agent workflow that processes input strands
       - **strand** — a file in a knot's strand-dir that triggers the knot to process it
-      - **tie-off** — a knot's final output document, stored under `rig/tie-offs/`
+      - **tie-off** — a knot's final output document, stored under `tie-offs/<rig>/`
       - **event** — a message a producer knot emits for consumer knots to process
 
       Knot terminology is encouraged inside rig files. Keep this
@@ -208,7 +230,7 @@ When asked to initialise a Knot rig:
      `agent-adapter` to `pi-json`, restart Knot.
 
 6. **Check for existing profiles**:
-   - Read `rig/state.json` and extract the `profiles` array.
+   - Read `tie-offs/<rig>/state.json` and extract the `profiles` array.
    - If profiles exist, report the available profile names and skip to
      step 8.
 
@@ -271,13 +293,13 @@ When asked to initialise a Knot rig:
      ```
 
 8. **Verify profile creation**:
-   - Read `rig/state.json` (wait up to 5 seconds for the state writer
-     to flush) and confirm at least one profile exists in the
-     `profiles` array.
+   - Read `tie-offs/<rig>/state.json` (wait up to 5 seconds for the
+     state writer to flush) and confirm at least one profile exists in
+     the `profiles` array.
    - If created in step 6, confirm `default` appears in the list.
 
 9. **Check for existing looms**:
-   - Read `rig/state.json` and check the `looms` array.
+   - Read `tie-offs/<rig>/state.json` and check the `looms` array.
    - If the array is empty `[]`, the rig has no looms yet. Report:
      "Rig is initialised but has no looms. Use the `knot-create` skill
      to create looms."
@@ -286,8 +308,8 @@ When asked to initialise a Knot rig:
 
 10. **Report success**: Summarise the rig state including:
    - Knot service status (running)
-   - Rig path (from `rig/state.json`)
-   - Profiles available (from `rig/state.json`)
+   - Rig path (from `tie-offs/<rig>/state.json`)
+   - Profiles available (from `tie-offs/<rig>/state.json`)
    - Number of registered looms
    - Next steps (create looms with `knot-create` skill)
 
@@ -295,7 +317,7 @@ When asked to initialise a Knot rig:
 
 ## State File Schema
 
-`rig/state.json` contains the current snapshot of rig state:
+`tie-offs/<rig>/state.json` contains the current snapshot of rig state:
 
 ```json
 {
@@ -322,12 +344,13 @@ Knot may not be writing state).
 
 | Scenario | Action |
 |----------|--------|
-| `rig/state.json` does not exist | Knot is not running or rig not initialised. Provide start instructions. |
-| `rig/state.json` is invalid JSON | State file may be corrupt or partially written. Wait a moment and re-read. |
-| `rig/state.json` `updated_at` is stale | Knot may have crashed. Provide restart instructions. |
-| `rig/state.json` `rig_path` is empty | Rig config may be missing. Report to user. |
-| `rig/state.json` `profiles` is empty | No profiles exist. Create default profile. |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running or rig not initialised. Provide start instructions. |
+| `tie-offs/<rig>/state.json` is invalid JSON | State file may be corrupt or partially written. Wait a moment and re-read. |
+| `tie-offs/<rig>/state.json` `updated_at` is stale | Knot may have crashed. Provide restart instructions. |
+| `tie-offs/<rig>/state.json` `rig_path` is empty | Rig config may be missing. Report to user. |
+| `tie-offs/<rig>/state.json` `profiles` is empty | No profiles exist. Create default profile. |
 | `~/.pi/agent/models.json` not found | Use placeholder provider/model. Document in profile body. |
+| `rig/` still shows as tracked in project git (pre-0.31.0 project) | One-time `git rm -r --cached rig/` + commit (see step 4c). |
 
 ---
 
@@ -338,17 +361,48 @@ Knot may not be writing state).
 cargo run
 
 # Check if Knot is running (state file exists and is fresh)
-cat rig/state.json | python3 -m json.tool
+cat tie-offs/rig/state.json | python3 -m json.tool
 
 # Check when state was last updated
-cat rig/state.json | python3 -c "import sys,json; print(json.load(sys.stdin)['updated_at'])"
+cat tie-offs/rig/state.json | python3 -c "import sys,json; print(json.load(sys.stdin)['updated_at'])"
 
 # View profiles
-cat rig/state.json | python3 -c "import sys,json; [print(p['name'], p['provider'], p['model']) for p in json.load(sys.stdin)['profiles']]"
+cat tie-offs/rig/state.json | python3 -c "import sys,json; [print(p['name'], p['provider'], p['model']) for p in json.load(sys.stdin)['profiles']]"
 
 # View looms
-cat rig/state.json | python3 -c "import sys,json; [print(l['id'], len(l['knots']), 'knots') for l in json.load(sys.stdin)['looms']]"
+cat tie-offs/rig/state.json | python3 -c "import sys,json; [print(l['id'], len(l['knots']), 'knots') for l in json.load(sys.stdin)['looms']]"
+
+# Rig repository (its own git repo — committed manually by the user)
+git -C rig status
+
+# Confirm the project git ignores the rig
+git check-ignore -v rig/
 ```
+
+---
+
+## Rig Repository
+
+Since Knot 0.31.0, the rig is versioned in **its own git repository**
+(`rig/.git`), separate from the project:
+
+- **Knot initialises `rig/.git` automatically** on startup (idempotent).
+  It writes no `.gitignore` inside the rig — the rig tracks exactly its
+  source (looms, knots, profiles, config); it holds no runtime data.
+- **The user commits the rig git manually** (`git -C rig add -A && git
+  -C rig commit -m ...`). Knot never commits the rig.
+- **Parent exclusion:** when the project root is inside a git repo,
+  Knot appends a marked `rig/` line to the project's `.gitignore` so
+  `git add -A` at the project level can never stage the rig (as a
+  gitlink or as tracked leftovers).
+- **Pre-existing projects:** if `rig/` files were already tracked by the
+  project git before the 0.31.0 layout migration, the `.gitignore` entry
+  alone is not enough — the user must run the one-time
+  `git rm -r --cached rig/` untrack step (step 4c). Knot detects this
+  and logs a warning instead of doing it.
+- **Runtime data lives in the project tree** at `tie-offs/<rig>/`
+  (tie-offs, loom-logs, event queue, rig-log, state) and is committed
+  with the project's git history by Knot's per-knot-run commits.
 
 ---
 
@@ -383,7 +437,8 @@ level):
 for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
-  cp -r .agents/skills/$skill ~/.agents/skills/$skill
+  mkdir -p ~/.agents/skills/$skill
+  cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
 done
 # Copy any extra files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then

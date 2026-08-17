@@ -92,7 +92,7 @@ strand files to fire the knot on demand.
 Check the tie-off to see what the agent did:
 
 ```bash
-cat rig/tie-offs/planning-loom/tie-off-prd-planner.md
+cat tie-offs/rig/planning-loom/tie-off-prd-planner.md
 ```
 
 Check the git history — Knot created a commit automatically:

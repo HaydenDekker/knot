@@ -4,8 +4,8 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.26.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Abstractions Skill
@@ -17,12 +17,17 @@ Read this before working deeply with any other knot skills.
 ## System Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Knot RIG (borrow-my-stuff-rig/) — Orchestration Engine │
-│  • Declarative file-based graph                        │
-│  • Single-threaded durable event queue                 │
-│  • Nodes: Looms + Knots (edges)                         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Knot RIG (borrow-my-stuff-rig/) — Orchestration Engine      │
+│  • Declarative file-based graph                            │
+│  • Single-threaded durable event queue                     │
+│  • Nodes: Looms + Knots (edges)                            │
+│  • Source-only: looms, knots, profiles, config. Its own    │
+│    git repo, committed manually by the user. Runtime data  │
+│    lives in the project-side runtime tree tie-offs/<rig>/  │
+│    (tie-offs, logs, event queue, state) — committed with   │
+│    the project git                                         │
+└──────────────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -61,9 +66,14 @@ Located at `borrow-my-stuff-rig/`, the rig is the "dumb" plumbing that:
 - Provides a **single-threaded durable event queue** that processes
   one event at a time, ensuring consistency
 - Routes **events** between knots without the agents knowing it exists
-- Maintains **state.json**, tie-offs, and logs
+- Maintains the runtime tree `tie-offs/<rig>/`: **state.json**,
+  tie-offs, loom-logs, rig-log, and the event queue
 
-The rig is generic — it contains no project-specific logic.
+The rig directory is generic and **source-only** — it contains no
+project-specific logic and no runtime data. It is versioned in its own
+git repository (initialised by Knot, committed manually by the user);
+the runtime tree is project output committed with the project's git
+history.
 
 ### 2. Profiles (Agent Identities)
 

@@ -6,7 +6,7 @@ Common issues and how to resolve them.
 
 ### Symptom
 
-`rig/state.json` does not exist or is not being updated.
+`tie-offs/<rig>/state.json` does not exist or is not being updated.
 
 ### Fix
 
@@ -21,14 +21,14 @@ knot
 Verify by watching the state file:
 
 ```bash
-watch -n 2 'cat rig/state.json | python3 -m json.tool'
+watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'
 ```
 
 ## Loom Not Discovered
 
 ### Symptom
 
-`rig/state.json` does not contain your loom.
+`tie-offs/<rig>/state.json` does not contain your loom.
 
 ### Common Causes
 
@@ -82,7 +82,7 @@ value in the knot file.
 
 ### Symptom
 
-`rig/state.json` shows the knot with status `failed` and a
+`tie-offs/<rig>/state.json` shows the knot with status `failed` and a
 `last_error` message.
 
 ### Diagnostics
@@ -90,19 +90,19 @@ value in the knot file.
 1. Check the loom-log for details:
 
    ```bash
-   cat rig/tie-offs/{loom-id}/.loom-log
+   cat tie-offs/<rig>/{loom-id}/.loom-log
    ```
 
 2. Check the tie-off file — it may contain partial output:
 
    ```bash
-   cat rig/tie-offs/{loom-id}/tie-off-{knot-name}.md
+   cat tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
    ```
 
 3. Check the rig-log for timeout events:
 
    ```bash
-   cat rig/.rig-log | grep TimeoutExceeded
+   cat tie-offs/rig/.rig-log | grep TimeoutExceeded
    ```
 
 ### Common Fixes
@@ -211,7 +211,7 @@ that no other process is competing for the file.
 
 ### Symptom
 
-`rig/.rig-log` or `rig/tie-offs/{loom-id}/.loom-log` does not exist.
+`tie-offs/<rig>/.rig-log` or `tie-offs/<rig>/{loom-id}/.loom-log` does not exist.
 
 ### Explanation
 
@@ -225,7 +225,7 @@ event. The loom-log is created when the loom starts processing.
 
 ### Symptom
 
-`rig/state.json` shows outdated processing status.
+`tie-offs/<rig>/state.json` shows outdated processing status.
 
 ### Explanation
 

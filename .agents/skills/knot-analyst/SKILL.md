@@ -4,8 +4,8 @@ description: "Analyse rig productivity and project progress at runtime. Tail the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.26.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.31.0+"
 ---
 
 # Knot Analyst Skill
@@ -16,10 +16,11 @@ processing state) with project-document signals (plans, specs, decision
 records) to produce a structured assessment of how the rig is performing
 and whether the project is making progress.
 
-**Rig-log:** `rig/.rig-log` (append-only JSONL — operational events)
-**Loom-logs:** `rig/tie-offs/{loom-id}/.loom-log` (append-only JSONL —
+**Rig-log:** `tie-offs/<rig>/.rig-log` (append-only JSONL — operational
+events)
+**Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL —
 per-loom activity)
-**State file:** `rig/state.json` (current rig snapshot)
+**State file:** `tie-offs/<rig>/state.json` (current rig snapshot)
 
 ---
 
@@ -34,8 +35,9 @@ signals to answer this.
 
 ### File-First
 
-All analysis reads from files — no HTTP calls needed. Read `rig/.rig-log`,
-loom-logs, `rig/state.json`, git log, and project documents.
+All analysis reads from files — no HTTP calls needed. Read
+`tie-offs/<rig>/.rig-log`, loom-logs, `tie-offs/<rig>/state.json`,
+git log, and project documents.
 
 ### Signal-Based, Not Prescriptive
 
@@ -55,7 +57,7 @@ acceptance specifications, completion criteria.
 
 ## Prerequisites
 
-1. Knot must be running and `rig/state.json` must exist.
+1. Knot must be running and `tie-offs/<rig>/state.json` must exist.
    If the file does not exist, report: "Knot is not running or rig is
    not initialised. Use `knot-init` skill."
 
@@ -75,7 +77,7 @@ structured report.
 
 Determine whether the rig has been doing meaningful work.
 
-**Read `rig/.rig-log`:**
+**Read `tie-offs/<rig>/.rig-log`:**
 
 The rig-log is an append-only JSONL file recording serious operational
 events. Tail the last 50 lines (or the full file if smaller).
@@ -88,7 +90,7 @@ Look for:
 | `QueueIdle` events | Timestamps between idle periods | Long idle gaps mean the rig is waiting for input. Frequent idle means work is completing quickly. A single idle at the end with no follow-up means work has stopped |
 | Age of last entry | Compare to current time | If the last entry is hours or days old, the rig may have stalled or completed all work |
 
-**Read each loom-log** at `rig/tie-offs/{loom-id}/.loom-log`:
+**Read each loom-log** at `tie-offs/<rig>/{loom-id}/.loom-log`:
 
 Tail the last 30 lines per loom. Look for:
 
@@ -101,7 +103,7 @@ Tail the last 30 lines per loom. Look for:
 | Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
 | `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
 | `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
-| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `rig/events/*.json` and auto-removed on pop — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
+| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `tie-offs/<rig>/events/*.json` and auto-removed on pop — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
 
 **Produce a summary:**
 
@@ -218,7 +220,7 @@ check for blockers.
 Identify whether the rig appears stuck, oscillating, or producing no
 forward progress.
 
-**Check knot status from `rig/state.json`:**
+**Check knot status from `tie-offs/<rig>/state.json`:**
 
 | Pattern | Concern Level | Meaning |
 |---------|--------------|---------|
@@ -229,7 +231,7 @@ forward progress.
 
 **Check for repeated processing without changes:**
 
-Read the tie-off files (`rig/tie-offs/{loom-id}/tie-off-{knot-name}.md`)
+Read the tie-off files (`tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`)
 for the last 5 entries. If multiple consecutive entries say "no changes
 needed" or similar language for the **same strand**, the strand may be
 stale — it is triggering the knot but the knot has already done its
@@ -360,9 +362,9 @@ For lightweight, targeted queries:
 
 ### "Is the rig working?"
 
-1. Read `rig/.rig-log` — last 10 lines. Any entries in the last hour?
+1. Read `tie-offs/<rig>/.rig-log` — last 10 lines. Any entries in the last hour?
 2. Run `git log --oneline -5` — any commits in the last 24h?
-3. Read `rig/state.json` — are any knots in `processing` or `completed`?
+3. Read `tie-offs/<rig>/state.json` — are any knots in `processing` or `completed`?
 
 ### "Where is the project?"
 
@@ -373,9 +375,9 @@ For lightweight, targeted queries:
 
 ### "Is anything broken?"
 
-1. Tail `rig/.rig-log` for `TimeoutExceeded` events in last 24h.
+1. Tail `tie-offs/<rig>/.rig-log` for `TimeoutExceeded` events in last 24h.
 2. Tail each loom-log for `KnotFailed` events in last 24h.
-3. Check `rig/state.json` for knots with `last_error` set.
+3. Check `tie-offs/<rig>/state.json` for knots with `last_error` set.
 4. Report any non-zero findings.
 
 ---
@@ -384,8 +386,8 @@ For lightweight, targeted queries:
 
 | Scenario | Action |
 |----------|--------|
-| `rig/.rig-log` does not exist | Rig-log may not have been written yet (no serious events). Report "No rig-log found — no timeout or idle events recorded." |
-| `rig/state.json` does not exist | Knot is not running. Report and suggest `knot-init`. |
+| `tie-offs/<rig>/.rig-log` does not exist | Rig-log may not have been written yet (no serious events). Report "No rig-log found — no timeout or idle events recorded." |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running. Report and suggest `knot-init`. |
 | Git is not initialised | Project may not be in a git repo. Skip git analysis, note in report. |
 | No `project/` directory | Cannot assess project document progress. Report "No project documents found." |
 | Loom-log missing for a loom | Loom has no recorded activity. Report "No activity for `{loom-id}`." |
@@ -397,13 +399,13 @@ For lightweight, targeted queries:
 
 ```bash
 # Tail rig-log for recent issues
-tail -50 rig/.rig-log
+tail -50 tie-offs/rig/.rig-log
 
 # Count timeouts in last 24h
-grep "TimeoutExceeded" rig/.rig-log | tail -20
+grep "TimeoutExceeded" tie-offs/rig/.rig-log | tail -20
 
 # Check loom activity
-for log in rig/tie-offs/*/.loom-log; do echo "=== $log ==="; tail -5 "$log"; done
+for log in tie-offs/rig/*/.loom-log; do echo "=== $log ==="; tail -5 "$log"; done
 
 # Recent git activity
 git log --oneline --since="7 days ago" | head -20
@@ -412,7 +414,7 @@ git log --oneline --since="7 days ago" | head -20
 git diff --stat HEAD~5
 
 # Knot statuses
-python3 -m json.tool rig/state.json | grep -A2 '"status"'
+python3 -m json.tool tie-offs/rig/state.json | grep -A2 '"status"'
 ```
 
 ---
