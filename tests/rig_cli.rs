@@ -472,3 +472,81 @@ fn cli_share_without_rig_name_exits_with_error() {
         stderr
     );
 }
+
+// ── Legacy layout → auto-migration at startup ──────────────────────────────
+
+/// A rig on the legacy layout (runtime artifacts inside the rig dir) is
+/// auto-migrated to the project-level runtime root at startup —
+/// including before the state writer and event queue create the runtime
+/// root themselves (regression: those tasks used to spawn first and
+/// turn `rig/tie-offs/` and `rig/events/` into false conflicts).
+#[test]
+fn cli_startup_migrates_legacy_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+
+    // Legacy layout: runtime artifacts inside the rig directory
+    let rig = cwd.join("rig");
+    write_fast_profile(&rig);
+    let loom = create_loom(&rig, "review");
+    write_knot(&loom, "k");
+    let legacy_tieoffs = rig.join("tie-offs").join("review-loom");
+    fs::create_dir_all(&legacy_tieoffs).unwrap();
+    fs::write(legacy_tieoffs.join("tie-off-k.md"), "tie-off").unwrap();
+    fs::write(legacy_tieoffs.join(".loom-log"), "legacy-line\n").unwrap();
+    fs::write(rig.join("state.json"), "{}\n").unwrap();
+    fs::write(rig.join(".rig-log"), "legacy\n").unwrap();
+    fs::create_dir_all(rig.join("events")).unwrap();
+
+    let knot = KnotProcess::spawn(cwd, &[]);
+
+    // Give startup (migration, discovery, first state write) time
+    thread::sleep(Duration::from_secs(2));
+
+    let output = knot.kill_and_wait();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Tie-off subtree moved to the runtime root
+    let runtime_root = cwd.join("tie-offs").join("rig");
+    assert!(
+        runtime_root.join("review-loom").join("tie-off-k.md").exists(),
+        "legacy tie-offs should be migrated.\nstderr: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(runtime_root.join("review-loom").join(".loom-log"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("legacy-line"))
+            .count(),
+        1,
+        "moved loom-log should keep its legacy content"
+    );
+    // The events dir moved — not lost to a conflict with the queue's
+    // own directory creation
+    assert!(
+        runtime_root.join("events").is_dir(),
+        "legacy events dir should be migrated.\nstderr: {stderr}"
+    );
+    assert!(
+        !rig.join("events").exists(),
+        "rig/events must not remain after migration.\nstderr: {stderr}"
+    );
+    // state.json and .rig-log at the runtime root
+    assert!(
+        runtime_root.join("state.json").exists(),
+        "state.json should be at the runtime root.\nstderr: {stderr}"
+    );
+    assert!(
+        runtime_root.join(".rig-log").exists(),
+        ".rig-log should be at the runtime root.\nstderr: {stderr}"
+    );
+    // Rig left source-only
+    assert!(!rig.join("tie-offs").exists(), "rig left source-only");
+    assert!(!rig.join("state.json").exists());
+    assert!(!rig.join(".rig-log").exists());
+    // Migration notice logged
+    assert!(
+        stderr.contains("migrated legacy layout"),
+        "stderr should carry the migration notice.\nstderr: {stderr}"
+    );
+}

@@ -550,12 +550,129 @@ pub fn spawn_process_strand_loop(
     });
 }
 
+/// Move one legacy runtime path to the runtime root.
+///
+/// No-op when `src` does not exist. When `dst` already exists, the
+/// destination is kept and the source is left in place for manual
+/// resolution (no data loss) — a warning is logged in either
+/// failure case, never an error: startup continues with whatever
+/// layout is on disk.
+fn move_legacy_path(src: &StdPath, dst: &StdPath, label: &str, moved: &mut Vec<String>) {
+    if !src.exists() {
+        return;
+    }
+    if dst.exists() {
+        eprintln!(
+            "WARNING: [startup] migration conflict: {label} — {} already exists; legacy {} kept for manual resolution",
+            dst.display(),
+            src.display(),
+        );
+        return;
+    }
+    match std::fs::rename(src, dst) {
+        Ok(()) => moved.push(label.to_string()),
+        Err(e) => eprintln!(
+            "WARNING: [startup] migration: failed to move {label} ({} → {}): {e}",
+            src.display(),
+            dst.display(),
+        ),
+    }
+}
+
+/// Migrate a rig from the legacy layout — runtime artifacts inside the
+/// rig directory — to the project-level runtime root.
+///
+/// Moves (subtree preserved):
+/// - `rig/tie-offs/` → the runtime root itself (its `{loom-id}/` tree
+///   becomes the runtime root's `{loom-id}/` tree)
+/// - `rig/state.json` → `<runtime-root>/state.json`
+/// - `rig/.rig-log` → `<runtime-root>/.rig-log`
+/// - `rig/events/` → `<runtime-root>/events/`
+///
+/// Idempotent: a rig already on the new layout is a no-op (and no
+/// empty runtime root is created). Destination-exists conflicts keep
+/// the destination and warn; the source stays for manual resolution.
+/// All failures are non-fatal warnings — the rig directory is left
+/// source-only whenever a move succeeds.
+///
+/// Must run before discovery and watcher registration so that moved
+/// dispatch directories, loom-logs, and the event queue are used at
+/// their new paths immediately (loom-log appends and watch
+/// registrations derive their paths at call time).
+fn migrate_legacy_rig_layout(rig_dir: &StdPath) {
+    let runtime_root = derive_runtime_root(rig_dir);
+    let mut moved: Vec<String> = Vec::new();
+
+    // 1. The legacy tie-off tree becomes the runtime root itself. The
+    //    parent (`tie-offs/`) must exist for the rename target.
+    let legacy_tieoffs = rig_dir.join("tie-offs");
+    if legacy_tieoffs.exists() {
+        if let Some(parent) = runtime_root.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "WARNING: [startup] migration: failed to create {}: {e}",
+                parent.display(),
+            );
+            return;
+        }
+        move_legacy_path(
+            &legacy_tieoffs,
+            &runtime_root,
+            "tie-offs/",
+            &mut moved,
+        );
+    }
+
+    // 2. Remaining runtime artifacts — create the runtime root when
+    //    needed (it may not exist if there was no legacy tie-offs
+    //    tree). A fresh rig gets no empty runtime root.
+    let remaining = [
+        ("state.json", "state.json"),
+        (".rig-log", ".rig-log"),
+        ("events", "events/"),
+    ];
+    if remaining
+        .iter()
+        .any(|(name, _)| rig_dir.join(name).exists())
+    {
+        if let Err(e) = std::fs::create_dir_all(&runtime_root) {
+            eprintln!(
+                "WARNING: [startup] migration: failed to create runtime root {}: {e}",
+                runtime_root.display(),
+            );
+            return;
+        }
+        for (name, label) in remaining {
+            move_legacy_path(
+                &rig_dir.join(name),
+                &runtime_root.join(name),
+                label,
+                &mut moved,
+            );
+        }
+    }
+
+    if !moved.is_empty() {
+        eprintln!(
+            "[startup] migrated legacy layout: {} → {}",
+            moved.join(", "),
+            runtime_root.display(),
+        );
+    }
+}
+
 /// Run the startup discovery and registration sequence.
 ///
 /// After building the AppContext, this:
-/// 1. Runs DiscoverLooms to scan rig and register looms
-/// 2. DiscoverLooms handles log events, storage, and watchers internally
-/// 3. Returns list of discovered looms
+/// 1. Migrates the legacy layout (runtime artifacts out of the rig)
+/// 2. Ensures the rig has its own git repository
+/// 3. Runs DiscoverLooms to scan rig and register looms
+/// 4. DiscoverLooms handles log events, storage, and watchers internally
+/// 5. Returns list of discovered looms
+///
+/// Migration precedes discovery/watcher registration so moved dispatch
+/// directories and loom-logs are used at their new paths immediately.
 ///
 /// Returns the list of discovered looms.
 pub fn run_startup(
@@ -585,6 +702,11 @@ agent-adapter: pi-stdio
             e
         })?;
     }
+
+    // Migrate the legacy layout (runtime artifacts inside the rig dir)
+    // to the project-level runtime root. Idempotent and non-fatal —
+    // runs after rig-dir creation and before any watcher registration.
+    migrate_legacy_rig_layout(rig_dir);
 
     // Ensure the rig has its own git repository and the parent project
     // repo (if any) excludes it. Idempotent and non-fatal — runs after
@@ -709,9 +831,17 @@ pub fn start_state_writer(
 
 /// Start the Knot service.
 ///
-/// Builds the `AppContext`, starts background pipelines (event, config,
-/// state writer), runs startup discovery, then blocks until Ctrl+C is
-/// received.
+/// Builds the `AppContext`, runs startup (legacy-layout migration, rig
+/// git init, loom discovery, watcher registration), then starts the
+/// background pipelines (event, config, state writer) and blocks until
+/// Ctrl+C is received.
+///
+/// Startup completes before any pipeline task is spawned: the
+/// migration must precede the first state write (state writer) and the
+/// event queue's load of `tie-offs/<rig>/events/` (event pipeline), or
+/// those tasks create the runtime root first and the migration skips
+/// the conflicting moves. Looms must also be discovered before
+/// persisted events referencing them are loaded.
 ///
 /// Graceful shutdown sequence:
 /// 1. Awaits Ctrl+C
@@ -724,30 +854,34 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // JoinSet ties the pipeline task lifetimes to the server task.
     let mut join_set = tokio::task::JoinSet::new();
 
-    // Start the config event pipeline: ConfigEventHandler (child of this task)
-    start_config_pipeline(&ctx, config_rx, &mut join_set);
-
-    // Start the strand event pipeline: creates the queue, loads persisted
-    // events, and spawns the debounce engine.
-    // The process-strand loop is NOT spawned yet — it is deferred until
-    // after run_startup() so that looms are discovered before persisted
-    // events referencing them are processed.
-    let debounce_queue = start_event_pipeline(&ctx, strand_rx, &mut join_set);
-
-    // Start the state writer: writes state.json (runtime root) every 5 seconds
-    start_state_writer(&ctx, &mut join_set);
-
-    // Startup: discover looms, create state files, start watchers.
-    // Must complete before the process-strand loop is spawned, so that
-    // persisted events referencing these looms can be resolved.
+    // Startup first: migrate the legacy layout, ensure the rig git
+    // repo, discover looms, register watchers. This must complete
+    // before any pipeline task is spawned — on a multi-threaded
+    // runtime a spawned task runs immediately: the state writer's
+    // first write and the event queue's events-dir creation would
+    // create the runtime root before the migration runs, turning
+    // legacy `rig/tie-offs/` and `rig/events/` into false conflicts
+    // that are never moved.
     let looms = run_startup(&ctx, &config.rig_dir).unwrap_or_else(|e| {
         eprintln!("WARNING: startup discovery failed: {e}");
         Vec::new()
     });
 
-    // Now that looms are discovered, spawn the process-strand loop.
-    // Persisted events loaded during start_event_pipeline can now be
-    // processed safely since their target looms are registered.
+    // Start the config event pipeline: ConfigEventHandler (child of this task)
+    start_config_pipeline(&ctx, config_rx, &mut join_set);
+
+    // Start the strand event pipeline: creates the queue, loads persisted
+    // events, and spawns the debounce engine. Looms are already
+    // discovered (run_startup), so persisted events referencing them
+    // resolve.
+    let debounce_queue = start_event_pipeline(&ctx, strand_rx, &mut join_set);
+
+    // Start the state writer: writes state.json (runtime root) every 5 seconds
+    start_state_writer(&ctx, &mut join_set);
+
+    // Spawn the process-strand loop. Persisted events loaded during
+    // start_event_pipeline can be processed safely since their target
+    // looms are registered.
     spawn_process_strand_loop(&ctx, debounce_queue, &mut join_set);
 
     // Store loom IDs in context for graceful shutdown logging.
@@ -965,5 +1099,309 @@ mod composition_tests {
         // Idempotent — a second startup does not fail or re-write.
         let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
         assert!(rig_dir.join(".git").exists());
+    }
+
+    // ── Legacy layout migration ─────────────────────────────────────────
+
+    /// Helper: create a rig in the legacy layout — reusable source plus
+    /// runtime artifacts inside the rig directory.
+    fn setup_legacy_rig(base: &std::path::Path, rig_name: &str) -> PathBuf {
+        let rig_dir = base.join(rig_name);
+        // Rig source (stays in place)
+        let loom_src = rig_dir.join("review-loom");
+        fs::create_dir_all(&loom_src).unwrap();
+        fs::write(loom_src.join("k.md"), "knot source").unwrap();
+        let profiles = rig_dir.join("profiles");
+        fs::create_dir_all(&profiles).unwrap();
+        fs::write(profiles.join("fast.md"), "profile").unwrap();
+
+        // Legacy runtime artifacts (must move to the runtime root)
+        let tieoffs = rig_dir.join("tie-offs");
+        fs::create_dir_all(tieoffs.join("review-loom")).unwrap();
+        fs::create_dir_all(tieoffs.join("other-loom").join("Ev1")).unwrap();
+        fs::write(
+            tieoffs.join("review-loom").join("tie-off-k.md"),
+            "tie-off",
+        )
+        .unwrap();
+        fs::write(
+            tieoffs.join("review-loom").join(".loom-log"),
+            "log-line\n",
+        )
+        .unwrap();
+        fs::write(
+            tieoffs.join("other-loom").join("Ev1").join("event-1.md"),
+            "event",
+        )
+        .unwrap();
+        fs::write(rig_dir.join("state.json"), "{}\n").unwrap();
+        fs::write(rig_dir.join(".rig-log"), "rig-log\n").unwrap();
+        fs::create_dir_all(rig_dir.join("events")).unwrap();
+        fs::write(rig_dir.join("events").join("e1.json"), "{}\n").unwrap();
+        rig_dir
+    }
+
+    /// The full legacy layout moves to the runtime root: the tie-offs
+    /// subtree (loom-logs, dispatch dirs included) becomes the runtime
+    /// root's `{loom-id}/` tree, and state.json / .rig-log / events/
+    /// move beside it. The rig is left source-only.
+    #[test]
+    fn test_migrate_moves_full_legacy_layout() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = setup_legacy_rig(dir.path(), "rig");
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+
+        migrate_legacy_rig_layout(&rig_dir);
+
+        // Tie-off subtree preserved at the runtime root
+        assert_eq!(
+            fs::read_to_string(
+                runtime_root.join("review-loom").join("tie-off-k.md")
+            )
+            .unwrap(),
+            "tie-off"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                runtime_root.join("review-loom").join(".loom-log")
+            )
+            .unwrap(),
+            "log-line\n"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                runtime_root
+                    .join("other-loom")
+                    .join("Ev1")
+                    .join("event-1.md")
+            )
+            .unwrap(),
+            "event"
+        );
+        // Runtime files at the runtime root
+        assert_eq!(
+            fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+            "{}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(runtime_root.join(".rig-log")).unwrap(),
+            "rig-log\n"
+        );
+        assert_eq!(
+            fs::read_to_string(runtime_root.join("events").join("e1.json"))
+                .unwrap(),
+            "{}\n"
+        );
+        // Legacy sources gone
+        assert!(!rig_dir.join("tie-offs").exists());
+        assert!(!rig_dir.join("state.json").exists());
+        assert!(!rig_dir.join(".rig-log").exists());
+        assert!(!rig_dir.join("events").exists());
+        // Rig source intact
+        assert_eq!(
+            fs::read_to_string(rig_dir.join("review-loom").join("k.md"))
+                .unwrap(),
+            "knot source"
+        );
+        assert_eq!(
+            fs::read_to_string(rig_dir.join("profiles").join("fast.md"))
+                .unwrap(),
+            "profile"
+        );
+    }
+
+    /// A second migration is a no-op — content is unchanged and nothing
+    /// is re-moved or clobbered.
+    #[test]
+    fn test_migrate_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = setup_legacy_rig(dir.path(), "rig");
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+
+        migrate_legacy_rig_layout(&rig_dir);
+        migrate_legacy_rig_layout(&rig_dir);
+
+        assert_eq!(
+            fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+            "{}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                runtime_root.join("review-loom").join("tie-off-k.md")
+            )
+            .unwrap(),
+            "tie-off"
+        );
+        assert!(!rig_dir.join("tie-offs").exists());
+        assert!(!rig_dir.join("state.json").exists());
+    }
+
+    /// Destination-exists conflict: the destination is kept and the
+    /// legacy source stays in place for manual resolution (no data
+    /// loss). Non-conflicting items still move.
+    #[test]
+    fn test_migrate_keeps_destination_on_conflict() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = setup_legacy_rig(dir.path(), "rig");
+        // The runtime root already exists with its own state.json (the
+        // rig already ran on the new layout).
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::write(runtime_root.join("state.json"), "new\n").unwrap();
+
+        migrate_legacy_rig_layout(&rig_dir);
+
+        // Destination kept
+        assert_eq!(
+            fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+            "new\n"
+        );
+        // Legacy source kept for manual resolution — no data loss
+        assert!(
+            rig_dir.join("state.json").exists(),
+            "conflicting legacy source must not be deleted"
+        );
+        assert!(
+            rig_dir.join("tie-offs").exists(),
+            "conflicting legacy tie-offs dir must not be deleted"
+        );
+        // Non-conflicting items still move
+        assert_eq!(
+            fs::read_to_string(runtime_root.join(".rig-log")).unwrap(),
+            "rig-log\n"
+        );
+        assert!(!rig_dir.join(".rig-log").exists());
+        assert!(
+            runtime_root.join("events").join("e1.json").exists()
+        );
+        assert!(!rig_dir.join("events").exists());
+    }
+
+    /// A rig already on the new layout is a no-op — no empty runtime
+    /// root is created.
+    #[test]
+    fn test_migrate_noop_when_new_layout() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(rig_dir.join("review-loom")).unwrap();
+        fs::write(rig_dir.join("review-loom").join("k.md"), "knot")
+            .unwrap();
+
+        migrate_legacy_rig_layout(&rig_dir);
+
+        assert!(
+            !dir.path().join("tie-offs").exists(),
+            "no runtime root should be created for a fresh rig"
+        );
+        assert_eq!(
+            fs::read_to_string(rig_dir.join("review-loom").join("k.md"))
+                .unwrap(),
+            "knot"
+        );
+    }
+
+    /// A named rig migrates to its own namespaced runtime root
+    /// (`tie-offs/dev-rig/`).
+    #[test]
+    fn test_migrate_named_rig() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = setup_legacy_rig(dir.path(), "dev-rig");
+        let runtime_root = dir.path().join("tie-offs").join("dev-rig");
+
+        migrate_legacy_rig_layout(&rig_dir);
+
+        assert_eq!(
+            fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+            "{}\n"
+        );
+        assert!(
+            runtime_root
+                .join("review-loom")
+                .join("tie-off-k.md")
+                .exists()
+        );
+        assert!(!rig_dir.join("tie-offs").exists());
+    }
+
+    /// A partial legacy layout (only some runtime artifacts present)
+    /// moves exactly what exists.
+    #[test]
+    fn test_migrate_partial_legacy() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(rig_dir.join("events")).unwrap();
+        fs::write(rig_dir.join("events").join("e1.json"), "{}\n").unwrap();
+
+        migrate_legacy_rig_layout(&rig_dir);
+
+        assert_eq!(
+            fs::read_to_string(
+                dir.path()
+                    .join("tie-offs")
+                    .join("rig")
+                    .join("events")
+                    .join("e1.json")
+            )
+            .unwrap(),
+            "{}\n"
+        );
+        assert!(!rig_dir.join("events").exists());
+    }
+
+    /// `run_startup()` migrates the legacy layout BEFORE discovery and
+    /// watcher registration: the legacy loom-log moves to the runtime
+    /// root and discovery appends `LoomStarted` to it at the NEW path
+    /// (loom-log paths are derived at append time, so an append at the
+    /// new path proves migration ran first). The rig is left
+    /// source-only.
+    #[test]
+    fn test_startup_migrates_legacy_layout() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        // Valid loom so discovery registers it (knot frontmatter is
+        // parsed by the repository scan).
+        let loom_src = rig_dir.join("review-loom");
+        fs::create_dir_all(&loom_src).unwrap();
+        fs::write(
+            loom_src.join("k.md"),
+            "---\nname: k\nagent-profile-ref: fast\nstrand-dir: \"../external-source\"\n---\n\nDo the thing.\n",
+        )
+        .unwrap();
+        // Legacy runtime artifacts
+        let tieoffs = rig_dir.join("tie-offs");
+        fs::create_dir_all(tieoffs.join("review-loom")).unwrap();
+        fs::write(
+            tieoffs.join("review-loom").join(".loom-log"),
+            "legacy-line\n",
+        )
+        .unwrap();
+        fs::write(rig_dir.join("state.json"), "{}\n").unwrap();
+
+        let config = AppConfig::with_rig_dir(rig_dir.clone());
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+
+        // Loom discovered
+        assert_eq!(looms.len(), 1, "the loom should be discovered");
+
+        // Legacy artifacts moved to the runtime root
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+        assert!(runtime_root.join("state.json").exists());
+        assert!(!rig_dir.join("state.json").exists());
+        assert!(!rig_dir.join("tie-offs").exists(), "rig left source-only");
+
+        // Discovery appended to the moved loom-log at the new path —
+        // migration preceded log appends and watcher registration.
+        let loom_log = runtime_root.join("review-loom").join(".loom-log");
+        let content =
+            fs::read_to_string(&loom_log).expect("loom-log at runtime root");
+        assert!(
+            content.contains("legacy-line"),
+            "moved loom-log content preserved: {content}"
+        );
+        assert!(
+            content.contains("LoomStarted"),
+            "discovery appended to the new-path loom-log: {content}"
+        );
     }
 }
