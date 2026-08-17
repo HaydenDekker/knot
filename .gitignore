@@ -2,3 +2,5 @@
 Cargo.lock
 .loom-log
 .knots/
+# knot: rig has its own git repository (excluded from project repo)
+rig/
