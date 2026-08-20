@@ -225,3 +225,26 @@ error variant for unknown aliases is added (keep errors domain-owned).
   Correct the comment while touching this file.
 - Plan 068 (rig-repo-separation) moved the runtime tree to
   `tie-offs/<rig>/` — all paths in this plan use the post-0.31 layout.
+
+## Implementation Status: ✅ Complete (2026-08-20)
+
+## Completion Notes
+- All 6 phases implemented and committed on branch `069-model-aliases`.
+- `ModelRegistry` domain + `model-ref` profile field + parse precedence
+  (alias wins over direct values with a warning).
+- `ModelRegistryPort` + `FileSystemModelRegistry` (fresh read per load —
+  live swap, no caching); `ProcessStrand` resolves the registry per run.
+- State visibility: `RigStateProfile` carries `model-ref` plus resolved
+  `provider`/`model` (null when unresolvable).
+- `run_startup` auto-creates `rig/models.yml` (commented template),
+  never overwrites.
+- 5 application tests (mock registry, incl. live swap) + 5 acceptance
+  tests (`tests/model_aliases.rs`: real registry + profiles + tie-off +
+  loom-log + state, run_startup idempotency).
+- Skills updated and published: knot-update 1.8.0 (0.32.0 changelog
+  entry), knot-create 5.6.0, knot-inspect 3.4.0, knot-init 4.1.0
+  (default alias seeding via `model-ref: default`).
+- Full `cargo test --no-fail-fast` green except one pre-existing lib
+  test failure (`domain::events::tests::build_listener_context_prompt_
+  includes_do_not_edit_guidance`) that fails on a clean tree too —
+  out of scope for this plan.
