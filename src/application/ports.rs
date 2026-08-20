@@ -11,7 +11,7 @@ use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, RigState, StrandPath, TieOff, TieOffPath,
 };
 use crate::domain::events::{LoomEvent, RigLogEvent};
-use crate::domain::value_objects::{AgentConfig, AgentProfile};
+use crate::domain::value_objects::{AgentConfig, AgentProfile, ModelRegistry};
 
 // ── Error Types ────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ pub enum PortError {
     TieOffWriteFailed(String),
     /// An agent profile was not found.
     ProfileNotFound(String),
+    /// A profile's `model-ref` alias was not found in the model registry.
+    ModelRefNotFound(String),
     /// Failed to scan the profiles directory.
     ProfileScanFailed(String),
     /// Failed to write to the rig-log.
@@ -119,6 +121,9 @@ impl std::fmt::Display for PortError {
             }
             PortError::ProfileNotFound(name) => {
                 write!(f, "agent profile '{name}' not found")
+            }
+            PortError::ModelRefNotFound(alias) => {
+                write!(f, "model-ref '{alias}' not found in rig/models.yml")
             }
             PortError::ProfileScanFailed(msg) => {
                 write!(f, "profile scan failed: {msg}")
@@ -518,6 +523,22 @@ pub trait AgentProfileRepository: Send + Sync {
 
 }
 
+/// Port for loading the rig-level model registry (`rig/models.yml`).
+///
+/// The registry maps model aliases to concrete `{provider, model}`
+/// pairs. Implementations must read the registry **fresh on every
+/// `load()` call** — no caching — so that editing `rig/models.yml`
+/// swaps the model behind an alias on the next strand processed, without
+/// a restart (the profile lifetime, not the startup lifetime).
+pub trait ModelRegistryPort: Send + Sync {
+    /// Load the model registry.
+    ///
+    /// A missing registry file yields an empty registry. Malformed
+    /// content degrades to an empty registry (with a warning) so the
+    /// registry can never block strand processing.
+    fn load(&self) -> Result<ModelRegistry, PortError>;
+}
+
 /// Port for creating git commits to version agent work.
 ///
 /// After a successful knot run, the application layer calls this port
@@ -816,6 +837,19 @@ mod tests {
 
     }
 
+    /// In-memory mock of `ModelRegistryPort`.
+    ///
+    /// Returns the configured registry on every `load()` call.
+    struct MockModelRegistry {
+        registry: ModelRegistry,
+    }
+
+    impl ModelRegistryPort for MockModelRegistry {
+        fn load(&self) -> Result<ModelRegistry, PortError> {
+            Ok(self.registry.clone())
+        }
+    }
+
     /// In-memory mock of `GitVersioningPort`.
     ///
     /// Records all commit calls for inspection in tests.
@@ -1068,6 +1102,33 @@ mod tests {
         assert!(list_result.is_ok());
         assert!(list_result.unwrap().is_empty());
 
+    }
+
+    #[test]
+    fn model_registry_port_contract() {
+        let registry = ModelRegistry::from_yaml(
+            "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n",
+        )
+        .unwrap();
+        let port = MockModelRegistry { registry: registry.clone() };
+
+        // Verify trait is object-safe
+        let _obj: &dyn ModelRegistryPort = &port;
+
+        // Verify load() returns the configured registry
+        let loaded = port.load().unwrap();
+        assert_eq!(loaded, registry);
+        assert_eq!(loaded.resolve("fast").unwrap().model, "gpt-4o");
+    }
+
+    #[test]
+    fn port_error_model_ref_not_found_display() {
+        let err = PortError::ModelRefNotFound("fast".to_string());
+        assert_eq!(
+            err.to_string(),
+            "model-ref 'fast' not found in rig/models.yml"
+        );
+        let _: &dyn std::error::Error = &err;
     }
 
     // ── Supporting Type Tests ───────────────────────────────────────────

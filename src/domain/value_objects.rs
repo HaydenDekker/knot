@@ -34,6 +34,14 @@ pub enum AgentProfileError {
     MissingProfilePrompt,
     /// The profile file has no frontmatter delimiters or no closing delimiter.
     InvalidFormat,
+    /// The profile's `model-ref` value is empty or whitespace-only.
+    EmptyModelRef,
+    /// The profile defines no model at all — no `model-ref` and no
+    /// `provider` + `model` pair.
+    MissingModelSpec,
+    /// The profile's `model-ref` alias does not exist in the model
+    /// registry.
+    ModelRefNotFound(String),
 }
 
 impl std::fmt::Display for AgentProfileError {
@@ -51,6 +59,15 @@ impl std::fmt::Display for AgentProfileError {
             }
             AgentProfileError::InvalidFormat => {
                 write!(f, "agent profile file has no valid frontmatter")
+            }
+            AgentProfileError::EmptyModelRef => {
+                write!(f, "agent profile model-ref must not be empty")
+            }
+            AgentProfileError::MissingModelSpec => {
+                write!(f, "agent profile must define a model (model-ref or provider + model)")
+            }
+            AgentProfileError::ModelRefNotFound(alias) => {
+                write!(f, "model-ref '{alias}' not found in rig/models.yml")
             }
         }
     }
@@ -200,23 +217,209 @@ impl RigAgentConfig {
     }
 }
 
+// ── Model Registry ─────────────────────────────────────────────────────────
+
+/// Errors produced when parsing a model registry (`rig/models.yml`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelRegistryError {
+    /// The file content is not valid YAML (or not a mapping).
+    MalformedYaml,
+    /// An alias entry is missing its `provider`.
+    MissingProvider { alias: String },
+    /// An alias entry is missing its `model`.
+    MissingModel { alias: String },
+    /// An alias entry's `provider` is empty or whitespace-only.
+    EmptyProvider { alias: String },
+    /// An alias entry's `model` is empty or whitespace-only.
+    EmptyModel { alias: String },
+}
+
+impl std::fmt::Display for ModelRegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelRegistryError::MalformedYaml => {
+                write!(f, "model registry is not valid YAML")
+            }
+            ModelRegistryError::MissingProvider { alias } => {
+                write!(f, "model registry alias '{alias}' is missing its provider")
+            }
+            ModelRegistryError::MissingModel { alias } => {
+                write!(f, "model registry alias '{alias}' is missing its model")
+            }
+            ModelRegistryError::EmptyProvider { alias } => {
+                write!(f, "model registry alias '{alias}' has an empty provider")
+            }
+            ModelRegistryError::EmptyModel { alias } => {
+                write!(f, "model registry alias '{alias}' has an empty model")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModelRegistryError {}
+
+/// A single alias → concrete model mapping in a [`ModelRegistry`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRef {
+    /// The LLM provider identifier (e.g. "openai", "anthropic").
+    pub provider: String,
+    /// The model name to use (e.g. "gpt-4o").
+    pub model: String,
+}
+
+/// Internal YAML structure for parsing a `rig/models.yml` document.
+///
+/// `provider`/`model` are optional here so that a *missing* field can be
+/// distinguished from an *empty* one (both are rejected, with different
+/// errors). Unknown keys are ignored.
+#[derive(Debug, serde::Deserialize)]
+struct RawModelsFile {
+    #[serde(default)]
+    models: Option<std::collections::BTreeMap<String, RawModelEntry>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawModelEntry {
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+/// Rig-level registry mapping **model aliases** to concrete
+/// `{provider, model}` pairs.
+///
+/// Backed by `rig/models.yml`:
+///
+/// ```yaml
+/// models:
+///   fast:
+///     provider: openai
+///     model: gpt-4o
+/// ```
+///
+/// The registry is read fresh at resolution time (per strand processing,
+/// per state write) and never cached — editing `models.yml` swaps the
+/// model behind an alias live, without a restart.
+///
+/// Alias names are any non-empty string (no slug enforcement); two
+/// aliases may target the same model. An empty registry (missing file,
+/// empty file, or absent `models` key) is valid: direct-spec profiles
+/// are unaffected, alias profiles fail to resolve.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRegistry {
+    /// Alias → concrete model mapping.
+    ///
+    /// Serialised under the top-level `models` key, matching the
+    /// `rig/models.yml` file format.
+    #[serde(default, rename = "models")]
+    pub entries: std::collections::BTreeMap<String, ModelRef>,
+}
+
+impl ModelRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Parse a `rig/models.yml` document.
+    ///
+    /// An empty document (blank, whitespace-only, or comments-only —
+    /// YAML `null`) parses to an empty registry. A document without a
+    /// `models` key parses to an empty registry. Malformed YAML is an
+    /// error, as is any alias entry with a missing or empty
+    /// `provider`/`model`.
+    pub fn from_yaml(content: &str) -> Result<Self, ModelRegistryError> {
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(content).map_err(|_| ModelRegistryError::MalformedYaml)?;
+        let raw: RawModelsFile = match value {
+            // Comments-only (or explicitly `null`) document — no entries.
+            serde_yaml::Value::Null => return Ok(Self::default()),
+            other => {
+                serde_yaml::from_value(other).map_err(|_| ModelRegistryError::MalformedYaml)?
+            }
+        };
+
+        let mut entries = std::collections::BTreeMap::new();
+        for (alias, entry) in raw.models.unwrap_or_default() {
+            let provider = match entry.provider {
+                None => return Err(ModelRegistryError::MissingProvider { alias }),
+                Some(p) if p.trim().is_empty() => {
+                    return Err(ModelRegistryError::EmptyProvider { alias })
+                }
+                Some(p) => p,
+            };
+            let model = match entry.model {
+                None => return Err(ModelRegistryError::MissingModel { alias }),
+                Some(m) if m.trim().is_empty() => {
+                    return Err(ModelRegistryError::EmptyModel { alias })
+                }
+                Some(m) => m,
+            };
+            entries.insert(alias, ModelRef { provider, model });
+        }
+        Ok(Self { entries })
+    }
+
+    /// Resolve an alias to its concrete model.
+    ///
+    /// Returns `None` when the alias is not present in the registry.
+    pub fn resolve(&self, alias: &str) -> Option<&ModelRef> {
+        self.entries.get(alias)
+    }
+
+    /// Number of aliases in the registry.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the registry has no aliases.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// Shared agent configuration that multiple knots can reference.
 ///
 /// Stored as a `.md` file in `profiles/{name}.md`. The file uses YAML
-/// frontmatter for structural metadata (`name`, `provider`, `model`,
-/// `tools`, `timeout`) and the markdown body (text after the closing
-/// `---`) for the profile prompt (`profile_prompt`).
+/// frontmatter for structural metadata (`name`, and either `model-ref`
+/// or `provider` + `model`, plus `tools`, `timeout`) and the markdown
+/// body (text after the closing `---`) for the profile prompt
+/// (`profile_prompt`).
 ///
-/// Knots reference profiles by `agent-profile-ref: {name}` and may
-/// override individual fields (model, tools) inline.
+/// Knots reference profiles by `agent-profile-ref: {name}`. A profile
+/// names its model either **directly** (`provider` + `model`) or via a
+/// rig-level alias (`model-ref` resolved against `rig/models.yml`).
+/// When both are present the alias wins and the direct values are
+/// ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfile {
     /// Profile name (becomes the filename: `profiles/{name}.md`).
     pub name: String,
     /// The LLM provider identifier (e.g. "openai", "anthropic").
-    pub provider: String,
+    ///
+    /// `None` when the profile uses `model-ref` instead of a direct
+    /// provider/model spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// The model name to use (e.g. "gpt-4o").
-    pub model: String,
+    ///
+    /// `None` when the profile uses `model-ref` instead of a direct
+    /// provider/model spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Rig-level model alias (resolved against `rig/models.yml` at
+    /// processing time).
+    ///
+    /// Takes highest priority over direct `provider`/`model` when both
+    /// are present.
+    #[serde(
+        default,
+        rename = "model-ref",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model_ref: Option<String>,
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -239,7 +442,7 @@ impl AgentProfile {
     /// session deadline.
     pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
-    /// Create a new `AgentProfile` with all required fields.
+    /// Create a new `AgentProfile` with a direct provider/model spec.
     ///
     /// `tools` defaults to an empty list. `timeout` defaults to `None`
     /// (use the runner's default).
@@ -265,15 +468,17 @@ impl AgentProfile {
         }
         Ok(Self {
             name,
-            provider,
-            model,
+            provider: Some(provider),
+            model: Some(model),
+            model_ref: None,
             tools: Vec::new(),
             profile_prompt,
             timeout: None,
         })
     }
 
-    /// Create a new `AgentProfile` with tools.
+    /// Create a new `AgentProfile` with a direct provider/model spec
+    /// and tools.
     pub fn with_tools(
         name: String,
         provider: String,
@@ -295,8 +500,54 @@ impl AgentProfile {
         }
         Ok(Self {
             name,
-            provider,
-            model,
+            provider: Some(provider),
+            model: Some(model),
+            model_ref: None,
+            tools,
+            profile_prompt,
+            timeout: None,
+        })
+    }
+
+    /// Create a new `AgentProfile` that names its model via a rig-level
+    /// alias (`model-ref`), resolved against `rig/models.yml` at
+    /// processing time.
+    ///
+    /// `tools` defaults to an empty list. `timeout` defaults to `None`
+    /// (use the runner's default).
+    ///
+    /// Returns `AgentProfileError` if the name, alias, or prompt is
+    /// blank.
+    pub fn with_model_ref(
+        name: String,
+        model_ref: String,
+        profile_prompt: String,
+    ) -> Result<Self, AgentProfileError> {
+        Self::with_model_ref_and_tools(name, model_ref, Vec::new(), profile_prompt)
+    }
+
+    /// Create a new `AgentProfile` that names its model via a rig-level
+    /// alias (`model-ref`), with tools.
+    pub fn with_model_ref_and_tools(
+        name: String,
+        model_ref: String,
+        tools: Vec<String>,
+        profile_prompt: String,
+    ) -> Result<Self, AgentProfileError> {
+        if name.trim().is_empty() {
+            return Err(AgentProfileError::MissingName);
+        }
+        if model_ref.trim().is_empty() {
+            return Err(AgentProfileError::EmptyModelRef);
+        }
+        if profile_prompt.trim().is_empty() {
+            return Err(AgentProfileError::MissingProfilePrompt);
+        }
+        Ok(Self {
+            name,
+            provider: None,
+            model: None,
+            model_ref: Some(model_ref),
             tools,
             profile_prompt,
             timeout: None,
@@ -317,17 +568,57 @@ impl AgentProfile {
     ///
     /// The profile provides `provider`, `model`, and `tools`.
     /// The knot's `PromptTemplate.instructions` becomes the goal.
+    ///
+    /// Model selection:
+    /// - When `model_ref` is set, the alias is resolved against
+    ///   `registry` and **takes priority over direct values**.
+    ///   An unknown alias is `AgentProfileError::ModelRefNotFound`.
+    /// - Otherwise the direct `provider` + `model` spec is used
+    ///   (legacy behaviour). A profile with no model spec at all is
+    ///   `AgentProfileError::MissingModelSpec`.
     pub fn resolve_for_knot(
         &self,
         knot: &crate::domain::entities::Knot,
-    ) -> AgentConfig {
-        AgentConfig {
+        registry: &ModelRegistry,
+    ) -> Result<AgentConfig, AgentProfileError> {
+        let (provider, model) = match self.model_ref.as_deref() {
+            Some(alias) => match registry.resolve(alias) {
+                Some(resolved) => (
+                    resolved.provider.clone(),
+                    resolved.model.clone(),
+                ),
+                None => {
+                    return Err(AgentProfileError::ModelRefNotFound(alias.to_string()));
+                }
+            },
+            None => {
+                let provider = self
+                    .provider
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty());
+                let model = self
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty());
+                match (provider, model) {
+                    (Some(provider), Some(model)) => (
+                        provider.to_string(),
+                        model.to_string(),
+                    ),
+                    _ => return Err(AgentProfileError::MissingModelSpec),
+                }
+            }
+        };
+
+        Ok(AgentConfig {
             goal: knot.prompt_template.instructions.clone(),
-            provider: self.provider.clone(),
-            model: self.model.clone(),
+            provider,
+            model,
             tools: self.tools.clone(),
             extra_args: Vec::new(),
-        }
+        })
     }
 
     /// Return the profile's session timeout as a `Duration`.
@@ -769,8 +1060,9 @@ mod tests {
         assert!(profile.is_ok());
         let profile = profile.unwrap();
         assert_eq!(profile.name, "fast");
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(profile.model_ref, None);
         assert!(profile.tools.is_empty());
         assert_eq!(profile.profile_prompt, "You are a fast reviewer.");
     }
@@ -1041,7 +1333,7 @@ mod tests {
         let deserialized: AgentProfile = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(deserialized.timeout, Some(600));
         assert_eq!(deserialized.name, "timed");
-        assert_eq!(deserialized.provider, "anthropic");
+        assert_eq!(deserialized.provider.as_deref(), Some("anthropic"));
     }
 
     #[test]
@@ -1091,7 +1383,9 @@ mod tests {
             .with_instructions("Review the document.")
             .build();
 
-        let config = profile.resolve_for_knot(&knot);
+        let config = profile
+            .resolve_for_knot(&knot, &ModelRegistry::new())
+            .unwrap();
 
         assert_eq!(config.provider, "openai");
         assert_eq!(config.model, "gpt-4o");
@@ -1118,7 +1412,9 @@ mod tests {
             .with_git_versioned(false)
             .build();
 
-        let config = profile.resolve_for_knot(&knot);
+        let config = profile
+            .resolve_for_knot(&knot, &ModelRegistry::new())
+            .unwrap();
         assert_eq!(config.provider, "anthropic");
         assert_eq!(config.model, "claude-sonnet");
         assert!(config.tools.is_empty());
@@ -1153,6 +1449,362 @@ mod tests {
         .unwrap();
 
         assert_eq!(profile.session_timeout(), None);
+    }
+
+    // ── ModelRegistry Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn model_registry_from_yaml_valid() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n  frontier:\n    provider: anthropic\n    model: claude-sonnet-4-20250514\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        assert_eq!(registry.len(), 2);
+        assert!(!registry.is_empty());
+
+        let fast = registry.resolve("fast").unwrap();
+        assert_eq!(fast.provider, "openai");
+        assert_eq!(fast.model, "gpt-4o");
+
+        let frontier = registry.resolve("frontier").unwrap();
+        assert_eq!(frontier.provider, "anthropic");
+        assert_eq!(frontier.model, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn model_registry_from_yaml_empty_file_is_empty_registry() {
+        assert!(ModelRegistry::from_yaml("").unwrap().is_empty());
+        assert!(ModelRegistry::from_yaml("   \n  \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn model_registry_from_yaml_missing_models_key_is_empty_registry() {
+        let registry = ModelRegistry::from_yaml("foo: bar\n").unwrap();
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn model_registry_from_yaml_malformed_is_error() {
+        let result = ModelRegistry::from_yaml("models: [unclosed");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ModelRegistryError::MalformedYaml);
+    }
+
+    #[test]
+    fn model_registry_from_yaml_rejects_empty_provider() {
+        let yaml = "models:\n  fast:\n    provider: \"  \"\n    model: gpt-4o\n";
+        let result = ModelRegistry::from_yaml(yaml);
+        assert_eq!(
+            result.unwrap_err(),
+            ModelRegistryError::EmptyProvider { alias: "fast".to_string() }
+        );
+    }
+
+    #[test]
+    fn model_registry_from_yaml_rejects_missing_provider() {
+        let yaml = "models:\n  fast:\n    model: gpt-4o\n";
+        let result = ModelRegistry::from_yaml(yaml);
+        assert_eq!(
+            result.unwrap_err(),
+            ModelRegistryError::MissingProvider { alias: "fast".to_string() }
+        );
+    }
+
+    #[test]
+    fn model_registry_from_yaml_rejects_empty_model() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: \"\"\n";
+        let result = ModelRegistry::from_yaml(yaml);
+        assert_eq!(
+            result.unwrap_err(),
+            ModelRegistryError::EmptyModel { alias: "fast".to_string() }
+        );
+    }
+
+    #[test]
+    fn model_registry_from_yaml_rejects_missing_model() {
+        let yaml = "models:\n  fast:\n    provider: openai\n";
+        let result = ModelRegistry::from_yaml(yaml);
+        assert_eq!(
+            result.unwrap_err(),
+            ModelRegistryError::MissingModel { alias: "fast".to_string() }
+        );
+    }
+
+    #[test]
+    fn model_registry_resolve_miss_returns_none() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        assert!(registry.resolve("unknown").is_none());
+    }
+
+    #[test]
+    fn model_registry_duplicate_targets_allowed() {
+        // Two aliases may target the same model (A/B swapping is a feature).
+        let yaml = "models:\n  a:\n    provider: openai\n    model: gpt-4o\n  b:\n    provider: openai\n    model: gpt-4o\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.resolve("a"), registry.resolve("b"));
+    }
+
+    #[test]
+    fn model_registry_yaml_roundtrip_matches_file_format() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        let out = serde_yaml::to_string(&registry).unwrap();
+        let restored: ModelRegistry = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(restored, registry);
+        // Serialised form keeps the top-level `models` key.
+        assert!(out.starts_with("models:"));
+    }
+
+    #[test]
+    fn model_registry_error_display() {
+        assert_eq!(
+            ModelRegistryError::MalformedYaml.to_string(),
+            "model registry is not valid YAML"
+        );
+        assert_eq!(
+            ModelRegistryError::EmptyProvider { alias: "fast".to_string() }.to_string(),
+            "model registry alias 'fast' has an empty provider"
+        );
+        assert_eq!(
+            ModelRegistryError::EmptyModel { alias: "fast".to_string() }.to_string(),
+            "model registry alias 'fast' has an empty model"
+        );
+    }
+
+    // ── AgentProfile model-ref Tests ──────────────────────────────────────
+
+    #[test]
+    fn agent_profile_with_model_ref_valid() {
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are a fast reviewer.".to_string(),
+        )
+        .unwrap();
+        assert_eq!(profile.name, "fast");
+        assert_eq!(profile.model_ref.as_deref(), Some("fast"));
+        assert_eq!(profile.provider, None);
+        assert_eq!(profile.model, None);
+        assert!(profile.tools.is_empty());
+    }
+
+    #[test]
+    fn agent_profile_with_model_ref_and_tools() {
+        let profile = AgentProfile::with_model_ref_and_tools(
+            "fast".to_string(),
+            "fast".to_string(),
+            vec!["fs".to_string(), "web".to_string()],
+            "You are a fast reviewer.".to_string(),
+        )
+        .unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("fast"));
+        assert_eq!(profile.tools, vec!["fs", "web"]);
+    }
+
+    #[test]
+    fn agent_profile_empty_model_ref() {
+        let result = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "   ".to_string(),
+            "You are fast.".to_string(),
+        );
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyModelRef);
+    }
+
+    #[test]
+    fn agent_profile_model_ref_missing_name() {
+        let result = AgentProfile::with_model_ref(
+            "".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        );
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingName);
+    }
+
+    #[test]
+    fn agent_profile_model_ref_empty_prompt() {
+        let result = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "".to_string(),
+        );
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingProfilePrompt);
+    }
+
+    #[test]
+    fn agent_profile_model_ref_serialization_roundtrip() {
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(600));
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+        // Serde name is kebab-case `model-ref`.
+        assert!(json.contains("\"model-ref\":\"fast\""));
+        // Direct spec is absent (skipped when None).
+        assert!(!json.contains("\"provider\""));
+        assert!(!json.contains("\"model\""));
+    }
+
+    #[test]
+    fn agent_profile_legacy_json_without_model_ref_defaults_to_none() {
+        let json = r#"{
+            "name": "legacy",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "tools": [],
+            "profile-prompt": "Legacy profile."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.model_ref, None);
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn agent_profile_error_display_model_ref_variants() {
+        assert_eq!(
+            AgentProfileError::EmptyModelRef.to_string(),
+            "agent profile model-ref must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::MissingModelSpec.to_string(),
+            "agent profile must define a model (model-ref or provider + model)"
+        );
+        assert_eq!(
+            AgentProfileError::ModelRefNotFound("fast".to_string()).to_string(),
+            "model-ref 'fast' not found in rig/models.yml"
+        );
+    }
+
+    #[test]
+    fn resolve_for_knot_alias_resolved_from_registry() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+            },
+        );
+
+        let knot = KnotBuilder::new("k1")
+            .with_instructions("Check the code.")
+            .build();
+
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.model, "claude-sonnet");
+    }
+
+    #[test]
+    fn resolve_for_knot_alias_takes_priority_over_direct_values() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        // Profile with BOTH model-ref and direct provider/model —
+        // the alias wins. (Both can coexist in a parsed file; serde
+        // builds the profile without constructor validation.)
+        let json = r#"{
+            "name": "fast",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "model-ref": "fast",
+            "tools": ["fs"],
+            "profile-prompt": "You are fast."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("fast"));
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+            },
+        );
+
+        let knot = KnotBuilder::new("k1")
+            .with_instructions("Check.")
+            .build();
+
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.model, "claude-sonnet");
+    }
+
+    #[test]
+    fn resolve_for_knot_unknown_alias_is_model_ref_not_found() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "ghost".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+
+        let knot = KnotBuilder::new("k1").build();
+
+        let result = profile.resolve_for_knot(&knot, &ModelRegistry::new());
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::ModelRefNotFound("ghost".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_for_knot_direct_spec_unchanged_with_empty_registry() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+
+        let knot = KnotBuilder::new("k1").build();
+
+        let config = profile
+            .resolve_for_knot(&knot, &ModelRegistry::new())
+            .unwrap();
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "gpt-4o");
+    }
+
+    #[test]
+    fn resolve_for_knot_no_model_spec_is_missing_model_spec() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        // A profile with no model at all can only exist via serde
+        // (constructors validate).
+        let json = r#"{
+            "name": "broken",
+            "tools": [],
+            "profile-prompt": "No model here."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+
+        let knot = KnotBuilder::new("k1").build();
+
+        let result = profile.resolve_for_knot(&knot, &ModelRegistry::new());
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingModelSpec);
     }
 
     // ── AgentAdapter Tests ──────────────────────────────────────────────────

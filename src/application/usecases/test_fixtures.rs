@@ -11,7 +11,7 @@ use crate::adapters::outbound::event_source::WatchType;
 use crate::application::ports::{
     AgentOutput, AgentProfileRepository, AgentRunner,
     ExecutionContext, EventDispatcherPort, EventSource, GitVersioningPort,
-    LoomLogPort, LoomRepository, PortError, RigLogPort, TieOffSink,
+    LoomLogPort, LoomRepository, ModelRegistryPort, PortError, RigLogPort, TieOffSink,
 };
 use crate::domain::entities::{
     Knot, KnotId, Loom, LoomId, StrandFileChecker, StrandPath, TieOff,
@@ -19,7 +19,9 @@ use crate::domain::entities::{
 };
 use crate::domain::value_objects::StrandSource;
 use crate::domain::events::{AgentEvent, LoomEvent, RigLogEvent};
-use crate::domain::value_objects::{AgentConfig, AgentProfile, PromptTemplate};
+use crate::domain::value_objects::{
+    AgentConfig, AgentProfile, ModelRegistry, PromptTemplate,
+};
 
 // ── Tracking EventSource ───────────────────────────────────────────────────
 
@@ -420,6 +422,57 @@ impl AgentProfileRepository for MockProfileRepository {
 
     fn list(&self) -> Result<Vec<AgentProfile>, PortError> {
         Ok(self.profiles.lock().unwrap().values().cloned().collect())
+    }
+}
+
+// ── Mock ModelRegistryPort ───────────────────────────────────────────
+
+/// A mock [`ModelRegistryPort`] backed by a mutable in-memory
+/// [`ModelRegistry`].
+///
+/// Defaults to an empty registry. Tests call `set_registry()` between
+/// `execute()` calls to simulate editing `rig/models.yml` on disk —
+/// every `load()` returns the current value (fresh read, no caching),
+/// which is what the live-swap guarantee requires.
+pub struct MockModelRegistry {
+    registry: Arc<Mutex<ModelRegistry>>,
+}
+
+impl MockModelRegistry {
+    /// Create a mock with an empty registry.
+    pub fn new() -> Self {
+        Self {
+            registry: Arc::new(Mutex::new(ModelRegistry::default())),
+        }
+    }
+
+    /// Create a mock with the given initial registry.
+    pub fn with_registry(registry: ModelRegistry) -> Self {
+        Self {
+            registry: Arc::new(Mutex::new(registry)),
+        }
+    }
+
+    /// Replace the registry (simulates a rewrite of `rig/models.yml`).
+    pub fn set_registry(&self, registry: ModelRegistry) {
+        *self.registry.lock().unwrap() = registry;
+    }
+
+    /// Return a clone of the current registry.
+    pub fn current(&self) -> ModelRegistry {
+        self.registry.lock().unwrap().clone()
+    }
+}
+
+impl Default for MockModelRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModelRegistryPort for MockModelRegistry {
+    fn load(&self) -> Result<ModelRegistry, PortError> {
+        Ok(self.registry.lock().unwrap().clone())
     }
 }
 

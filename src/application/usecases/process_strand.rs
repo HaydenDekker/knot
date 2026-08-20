@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::adapters::logging;
 use crate::application::ports::{
     AgentProfileRepository, AgentRunner, EventDispatcherPort, GitVersioningPort,
-    KnotEventType, LoomLogPort, PortError, RigLogPort, TieOffSink,
+    KnotEventType, LoomLogPort, ModelRegistryPort, PortError, RigLogPort, TieOffSink,
 };
 use crate::application::session_resume;
 use crate::application::store::LoomStore;
@@ -18,7 +18,8 @@ use crate::domain::events::{AgentEvent, BuildContext, ContextProvider, LoomEvent
 use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
-    AgentConfig, AgentProfile, EventSubscription, RigAgentConfig, StrandSource,
+    AgentConfig, AgentProfile, AgentProfileError, EventSubscription, RigAgentConfig,
+    StrandSource,
 };
 
 // Re-export shared types from types module
@@ -48,6 +49,10 @@ pub struct ProcessStrand {
     pub(crate) rig_dir: PathBuf,
     /// Profile repository for dynamic profile resolution at processing time.
     pub(crate) profile_repo: Arc<dyn AgentProfileRepository>,
+    /// Model registry for resolving `model-ref` aliases at processing
+    /// time. Read fresh per run (no caching) so registry edits are
+    /// picked up live — the next strand uses the new model, no restart.
+    pub(crate) model_registry: Arc<dyn ModelRegistryPort>,
     /// Rig-log port for recording operational events (timeouts, idle).
     pub(crate) rig_log: Arc<dyn RigLogPort>,
     /// Git versioning port for creating commits after successful runs.
@@ -70,6 +75,7 @@ impl ProcessStrand {
         rig_config: RigAgentConfig,
         rig_dir: PathBuf,
         profile_repo: Arc<dyn AgentProfileRepository>,
+        model_registry: Arc<dyn ModelRegistryPort>,
         rig_log: Arc<dyn RigLogPort>,
         git_versioning_port: Arc<dyn GitVersioningPort>,
         file_checker: Arc<dyn StrandFileChecker>,
@@ -84,6 +90,7 @@ impl ProcessStrand {
             rig_config,
             rig_dir,
             profile_repo,
+            model_registry,
             rig_log,
             git_versioning_port,
             file_checker,
@@ -95,8 +102,10 @@ impl ProcessStrand {
     /// Resolve the effective `AgentConfig` for a knot, the profile's
     /// session timeout, and the profile itself.
     ///
-    /// Loads the profile from the repository and delegates the
-    /// profile→config mapping to `AgentProfile::resolve_for_knot()`.
+    /// Loads the profile from the repository, loads the model registry
+    /// fresh (no caching), and delegates the profile→config mapping to
+    /// `AgentProfile::resolve_for_knot()` — where a `model-ref` alias
+    /// wins over direct `provider`/`model` values.
     /// The profile's `profile_prompt` is delivered via stdin
     /// (not `--system-prompt`), so it is not merged here.
     ///
@@ -104,6 +113,11 @@ impl ProcessStrand {
     /// where the `Option<Duration>` is the profile's timeout
     /// (or `None` to use the runner's default) and the `AgentProfile`
     /// is the loaded profile (avoiding a second repository lookup).
+    ///
+    /// An unknown `model-ref` alias fails with
+    /// `PortError::ModelRefNotFound` — the knot run fails with a
+    /// loom-log entry and the error visible in state `last_error`
+    /// (mirrors `ProfileNotFound`).
     pub fn resolve_agent_config(
         &self,
         knot: &Knot,
@@ -116,7 +130,16 @@ impl ProcessStrand {
                 PortError::ProfileNotFound(knot.agent_profile_ref.clone())
             })?;
 
-        let config = profile.resolve_for_knot(knot);
+        // Fresh registry read per run — live swap guarantee.
+        let registry = self.model_registry.load()?;
+        let config = profile.resolve_for_knot(knot, &registry).map_err(|e| {
+            match e {
+                AgentProfileError::ModelRefNotFound(alias) => {
+                    PortError::ModelRefNotFound(alias)
+                }
+                other => PortError::ProfileNotFound(other.to_string()),
+            }
+        })?;
         let timeout = profile.session_timeout();
 
         Ok((config, timeout, profile))
@@ -563,8 +586,9 @@ mod profile_resolution_tests {
 
     use super::super::test_fixtures::{
         build_knot_with_profile, default_profile, MockAgentRunner,
-        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher,
+        MockStrandFileChecker, MockTieOffSink,
     };
 
     /// Build a knot with the given profile ref.
@@ -612,6 +636,7 @@ mod profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -651,6 +676,7 @@ mod profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -700,6 +726,7 @@ mod profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -743,6 +770,7 @@ mod profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -810,6 +838,7 @@ mod profile_resolution_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -847,8 +876,8 @@ mod execution_test_shared {
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, default_profile,
         MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
-        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
-        MockStrandFileChecker, TrackingTieOffSink,
+        MockLoomLogPort, MockModelRegistry, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Re-export build_knot with profile parameter for execution tests.
@@ -892,6 +921,7 @@ mod execution_test_shared {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -1635,9 +1665,9 @@ mod profile_timeout_tests {
 
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, MockAgentRunner,
-        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
-        TrackingAgentRunner,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher,
+        MockStrandFileChecker, MockTieOffSink, TrackingAgentRunner,
     };
 
     fn build_knot(id: impl Into<String>, profile: &str) -> crate::domain::entities::Knot {
@@ -1675,6 +1705,7 @@ mod profile_timeout_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -1718,6 +1749,7 @@ mod profile_timeout_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo.clone(),
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -1772,6 +1804,7 @@ mod profile_timeout_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -1836,6 +1869,7 @@ mod profile_timeout_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -1876,8 +1910,9 @@ mod git_versioning_tests {
 
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
-        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher,
+        MockStrandFileChecker, MockTieOffSink,
     };
 
     /// Build a knot with configurable git_versioned flag.
@@ -1908,6 +1943,7 @@ mod git_versioning_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             git_port,
             Arc::new(MockStrandFileChecker::new()),
@@ -2036,8 +2072,8 @@ mod session_title_tests {
     use super::super::test_fixtures::{
         build_knot_with_profile, build_loom, default_profile,
         MockGitVersioningPort, MockLoomLogPort, MockTieOffSink,
-        MockProfileRepository, MockRigLogPort, MockEventDispatcher, MockStrandFileChecker,
-        TrackingAgentRunner,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockEventDispatcher, MockStrandFileChecker, TrackingAgentRunner,
     };
 
     fn build_knot(id: impl Into<String>, profile: &str) -> Knot {
@@ -2080,6 +2116,7 @@ mod session_title_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -2139,6 +2176,7 @@ mod session_title_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -2186,6 +2224,7 @@ mod session_title_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -2240,6 +2279,7 @@ mod session_title_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -2323,6 +2363,7 @@ mod session_title_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -2372,9 +2413,9 @@ mod text_check_tests {
 
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
-        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, MockTieOffSink,
-        TrackingTieOffSink,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher,
+        MockStrandFileChecker, MockTieOffSink, TrackingTieOffSink,
     };
 
     /// Build a knot with git_versioned: false (not needed for text checks).
@@ -2413,6 +2454,7 @@ mod text_check_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(
@@ -2693,8 +2735,9 @@ mod file_existence_tests {
 
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
-        MockGitVersioningPort, MockLoomLogPort, MockProfileRepository,
-        MockRigLogPort, MockEventDispatcher, MockStrandFileChecker, TrackingTieOffSink,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockEventDispatcher,
+        MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Build a knot with git_versioned: false.
@@ -2735,6 +2778,7 @@ mod file_existence_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(MockRigLogPort::default()),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -3048,8 +3092,8 @@ mod event_dispatch_tests {
     use super::super::test_fixtures::{
         build_knot, build_knot_with_profile, build_loom, default_profile,
         MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
-        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
-        MockStrandFileChecker, TrackingTieOffSink,
+        MockLoomLogPort, MockModelRegistry, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Build a knot that listens for events from another knot.
@@ -3119,6 +3163,7 @@ mod event_dispatch_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -4023,6 +4068,7 @@ mod event_dispatch_tests {
             RigAgentConfig::default_config(),
             rig_dir.clone(),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -4430,8 +4476,8 @@ mod phase6_integration_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile,
         MockAgentRunner, MockEventDispatcher, MockGitVersioningPort,
-        MockLoomLogPort, MockProfileRepository, MockRigLogPort,
-        MockStrandFileChecker, TrackingTieOffSink,
+        MockLoomLogPort, MockModelRegistry, MockProfileRepository,
+        MockRigLogPort, MockStrandFileChecker, TrackingTieOffSink,
     };
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -4522,6 +4568,7 @@ mod phase6_integration_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -4818,8 +4865,8 @@ mod event_enforcement_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
         MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        TrackingTieOffSink,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
     };
 
     /// Build a knot that listens for events from another knot.
@@ -4887,6 +4934,7 @@ mod event_enforcement_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -5387,8 +5435,8 @@ mod phase4_integration_tests {
     use super::super::test_fixtures::{
         build_knot, build_loom, default_profile, MockAgentRunner,
         MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
-        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
-        TrackingTieOffSink,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
     };
 
     fn build_consumer_knot(
@@ -5459,6 +5507,7 @@ mod phase4_integration_tests {
             RigAgentConfig::default_config(),
             rig_dir.clone(),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -5858,6 +5907,7 @@ mod phase4_integration_tests {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            Arc::new(MockModelRegistry::default()),
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
@@ -5866,5 +5916,300 @@ mod phase4_integration_tests {
         );
 
         (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store)
+    }
+}
+
+// ── Model Registry Resolution Tests (069 Phase 2) ─────────────────────
+//
+// Application-level tests for `model-ref` alias resolution in
+// `ProcessStrand`: a resolved alias reaches the CLI args, unknown
+// aliases fail with `ModelRefNotFound`, empty registries fail alias
+// profiles (direct-spec profiles unaffected), and the live-swap
+// guarantee — a registry edit between two `execute()` calls is picked
+// up by the second run without a restart.
+
+#[cfg(test)]
+mod model_registry_resolution_tests {
+    use super::*;
+    use crate::application::usecases::test_fixtures::{
+        build_knot_with_profile, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, MockTieOffSink,
+    };
+    use crate::domain::entities::{KnotId, LoomId};
+    use crate::domain::value_objects::{
+        AgentProfile, ModelRef, ModelRegistry,
+    };
+    use std::collections::{BTreeMap, HashMap};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// Build a registry from `(alias, provider, model)` triples.
+    fn registry_from(pairs: &[(&str, &str, &str)]) -> ModelRegistry {
+        ModelRegistry {
+            entries: pairs
+                .iter()
+                .map(|(alias, provider, model)| {
+                    (
+                        (*alias).to_string(),
+                        ModelRef {
+                            provider: (*provider).to_string(),
+                            model: (*model).to_string(),
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    /// Build a `model-ref` profile for tests.
+    fn alias_profile(name: &str, alias: &str) -> AgentProfile {
+        AgentProfile::with_model_ref(
+            name.to_string(),
+            alias.to_string(),
+            "You are an aliased agent.".to_string(),
+        )
+        .unwrap()
+    }
+
+    /// Build a `ProcessStrand` wired with the given profile map and
+    /// registry, plus a mock runner for inspecting the executed context.
+    fn build_use_case(
+        loom: Loom,
+        profiles: HashMap<String, AgentProfile>,
+        registry: ModelRegistry,
+    ) -> (
+        ProcessStrand,
+        Arc<MockModelRegistry>,
+        Arc<MockAgentRunner>,
+        Arc<std::sync::Mutex<Vec<LoomEvent>>>,
+    ) {
+        let store = LoomStore::new();
+        store.register(loom);
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let runner = Arc::new(MockAgentRunner::default());
+        let model_registry = Arc::new(MockModelRegistry::with_registry(registry));
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            runner.clone() as Arc<dyn AgentRunner>,
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            Arc::new(MockProfileRepository {
+                profiles: Arc::new(std::sync::Mutex::new(profiles)),
+            }),
+            model_registry.clone(),
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+
+        (use_case, model_registry, runner, log_events)
+    }
+
+    fn created_event(strand_path: PathBuf) -> StrandEvent {
+        StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path),
+        }
+    }
+
+    /// 1. A profile with `model-ref: fast` resolves against the registry
+    /// and the resolved model reaches the CLI args.
+    #[test]
+    fn resolved_alias_reaches_cli_args() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom(
+            "test-loom",
+            vec![build_knot_with_profile("k1", "aliased")],
+        );
+        let (use_case, _registry, runner, _log_events) = build_use_case(
+            loom,
+            HashMap::from_iter([(
+                "aliased".to_string(),
+                alias_profile("aliased", "fast"),
+            )]),
+            registry_from(&[("fast", "openai", "gpt-4o-mini")]),
+        );
+
+        let result = use_case.execute(created_event(strand_path));
+        assert!(result.is_ok());
+
+        let ctx = runner.get_captured_ctx().expect("runner should have executed");
+        let args = ctx.agent_config.build_cli_args();
+        let model_index = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model flag missing");
+        assert_eq!(
+            args[model_index + 1], "gpt-4o-mini",
+            "resolved registry model must reach CLI args: {:?}",
+            args,
+        );
+        assert_eq!(ctx.agent_config.provider, "openai");
+        assert_eq!(ctx.agent_config.model, "gpt-4o-mini");
+    }
+
+    /// 2. An alias absent from the registry fails resolution with
+    /// `PortError::ModelRefNotFound`.
+    #[test]
+    fn unknown_alias_returns_model_ref_not_found() {
+        let knot = build_knot_with_profile("k1", "aliased");
+        let loom = build_loom("test-loom", vec![knot.clone()]);
+        let (use_case, _registry, _runner, _log_events) = build_use_case(
+            loom,
+            HashMap::from_iter([(
+                "aliased".to_string(),
+                alias_profile("aliased", "ghost"),
+            )]),
+            registry_from(&[("fast", "openai", "gpt-4o")]),
+        );
+
+        let result = use_case.resolve_agent_config(&knot);
+
+        match result {
+            Err(PortError::ModelRefNotFound(alias)) => assert_eq!(alias, "ghost"),
+            other => panic!(
+                "expected ModelRefNotFound, got {:?}",
+                other.map(|(c, _, _)| c.model)
+            ),
+        }
+    }
+
+    /// 3. Empty registry + `model-ref` profile: the knot run fails with
+    /// `ModelRefNotFound` and the failure is recorded in the loom-log
+    /// (KnotProcessing, KnotFailed, StrandProcessed-with-error).
+    #[test]
+    fn empty_registry_with_model_ref_fails_execution() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom(
+            "test-loom",
+            vec![build_knot_with_profile("k1", "aliased")],
+        );
+        let (use_case, _registry, _runner, log_events) = build_use_case(
+            loom,
+            HashMap::from_iter([(
+                "aliased".to_string(),
+                alias_profile("aliased", "fast"),
+            )]),
+            ModelRegistry::default(), // empty registry
+        );
+
+        let result = use_case.execute(created_event(strand_path));
+
+        match result {
+            Err(PortError::ModelRefNotFound(alias)) => assert_eq!(alias, "fast"),
+            other => panic!("expected Err(ModelRefNotFound), got {:?}", other.is_ok()),
+        }
+
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3, "loom-log should have 3 events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { .. } => {}
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotFailed { error, .. } => {
+                assert!(
+                    error.contains("fast"),
+                    "failure should name the alias: {error}"
+                );
+                assert!(
+                    error.contains("rig/models.yml"),
+                    "failure should point at the registry file: {error}"
+                );
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_some(), "StrandProcessed should carry the error");
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+    }
+
+    /// 4. A direct-spec profile (no `model-ref`) resolves from its own
+    /// `provider`/`model` values and is unaffected by the registry.
+    #[test]
+    fn direct_spec_profile_unaffected_by_registry() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot_with_profile("k1", "fast")]);
+        let (use_case, _registry, runner, _log_events) = build_use_case(
+            loom,
+            HashMap::from_iter([("fast".to_string(), default_profile())]),
+            ModelRegistry::default(), // empty registry must not matter
+        );
+
+        let result = use_case.execute(created_event(strand_path));
+        assert!(result.is_ok());
+
+        let ctx = runner.get_captured_ctx().expect("runner should have executed");
+        assert_eq!(ctx.agent_config.provider, "openai");
+        assert_eq!(ctx.agent_config.model, "gpt-4o");
+    }
+
+    /// 5. Live swap: the registry is replaced between two `execute()`
+    /// calls (simulating an edit to `rig/models.yml`) and the second
+    /// run uses the new model — no restart.
+    #[test]
+    fn live_swap_picks_up_changed_registry_between_runs() {
+        let dir = TempDir::new().unwrap();
+        let strand1 = dir.path().join("strand-1.md");
+        let strand2 = dir.path().join("strand-2.md");
+        std::fs::write(&strand1, "first").unwrap();
+        std::fs::write(&strand2, "second").unwrap();
+
+        let loom = build_loom(
+            "test-loom",
+            vec![build_knot_with_profile("k1", "aliased")],
+        );
+        let (use_case, registry, runner, _log_events) = build_use_case(
+            loom,
+            HashMap::from_iter([(
+                "aliased".to_string(),
+                alias_profile("aliased", "fast"),
+            )]),
+            registry_from(&[("fast", "openai", "gpt-4o")]),
+        );
+
+        // Run 1 — resolves the original model.
+        assert!(use_case.execute(created_event(strand1)).is_ok());
+        let ctx1 = runner.get_captured_ctx().expect("run 1 should execute");
+        assert_eq!(ctx1.agent_config.model, "gpt-4o");
+
+        // Swap the registry behind the alias (models.yml rewrite).
+        registry.set_registry(registry_from(&[
+            ("fast", "anthropic", "claude-sonnet-4-20250514"),
+        ]));
+
+        // Run 2 — must use the new model with no restart.
+        assert!(use_case.execute(created_event(strand2)).is_ok());
+        let ctx2 = runner.get_captured_ctx().expect("run 2 should execute");
+        assert_eq!(ctx2.agent_config.provider, "anthropic");
+        assert_eq!(ctx2.agent_config.model, "claude-sonnet-4-20250514");
+
+        // Both runs were captured in order.
+        let all = runner.get_captured_contexts();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].agent_config.model, "gpt-4o");
+        assert_eq!(all[1].agent_config.model, "claude-sonnet-4-20250514");
     }
 }

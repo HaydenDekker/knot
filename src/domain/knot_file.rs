@@ -296,6 +296,8 @@ struct RawProfileFrontmatter {
     name: Option<String>,
     provider: Option<String>,
     model: Option<String>,
+    #[serde(default, rename = "model-ref")]
+    model_ref: Option<String>,
     #[serde(default)]
     tools: Option<Vec<String>>,
     #[serde(default)]
@@ -307,7 +309,10 @@ struct RawProfileFrontmatter {
 /// Extracts and validates the YAML frontmatter. The body (markdown after the
 /// closing `---`) contains the profile prompt.
 ///
-/// Required frontmatter fields: `name`, `provider`, `model`.
+/// Required frontmatter fields: `name`, and either `model-ref` (rig-level
+/// alias from `rig/models.yml`) or the direct `provider` + `model` pair.
+/// When both `model-ref` and `provider`/`model` are present, the alias
+/// wins and a parse warning is emitted.
 /// Body (after closing `---`) must contain non-empty prompt text.
 /// Optional frontmatter fields: `tools`, `timeout`.
 pub fn parse_agent_profile(
@@ -326,32 +331,61 @@ pub fn parse_agent_profile(
         .filter(|n| !n.trim().is_empty())
         .ok_or(AgentProfileError::MissingName)?;
 
-    // Validate provider
-    let provider = raw
-        .provider
-        .filter(|p| !p.trim().is_empty())
-        .ok_or(AgentProfileError::EmptyProvider)?;
-
-    // Validate model
-    let model = raw
-        .model
-        .filter(|m| !m.trim().is_empty())
-        .ok_or(AgentProfileError::EmptyModel)?;
-
     // Body is the profile prompt — required and non-empty
     let profile_prompt = body
         .filter(|b| !b.trim().is_empty())
         .ok_or(AgentProfileError::MissingProfilePrompt)?;
 
-    // Build profile with optional tools and timeout
-    AgentProfile::with_tools(
-        name,
-        provider,
-        model,
-        raw.tools.unwrap_or_default(),
-        profile_prompt,
-    )
-    .map(|p| p.with_timeout(raw.timeout))
+    let tools = raw.tools.unwrap_or_default();
+
+    // Validate model-ref (when present it must be non-empty).
+    let model_ref = match raw.model_ref.as_ref() {
+        Some(ref alias) if alias.trim().is_empty() => {
+            return Err(AgentProfileError::EmptyModelRef)
+        }
+        other => other.cloned(),
+    };
+
+    let provider_present = raw
+        .provider
+        .as_ref()
+        .map(|p| !p.trim().is_empty())
+        .unwrap_or(false);
+    let model_present = raw
+        .model
+        .as_ref()
+        .map(|m| !m.trim().is_empty())
+        .unwrap_or(false);
+
+    let profile = if let Some(alias) = model_ref {
+        // Alias spec. When direct values are also present the alias wins
+        // and the redundant direct fields are flagged with a warning.
+        if provider_present || model_present {
+            eprintln!(
+                "WARNING: profile '{name}' defines both model-ref and \
+                 provider/model — model-ref takes precedence; \
+                 remove the redundant direct fields from rig/profiles/{name}.md"
+            );
+        }
+        AgentProfile::with_model_ref_and_tools(name, alias, tools, profile_prompt)?
+    } else if provider_present && model_present {
+        // Legacy direct spec — unchanged behaviour.
+        AgentProfile::with_tools(
+            name,
+            raw.provider.unwrap(),
+            raw.model.unwrap(),
+            tools,
+            profile_prompt,
+        )?
+    } else if !provider_present && !model_present {
+        return Err(AgentProfileError::MissingModelSpec);
+    } else if !provider_present {
+        return Err(AgentProfileError::EmptyProvider);
+    } else {
+        return Err(AgentProfileError::EmptyModel);
+    };
+
+    Ok(profile.with_timeout(raw.timeout))
 }
 
 
@@ -845,8 +879,9 @@ You are a fast reviewer. Keep responses concise and direct.
 
         let profile = result.unwrap();
         assert_eq!(profile.name, "fast");
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(profile.model_ref, None);
         assert_eq!(profile.tools, vec!["fs"]);
         assert!(profile.profile_prompt.contains("fast reviewer"));
     }
@@ -863,8 +898,9 @@ Review the document.
 ";
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.name, "minimal");
-        assert_eq!(profile.provider, "anthropic");
-        assert_eq!(profile.model, "claude-sonnet-4-20250514");
+        assert_eq!(profile.provider.as_deref(), Some("anthropic"));
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(profile.model_ref, None);
         assert!(profile.tools.is_empty());
         assert_eq!(profile.profile_prompt, "Review the document.");
     }
@@ -884,6 +920,52 @@ Keep responses thorough.
         let profile = parse_agent_profile(content).unwrap();
         assert!(profile.profile_prompt.contains("detailed reviewer"));
         assert!(profile.profile_prompt.contains("thorough"));
+    }
+
+    #[test]
+    fn parse_profile_with_model_ref() {
+        let content = "---\nname: fast\nmodel-ref: fast\n---\n\nReview the document.\n";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.name, "fast");
+        assert_eq!(profile.model_ref.as_deref(), Some("fast"));
+        assert_eq!(profile.provider, None);
+        assert_eq!(profile.model, None);
+        assert!(profile.tools.is_empty());
+        assert_eq!(profile.profile_prompt, "Review the document.");
+    }
+
+    #[test]
+    fn parse_profile_with_model_ref_tools_and_timeout() {
+        let content = "---\nname: fast\nmodel-ref: fast\ntools:\n  - fs\ntimeout: 600\n---\n\nReview.\n";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("fast"));
+        assert_eq!(profile.tools, vec!["fs"]);
+        assert_eq!(profile.timeout, Some(600));
+    }
+
+    #[test]
+    fn parse_profile_model_ref_wins_over_direct_values() {
+        // Both model-ref and provider/model present — the alias wins
+        // and the redundant direct values are dropped (with a warning).
+        let content = "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nmodel-ref: frontier\n---\n\nReview.\n";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("frontier"));
+        assert_eq!(profile.provider, None);
+        assert_eq!(profile.model, None);
+    }
+
+    #[test]
+    fn parse_profile_empty_model_ref() {
+        let content = "---\nname: fast\nmodel-ref: \"  \"\n---\n\nReview.\n";
+        let result = parse_agent_profile(content);
+        assert_eq!(result.unwrap_err(), AgentProfileError::EmptyModelRef);
+    }
+
+    #[test]
+    fn parse_profile_no_model_spec() {
+        let content = "---\nname: fast\n---\n\nReview.\n";
+        let result = parse_agent_profile(content);
+        assert_eq!(result.unwrap_err(), AgentProfileError::MissingModelSpec);
     }
 
     #[test]
@@ -1026,6 +1108,18 @@ Review.
         assert_eq!(
             AgentProfileError::InvalidFormat.to_string(),
             "agent profile file has no valid frontmatter"
+        );
+        assert_eq!(
+            AgentProfileError::EmptyModelRef.to_string(),
+            "agent profile model-ref must not be empty"
+        );
+        assert_eq!(
+            AgentProfileError::MissingModelSpec.to_string(),
+            "agent profile must define a model (model-ref or provider + model)"
+        );
+        assert_eq!(
+            AgentProfileError::ModelRefNotFound("fast".to_string()).to_string(),
+            "model-ref 'fast' not found in rig/models.yml"
         );
     }
 

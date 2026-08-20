@@ -187,8 +187,9 @@ mod tests {
         assert!(result.is_ok());
         let profile = result.unwrap().unwrap();
         assert_eq!(profile.name, "fast");
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(profile.model_ref, None);
         assert_eq!(profile.tools, vec!["fs"]);
         assert!(profile.profile_prompt.contains("fast reviewer"));
     }

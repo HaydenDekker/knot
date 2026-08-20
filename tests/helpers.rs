@@ -44,6 +44,11 @@ pub struct ProcessStrandResult {
     pub tie_off_content: Arc<Mutex<HashMap<String, String>>>,
     /// The mock agent runner (captures execution contexts).
     pub agent_runner: Arc<MockAgentRunner>,
+    /// The mock model registry (in-memory; empty by default).
+    ///
+    /// Call `set_registry()` between `execute()` calls to simulate
+    /// editing `rig/models.yml` — every load is fresh (live swap).
+    pub model_registry: Arc<MockModelRegistry>,
     /// Git versioning port — present only when `.with_tracking_git()` is used.
     pub git_port: Option<Arc<MockGitVersioningPort>>,
     /// Git commits recorded by the tracking git port.
@@ -78,6 +83,8 @@ pub struct ProcessStrandBuilder {
     agent_runner: Arc<MockAgentRunner>,
     /// Custom profile override (uses `default_profile()` if `None`).
     profile: Option<AgentProfile>,
+    /// Custom model registry override (in-memory mock, empty by default).
+    model_registry: Option<Arc<MockModelRegistry>>,
     /// Whether to create a tracking git port.
     tracking_git: bool,
     /// Whether to expose the tracking event dispatcher in the result.
@@ -93,6 +100,7 @@ impl ProcessStrandBuilder {
             looms: vec![loom],
             agent_runner,
             profile: None,
+            model_registry: None,
             tracking_git: false,
             tracking_event_dispatcher: false,
             tracking_file_checker: false,
@@ -112,6 +120,19 @@ impl ProcessStrandBuilder {
     /// Used by tests that need a custom timeout or other profile settings.
     pub fn with_profile(mut self, profile: AgentProfile) -> Self {
         self.profile = Some(profile);
+        self
+    }
+
+    /// Override the default model registry (in-memory mock, empty).
+    ///
+    /// Used by tests that exercise `model-ref` profiles — the mock is
+    /// exposed in the result so the registry can be rewritten between
+    /// `execute()` calls (live swap).
+    pub fn with_model_registry(
+        mut self,
+        model_registry: Arc<MockModelRegistry>,
+    ) -> Self {
+        self.model_registry = Some(model_registry);
         self
     }
 
@@ -158,6 +179,10 @@ impl ProcessStrandBuilder {
             ]))),
         });
 
+        let model_registry = self
+            .model_registry
+            .unwrap_or_else(|| Arc::new(MockModelRegistry::default()));
+
         let git_port: Arc<dyn knot::application::ports::GitVersioningPort>;
         let git_port_concrete: Option<Arc<MockGitVersioningPort>>;
         let git_commits: Option<Arc<Mutex<Vec<(knot::domain::entities::LoomId, knot::domain::entities::KnotId, String, String, String)>>>>;
@@ -203,6 +228,7 @@ impl ProcessStrandBuilder {
             RigAgentConfig::default_config(),
             PathBuf::from("/rig"),
             profile_repo,
+            model_registry.clone() as Arc<dyn knot::application::ports::ModelRegistryPort>,
             Arc::new(rig_log),
             git_port,
             file_checker,
@@ -217,6 +243,7 @@ impl ProcessStrandBuilder {
             rig_events,
             tie_off_content,
             agent_runner: self.agent_runner,
+            model_registry,
             git_port: git_port_concrete,
             git_commits,
             file_checker: file_checker_concrete,
