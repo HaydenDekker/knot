@@ -1,11 +1,11 @@
 ---
 name: knot-init
-description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, creates a default profile by reading available models from ~/.pi/agent/models.json. Verifies setup by reading `rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
+description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, seeds a `default` alias in `rig/models.yml` from ~/.pi/agent/models.json and creates a default profile that uses `model-ref: default`. Verifies setup by reading `tie-offs/rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.0.0"
-  compatibility: "Knot 0.31.0+"
+  version: "4.1.0"
+  compatibility: "Knot 0.32.0+"
 ---
 
 # Knot Init Skill
@@ -36,8 +36,12 @@ its current state instead of recreating it.
 ### Profile Discovery
 
 When no profiles exist, this skill reads available models from the pi
-agent configuration at `~/.pi/agent/models.json` to populate the
-default profile with a real provider and model.
+agent configuration at `~/.pi/agent/models.json` and seeds a
+`default` alias in `rig/models.yml`. The default profile then
+references that alias via `model-ref: default` — the registry is
+resolved fresh at processing time, so swapping the model behind the
+alias is a single edit to `rig/models.yml` (no profile edits, no
+restart).
 
 ---
 
@@ -234,9 +238,10 @@ When asked to initialise a Knot rig:
    - If profiles exist, report the available profile names and skip to
      step 8.
 
-7. **Create default profile** (only when no profiles exist):
+7. **Create default profile + seed the model registry** (only when no
+   profiles exist):
    - Read available models from `~/.pi/agent/models.json` to determine
-     a provider and model for the default profile.
+     a provider and model for the `default` alias.
    - The models.json file has this structure:
      ```json
      {
@@ -252,51 +257,74 @@ When asked to initialise a Knot rig:
      }
      ```
    - Use the first available provider and its first model.
-   - Write the default profile to `rig/profiles/default.md`:
+   - **Seed the `default` alias in `rig/models.yml`** (Knot's
+     `run_startup` auto-creates the file as a commented template when
+     missing — never overwrite user content):
+     - If `rig/models.yml` already defines a `default` alias, leave
+       the file untouched (idempotent).
+     - Otherwise, add the alias — create the `models:` section if the
+       file has none, and keep any existing aliases:
+       ```yaml
+       models:
+         default:
+           provider: <provider-name>
+           model: <model-id>
+       ```
+   - Write the default profile to `rig/profiles/default.md`. The
+     prompt lives in the **body** (not frontmatter):
      ```markdown
      ---
      name: default
-     provider: <provider-name>
-     model: <model-id>
-     system-prompt: |
-       You are a helpful AI assistant. Follow the instructions
-       provided in each task.
+     model-ref: default
      ---
+
+     You are a helpful AI assistant. Follow the instructions
+     provided in each task.
 
      # Default Profile
 
-     Auto-generated default profile.
-     Provider and model sourced from ~/.pi/agent/models.json.
+     Auto-generated default profile. The `default` alias in
+     rig/models.yml is seeded from ~/.pi/agent/models.json.
 
-     To change this profile, edit the frontmatter above.
+     To change the model, edit the `default` alias in rig/models.yml
+     — it is resolved fresh on every run (no restart).
      To add more profiles, create additional .md files in this
      directory (e.g. fast.md, reviewer.md).
      ```
    - If `~/.pi/agent/models.json` does not exist or cannot be read,
-     use placeholder values and document them in the body:
+     seed a **placeholder** `default` alias and document it in the
+     body:
+     ```yaml
+     models:
+       default:
+         provider: openai
+         model: gpt-4o
+     ```
      ```markdown
      ---
      name: default
-     provider: openai
-     model: gpt-4o
-     system-prompt: |
-       You are a helpful AI assistant.
+     model-ref: default
      ---
+
+     You are a helpful AI assistant.
 
      # Default Profile
 
      Auto-generated default profile.
 
      WARNING: Could not read ~/.pi/agent/models.json.
-     Provider and model are placeholders — edit this file to
-     configure a real provider and model.
+     The `default` alias in rig/models.yml uses placeholder values
+     — edit it to configure a real provider and model.
      ```
 
 8. **Verify profile creation**:
    - Read `tie-offs/<rig>/state.json` (wait up to 5 seconds for the
      state writer to flush) and confirm at least one profile exists in
      the `profiles` array.
-   - If created in step 6, confirm `default` appears in the list.
+   - If created in step 7, confirm `default` appears in the list with
+     `model-ref: "default"` and a **resolved** (non-null)
+     `provider`/`model` — nulls mean the alias is unresolvable (check
+     `rig/models.yml`).
 
 9. **Check for existing looms**:
    - Read `tie-offs/<rig>/state.json` and check the `looms` array.
@@ -326,6 +354,7 @@ When asked to initialise a Knot rig:
   "profiles": [
     {
       "name": "default",
+      "model-ref": "default",
       "provider": "llama-workhorse",
       "model": "qwen3-27b"
     }
@@ -333,6 +362,12 @@ When asked to initialise a Knot rig:
   "updated_at": "2026-06-18T12:00:00Z"
 }
 ```
+
+Profile entries carry `model-ref` (the alias, `null` for direct-spec
+profiles) plus the **resolved** `provider`/`model` from
+`rig/models.yml`. `null` provider/model means the alias is
+unresolvable — the profile's knots will fail with `ModelRefNotFound`
+until `rig/models.yml` defines the alias.
 
 The `updated_at` field is an ISO 8601 UTC timestamp. Use it to
 determine if the state file is stale (older than ~10 seconds means
@@ -349,7 +384,8 @@ Knot may not be writing state).
 | `tie-offs/<rig>/state.json` `updated_at` is stale | Knot may have crashed. Provide restart instructions. |
 | `tie-offs/<rig>/state.json` `rig_path` is empty | Rig config may be missing. Report to user. |
 | `tie-offs/<rig>/state.json` `profiles` is empty | No profiles exist. Create default profile. |
-| `~/.pi/agent/models.json` not found | Use placeholder provider/model. Document in profile body. |
+| `~/.pi/agent/models.json` not found | Seed the `default` alias in `rig/models.yml` with placeholder provider/model. Document in profile body. |
+| Profile shows `null` provider/model in state | The profile's alias is unresolvable — `rig/models.yml` is missing, empty, or malformed, or the alias is undefined. Check `rig/models.yml`. |
 | `rig/` still shows as tracked in project git (pre-0.31.0 project) | One-time `git rm -r --cached rig/` + commit (see step 4c). |
 
 ---
@@ -366,8 +402,8 @@ cat tie-offs/rig/state.json | python3 -m json.tool
 # Check when state was last updated
 cat tie-offs/rig/state.json | python3 -c "import sys,json; print(json.load(sys.stdin)['updated_at'])"
 
-# View profiles
-cat tie-offs/rig/state.json | python3 -c "import sys,json; [print(p['name'], p['provider'], p['model']) for p in json.load(sys.stdin)['profiles']]"
+# View profiles (name, alias, resolved provider, resolved model)
+cat tie-offs/rig/state.json | python3 -c "import sys,json; [print(p['name'], p.get('model-ref'), p['provider'], p['model']) for p in json.load(sys.stdin)['profiles']]"
 
 # View looms
 cat tie-offs/rig/state.json | python3 -c "import sys,json; [print(l['id'], len(l['knots']), 'knots') for l in json.load(sys.stdin)['looms']]"

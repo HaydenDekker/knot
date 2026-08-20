@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.5.0"
-  compatibility: "Knot 0.31.0+"
+  version: "5.6.0"
+  compatibility: "Knot 0.32.0+"
 ---
 
 # Knot Create Skill
@@ -112,9 +112,10 @@ first, then create knots that reference it.
 
 1. **Gather required information** from the user:
    - `name`: Profile identifier (e.g. `fast`, `reviewer`, `coder`)
-   - `provider`: AI provider (e.g. `openai`, `anthropic`, or a pi
-     provider name like `llama-workhorse`)
-   - `model`: Model identifier (e.g. `gpt-4o`, `qwen3-27b`)
+   - Model selection — **one of**:
+     - `provider` + `model`: direct spec (e.g. `openai` / `gpt-4o`)
+     - `model-ref`: an alias defined in `rig/models.yml` (resolved
+       fresh at processing time — see “Model Registry” below)
    - System prompt: The agent's persona instructions (goes in the
      markdown body after the closing `---`)
    - `tools` (optional): List of pi tool names (e.g. `read`, `write`, `edit`, `bash`)
@@ -608,10 +609,69 @@ You are a fast reviewer. Keep responses concise and direct.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | **Yes** | Profile identifier (becomes the filename stem) |
-| `provider` | **Yes** | LLM provider (e.g. `openai`, `anthropic`) |
-| `model` | **Yes** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
+| `model-ref` | **Yes, unless `provider` + `model`** | Alias resolved against `rig/models.yml` at processing time. Takes **highest priority** over direct values. |
+| `provider` | **Yes, unless `model-ref`** | LLM provider (e.g. `openai`, `anthropic`). Ignored (with a parse warning) when `model-ref` is also set. |
+| `model` | **Yes, unless `model-ref`** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`). Ignored (with a parse warning) when `model-ref` is also set. |
 | `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
+
+A profile with **neither** `model-ref` **nor** `provider` + `model`
+fails to parse (`MissingModelSpec`).
+
+### Model Registry (`rig/models.yml`)
+
+The rig-level model registry maps **aliases** to `{provider, model}`
+pairs:
+
+```yaml
+models:
+  fast:
+    provider: openai
+    model: gpt-4o
+  frontier:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+```
+
+- Top-level `models` map; both `provider` and `model` are required,
+  non-empty per alias.
+- Alias names: any non-empty string (no slug enforcement). Two aliases
+  may target the same model (A/B swapping is a feature).
+- File missing, empty, or comments-only → empty registry. Malformed
+  YAML (or an invalid entry) → warning; treated as an empty registry —
+  never blocks processing.
+- The registry is read **fresh at resolution time** (per strand
+  processing, per state write) — never cached. `run_startup`
+  auto-creates a commented template when the file is missing and never
+  overwrites it.
+
+Profile precedence:
+
+| `model-ref` | `provider` + `model` | Behaviour |
+|---|---|---|
+| set | absent | Resolved via registry at processing time |
+| set | set | **Alias wins** — direct values ignored, parse warning |
+| absent | set | Legacy direct spec — unchanged |
+| absent | absent | Parse error (no model defined) |
+
+An unknown alias fails the knot run with `ModelRefNotFound` (error in
+the loom-log and in state `last_error`, message pointing at
+`rig/models.yml`).
+
+**Swap a model behind an alias** (no profile edits, no restart):
+
+1. Edit `rig/models.yml` — change the `provider`/`model` under the
+   alias:
+   ```yaml
+   models:
+     fast:
+       provider: anthropic
+       model: claude-sonnet-4-20250514
+   ```
+2. The **next strand** processed by any knot using a profile with
+   `model-ref: fast` uses the new model. Verify in
+   `tie-offs/<rig>/state.json` (profile entries show the resolved
+   `provider`/`model`) or in the next tie-off.
 
 ### Profile Markdown Body
 
@@ -627,7 +687,10 @@ When a strand event triggers a knot:
 
 1. The knot's `agent-profile-ref` is used to load the profile from
    `rig/profiles/{name}.md` (read fresh from disk each time).
-2. The profile provides: `provider`, `model`, `tools`.
+2. The profile provides: `tools`, and the model — either its
+   `model-ref` alias resolved against a **fresh read** of
+   `rig/models.yml`, or its direct `provider` + `model` (alias wins
+   when both are present).
 3. The profile's markdown body is merged with the knot's markdown
    body to form the full system prompt:
    ```
@@ -668,9 +731,17 @@ written atomically every 5 seconds.
   "profiles": [
     {
       "name": "fast",
+      "model-ref": "fast",
       "provider": "openai",
       "model": "gpt-4o",
       "timeout": 600
+    },
+    {
+      "name": "reviewer",
+      "model-ref": null,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "timeout": null
     }
   ],
   "updated_at": "2026-06-18T12:00:00Z"
@@ -686,9 +757,12 @@ written atomically every 5 seconds.
 | `completed` | Processing finished successfully |
 | `failed` | Processing failed with an error |
 
-> **Note:** The state file includes `name`, `provider`, `model`, and
-> `timeout` for profiles but not `tools` or the system prompt (body).
-> To check those fields, read the profile file directly from
+> **Note:** The state file includes `name`, `model-ref`, `provider`,
+> `model`, and `timeout` for profiles but not `tools` or the system
+> prompt (body). `provider`/`model` are the **resolved** values — for
+> `model-ref` profiles they come from `rig/models.yml` and are `null`
+> when the alias is unresolvable; for direct-spec profiles `model-ref`
+> is `null`. To check those fields, read the profile file directly from
 > `rig/profiles/{name}.md`.
 
 ---
@@ -700,6 +774,8 @@ written atomically every 5 seconds.
 | Loom `{id}` not in `tie-offs/<rig>/state.json` | Directory may not end in `-loom`, or file watcher hasn't picked it up yet. Wait up to 5 seconds and re-check. |
 | Profile `{name}` not in `tie-offs/<rig>/state.json` | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
 | Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log at `tie-offs/<rig>/{loom-id}/.loom-log`. |
+| `model-ref` not in `rig/models.yml` | Knot will fail with `ModelRefNotFound` (`model-ref 'X' not found in rig/models.yml`). Add the alias to `rig/models.yml` or fix the profile. The error appears in the loom-log and in state `last_error`. |
+| Profile shows `null` provider/model in state | The profile's alias is unresolvable — `rig/models.yml` is missing, empty, or malformed, or the alias is undefined. Check `rig/models.yml`. |
 | Knot file parse errors | Knot is skipped. Check `tie-offs/<rig>/{loom-id}/.loom-log` for `KnotParseWarning` events. |
 | `tie-offs/<rig>/state.json` does not exist | Knot is not running. Suggest `knot-init` skill. |
 
@@ -708,7 +784,7 @@ written atomically every 5 seconds.
 ## Quick Reference
 
 ```bash
-# Create a profile (write file directly)
+# Create a profile with a direct provider/model spec
 mkdir -p rig/profiles
 cat > rig/profiles/fast.md << 'EOF'
 ---
@@ -719,6 +795,28 @@ model: gpt-4o
 
 You are a fast reviewer.
 EOF
+
+# Create a profile that references a model alias
+cat > rig/profiles/frontier.md << 'EOF'
+---
+name: frontier
+model-ref: frontier
+---
+
+You are a frontier-model reviewer.
+EOF
+
+# Define the alias in the rig-level registry (auto-created by startup)
+cat >> rig/models.yml << 'EOF'
+models:
+  frontier:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+EOF
+
+# Swap the model behind an alias (live — next strand picks it up)
+# Edit rig/models.yml: change provider/model under the alias. No profile
+# edits, no restart.
 
 # Create a loom with a normal knot (filesystem strand-dir)
 mkdir -p rig/prd-review-loom

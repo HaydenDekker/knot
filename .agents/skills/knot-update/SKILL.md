@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.7.0"
-  compatibility: "Knot 0.23.0+"
+  version: "1.8.0"
+  compatibility: "Knot 0.32.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,113 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Model Aliases — Rig-Level Model Registry (Knot 0.32.0, 2026-08-20)
+
+**What changed:** profiles can now reference a rig-level model alias
+instead of hard-coding `provider` + `model`. A new registry file
+`rig/models.yml` maps **aliases** to `{provider, model}` pairs. The
+registry is read fresh at resolution time (per strand processing, per
+state write) — never cached. Swapping a model is a single edit in
+`models.yml`; every profile referencing the alias picks it up live,
+without a restart.
+
+**New file: `rig/models.yml`**
+
+```yaml
+models:
+  fast:
+    provider: openai
+    model: gpt-4o
+  frontier:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+```
+
+- Top-level `models` map: alias → `{provider, model}`.
+- Both `provider` and `model` are required, non-empty per alias.
+- Alias names: any non-empty string (no slug enforcement). Two
+  aliases may target the same model (A/B swapping is a feature).
+- File missing, empty, or comments-only → empty registry. Malformed
+  YAML, or an entry with a missing/empty `provider`/`model` → warning;
+  treated as an empty registry (never blocks processing).
+- `run_startup` auto-creates `rig/models.yml` (commented template)
+  when missing; never overwrites an existing file.
+
+**New profile field: `model-ref`**
+
+```yaml
+---
+name: fast
+model-ref: fast
+tools:
+  - read
+---
+```
+
+Precedence:
+
+| `model-ref` | `provider` + `model` | Behaviour |
+|---|---|---|
+| set | absent | Resolved via registry at processing time |
+| set | set | **Alias wins** — direct values ignored, parse warning |
+| absent | set | Legacy direct spec — unchanged |
+| absent | absent | Parse error (no model defined) |
+
+Unknown alias → the knot run fails with `ModelRefNotFound`; the error
+(`model-ref 'X' not found in rig/models.yml`) appears in the loom-log
+and in `last_error` in state.
+
+**State schema (`tie-offs/<rig>/state.json`):** profile entries gain
+`model-ref` (the alias, `null` for direct-spec profiles), and
+`provider`/`model` become the **resolved** values — `null` when the
+alias is unresolvable.
+
+**Direct-spec profiles are unaffected** — no forced migration.
+`provider` + `model` remain valid indefinitely.
+
+#### Migration (optional — only if you want alias-based swapping)
+
+1. **Collect the distinct provider/model pairs** in use:
+   ```bash
+   grep -rE '^(provider|model):' rig/profiles/
+   ```
+2. **Define an alias per distinct pair** in `rig/models.yml` (semantic
+   names, e.g. `fast`, `frontier`):
+   ```yaml
+   models:
+     fast:
+       provider: openai
+       model: gpt-4o
+   ```
+3. **Replace the frontmatter lines** in each profile that uses that
+   pair — locate them, then swap the two lines for one `model-ref`:
+   ```bash
+   grep -rl '^model: gpt-4o$' rig/profiles/
+   ```
+   ```yaml
+   ---
+   name: fast
+   model-ref: fast
+   ---
+   ```
+4. **Verify:** `tie-offs/<rig>/state.json` should show `model-ref`
+   plus the resolved `provider`/`model` for each migrated profile.
+
+#### If Not Migrated
+
+Nothing breaks. Direct-spec profiles behave exactly as before. A
+`model-ref` profile simply fails to resolve (`ModelRefNotFound`) until
+its alias exists in `rig/models.yml`.
+
+#### Fields Unchanged by This Migration
+
+Knot frontmatter (`name`, `agent-profile-ref`, `strand-dir`,
+`git-versioned`, `strand-source`, `event-description`), loom format, and
+tie-off format are unchanged. Profile frontmatter gains the optional
+`model-ref` field only.
 
 ---
 

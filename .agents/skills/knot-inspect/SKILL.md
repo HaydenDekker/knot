@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.3.0"
-  compatibility: "Knot 0.31.0+"
+  version: "3.4.0"
+  compatibility: "Knot 0.32.0+"
 ---
 
 # Knot Inspect Skill
@@ -74,9 +74,17 @@ knot) based on user requests.
   "profiles": [
     {
       "name": "fast",
+      "model-ref": "fast",
       "provider": "openai",
       "model": "gpt-4o",
       "timeout": 600
+    },
+    {
+      "name": "reviewer",
+      "model-ref": null,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "timeout": null
     }
   ],
   "updated_at": "2026-06-18T12:00:00Z"
@@ -85,6 +93,14 @@ knot) based on user requests.
 
 The state file is written atomically every 5 seconds. Staleness is at
 most 5 seconds behind reality.
+
+Profile entries carry `model-ref` (the alias, `null` for direct-spec
+profiles) plus the **resolved** `provider`/`model`. For `model-ref`
+profiles the resolved values come from `rig/models.yml`; `null`
+`provider`/`model` means the alias is **unresolvable** (missing,
+empty, or malformed registry, or an undefined alias) — the profile's
+knots will fail with `ModelRefNotFound` until `rig/models.yml` is
+fixed.
 
 ---
 
@@ -111,9 +127,14 @@ When asked to show rig status:
 4. **List profiles**: Extract the `profiles` array from state.
    Present a summary table:
 
-   | Profile | Provider | Model | Timeout |
-   |---------|----------|---------|---------|
-   | `fast` | `openai` | `gpt-4o` | `300` |
+   | Profile | Alias | Provider | Model | Timeout |
+   |---------|-------|----------|---------|---------|
+   | `fast` | `fast` | `openai` | `gpt-4o` | `300` |
+   | `reviewer` | — | `anthropic` | `claude-sonnet-4-20250514` | default |
+
+   `Alias` is the profile's `model-ref` (`—` for direct-spec
+   profiles). `Provider`/`Model` are the resolved values — `null`
+   means the alias is unresolvable (check `rig/models.yml`).
 
 5. **If no looms**: Report "No looms are registered. Use the
    `knot-create` skill to create looms."
@@ -179,13 +200,21 @@ When asked to list or view agent profiles:
 
 1. **List all profiles**: Read `tie-offs/<rig>/state.json` and extract the
    `profiles` array.
-   Present a summary table with: Name, Provider, Model, Timeout
-   (show "default" for null/missing values).
+   Present a summary table with: Name, Alias (`model-ref`), Provider,
+   Model, Timeout (show "default" for null/missing timeout). For
+   `model-ref` profiles, Provider/Model are the values resolved from
+   `rig/models.yml`; show `null` as **unresolvable alias** and point
+   the user at `rig/models.yml`.
 
 2. **View a specific profile**: Find the profile by name in state.
    - If not found: Report "Profile `{name}` not found. Check
      `tie-offs/<rig>/state.json` to see available profiles."
-   - Show: name, provider, model, timeout.
+   - Show: name, model-ref (alias), resolved provider, resolved model,
+     timeout.
+   - If `model-ref` is set but `provider`/`model` are `null`, the
+     alias is unresolvable — report that and check `rig/models.yml`
+     (missing/empty/malformed file or undefined alias). The profile's
+     knots will fail with `ModelRefNotFound` until it is fixed.
    - The state file includes `timeout` (in seconds). A missing or
      null value means the runner default of 300 seconds (5 minutes).
    - The state file does not include `profile_prompt`. If the user
