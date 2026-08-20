@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-20 (plan 069 added)
+> **Last Updated:** 2026-08-20 (plan 069 completed)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 69 | [Model Aliases — Rig-Level Model Registry](069-model-aliases/model-aliases-plan.md) | 📝 Draft | 2026-08-20 |
+| 69 | [Model Aliases — Rig-Level Model Registry](069-model-aliases/model-aliases-plan.md) | ✅ Complete | 2026-08-20 |
 | 68 | [Rig Repository Separation](068-rig-repo-separation/rig-repo-separation-plan.md) | 📝 Draft | 2026-08-17 |
 | 66 | [Relax the Knot Terminology Rule](066-terminology-rule-relaxation/terminology-rule-relaxation-plan.md) | 📝 Draft | 2026-07-29 |
 | 63 | [Spurious Delete Suppression](063-spurious-delete-suppression/spurious-delete-suppression-plan.md) | 📝 Draft | 2026-07-16 |
@@ -60,9 +60,11 @@ _Overview sections for active and recently completed plans go here._
 
 ### 69. Model Aliases — Rig-Level Model Registry
 
-**Status:** 📝 Draft
+**Status:** ✅ Complete (2026-08-20)
 **Created:** 2026-08-20
 **Goal:** Add a rig-level model registry (`rig/models.yml`) mapping aliases to `{provider, model}` pairs, plus an optional `model-ref` field on profiles (alias takes highest priority over direct spec), so swapping a model is a one-line edit picked up live on the next strand — no per-profile edits, no restart.
+
+Completed in Knot 0.32.0: `ModelRegistry` domain value, `ModelRegistryPort` + `FileSystemModelRegistry` (fresh read per resolution — live swap), `model-ref` profile frontmatter with alias-over-direct precedence, state visibility (resolved provider/model, null when unresolvable), `run_startup` auto-creates `rig/models.yml`, and updated skills (knot-update/create/inspect/init).
 
 Full details in [069-model-aliases/model-aliases-plan.md](069-model-aliases/model-aliases-plan.md).
 
