@@ -574,8 +574,9 @@ mod state_writer_adapter {
             }],
             profiles: vec![RigStateProfile {
                 name: "fast".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
+                model_ref: None,
+                provider: Some("openai".to_string()),
+                model: Some("gpt-4o".to_string()),
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -638,8 +639,9 @@ mod state_writer_adapter {
                     looms: vec![],
                     profiles: vec![RigStateProfile {
                         name: format!("profile-{i}"),
-                        provider: "openai".to_string(),
-                        model: "gpt-4o".to_string(),
+                        model_ref: None,
+                        provider: Some("openai".to_string()),
+                        model: Some("gpt-4o".to_string()),
                         timeout: None,
                     }],
                     strand_queue: vec![],
@@ -800,8 +802,8 @@ mod profile_repo_adapter {
         let profile = repo.get("fast").unwrap().unwrap();
 
         assert_eq!(profile.name, "fast");
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
     }
 
     /// `list()` returns all profiles.
@@ -847,8 +849,8 @@ mod profile_repo_adapter {
         let profile = repo.get("reviewer").unwrap().unwrap();
 
         assert_eq!(profile.name, "reviewer");
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.model, "gpt-4o");
+        assert_eq!(profile.provider.as_deref(), Some("openai"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
         assert!(profile.profile_prompt.contains("code reviewer"));
     }
 }

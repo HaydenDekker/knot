@@ -46,6 +46,9 @@ pub struct AppContext {
     pub agent_runner: Arc<dyn application::ports::AgentRunner>,
     /// Agent profile repository for dynamic profile resolution.
     pub profile_repo: Arc<dyn application::ports::AgentProfileRepository>,
+    /// Model registry (rig/models.yml) for resolving `model-ref`
+    /// aliases — read fresh per strand and per state write.
+    pub model_registry: Arc<dyn application::ports::ModelRegistryPort>,
     /// Rig-log port for recording operational events (timeouts, idle).
     pub rig_log_port: Arc<dyn application::ports::RigLogPort>,
     /// Rig-level agent configuration.
@@ -235,6 +238,14 @@ pub fn build_app_context(
             ),
         );
 
+    // Model registry: reads rig/models.yml fresh on every load (no
+    // caching) so a model swap behind an alias is picked up on the next
+    // strand, without a restart.
+    let model_registry: Arc<dyn application::ports::ModelRegistryPort> =
+        Arc::new(crate::adapters::outbound::FileSystemModelRegistry::new(
+            config.rig_dir.clone(),
+        ));
+
     // Runtime root: all runtime artifacts (tie-offs, dispatch dirs,
     // loom-logs, state.json, .rig-log, events/) live under
     // tie-offs/<rig-basename>/ at the project level — the rig directory
@@ -296,6 +307,7 @@ pub fn build_app_context(
             event_sender: strand_tx,
             agent_runner,
             profile_repo,
+            model_registry,
             rig_log_port,
             rig_config,
             loom_ids: Vec::new(),
@@ -401,6 +413,7 @@ pub fn spawn_process_strand_loop(
     let rig_config = ctx.rig_config.clone();
     let rig_dir = ctx.rig_dir.clone();
     let profile_repo = Arc::clone(&ctx.profile_repo);
+    let model_registry = Arc::clone(&ctx.model_registry);
     let rig_log_port = Arc::clone(&ctx.rig_log_port);
 
     // Git versioning — wired in the composition root (project root).
@@ -417,6 +430,7 @@ pub fn spawn_process_strand_loop(
             rig_config,
             rig_dir,
             profile_repo,
+            model_registry,
             rig_log_port.clone(),
             git_versioning_port,
             Arc::new(
@@ -703,6 +717,35 @@ agent-adapter: pi-stdio
         })?;
     }
 
+    // Auto-create the model registry file if missing so the rig has an
+    // explicit (empty) registry rather than an absent file. Idempotent:
+    // an existing models.yml is never overwritten.
+    let models_path = rig_dir.join("models.yml");
+    if !models_path.exists() {
+        let models_template = r#"# Rig-level model registry.
+#
+# Maps model aliases to {provider, model} pairs. Profiles reference an
+# alias via `model-ref:` in their frontmatter; the alias is resolved
+# fresh on every strand, so swapping the model behind an alias is a
+# single edit here — picked up live, without a restart.
+#
+# Both `provider` and `model` are required per alias, e.g.:
+#
+# models:
+#   default:
+#     provider: openai
+#     model: gpt-4o
+#
+# While `models:` is absent (or empty), the registry is empty: profiles
+# with `model-ref` fail to resolve (ModelRefNotFound); profiles with a
+# direct provider/model spec are unaffected.
+"#;
+        std::fs::write(&models_path, models_template).map_err(|e| {
+            eprintln!("WARNING: failed to write {}: {e}", models_path.display());
+            e
+        })?;
+    }
+
     // Migrate the legacy layout (runtime artifacts inside the rig dir)
     // to the project-level runtime root. Idempotent and non-fatal —
     // runs after rig-dir creation and before any watcher registration.
@@ -796,6 +839,7 @@ pub fn start_state_writer(
     let store = ctx.store.clone();
     let log_port = Arc::clone(&ctx.loom_log_port);
     let profile_repo = Arc::clone(&ctx.profile_repo);
+    let model_registry = Arc::clone(&ctx.model_registry);
     let state_writer = Arc::clone(&ctx.state_writer);
     let rig_dir = ctx.rig_dir.clone();
     let strand_queue = Arc::clone(&ctx.strand_queue);
@@ -805,6 +849,7 @@ pub fn start_state_writer(
             store,
             log_port,
             profile_repo,
+            model_registry,
             state_writer,
             rig_dir,
             strand_queue,
