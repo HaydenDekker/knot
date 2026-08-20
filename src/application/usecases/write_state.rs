@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::application::ports::{
-    AgentProfileRepository, LoomLogPort, PortError, StateWriterPort,
-    StrandEventQueue,
+    AgentProfileRepository, LoomLogPort, ModelRegistryPort, PortError,
+    StateWriterPort, StrandEventQueue,
 };
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
@@ -34,6 +34,10 @@ pub struct WriteState {
     store: LoomStore,
     log_port: Arc<dyn LoomLogPort>,
     profile_repo: Arc<dyn AgentProfileRepository>,
+    /// Model registry — loaded fresh on each state build so that
+    /// `model-ref` profiles show their resolved provider/model and a
+    /// registry edit is reflected in the next state write (no restart).
+    model_registry: Arc<dyn ModelRegistryPort>,
     state_writer: Arc<dyn StateWriterPort>,
     rig_dir: PathBuf,
     strand_queue: Option<StrandQueueRef>,
@@ -49,6 +53,7 @@ impl WriteState {
         store: LoomStore,
         log_port: Arc<dyn LoomLogPort>,
         profile_repo: Arc<dyn AgentProfileRepository>,
+        model_registry: Arc<dyn ModelRegistryPort>,
         state_writer: Arc<dyn StateWriterPort>,
         rig_dir: PathBuf,
         strand_queue: StrandQueueRef,
@@ -57,6 +62,7 @@ impl WriteState {
             store,
             log_port,
             profile_repo,
+            model_registry,
             state_writer,
             rig_dir,
             strand_queue: Some(strand_queue),
@@ -85,13 +91,37 @@ impl WriteState {
             })
             .collect();
 
+        // Fresh registry read per state build — resolved models track
+        // live edits to rig/models.yml.
+        let registry = self.model_registry.load()?;
+
         let rig_state_profiles: Vec<RigStateProfile> = profiles
             .into_iter()
-            .map(|p| RigStateProfile {
-                name: p.name,
-                provider: p.provider,
-                model: p.model,
-                timeout: p.timeout,
+            .map(|p| {
+                let (model_ref, provider, model) = match p.model_ref.as_deref() {
+                    Some(alias) => match registry.resolve(alias) {
+                        Some(resolved) => (
+                            Some(alias.to_string()),
+                            Some(resolved.provider.clone()),
+                            Some(resolved.model.clone()),
+                        ),
+                        None => {
+                            eprintln!(
+                                "WARNING: profile '{}' references unknown model alias '{}' — provider/model shown as null in state (check rig/models.yml)",
+                                p.name, alias
+                            );
+                            (Some(alias.to_string()), None, None)
+                        }
+                    },
+                    None => (None, p.provider, p.model),
+                };
+                RigStateProfile {
+                    name: p.name,
+                    model_ref,
+                    provider,
+                    model,
+                    timeout: p.timeout,
+                }
             })
             .collect();
 
@@ -395,6 +425,9 @@ mod write_state_tests {
         let store = LoomStore::new();
         let log_port = Arc::new(MockLoomLogForState::default());
         let profile_repo = Arc::new(MockProfileRepoForState::default());
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
         let state_writer = Arc::new(MockStateWriterForState::default());
         let rig_dir = PathBuf::from("/test/rig");
 
@@ -405,6 +438,7 @@ mod write_state_tests {
             store.clone(),
             log_port.clone(),
             profile_repo.clone(),
+            model_registry,
             state_writer.clone(),
             rig_dir,
             strand_queue,
@@ -446,8 +480,112 @@ mod write_state_tests {
         assert_eq!(state.looms[0].knots[0].status, "idle");
         assert_eq!(state.profiles.len(), 1);
         assert_eq!(state.profiles[0].name, "fast");
-        assert_eq!(state.profiles[0].provider, "openai");
-        assert_eq!(state.profiles[0].model, "gpt-4o");
+        assert_eq!(state.profiles[0].model_ref, None);
+        assert_eq!(state.profiles[0].provider.as_deref(), Some("openai"));
+        assert_eq!(state.profiles[0].model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// Alias profile: state shows `model-ref` plus the resolved
+    /// provider/model from the registry.
+    #[test]
+    fn build_state_alias_profile_shows_resolved_model() {
+        let store = LoomStore::new();
+        let log_port: Arc<dyn LoomLogPort> = Arc::new(MockLoomLogForState::default());
+        let concrete_repo = Arc::new(MockProfileRepoForState::default());
+        concrete_repo.add_profile(
+            AgentProfile::with_model_ref(
+                "fast".to_string(),
+                "fast".to_string(),
+                "You are fast.".to_string(),
+            )
+            .unwrap(),
+        );
+        let profile_repo: Arc<dyn AgentProfileRepository> = concrete_repo;
+        let registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
+        use crate::domain::value_objects::{ModelRef, ModelRegistry};
+        let mut reg = ModelRegistry::new();
+        reg.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+            },
+        );
+        registry.set_registry(reg);
+        let state_writer: Arc<dyn StateWriterPort> =
+            Arc::new(MockStateWriterForState::default());
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(None));
+
+        let uc = WriteState::new(
+            store.clone(),
+            log_port,
+            profile_repo,
+            registry,
+            state_writer,
+            PathBuf::from("/test/rig"),
+            strand_queue,
+        );
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(state.profiles.len(), 1);
+        assert_eq!(state.profiles[0].name, "fast");
+        assert_eq!(state.profiles[0].model_ref.as_deref(), Some("fast"));
+        assert_eq!(state.profiles[0].provider.as_deref(), Some("anthropic"));
+        assert_eq!(state.profiles[0].model.as_deref(), Some("claude-sonnet"));
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"model-ref\":\"fast\""));
+    }
+
+    /// Direct-spec profile: state shows `model_ref` null and the
+    /// profile's own provider/model.
+    #[test]
+    fn build_state_direct_profile_has_null_model_ref() {
+        let (uc, _store, _log_port, profile_repo, _writer) = build_use_case();
+
+        profile_repo.add_profile(
+            AgentProfile::new(
+                "legacy".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+                "You are legacy.".to_string(),
+            )
+            .unwrap(),
+        );
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(state.profiles[0].model_ref, None);
+        assert_eq!(state.profiles[0].provider.as_deref(), Some("openai"));
+        assert_eq!(state.profiles[0].model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// Unknown alias: provider/model are null in state (warning is
+    /// logged); the profile entry still carries the `model-ref`.
+    #[test]
+    fn build_state_unknown_alias_shows_null_provider_and_model() {
+        let (uc, _store, _log_port, profile_repo, _writer) = build_use_case();
+        // Registry stays empty (from build_use_case) — alias unresolvable.
+
+        profile_repo.add_profile(
+            AgentProfile::with_model_ref(
+                "ghostly".to_string(),
+                "ghost".to_string(),
+                "You are ghostly.".to_string(),
+            )
+            .unwrap(),
+        );
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(state.profiles[0].model_ref.as_deref(), Some("ghost"));
+        assert_eq!(state.profiles[0].provider, None);
+        assert_eq!(state.profiles[0].model, None);
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"provider\":null"));
+        assert!(json.contains("\"model\":null"));
     }
 
     #[test]
@@ -641,10 +779,14 @@ mod write_state_tests {
         let strand_queue: StrandQueueRef =
             Arc::new(std::sync::Mutex::new(None));
 
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
         let uc = WriteState::new(
             store.clone(),
             log_port,
             profile_repo,
+            model_registry,
             state_writer,
             rig_dir,
             strand_queue,
@@ -724,6 +866,9 @@ mod write_state_tests {
         // Profile structure
         let profiles = value["profiles"].as_array().unwrap();
         assert_eq!(profiles[0]["name"], "fast");
+        // Direct-spec profile: model-ref is null, provider/model resolve
+        // to the profile's own values.
+        assert_eq!(profiles[0]["model-ref"], serde_json::Value::Null);
         assert_eq!(profiles[0]["provider"], "openai");
         assert_eq!(profiles[0]["model"], "gpt-4o");
     }
@@ -758,10 +903,14 @@ mod write_state_tests {
         let strand_queue: StrandQueueRef =
             Arc::new(std::sync::Mutex::new(Some(queue)));
 
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
         let uc = WriteState::new(
             store.clone(),
             log_port,
             profile_repo,
+            model_registry,
             state_writer,
             rig_dir,
             strand_queue,
@@ -834,10 +983,14 @@ mod write_state_tests {
         let strand_queue: StrandQueueRef =
             Arc::new(std::sync::Mutex::new(Some(queue)));
 
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
         let uc = WriteState::new(
             store.clone(),
             log_port,
             profile_repo,
+            model_registry,
             state_writer,
             rig_dir,
             strand_queue,

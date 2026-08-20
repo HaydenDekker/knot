@@ -133,8 +133,9 @@ mod tests {
             }],
             profiles: vec![RigStateProfile {
                 name: "fast".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
+                model_ref: None,
+                provider: Some("openai".to_string()),
+                model: Some("gpt-4o".to_string()),
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -313,8 +314,9 @@ mod tests {
                     looms: vec![],
                     profiles: vec![RigStateProfile {
                         name: format!("profile-{i}"),
-                        provider: "openai".to_string(),
-                        model: "gpt-4o".to_string(),
+                        model_ref: None,
+                        provider: Some("openai".to_string()),
+                        model: Some("gpt-4o".to_string()),
                         timeout: None,
                     }],
                     strand_queue: vec![],

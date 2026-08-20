@@ -310,14 +310,29 @@ pub struct RigStateKnot {
 }
 
 /// An agent profile as represented in the state snapshot.
+///
+/// `model_ref` is the profile's `model-ref` alias (`None` for
+/// direct-spec profiles). `provider`/`model` are the **resolved** values:
+/// for alias profiles they come from `rig/models.yml` at write time;
+/// `null` when the alias is unresolvable (missing registry entry or
+/// missing/malformed registry file).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RigStateProfile {
     /// Profile name.
     pub name: String,
-    /// The LLM provider identifier.
-    pub provider: String,
-    /// The model name to use.
-    pub model: String,
+    /// The profile's `model-ref` alias, if any.
+    #[serde(rename = "model-ref")]
+    pub model_ref: Option<String>,
+    /// The resolved LLM provider identifier.
+    ///
+    /// `None` (serialised as `null`) when the profile's alias is
+    /// unresolvable against the model registry.
+    pub provider: Option<String>,
+    /// The resolved model name.
+    ///
+    /// `None` (serialised as `null`) when the profile's alias is
+    /// unresolvable against the model registry.
+    pub model: Option<String>,
     /// Session timeout in seconds. `None` means use the runner's default (300s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
@@ -907,8 +922,9 @@ mod tests {
             }],
             profiles: vec![RigStateProfile {
                 name: "fast".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
+                model_ref: None,
+                provider: Some("openai".to_string()),
+                model: Some("gpt-4o".to_string()),
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -943,8 +959,9 @@ mod tests {
             }],
             profiles: vec![RigStateProfile {
                 name: "fast".to_string(),
-                provider: "openai".to_string(),
-                model: "gpt-4o".to_string(),
+                model_ref: None,
+                provider: Some("openai".to_string()),
+                model: Some("gpt-4o".to_string()),
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -1160,14 +1177,16 @@ mod tests {
             profiles: vec![
                 RigStateProfile {
                     name: "fast".to_string(),
-                    provider: "openai".to_string(),
-                    model: "gpt-4o".to_string(),
+                    model_ref: None,
+                    provider: Some("openai".to_string()),
+                    model: Some("gpt-4o".to_string()),
                     timeout: None,
                 },
                 RigStateProfile {
                     name: "detailed".to_string(),
-                    provider: "anthropic".to_string(),
-                    model: "claude-sonnet".to_string(),
+                    model_ref: Some("detailed".to_string()),
+                    provider: Some("anthropic".to_string()),
+                    model: Some("claude-sonnet".to_string()),
                     timeout: Some(600),
                 },
             ],
