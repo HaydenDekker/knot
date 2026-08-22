@@ -249,7 +249,7 @@ fn test_event_enforcement_with_real_pi() {
         !dispatches.is_empty(),
         "event dispatcher should have been called"
     );
-    let (event, consumer_knot_id, consumer_loom_id, _rig_dir) = &dispatches[0];
+    let (event, consumer_knot_id, consumer_loom_id, _rig_dir, _seq) = &dispatches[0];
     assert_eq!(event.event_id, "PlanCreated");
     assert_eq!(*consumer_knot_id, "plan-validator");
     assert_eq!(*consumer_loom_id, "validation-loom");
@@ -665,7 +665,7 @@ fn test_event_enforcement_multiple_consumers() {
     );
 
     // Verify both consumer looms received the dispatch
-    let loom_ids: Vec<_> = dispatches.iter().map(|(_, _, loom, _)| loom.as_str()).collect();
+    let loom_ids: Vec<_> = dispatches.iter().map(|(_, _, loom, _, _)| loom.as_str()).collect();
     assert!(
         loom_ids.contains(&"validation-loom"),
         "should dispatch to validation-loom: {:?}",

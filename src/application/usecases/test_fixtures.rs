@@ -895,15 +895,20 @@ impl AgentRunner for TrackingAgentRunner {
 
 /// A mock [`EventDispatcherPort`] that records all dispatch calls.
 ///
+/// Each recorded call is
+/// `(event, consumer_knot_id, consumer_loom_id, rig_dir, seq)` — the
+/// trailing `seq` is the batch sequence position the use case assigned
+/// (0 = plain name, `i ≥ 1` = `-{i:03}` suffix).
+///
 /// Returns a synthetic path so the application layer can verify the
 /// dispatch was invoked without touching the filesystem.
 pub struct MockEventDispatcher {
     dispatches:
-        Arc<Mutex<Vec<(AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(AgentEvent, String, String, String, u32)>>>,
 }
 
 impl MockEventDispatcher {
-    pub fn new() -> (Self, Arc<Mutex<Vec<(AgentEvent, String, String, String)>>>) {
+    pub fn new() -> (Self, Arc<Mutex<Vec<(AgentEvent, String, String, String, u32)>>>) {
         let dispatches = Arc::new(Mutex::new(vec![]));
         (
             Self {
@@ -916,7 +921,7 @@ impl MockEventDispatcher {
     /// Return all recorded dispatch calls.
     pub fn get_dispatches(
         &self,
-    ) -> Vec<(AgentEvent, String, String, String)> {
+    ) -> Vec<(AgentEvent, String, String, String, u32)> {
         self.dispatches.lock().unwrap().clone()
     }
 }
@@ -936,12 +941,14 @@ impl EventDispatcherPort for MockEventDispatcher {
         _producer_knot: &str,
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
+        seq: u32,
     ) -> Result<std::path::PathBuf, PortError> {
         self.dispatches.lock().unwrap().push((
             event.clone(),
             consumer_knot.id.0.clone(),
             consumer_loom_id.0.clone(),
             rig_dir.display().to_string(),
+            seq,
         ));
         // Return a synthetic path so callers can verify dispatch happened
         // (under the runtime root, matching FileSystemEventDispatcher).

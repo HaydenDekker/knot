@@ -434,6 +434,14 @@ impl ProcessStrand {
     /// that target this producer knot and match the event ID. Dispatches event
     /// files to each matching consumer.
     ///
+    /// Sequencing: dispatches are grouped by target directory
+    /// (`(consumer_loom_id, event_id)` — exactly the `{loom}/{EventId}/`
+    /// directory). A group with a single member dispatches with `seq = 0`
+    /// (plain filename); a group with N > 1 members dispatches with
+    /// `seq = 1..N` in match order (tie-off block order for the events,
+    /// loom-store order for the consumers), so the filename suffixes
+    /// follow the producer's emission order.
+    ///
     /// Returns the list of `(event_id, consumer_knot_id, consumer_loom_id)` dispatches performed.
     pub(crate) fn dispatch_events_to_consumers(
         &self,
@@ -443,8 +451,25 @@ impl ProcessStrand {
         all_knot_ids: &[&str],
     ) -> Result<Vec<(String, String, String)>, PortError> {
         let all_looms = self.store.list();
-        let mut dispatches: Vec<(String, String, String)> = Vec::new();
 
+        /// A single (event, consumer loom, consumer knot) match found in
+        /// the subscription scan.
+        struct Match<'a> {
+            event: &'a AgentEvent,
+            loom: &'a Loom,
+            consumer_knot: &'a Knot,
+        }
+
+        impl<'a> Match<'a> {
+            /// The target directory key: `(consumer_loom_id, event_id)`.
+            fn group_key(&self) -> (&'a str, &'a str) {
+                (self.loom.id.0.as_str(), self.event.event_id.as_str())
+            }
+        }
+
+        // Pass 1 — collect all matches in scan order (events in tie-off
+        // block order; consumers in loom-store order).
+        let mut matches: Vec<Match<'_>> = Vec::new();
         for event in events {
             for loom in &all_looms {
                 for consumer_knot in &loom.knots {
@@ -467,22 +492,50 @@ impl ProcessStrand {
                             } => sub_event_id == &event.event_id,
                         };
                         if matches_event {
-                            let _path = self.event_dispatcher.dispatch(
+                            matches.push(Match {
                                 event,
+                                loom,
                                 consumer_knot,
-                                &producer_knot.id.0,
-                                &loom.id,
-                                &self.rig_dir,
-                            )?;
-                            dispatches.push((
-                                event.event_id.clone(),
-                                consumer_knot.id.0.clone(),
-                                loom.id.0.clone(),
-                            ));
+                            });
                         }
                     }
                 }
             }
+        }
+
+        // Pass 2 — count group sizes. Group key = the target directory:
+        // `(consumer_loom_id, event_id)`.
+        let mut group_sizes: std::collections::HashMap<(&str, &str), u32> =
+            std::collections::HashMap::new();
+        for m in &matches {
+            *group_sizes.entry(m.group_key()).or_insert(0) += 1;
+        }
+
+        // Pass 3 — dispatch in match order with per-group sequences:
+        // singleton group → seq 0 (plain name); group of N > 1 → seq 1..N.
+        let mut dispatches: Vec<(String, String, String)> = Vec::new();
+        let mut group_counts: std::collections::HashMap<(&str, &str), u32> =
+            std::collections::HashMap::new();
+        for m in &matches {
+            let key = m.group_key();
+            let group_size = group_sizes[&key];
+            let count = group_counts.entry(key).or_insert(0);
+            *count += 1;
+            let seq = if group_size == 1 { 0 } else { *count };
+
+            let _path = self.event_dispatcher.dispatch(
+                m.event,
+                m.consumer_knot,
+                &producer_knot.id.0,
+                &m.loom.id,
+                &self.rig_dir,
+                seq,
+            )?;
+            dispatches.push((
+                m.event.event_id.clone(),
+                m.consumer_knot.id.0.clone(),
+                m.loom.id.0.clone(),
+            ));
         }
 
         Ok(dispatches)
@@ -3134,7 +3187,7 @@ mod event_dispatch_tests {
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<HashMap<String, String>>>,
-        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
     ) {
         let store = LoomStore::new();
@@ -3240,10 +3293,12 @@ mod event_dispatch_tests {
             "should have dispatched exactly 1 event, got {}",
             dispatched.len()
         );
-        let (evt, consumer_knot_name, consumer_loom, _rig_dir) = &dispatched[0];
+        let (evt, consumer_knot_name, consumer_loom, _rig_dir, seq) = &dispatched[0];
         assert_eq!(evt.event_id, "PlanCreated");
         assert_eq!(*consumer_knot_name, "plan-watcher");
         assert_eq!(*consumer_loom, "consumer-loom");
+        // Single dispatch into its directory — plain name (seq 0)
+        assert_eq!(*seq, 0, "singleton group should dispatch with seq 0");
 
         // Verify loom-log has EventsDispatched entry
         let events = log_events.lock().unwrap();
@@ -3393,10 +3448,286 @@ mod event_dispatch_tests {
         // Collect the loom IDs
         let looms: Vec<String> = dispatched
             .iter()
-            .map(|(_, _, loom, _)| loom.clone())
+            .map(|(_, _, loom, _, seq)| {
+                assert_eq!(*seq, 0, "different directories — plain name (seq 0)");
+                loom.clone()
+            })
             .collect();
         assert!(looms.contains(&"consumer-loom-a".to_string()));
         assert!(looms.contains(&"consumer-loom-b".to_string()));
+    }
+
+    /// Four same-id events → one consumer: the incident shape
+    /// (2026-08-22, `retest-validator` emitted four `ValidationFail`
+    /// blocks dispatched to `uat-gap-assessment` in one pass). All four
+    /// target the same `{loom}/{EventId}/` directory, so the use case
+    /// must assign seq 1..4 — one distinct filename per event, none lost
+    /// to a same-second collision.
+    #[test]
+    fn event_dispatch_same_id_multiple_events_same_consumer_gets_sequences() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("retest-validator")],
+        );
+        let consumer_loom = build_loom(
+            "uat-gap-assessment-loom",
+            vec![build_consumer_knot(
+                "gap-assessor",
+                "retest-validator",
+                "ValidationFail",
+                "When validation fails.",
+            )],
+        );
+
+        // Four ValidationFail blocks — same event id, distinct payloads
+        // (the incident: frontend, tauri-commands, tauri-desktop,
+        // tauri-android).
+        let event_content = concat!(
+            "Validation complete.\n",
+            "```markdown\n",
+            "---\n",
+            "event: ValidationFail\n",
+            "ci: frontend\n",
+            "description: frontend tests failed\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: ValidationFail\n",
+            "ci: tauri-commands\n",
+            "description: tauri-commands tests failed\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: ValidationFail\n",
+            "ci: tauri-desktop\n",
+            "description: tauri-desktop tests failed\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: ValidationFail\n",
+            "ci: tauri-android\n",
+            "description: tauri-android tests failed\n",
+            "---\n",
+            "```\n",
+        );
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("retest-validator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // All four events dispatched — none lost to a filename collision
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            4,
+            "all four same-id events should dispatch, got {}",
+            dispatched.len()
+        );
+
+        // Same target directory for all four → seq 1..4 in emission order
+        let seqs: Vec<u32> = dispatched.iter().map(|d| d.4).collect();
+        assert_eq!(
+            seqs,
+            vec![1, 2, 3, 4],
+            "same-directory fan-out must use seq 1..N, got {:?}",
+            seqs
+        );
+
+        // Payloads survive in emission order
+        let cis: Vec<&str> = dispatched
+            .iter()
+            .map(|d| d.0.payload.get("ci").map(|s| s.as_str()).unwrap_or_default())
+            .collect();
+        assert_eq!(
+            cis,
+            vec!["frontend", "tauri-commands", "tauri-desktop", "tauri-android"]
+        );
+
+        // Loom-log entry lists all four dispatches
+        let events = log_events.lock().unwrap();
+        let dispatch_log = events
+            .iter()
+            .find(|e| matches!(e, LoomEvent::EventsDispatched { .. }))
+            .expect("EventsDispatched should be logged");
+        if let LoomEvent::EventsDispatched { dispatches: d, .. } = dispatch_log {
+            assert_eq!(d.len(), 4, "all four dispatches should be logged");
+        }
+    }
+
+    /// Secondary collision path: two consumer knots in the SAME loom are
+    /// both subscribed to the same event from the same producer — a
+    /// single event then produces two writes to one `{loom}/{EventId}/`
+    /// directory, so both dispatches get sequences (1, 2).
+    #[test]
+    fn event_dispatch_two_consumer_knots_same_loom_get_sequences() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![
+                build_consumer_knot(
+                    "watcher-a",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created (A).",
+                ),
+                build_consumer_knot(
+                    "watcher-b",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created (B).",
+                ),
+            ],
+        );
+
+        let event_content = concat!(
+            "Plan created.\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-003\n",
+            "---\n",
+            "```",
+        );
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            2,
+            "both consumer knots in the same loom should dispatch"
+        );
+
+        // Same target directory for both → seq 1, 2 in loom knot order
+        let seqs: Vec<u32> = dispatched.iter().map(|d| d.4).collect();
+        assert_eq!(seqs, vec![1, 2], "same-directory dispatches must use seq 1..N");
+        let names: Vec<&str> = dispatched.iter().map(|d| d.1.as_str()).collect();
+        assert_eq!(names, vec!["watcher-a", "watcher-b"]);
+    }
+
+    /// Different event ids to the same loom are different directories —
+    /// each dispatch is a singleton group and keeps the plain name
+    /// (seq 0), even though two writes happen in the same second.
+    #[test]
+    fn event_dispatch_different_event_ids_same_loom_stay_seq_zero() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![
+                build_consumer_knot(
+                    "watcher-created",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created.",
+                ),
+                build_consumer_knot(
+                    "watcher-approved",
+                    "plan-creator",
+                    "PlanApproved",
+                    "When a plan is approved.",
+                ),
+            ],
+        );
+
+        let event_content = concat!(
+            "Plan created and approved.\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "plan: PLAN-004\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanApproved\n",
+            "plan: PLAN-004\n",
+            "---\n",
+            "```",
+        );
+        let output = Ok(AgentOutput {
+            stdout: event_content.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _tie_off_appends, _content, dispatches, _store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(
+            dispatched.len(),
+            2,
+            "one dispatch per event id"
+        );
+
+        // Different directories ({loom}/PlanCreated and {loom}/PlanApproved)
+        // → each is a singleton group → plain names.
+        let seqs: Vec<u32> = dispatched.iter().map(|d| d.4).collect();
+        assert_eq!(seqs, vec![0, 0], "different directories stay seq 0");
     }
 
     /// Listener context is injected into the prompt when consumers exist.
@@ -3695,7 +4026,7 @@ mod event_dispatch_tests {
 
         let dispatched = dispatches.lock().unwrap();
         assert_eq!(dispatched.len(), 1);
-        let (evt, _, _, _) = &dispatched[0];
+        let (evt, _, _, _, _) = &dispatched[0];
         assert_eq!(evt.event_id, "PlanCreated");
         assert_eq!(
             evt.payload.get("plan"),
@@ -3761,7 +4092,7 @@ mod event_dispatch_tests {
 
         let dispatched = dispatches.lock().unwrap();
         assert_eq!(dispatched.len(), 1);
-        let (evt, consumer_knot_name, consumer_loom_id, rig_dir) = &dispatched[0];
+        let (evt, consumer_knot_name, consumer_loom_id, rig_dir, _) = &dispatched[0];
 
         // Event has no target_knot field (removed from struct)
         assert_eq!(evt.event_id, "PlanCreated");
@@ -3871,10 +4202,11 @@ mod event_dispatch_tests {
             "loom-level subscription should dispatch, got {} events",
             dispatched.len()
         );
-        let (evt, consumer_knot_name, consumer_loom, _rig_dir) = &dispatched[0];
+        let (evt, consumer_knot_name, consumer_loom, _rig_dir, seq) = &dispatched[0];
         assert_eq!(evt.event_id, "PlanCreated");
         assert_eq!(*consumer_knot_name, "plan-watcher");
         assert_eq!(*consumer_loom, "consumer-loom");
+        assert_eq!(*seq, 0, "singleton group should dispatch with seq 0");
     }
 
     /// Producer in a different loom from the loom-level subscription —
@@ -4012,7 +4344,7 @@ mod event_dispatch_tests {
 
         // Verify both consumers received the event
         let consumer_names: Vec<&String> =
-            dispatched.iter().map(|(_, name, _, _)| name).collect();
+            dispatched.iter().map(|(_, name, _, _, _)| name).collect();
         assert!(
             consumer_names.contains(&&"plan-watcher".to_string()),
             "knot-level consumer should receive dispatch"
@@ -4034,7 +4366,7 @@ mod event_dispatch_tests {
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<HashMap<String, String>>>,
-        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
         TempDir,
     ) {
@@ -4905,7 +5237,7 @@ mod event_enforcement_tests {
     ) -> (
         ProcessStrand,
         Arc<Mutex<Vec<LoomEvent>>>,
-        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
     ) {
         let store = LoomStore::new();
@@ -5473,7 +5805,7 @@ mod phase4_integration_tests {
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<HashMap<String, String>>>,
-        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
         TempDir,
     ) {
@@ -5878,7 +6210,7 @@ mod phase4_integration_tests {
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<TieOff>>>,
         Arc<Mutex<HashMap<String, String>>>,
-        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String)>>>,
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
     ) {
         let store = LoomStore::new();

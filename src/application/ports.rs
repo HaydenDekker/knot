@@ -653,6 +653,14 @@ pub trait EventDispatcherPort: Send + Sync {
     /// Content: YAML frontmatter with event payload + markdown body with context.
     /// If multiple consumers listen for the same event, each loom gets its own copy.
     ///
+    /// `seq` is the dispatch's position within its target directory batch
+    /// (the `{consumer-loom-id}/{event-id}/` directory). `0` = plain name
+    /// `event-{ts}.md` (single-dispatch group); `i ≥ 1` = suffixed name
+    /// `event-{ts}-{i:03}.md` (the i-th dispatch of a same-second fan-out
+    /// into the same directory). The adapter owns name materialisation and
+    /// guarantees the created file is unique (atomic creation, taken-name
+    /// fallback).
+    ///
     /// `producer_knot` identifies the knot that emitted the event — derived
     /// from the tie-off processing context, not from the event itself.
     ///
@@ -664,6 +672,7 @@ pub trait EventDispatcherPort: Send + Sync {
         producer_knot: &str,
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
+        seq: u32,
     ) -> Result<std::path::PathBuf, PortError>;
 }
 
