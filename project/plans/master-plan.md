@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-22 (plan 070 added)
+> **Last Updated:** 2026-08-22 (plan 070 activated)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | 📝 Draft | 2026-08-22 |
+| 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | 🟡 In Progress | 2026-08-22 |
 | 69 | [Model Aliases — Rig-Level Model Registry](069-model-aliases/model-aliases-plan.md) | ✅ Complete | 2026-08-20 |
 | 68 | [Rig Repository Separation](068-rig-repo-separation/rig-repo-separation-plan.md) | 📝 Draft | 2026-08-17 |
 | 66 | [Relax the Knot Terminology Rule](066-terminology-rule-relaxation/terminology-rule-relaxation-plan.md) | 📝 Draft | 2026-07-29 |
@@ -58,6 +58,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 70. Unique Event Dispatch Filenames — Per-Batch Sequence Suffix
+
+**Status:** 🟡 In Progress
+**Created:** 2026-08-22
+**Goal:** Make event dispatch filenames unique per dispatch batch — same-second fan-out of one event type to one consumer gets per-directory sequence suffixes (`event-{ts}-001.md` …) and atomic `create_new` file creation, so no two dispatches can target one path.
+
+Full details in [070-dispatch-filename-collision/dispatch-filename-collision-plan.md](070-dispatch-filename-collision/dispatch-filename-collision-plan.md).
 
 ### 69. Model Aliases — Rig-Level Model Registry
 
