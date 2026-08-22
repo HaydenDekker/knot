@@ -242,3 +242,30 @@ artifact; migration = none required, warnings self-settle) and note the new
   are unchanged.
 - **Binary version.** The `EventsDispatched` shape change ships with the next
   version bump via plan completion; `knot-update` changelog is the record.
+
+## Implementation Status: ✅ Complete (2026-08-22)
+
+## Completion Notes
+- All 5 phases implemented and committed on branch `070-dispatch-filename-collision`.
+- `event_file_name(ts, seq)` pure helper (Phase 0): `seq = 0` →
+  `event-{ts}.md`, `seq ≥ 1` → `event-{ts}-{seq:03}.md`.
+- `EventDispatcherPort::dispatch` gained `seq: u32`; `ProcessStrand::
+  dispatch_events_to_consumers` rewritten as collect → group by
+  `(consumer_loom_id, event_id)` → dispatch with per-group sequences
+  (Phase 1).
+- Atomic creation: `create_new` + taken-name fallback (bounded 1000
+  retries, `PortError` on exhaustion) in `create_event_file` (Phase 2).
+- Acceptance test `tests/event_fanout.rs` replays the incident
+  end-to-end with the real dispatcher: 4 files, 4 payloads, consumer
+  processes 4 strands (Phase 3); `ProcessStrandBuilder` gained
+  `with_real_event_dispatcher(rig_dir)`.
+- `LoomEvent::EventsDispatched.dispatches` extended to the 4-tuple
+  (created file path, absolute); legacy 3-tuple loom-log lines are
+  skipped with a warning (pinned by test) (Phase 4).
+- knot-update 1.9.0 changelog entry (0.33.0); design knowledge
+  extracted to `project/design/design-event-dispatch.md`.
+- Full `cargo test --no-fail-fast` green (1077 passed) except one
+  pre-existing lib test failure
+  (`domain::events::tests::build_listener_context_prompt_includes_
+  do_not_edit_guidance`) that fails on a clean tree too — out of scope
+  for this plan.
