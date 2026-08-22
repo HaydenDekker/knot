@@ -5,6 +5,8 @@
 //! this directory (or a subdirectory within it), so new event files trigger
 //! the consumer's processing pipeline.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 
 use crate::application::ports::{EventDispatcherPort, PortError};
@@ -42,8 +44,82 @@ pub(crate) fn event_file_name(timestamp: &str, seq: u32) -> String {
 pub struct FileSystemEventDispatcher;
 
 impl FileSystemEventDispatcher {
+    /// Maximum number of taken-name retries when the computed event
+    /// filename already exists (leftover from an earlier run in the same
+    /// second, or a concurrent dispatch). Bounded so a pathological
+    /// directory cannot loop forever.
+    const MAX_NAME_RETRIES: u32 = 1000;
+
     pub fn new() -> Self {
         Self
+    }
+
+    /// Atomically create an event file in `event_dir` for the given
+    /// timestamp and batch sequence.
+    ///
+    /// The candidate name is [`event_file_name`](super::event_file_name)
+    /// of `(timestamp, seq)`; if that name is already taken, the suffix
+    /// is bumped by one and creation retried — up to
+    /// [`MAX_NAME_RETRIES`](Self::MAX_NAME_RETRIES) times. Creation uses
+    /// `OpenOptions::create_new`, so a collision can never silently
+    /// overwrite an existing file: "two writes, one path" is impossible,
+    /// not just unlikely.
+    ///
+    /// The content is written to the opened handle and flushed before
+    /// the path is returned.
+    pub(crate) fn create_event_file(
+        event_dir: &Path,
+        timestamp: &str,
+        seq: u32,
+        content: &str,
+    ) -> Result<std::path::PathBuf, PortError> {
+        let mut candidate = seq;
+        for _ in 0..=Self::MAX_NAME_RETRIES {
+            let filename = event_file_name(timestamp, candidate);
+            let path = event_dir.join(&filename);
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    file.write_all(content.as_bytes()).map_err(|e| {
+                        PortError::EventDispatchFailed(format!(
+                            "failed to write event file '{}': {e}",
+                            path.display()
+                        ))
+                    })?;
+                    file.flush().map_err(|e| {
+                        PortError::EventDispatchFailed(format!(
+                            "failed to flush event file '{}': {e}",
+                            path.display()
+                        ))
+                    })?;
+                    return Ok(path);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Name taken — bump the suffix and retry. When
+                    // `seq == 0` this walks plain → -001 → -002 …;
+                    // when `seq ≥ 1` it continues from the assigned
+                    // position (seq → seq+1 → …).
+                    match candidate.checked_add(1) {
+                        Some(next) => candidate = next,
+                        None => break, // sequence overflow — exhausted
+                    }
+                }
+                Err(e) => {
+                    return Err(PortError::EventDispatchFailed(format!(
+                        "failed to create event file '{}': {e}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        Err(PortError::EventDispatchFailed(format!(
+            "could not allocate a unique event filename in '{}' after {} retries",
+            event_dir.display(),
+            Self::MAX_NAME_RETRIES
+        )))
     }
 }
 
@@ -64,7 +140,6 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         seq: u32,
     ) -> Result<std::path::PathBuf, PortError> {
         let timestamp = format_timestamp();
-        let filename = event_file_name(&timestamp, seq);
 
         let event_dir = derive_runtime_root(rig_dir)
             .join(&consumer_loom_id.0)
@@ -78,19 +153,10 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
             ))
         })?;
 
-        let event_path = event_dir.join(&filename);
-
         // Build the event file content: YAML frontmatter + markdown body
         let content = Self::build_event_file_content(event, &timestamp, producer_knot);
 
-        std::fs::write(&event_path, &content).map_err(|e| {
-            PortError::EventDispatchFailed(format!(
-                "failed to write event file '{}': {e}",
-                event_path.display()
-            ))
-        })?;
-
-        Ok(event_path)
+        Self::create_event_file(&event_dir, &timestamp, seq, &content)
     }
 }
 
@@ -224,6 +290,160 @@ mod tests {
             event_file_name("2026 08 22T12:00:00Z", 7),
             "event-2026-08-22T12-00-00Z-007.md"
         );
+    }
+
+    // ── create_event_file tests (Phase 2) ──────────────────────────────
+    //
+    // Deterministic: the timestamp is injected, no real clock involved.
+
+    /// Fresh directory, `seq = 0` → the plain name is used.
+    #[test]
+    fn create_event_file_fresh_dir_uses_plain_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let event_dir = dir.path().join("EventId");
+        std::fs::create_dir_all(&event_dir).unwrap();
+
+        let path = FileSystemEventDispatcher::create_event_file(
+            &event_dir,
+            "2026-08-22T21:54:49+01:00",
+            0,
+            "content",
+        )
+        .unwrap();
+
+        assert_eq!(
+            path.file_name().unwrap(),
+            "event-2026-08-22T21-54-49+01-00.md"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "content");
+    }
+
+    /// The plain name is already taken (leftover from an earlier run in
+    /// the same second) → `seq = 0` falls back to `-001` instead of
+    /// overwriting.
+    #[test]
+    fn create_event_file_taken_plain_name_falls_back_to_001() {
+        let dir = tempfile::tempdir().unwrap();
+        let event_dir = dir.path().join("EventId");
+        std::fs::create_dir_all(&event_dir).unwrap();
+
+        // Pre-create the name the seq=0 dispatch would compute
+        std::fs::write(
+            event_dir.join("event-2026-08-22T21-54-49+01-00.md"),
+            "pre-existing",
+        )
+        .unwrap();
+
+        let path = FileSystemEventDispatcher::create_event_file(
+            &event_dir,
+            "2026-08-22T21:54:49+01:00",
+            0,
+            "new content",
+        )
+        .unwrap();
+
+        assert_eq!(
+            path.file_name().unwrap(),
+            "event-2026-08-22T21-54-49+01-00-001.md",
+            "taken plain name must fall back to the first suffix"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+        // The pre-existing file is untouched (create_new, no overwrite)
+        assert_eq!(
+            std::fs::read_to_string(event_dir.join("event-2026-08-22T21-54-49+01-00.md"))
+                .unwrap(),
+            "pre-existing"
+        );
+    }
+
+    /// A batch position is already taken (concurrent dispatch or
+    /// leftover) → `seq = 1` continues from `-002`.
+    #[test]
+    fn create_event_file_taken_seq_name_falls_back_to_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let event_dir = dir.path().join("EventId");
+        std::fs::create_dir_all(&event_dir).unwrap();
+
+        std::fs::write(
+            event_dir.join("event-2026-08-22T21-54-49+01-00-001.md"),
+            "taken",
+        )
+        .unwrap();
+
+        let path = FileSystemEventDispatcher::create_event_file(
+            &event_dir,
+            "2026-08-22T21:54:49+01:00",
+            1,
+            "next content",
+        )
+        .unwrap();
+
+        assert_eq!(
+            path.file_name().unwrap(),
+            "event-2026-08-22T21-54-49+01-00-002.md",
+            "taken batch position must bump to the next suffix"
+        );
+    }
+
+    /// Every candidate name is taken → the bounded retry is exhausted
+    /// and a clear `PortError` is returned (never a silent overwrite).
+    #[test]
+    fn create_event_file_exhausts_retries_and_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let event_dir = dir.path().join("EventId");
+        std::fs::create_dir_all(&event_dir).unwrap();
+
+        // Take the plain name and suffixes 001..=1000 — every candidate
+        // the seq=0 retry loop can try (1001 attempts total).
+        for candidate in 0..=FileSystemEventDispatcher::MAX_NAME_RETRIES {
+            let name = event_file_name("2026-08-22T21:54:49+01:00", candidate);
+            std::fs::write(event_dir.join(name), "taken").unwrap();
+        }
+
+        let result = FileSystemEventDispatcher::create_event_file(
+            &event_dir,
+            "2026-08-22T21:54:49+01:00",
+            0,
+            "never written",
+        );
+
+        let err = result.expect_err("exhausted retries must be an error");
+        let msg = match err {
+            PortError::EventDispatchFailed(m) => m,
+            other => panic!("expected EventDispatchFailed, got {:?}", other),
+        };
+        assert!(
+            msg.contains("could not allocate a unique event filename"),
+            "error should name the failure: {}",
+            msg
+        );
+        // No 1002nd file appeared
+        assert_eq!(
+            std::fs::read_dir(&event_dir).unwrap().count(),
+            (FileSystemEventDispatcher::MAX_NAME_RETRIES + 1) as usize
+        );
+    }
+
+    /// A non-collision I/O error (e.g. permissions) is returned
+    /// immediately, not retried.
+    #[test]
+    fn create_event_file_io_error_is_not_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        // Point at a path whose parent cannot exist: a file is
+        // pre-created where the directory should be, so open() fails
+        // with NotADirectory rather than AlreadyExists.
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let event_dir = blocker.join("EventId");
+
+        let result = FileSystemEventDispatcher::create_event_file(
+            &event_dir,
+            "2026-08-22T21:54:49+01:00",
+            0,
+            "content",
+        );
+
+        assert!(result.is_err(), "open failure must be an error");
     }
 
     fn build_event() -> AgentEvent {
