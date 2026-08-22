@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-22 (plan 070 completed)
+> **Last Updated:** 2026-08-22 (plan 071 drafted)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
 | 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | ✅ Complete | 2026-08-22 |
 | 69 | [Model Aliases — Rig-Level Model Registry](069-model-aliases/model-aliases-plan.md) | ✅ Complete | 2026-08-20 |
 | 68 | [Rig Repository Separation](068-rig-repo-separation/rig-repo-separation-plan.md) | 📝 Draft | 2026-08-17 |
@@ -58,6 +59,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 71. Record the Pi Session ID in Tie-Off Sections
+
+**Status:** 📝 Draft
+**Created:** 2026-08-22
+**Goal:** Record the pi session ID captured during agent execution as an optional `session:` metadata line in tie-off sections, so every tie-off section is traceable to the exact pi session that produced it.
+
+Full details in [071-tie-off-session-id/tie-off-session-id-plan.md](071-tie-off-session-id/tie-off-session-id-plan.md).
 
 ### 70. Unique Event Dispatch Filenames — Per-Batch Sequence Suffix
 
