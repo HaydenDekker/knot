@@ -15,6 +15,25 @@ use crate::domain::knot_file::derive_runtime_root;
 // Re-export shared timestamp helper
 use crate::application::usecases::types::format_timestamp;
 
+/// Derive the event filename for a dispatch from a raw timestamp string.
+///
+/// `seq == 0` → `event-{ts}.md` — the plain name, reserved for
+/// single-dispatch groups. `seq ≥ 1` → `event-{ts}-{seq:03}.md` — the
+/// dispatch's position within a same-directory batch (3-digit
+/// zero-padded, 1–999).
+///
+/// Colons and spaces in the timestamp are replaced with hyphens for
+/// filesystem safety. Pure and clock-free so it is unit-testable with
+/// an injected timestamp string.
+pub(crate) fn event_file_name(timestamp: &str, seq: u32) -> String {
+    let ts = timestamp.replace([':', ' '], "-");
+    if seq == 0 {
+        format!("event-{}.md", ts)
+    } else {
+        format!("event-{}-{:03}.md", ts, seq)
+    }
+}
+
 /// Filesystem implementation of [`EventDispatcherPort`].
 ///
 /// Creates event files at:
@@ -44,7 +63,7 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         rig_dir: &Path,
     ) -> Result<std::path::PathBuf, PortError> {
         let timestamp = format_timestamp();
-        let filename = format!("event-{}.md", timestamp.replace([':', ' '], "-"));
+        let filename = event_file_name(&timestamp, 0);
 
         let event_dir = derive_runtime_root(rig_dir)
             .join(&consumer_loom_id.0)
@@ -145,6 +164,66 @@ impl FileSystemEventDispatcher {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    // ── event_file_name tests (Phase 0) ────────────────────────────────
+
+    /// `seq = 0` produces the plain (pre-suffix) name — colons and
+    /// spaces replaced with hyphens, no sequence suffix.
+    #[test]
+    fn event_file_name_seq_zero_is_plain_name() {
+        assert_eq!(
+            event_file_name("2026-08-22T21:54:49+01:00", 0),
+            "event-2026-08-22T21-54-49+01-00.md"
+        );
+    }
+
+    /// Sequence numbers start at 1 (never 0) so the plain name stays
+    /// reserved for single-dispatch groups.
+    #[test]
+    fn event_file_name_seq_one_starts_at_001() {
+        assert_eq!(
+            event_file_name("2026-08-22T21:54:49+01:00", 1),
+            "event-2026-08-22T21-54-49+01-00-001.md"
+        );
+    }
+
+    #[test]
+    fn event_file_name_seq_two() {
+        assert_eq!(
+            event_file_name("2026-08-22T21:54:49+01:00", 2),
+            "event-2026-08-22T21-54-49+01-00-002.md"
+        );
+    }
+
+    /// The suffix is 3-digit zero-padded up to the 999 cap.
+    #[test]
+    fn event_file_name_seq_999_max_padding() {
+        assert_eq!(
+            event_file_name("2026-08-22T21:54:49+01:00", 999),
+            "event-2026-08-22T21-54-49+01-00-999.md"
+        );
+    }
+
+    /// Mid-range sequences are zero-padded to three digits.
+    #[test]
+    fn event_file_name_suffix_is_three_digit_zero_padded() {
+        let name = event_file_name("2026-08-22T21:54:49+01:00", 42);
+        assert!(name.ends_with("-042.md"), "got: {}", name);
+    }
+
+    /// Colon and space substitution is preserved for any timestamp
+    /// shape (the helper owns the filesystem-safety replacement).
+    #[test]
+    fn event_file_name_preserves_colon_and_space_substitution() {
+        assert_eq!(
+            event_file_name("2026 08 22T12:00:00Z", 0),
+            "event-2026-08-22T12-00-00Z.md"
+        );
+        assert_eq!(
+            event_file_name("2026 08 22T12:00:00Z", 7),
+            "event-2026-08-22T12-00-00Z-007.md"
+        );
+    }
 
     fn build_event() -> AgentEvent {
         let mut payload = HashMap::new();
