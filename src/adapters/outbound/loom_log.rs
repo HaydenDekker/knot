@@ -521,4 +521,59 @@ mod tests {
             _ => panic!("second event should be KnotCompleted"),
         }
     }
+
+    /// A legacy 3-tuple `EventsDispatched` line (written by Knot < 0.33.0,
+    /// before the created-file-path element) fails to deserialize into the
+    /// 4-tuple and is skipped with a warning — while subsequent lines read
+    /// fine. Pins the 0.30.1-style graceful degradation: warning noise
+    /// only, no data loss.
+    #[test]
+    fn loom_log_read_all_skips_legacy_3tuple_events_dispatched() {
+        let dir = tempfile::tempdir().unwrap();
+        let loom_id = LoomId("legacy-loom".to_string());
+
+        let log_path =
+            dir.path().join("tie-offs/rig/legacy-loom/.loom-log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+
+        // Line 1: legacy 3-tuple EventsDispatched (old shape)
+        // Line 2: current 4-tuple EventsDispatched
+        // Line 3: a normal event after the legacy line
+        let content = concat!(
+            "{\"EventsDispatched\":{\"loom_id\":\"legacy-loom\",\"knot_id\":\"k1\",\"strand_path\":\"in.md\",\"dispatches\":[[\"PlanCreated\",\"watcher\",\"consumer-loom\"]],\"timestamp\":\"2026-07-10T10:00:00Z\"}}\n",
+            "{\"EventsDispatched\":{\"loom_id\":\"legacy-loom\",\"knot_id\":\"k1\",\"strand_path\":\"in.md\",\"dispatches\":[[\"PlanCreated\",\"watcher\",\"consumer-loom\",\"/tie-offs/rig/consumer-loom/PlanCreated/event-2026-07-10T10-00-01Z.md\"]],\"timestamp\":\"2026-08-22T21:54:49+01:00\"}}\n",
+            "{\"KnotCompleted\":{\"loom_id\":\"legacy-loom\",\"knot_id\":\"k1\",\"strand_path\":\"in.md\",\"tie_off_path\":\"out.md\",\"timestamp\":\"2026-08-22T21:54:50+01:00\"}}\n",
+        );
+        fs::write(&log_path, content).unwrap();
+
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
+        let events = log.read_all(&loom_id).unwrap();
+
+        // The legacy line is skipped; the two current-shape lines survive
+        assert_eq!(
+            events.len(),
+            2,
+            "legacy 3-tuple line must be skipped, later lines must read"
+        );
+
+        match &events[0] {
+            LoomEvent::EventsDispatched { dispatches, .. } => {
+                assert_eq!(dispatches.len(), 1);
+                assert_eq!(dispatches[0].0, "PlanCreated");
+                assert!(
+                    dispatches[0].3.ends_with("event-2026-07-10T10-00-01Z.md"),
+                    "4th element must carry the created file path: {}",
+                    dispatches[0].3
+                );
+            }
+            other => panic!("first event should be EventsDispatched, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!(
+                "second event should be KnotCompleted (read after the \
+                 skipped legacy line), got {other:?}"
+            ),
+        }
+    }
 }

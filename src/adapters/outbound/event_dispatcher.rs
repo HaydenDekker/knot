@@ -4,6 +4,22 @@
 //! an `{event-id}/` subdirectory. The consumer knot's `strand-dir` watches
 //! this directory (or a subdirectory within it), so new event files trigger
 //! the consumer's processing pipeline.
+//!
+//! ## Filename contract
+//!
+//! `event-{timestamp}[-NNN].md` where `{timestamp}` is the dispatch
+//! clock with `:`/space replaced by `-`, and `NNN` is a 3-digit
+//! zero-padded batch sequence (1–999, absent for `seq = 0`):
+//!
+//! - `seq = 0` → `event-{ts}.md` — a single dispatch into its directory.
+//! - `seq = i ≥ 1` → `event-{ts}-{i:03}.md` — the i-th dispatch of a
+//!   same-second fan-out into the same `{loom}/{EventId}/` directory.
+//!
+//! Files are created with `OpenOptions::create_new` (never overwriting);
+//! if the computed name is already taken, the suffix is bumped until a
+//! free name is found (bounded retry, `PortError` on exhaustion). The
+//! suffix is transparent to consumers: event-file detection is
+//! prefix-based (`event-`) plus frontmatter.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -39,8 +55,11 @@ pub(crate) fn event_file_name(timestamp: &str, seq: u32) -> String {
 /// Filesystem implementation of [`EventDispatcherPort`].
 ///
 /// Creates event files at:
-/// `tie-offs/<rig-basename>/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
-/// (under the rig's runtime root, not inside the rig directory).
+/// `tie-offs/<rig-basename>/{consumer-loom-id}/{event-id}/event-{timestamp}[-NNN].md`
+/// (under the rig's runtime root, not inside the rig directory) — see the
+/// module docs for the filename contract. Creation is atomic
+/// (`create_new` + taken-name fallback), so two dispatches can never
+/// target one path.
 pub struct FileSystemEventDispatcher;
 
 impl FileSystemEventDispatcher {

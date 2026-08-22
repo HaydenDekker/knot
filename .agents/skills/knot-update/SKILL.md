@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.8.0"
-  compatibility: "Knot 0.32.0+"
+  version: "1.9.0"
+  compatibility: "Knot 0.33.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,50 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Unique Event Dispatch Filenames — Per-Batch Sequence Suffix (Knot 0.33.0, 2026-08-22)
+
+**What changed:** when one dispatch batch (one parsed tie-off, including
+event-enforcement follow-ups) fans multiple events out into the *same*
+consumer directory — same event id, same consumer loom, same second —
+event files now carry a per-batch sequence suffix, and event files are
+created atomically. Before this version all writes targeted the single
+path `event-{ts}.md` and the last write silently won (incident
+2026-08-22: a four-way `ValidationFail` fan-out lost three of four
+events). The same fix also covers the rarer path where two consumer
+knots in one loom subscribe to the same event.
+
+**Event file naming (`tie-offs/<rig>/<consumer-loom>/<EventId>/`):**
+
+| Batch size | Filenames |
+|---|---|
+| 1 (unchanged) | `event-{ts}.md` |
+| N > 1 | `event-{ts}-001.md`, `event-{ts}-002.md`, … `event-{ts}-NNN.md` |
+
+- `{ts}` is unchanged: dispatch clock at second precision, `:`/space
+  replaced by `-` (e.g. `event-2026-08-22T21-54-49+01-00.md`).
+- The suffix is a 3-digit zero-padded number starting at `001` — the
+  plain name stays reserved for single-dispatch batches. Suffix order
+  follows the producer's emission order.
+- Creation is atomic (`create_new`): if the computed name is already
+  taken — a leftover from an earlier run in the same second, or a
+  concurrent dispatch — the suffix is bumped until a free name is
+  found (bounded retry). A silent overwrite is no longer possible.
+
+**Migration: none required.**
+
+- **Consumers unchanged** — event-file detection is prefix-based
+  (`event-`) plus frontmatter, so the suffix is transparent. N distinct
+  files in one second produce N distinct consumer strands.
+- **Loom-log `EventsDispatched` entries** extend their `dispatches`
+  array from 3-tuples to 4-tuples (the created file path is added).
+  This is an internal runtime artifact — no project document changes.
+  When the new binary reads loom-logs written by an older binary,
+  legacy 3-tuple lines are skipped with a warning; the warnings
+  self-settle as the logs are re-read, and no data is lost (the
+  producer's append-only tie-off retains all events).
 
 ---
 

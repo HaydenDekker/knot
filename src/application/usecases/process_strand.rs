@@ -442,14 +442,16 @@ impl ProcessStrand {
     /// loom-store order for the consumers), so the filename suffixes
     /// follow the producer's emission order.
     ///
-    /// Returns the list of `(event_id, consumer_knot_id, consumer_loom_id)` dispatches performed.
+    /// Returns the list of `(event_id, consumer_knot_id, consumer_loom_id,
+    /// created_file_path)` dispatches performed — the path is the file the
+    /// dispatcher created for that dispatch (delivery traceability).
     pub(crate) fn dispatch_events_to_consumers(
         &self,
         events: &[AgentEvent],
         producer_knot: &Knot,
         loom_id: &LoomId,
         all_knot_ids: &[&str],
-    ) -> Result<Vec<(String, String, String)>, PortError> {
+    ) -> Result<Vec<(String, String, String, String)>, PortError> {
         let all_looms = self.store.list();
 
         /// A single (event, consumer loom, consumer knot) match found in
@@ -513,7 +515,7 @@ impl ProcessStrand {
 
         // Pass 3 — dispatch in match order with per-group sequences:
         // singleton group → seq 0 (plain name); group of N > 1 → seq 1..N.
-        let mut dispatches: Vec<(String, String, String)> = Vec::new();
+        let mut dispatches: Vec<(String, String, String, String)> = Vec::new();
         let mut group_counts: std::collections::HashMap<(&str, &str), u32> =
             std::collections::HashMap::new();
         for m in &matches {
@@ -523,7 +525,7 @@ impl ProcessStrand {
             *count += 1;
             let seq = if group_size == 1 { 0 } else { *count };
 
-            let _path = self.event_dispatcher.dispatch(
+            let path = self.event_dispatcher.dispatch(
                 m.event,
                 m.consumer_knot,
                 &producer_knot.id.0,
@@ -535,6 +537,7 @@ impl ProcessStrand {
                 m.event.event_id.clone(),
                 m.consumer_knot.id.0.clone(),
                 m.loom.id.0.clone(),
+                path.display().to_string(),
             ));
         }
 
@@ -3314,6 +3317,13 @@ mod event_dispatch_tests {
             assert_eq!(d[0].0, "PlanCreated");
             assert_eq!(d[0].1, "plan-watcher");
             assert_eq!(d[0].2, "consumer-loom");
+            // 4th element = the file the dispatcher created (mock
+            // returns its synthetic path)
+            assert!(
+                d[0].3.ends_with("/consumer-loom/PlanCreated/event-mock.md"),
+                "dispatch entry must carry the created file path: {}",
+                d[0].3
+            );
         }
     }
 

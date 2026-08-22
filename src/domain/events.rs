@@ -439,13 +439,22 @@ pub enum LoomEvent {
     ///
     /// Recorded after a knot completes successfully and structured agent
     /// events are extracted from its tie-off. Lists which event-ids were
-    /// dispatched and to which consumer looms.
+    /// dispatched, to which consumer looms, and the file each dispatch
+    /// created — so a same-second fan-out can be traced file-by-file.
+    ///
+    /// The 4th tuple element (created file path) was added in Knot 0.33.0;
+    /// legacy 3-tuple entries from earlier binaries fail to deserialize
+    /// and are skipped by the loom-log reader with a warning (graceful
+    /// degradation — no data loss, the producer tie-off retains all
+    /// events). Same precedent as the 2→3 tuple expansion in 0.30.1.
     EventsDispatched {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
-        /// List of (event-id, consumer-knot-id, consumer-loom-id) triples dispatched.
-        dispatches: Vec<(String, String, String)>,
+        /// List of (event-id, consumer-knot-id, consumer-loom-id,
+        /// created-file-path) quadruples dispatched. The path is absolute
+        /// (the path the dispatcher returned when it created the file).
+        dispatches: Vec<(String, String, String, String)>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
