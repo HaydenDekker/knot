@@ -57,6 +57,11 @@ pub struct ProcessStrandResult {
     pub file_checker: Option<Arc<MockStrandFileChecker>>,
     /// Event dispatcher — present only when `.with_tracking_event_dispatcher()` is used.
     pub event_dispatcher: Option<Arc<MockEventDispatcher>>,
+    /// The real rig directory — present only when `.with_real_event_dispatcher(rig_dir)`
+    /// is used. Event files are created by the real `FileSystemEventDispatcher`
+    /// under `tie-offs/<rig-basename>/` (the runtime root, a sibling of the
+    /// rig directory's parent).
+    pub rig_dir: Option<PathBuf>,
 }
 
 /// Builder for constructing [`ProcessStrand`] with all mock ports wired up.
@@ -91,6 +96,9 @@ pub struct ProcessStrandBuilder {
     tracking_event_dispatcher: bool,
     /// Whether to expose the file checker in the result.
     tracking_file_checker: bool,
+    /// Real rig directory + real `FileSystemEventDispatcher` — when set,
+    /// event dispatch writes real files to disk instead of the mock.
+    real_event_dispatcher: Option<PathBuf>,
 }
 
 impl ProcessStrandBuilder {
@@ -104,6 +112,7 @@ impl ProcessStrandBuilder {
             tracking_git: false,
             tracking_event_dispatcher: false,
             tracking_file_checker: false,
+            real_event_dispatcher: None,
         }
     }
 
@@ -160,6 +169,18 @@ impl ProcessStrandBuilder {
         self
     }
 
+    /// Wire the **real** `FileSystemEventDispatcher` against a real rig
+    /// directory (default is a mock that records calls without touching
+    /// the filesystem).
+    ///
+    /// `rig_dir` must be an existing directory; event files are created
+    /// under the runtime root — `tie-offs/<rig-basename>/` next to it.
+    /// Returns `rig_dir` in the result.
+    pub fn with_real_event_dispatcher(mut self, rig_dir: PathBuf) -> Self {
+        self.real_event_dispatcher = Some(rig_dir);
+        self
+    }
+
     /// Build the [`ProcessStrand`] use case with all mocked ports.
     pub fn build(self) -> ProcessStrandResult {
         let store = LoomStore::new();
@@ -212,7 +233,13 @@ impl ProcessStrandBuilder {
         let event_dispatcher: Arc<dyn knot::application::ports::EventDispatcherPort>;
         let event_dispatcher_concrete: Option<Arc<MockEventDispatcher>>;
 
-        if self.tracking_event_dispatcher {
+        if self.real_event_dispatcher.is_some() {
+            // Real dispatcher writing real event files to the runtime root
+            event_dispatcher = Arc::new(
+                knot::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+            );
+            event_dispatcher_concrete = None;
+        } else if self.tracking_event_dispatcher {
             event_dispatcher_concrete = Some(Arc::new(MockEventDispatcher::default()));
             event_dispatcher = event_dispatcher_concrete.clone().unwrap();
         } else {
@@ -226,7 +253,9 @@ impl ProcessStrandBuilder {
             self.agent_runner.clone() as Arc<dyn AgentRunner>,
             Arc::new(tie_off_sink),
             RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
+            self.real_event_dispatcher
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("/rig")),
             profile_repo,
             model_registry.clone() as Arc<dyn knot::application::ports::ModelRegistryPort>,
             Arc::new(rig_log),
@@ -248,6 +277,7 @@ impl ProcessStrandBuilder {
             git_commits,
             file_checker: file_checker_concrete,
             event_dispatcher: event_dispatcher_concrete,
+            rig_dir: self.real_event_dispatcher.clone(),
         }
     }
 }

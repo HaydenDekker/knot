@@ -26,6 +26,7 @@ pub use loom::UnregisterLoom;
 pub use manage_knot::{KnotAction, ManageKnot};
 pub use process_strand::ProcessStrand;
 pub use query::GetKnotStatus;
+pub use strand_event_metadata::{extract_event_metadata, extract_expected_event_ids};
 pub use query::GetLoom;
 pub use query::GetLoomActivity;
 pub use query::ListLooms;
