@@ -213,6 +213,20 @@ impl StrandQueueAccessor for DiskBackedEventQueue {
             .map(|e| PathBuf::from(&e.strand_path))
             .collect()
     }
+
+    fn delete(&self, id: &PendingEventId) -> bool {
+        // Same file-level removal as the port's `delete` — used by
+        // ProcessStrand's late-removal step.
+        let path = self.store.event_path(id);
+        if path.exists() {
+            self.store.remove_event(id).expect(
+                "failed to remove event file during late removal",
+            );
+            true
+        } else {
+            false
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -384,7 +398,10 @@ mod tests {
         assert_eq!(queue.front().unwrap().strand_path, "/file-a.md");
 
         // After deleting the head, front advances to the next in FIFO
-        queue.delete(&PendingEventId("1001-aaa".to_string()));
+        StrandEventQueue::delete(
+            &queue,
+            &PendingEventId("1001-aaa".to_string()),
+        );
         assert_eq!(queue.front().unwrap().strand_path, "/file-b.md");
     }
 
@@ -495,7 +512,7 @@ mod tests {
         let id = queue.push(event);
 
         assert_eq!(queue.len(), 1);
-        assert!(queue.delete(&id));
+        assert!(StrandEventQueue::delete(&queue, &id));
         assert_eq!(queue.len(), 0);
     }
 
@@ -506,7 +523,7 @@ mod tests {
         let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
         let id = PendingEventId("9999-zzzz".to_string());
 
-        assert!(!queue.delete(&id));
+        assert!(!StrandEventQueue::delete(&queue, &id));
     }
 
     // ── pending_event ───────────────────────────────────────────────

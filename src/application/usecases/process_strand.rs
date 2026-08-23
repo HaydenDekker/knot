@@ -15,6 +15,7 @@ use crate::domain::entities::{
     StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
 };
 use crate::domain::events::{AgentEvent, BuildContext, ContextProvider, LoomEvent, StrandEvent, StrandQueueAccessor};
+use crate::domain::pending_event::{PendingEvent, PendingEventId};
 use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
@@ -145,18 +146,97 @@ impl ProcessStrand {
         Ok((config, timeout, profile))
     }
 
-    /// Resolve agent config, build prompt, execute agent, derive outcome.
+    /// Execute the strand processing pipeline (queue-less entry point).
     ///
-    /// Covers: profile resolution, deleted-event history, prompt building,
-    /// listener context, agent execution, and outcome derivation.
-    ///
-    /// Returns a `ResolvedExecution` with the outcome, session ID, listener
-    /// context, and all knots for downstream event enforcement.
-    /// Execute the strand processing pipeline.
+    /// Delegates to [`execute_inner`](Self::execute_inner) with no event
+    /// ID — no queue removal happens (used by callers and tests that do
+    /// not manage an event file).
     ///
     /// Appends lifecycle events to loom-log: KnotProcessing, then
     /// KnotCompleted or KnotFailed, then StrandProcessed.
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
+        self.execute_inner(event, None)
+    }
+
+    /// Execute a single queued event with late (at-least-once) removal.
+    ///
+    /// Converts the [`PendingEvent`] to a [`StrandEvent`] and executes it,
+    /// threading the event ID through to the terminal points so the event
+    /// file is removed exactly once on **every** return:
+    ///
+    /// - **Success** — as the last step before the git commit: dispatch,
+    ///   `KnotCompleted`, `StrandProcessed`, and event enforcement all
+    ///   happen first, and the commit captures everything, including the
+    ///   removal.
+    /// - **Failure / skip / early error** — at the point of failure
+    ///   (consume-on-failure — no poison-pill retry loops).
+    ///
+    /// The only window in which the event survives a crash is "processing
+    /// in flight" — a restart re-queues the event and the knot re-runs
+    /// (safe by knot idempotency).
+    pub fn execute_with_pending(
+        &self,
+        pending: &PendingEvent,
+    ) -> Result<(), PortError> {
+        let event: StrandEvent = match pending.clone().try_into() {
+            Ok(event) => event,
+            Err(e) => {
+                // Unknown event kind — the file can never be processed;
+                // consume it (poison-pill avoidance) and propagate.
+                self.remove_pending_event(Some(&pending.id));
+                return Err(PortError::EventStoreFailed(e.to_string()));
+            }
+        };
+        self.execute_inner(event, Some(&pending.id))
+    }
+
+    /// Remove the queued event file for `event_id` (no-op when `None` or
+    /// when no queue is wired).
+    ///
+    /// This is the explicit removal step of the late-removal semantics —
+    /// every terminal point in [`execute_inner`](Self::execute_inner)
+    /// calls it exactly once. `pub(crate)` so the success/failure helper
+    /// functions (terminal points) can invoke it.
+    pub(crate) fn remove_pending_event(
+        &self,
+        event_id: Option<&PendingEventId>,
+    ) {
+        if let Some(id) = event_id
+            && let Some(queue) = &self.strand_queue
+        {
+            if !queue.delete(id) {
+                eprintln!(
+                    "[process] late removal: event file already gone (id={})",
+                    id.0
+                );
+            }
+        }
+    }
+
+    /// Remove the event file (if any) and propagate the error.
+    ///
+    /// Terminal-point helper that keeps the late-removal invariant
+    /// explicit: every early error removes the event before returning.
+    fn abort_with(
+        &self,
+        event_id: Option<&PendingEventId>,
+        err: PortError,
+    ) -> Result<(), PortError> {
+        self.remove_pending_event(event_id);
+        Err(err)
+    }
+
+    /// The strand processing pipeline itself.
+    ///
+    /// `event_id` is `Some` when the event arrived through
+    /// [`execute_with_pending`](Self::execute_with_pending): in that case
+    /// the event file is removed exactly once on every return (late
+    /// removal — see that method for the ordering contract).
+    fn execute_inner(
+        &self,
+        event: StrandEvent,
+        event_id: Option<&PendingEventId>,
+    ) -> Result<(), PortError> {
         // Single match: extract fields, event_type, and strand_kind.
         let (loom_id, knot_id, strand_path, event_type) = match &event {
             StrandEvent::Created {
@@ -206,35 +286,53 @@ impl ProcessStrand {
             &strand_path.0,
         );
 
-        // Look up the loom and knot
-        let loom = self
+        // Look up the loom and knot (early error — remove the event on
+        // the way out: consume-on-failure, no poison-pill retry).
+        let loom = match self
             .store
             .get(&loom_id)
-            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))?;
-        let knot = loom
+            .ok_or_else(|| PortError::LoomNotFound(loom_id.clone()))
+        {
+            Ok(loom) => loom,
+            Err(err) => return self.abort_with(event_id, err),
+        };
+        let knot = match loom
             .knots
             .iter()
             .find(|k| k.id == knot_id)
             .ok_or_else(|| PortError::KnotStatusDeriveFailed(format!(
                 "knot '{}' not found in loom '{}'",
                 knot_id.0, loom_id.0
-            )))?;
+            )))
+        {
+            Ok(knot) => knot,
+            Err(err) => return self.abort_with(event_id, err),
+        };
 
         // Determine tie-off path (statically derived from loom + knot)
         let tie_off_path = self.compute_tie_off_path(&loom, knot, &strand_path);
 
-        // Strand file check: skip binary/temp/missing files.
-        if !self.validate_strand(&event, strand_kind, &loom_id, &knot_id, &strand_path)? {
-            return Ok(());
+        // Strand file check: skip binary/temp/missing files. A skip
+        // consumes the event (it will not be re-processed); a check
+        // failure is an early error — both remove the event file.
+        match self.validate_strand(&event, strand_kind, &loom_id, &knot_id, &strand_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.remove_pending_event(event_id);
+                return Ok(());
+            }
+            Err(err) => return self.abort_with(event_id, err),
         }
 
         // 1. Append KnotProcessing to loom-log
-        self.log_port.append(LoomEvent::KnotProcessing {
+        if let Err(err) = self.log_port.append(LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             timestamp: format_timestamp(),
-        })?;
+        }) {
+            return self.abort_with(event_id, err);
+        }
 
         // 2. Resolve config, build prompt, execute agent, derive outcome.
         let resolved = match super::process_strand_helpers::resolve_config_and_build(
@@ -280,6 +378,9 @@ impl ProcessStrand {
                     &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
                 );
+                // Config/profile resolution failed — consume the event
+                // at the point of failure.
+                self.remove_pending_event(event_id);
                 return Err(err);
             }
         };
@@ -306,7 +407,9 @@ impl ProcessStrand {
             );
         }
 
-        // Write loom-log: KnotCompleted or KnotFailed.
+        // Write loom-log: KnotCompleted or KnotFailed. Both terminal
+        // points remove the event file exactly once (on success, before
+        // the git commit; on failure, at the point of failure).
         match outcome.tie_off_status() {
             Some(crate::domain::entities::TieOffStatus::Produced) => {
                 super::process_strand_helpers::handle_success(
@@ -314,15 +417,17 @@ impl ProcessStrand {
                     knot, &tie_off_path,
                     &loom_id, &knot_id, &strand_path,
                     &event_label,
-                )?;
+                    event_id,
+                )
             }
             _ => {
                 super::process_strand_helpers::handle_failure(
                     self, &outcome, strand_kind,
                     &loom_id, &knot_id, &strand_path,
-                )?;
+                    event_id,
+                )
             }
-        }
+        }?;
 
         Ok(())
     }

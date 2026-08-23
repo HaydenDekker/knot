@@ -440,7 +440,8 @@ fn delete_from_queue_removes_event() {
     assert!(event_file_exists(&events_dir, &id));
 
     // Delete the event
-    let deleted = queue.delete(&id);
+    let deleted =
+        knot::application::ports::StrandEventQueue::delete(&queue, &id);
     assert!(deleted, "delete should return true for existing event");
 
     // Verify removed from queue
@@ -462,7 +463,8 @@ fn delete_from_queue_removes_event() {
     assert!(queue.pop().is_none());
 
     // Delete again returns false
-    let deleted_again = queue.delete(&id);
+    let deleted_again =
+        knot::application::ports::StrandEventQueue::delete(&queue, &id);
     assert!(
         !deleted_again,
         "delete should return false for already-deleted event"

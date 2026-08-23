@@ -10,6 +10,7 @@ use crate::application::ports::{KnotEventType, PortError};
 use crate::application::session_resume;
 use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath, TieOff, TieOffOutcome, TieOffPath};
 use crate::domain::events::BuildContext;
+use crate::domain::pending_event::PendingEventId;
 
 /// Result of config resolution, prompt building, and agent execution.
 ///
@@ -65,6 +66,11 @@ pub fn write_tie_off(
 }
 
 /// Handle non-success outcome: write KnotFailed + StrandProcessed logs.
+///
+/// Late removal: the queued event file (when `event_id` is `Some`) is
+/// removed at the point of failure — consume-on-failure, no poison-pill
+/// retry loops. The removal happens exactly once on every return, even
+/// when a log append fails.
 pub fn handle_failure(
     ps: &ProcessStrand,
     outcome: &TieOffOutcome,
@@ -72,6 +78,7 @@ pub fn handle_failure(
     loom_id: &LoomId,
     knot_id: &KnotId,
     strand_path: &StrandPath,
+    event_id: Option<&PendingEventId>,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::domain::events::LoomEvent;
@@ -82,27 +89,37 @@ pub fn handle_failure(
         .map(|s| s.to_string())
         .unwrap_or_default();
 
-    ps.log_port.append(LoomEvent::KnotFailed {
-        loom_id: loom_id.clone(),
-        knot_id: knot_id.clone(),
-        strand_path: strand_path.clone(),
-        error: error_msg.clone(),
-        timestamp: format_timestamp(),
-    })?;
+    let result: Result<(), PortError> = (|| {
+        ps.log_port.append(LoomEvent::KnotFailed {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            error: error_msg.clone(),
+            timestamp: format_timestamp(),
+        })?;
 
-    ps.log_port.append(LoomEvent::StrandProcessed {
-        loom_id: loom_id.clone(),
-        strand_path: strand_path.clone(),
-        error: Some(error_msg.clone()),
-        timestamp: format_timestamp(),
-    })?;
+        ps.log_port.append(LoomEvent::StrandProcessed {
+            loom_id: loom_id.clone(),
+            strand_path: strand_path.clone(),
+            error: Some(error_msg.clone()),
+            timestamp: format_timestamp(),
+        })?;
 
-    logging::log_strand_event(
-        &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
-        &strand_path.0,
-    );
+        Ok(())
+    })();
 
-    Ok(())
+    // Consume the event at the point of failure — exactly once, even
+    // when a log append failed above.
+    ps.remove_pending_event(event_id);
+
+    if result.is_ok() {
+        logging::log_strand_event(
+            &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
+            &strand_path.0,
+        );
+    }
+
+    result
 }
 
 /// Resolve agent config, build prompt, execute agent, derive outcome.
@@ -225,7 +242,15 @@ pub fn resolve_config_and_build(
 }
 
 /// Handle success outcome: event dispatch, KnotCompleted, StrandProcessed,
-/// event enforcement, git commit, and completion logging.
+/// event enforcement, late removal, git commit, and completion logging.
+///
+/// Late removal: when `event_id` is `Some`, the queued event file is
+/// removed exactly once on every return, and on success the removal is
+/// the **last step before the git commit** — dispatch, `KnotCompleted`,
+/// `StrandProcessed`, and event enforcement all happen first, and the
+/// commit captures everything, including the removal. The removal is
+/// unconditional on success (even when the knot is not git-versioned or
+/// has no commit content).
 pub fn handle_success(
     ps: &ProcessStrand,
     outcome: &TieOffOutcome,
@@ -237,6 +262,7 @@ pub fn handle_success(
     knot_id: &KnotId,
     strand_path: &StrandPath,
     event_label: &str,
+    event_id: Option<&PendingEventId>,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::application::session_resume;
@@ -258,21 +284,29 @@ pub fn handle_success(
     }
 
     // Append KnotCompleted to loom-log.
-    ps.log_port.append(LoomEvent::KnotCompleted {
+    // On failure: remove the event (consume-on-failure) and propagate —
+    // the commit below is skipped, as before.
+    if let Err(err) = ps.log_port.append(LoomEvent::KnotCompleted {
         loom_id: loom_id.clone(),
         knot_id: knot_id.clone(),
         strand_path: strand_path.clone(),
         tie_off_path: tie_off_path.clone(),
         timestamp: format_timestamp(),
-    })?;
+    }) {
+        ps.remove_pending_event(event_id);
+        return Err(err);
+    }
 
     // Append StrandProcessed to loom-log.
-    ps.log_port.append(LoomEvent::StrandProcessed {
+    if let Err(err) = ps.log_port.append(LoomEvent::StrandProcessed {
         loom_id: loom_id.clone(),
         strand_path: strand_path.clone(),
         error: None,
         timestamp: format_timestamp(),
-    })?;
+    }) {
+        ps.remove_pending_event(event_id);
+        return Err(err);
+    }
 
     // ── Event Enforcement ──────────────────────────────────────────
     // If the agent was instructed to emit events but produced
@@ -369,9 +403,17 @@ pub fn handle_success(
         }
     }
 
+    // ── Late removal ──────────────────────────────────────────────
+    // Remove the event file exactly once, as the last step before the
+    // git commit: dispatch, KnotCompleted, StrandProcessed, and event
+    // enforcement have all happened. The commit (below) captures
+    // everything, including the removal. Unconditional on success.
+    ps.remove_pending_event(event_id);
+
     // Git versioning commit (best-effort, non-fatal).
-    // Runs last so the commit captures all artifacts from the
-    // turn: tie-off, dispatched events, and loom-log entries.
+    // Runs after the removal so the commit captures all artifacts from
+    // the turn: tie-off, dispatched events, loom-log entries, and the
+    // queue-file removal.
     if knot.git_versioned {
         if let Some(ref content) = outcome.tie_off_content() {
             let commit_result = ps.git_versioning_port.commit(

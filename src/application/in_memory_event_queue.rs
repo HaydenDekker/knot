@@ -166,6 +166,16 @@ impl StrandQueueAccessor for InMemoryEventQueue {
             .map(|e| std::path::PathBuf::from(&e.strand_path))
             .collect()
     }
+
+    fn delete(&self, id: &PendingEventId) -> bool {
+        let mut queue = self.events.lock().unwrap();
+        if let Some(pos) = queue.iter().position(|e| &e.id == id) {
+            queue.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -353,7 +363,7 @@ mod tests {
         queue.push(make_pending(created("file-b.md")));
 
         assert_eq!(queue.len(), 2);
-        assert!(queue.delete(&id));
+        assert!(StrandEventQueue::delete(&queue, &id));
         assert_eq!(queue.len(), 1);
     }
 
@@ -362,7 +372,7 @@ mod tests {
     fn delete_nonexistent() {
         let queue = InMemoryEventQueue::new();
         let id = PendingEventId("999-zzzz".to_string());
-        assert!(!queue.delete(&id));
+        assert!(!StrandEventQueue::delete(&queue, &id));
     }
 
     /// `pending_event` returns the event by ID.
@@ -430,7 +440,7 @@ mod tests {
             "file-a.md"
         );
 
-        assert!(queue.delete(&e1_id));
+        assert!(StrandEventQueue::delete(&queue, &e1_id));
         assert_eq!(
             queue.front().unwrap().strand_path,
             "file-b.md"

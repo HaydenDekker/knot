@@ -11,7 +11,6 @@ use crate::application::ports::{GitVersioningPort, StateWriterPort, StrandEventQ
 use crate::domain;
 use crate::domain::entities::Loom;
 use crate::domain::knot_file::derive_runtime_root;
-use crate::domain::pending_event::PendingEventOrShutdown;
 use crate::domain::events::{ConfigEvent, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::{AgentAdapter, RigAgentConfig};
@@ -447,36 +446,47 @@ pub fn spawn_process_strand_loop(
         // After each event, poll for 500ms — if no event arrives,
         // write QueueIdle to the rig-log and go back to blocking.
         //
-        // `is_burst_active` controls whether the next recv is blocking
+        // `is_burst_active` controls whether the next read is blocking
         // (idle, wait for first event) or timed (drain check, detect end
         // of burst). This keeps a single flat loop with no nesting.
         //
-        // The queue holds `PendingEventOrShutdown`:
-        // `PendingEventOrShutdown::Event` for real events,
-        // `PendingEventOrShutdown::Shutdown` for the shutdown sentinel
-        // from the debounce engine. The inner pop+notified loop drains
-        // the queue; the outer match handles events vs. shutdown vs.
-        // timeout.
+        // Late-removal (at-least-once) loop: the queue is **peeked** via
+        // `front()` — the event file survives while processing is in
+        // flight, and `ProcessStrand::execute_with_pending` removes it
+        // exactly once after processing (on success, before the git
+        // commit; on failure, at the point of failure). The shutdown
+        // sentinel is never surfaced through `front()`: the loop breaks
+        // when `front()` is `None` **and** `shutdown_signaled()` —
+        // drain-on-shutdown, events queued before the signal are still
+        // processed.
         let poll_window = Duration::from_millis(500);
         let mut is_burst_active = false;
-        let mut shutdown_signaled = false;
+
+        /// Peek the next event without removing it, or `None` when the
+        /// shutdown was signalled and the queue has drained.
+        async fn next_event(
+            queue: &Arc<DiskBackedEventQueue>,
+        ) -> Option<domain::pending_event::PendingEvent> {
+            loop {
+                if let Some(item) = queue.front() {
+                    return Some(item);
+                }
+                if queue.shutdown_signaled() {
+                    return None;
+                }
+                queue.notified().await;
+            }
+        }
 
         loop {
-            // Read next item from the StrandEventQueue.
-            // pop() returns Option<PendingEventOrShutdown>:
-            //   Some(Event) → real event
-            //   Some(Shutdown) → shutdown sentinel
-            //   None → queue empty (no sentinel), wait for notification
-            let next_item: Option<PendingEventOrShutdown> = if is_burst_active {
-                match tokio::time::timeout(poll_window, async {
-                    loop {
-                        let item = debounce_queue_inner.pop();
-                        if item.is_some() {
-                            break item;
-                        }
-                        debounce_queue_inner.notified().await;
-                    }
-                }).await {
+            // Peek the next item from the StrandEventQueue:
+            //   Some(event) → real event (still on disk — late removal)
+            //   None        → shutdown signalled and queue drained
+            let next_item: Option<domain::pending_event::PendingEvent> = if is_burst_active {
+                match tokio::time::timeout(
+                    poll_window,
+                    next_event(&debounce_queue_inner),
+                ).await {
                     Ok(item) => item,
                     Err(_) => {
                         // Timeout: burst has ended — queue is idle.
@@ -499,67 +509,41 @@ pub fn spawn_process_strand_loop(
                     }
                 }
             } else {
-                // Queue is idle; block until a fresh event arrives.
-                async {
-                    loop {
-                        let item = debounce_queue_inner.pop();
-                        if item.is_some() {
-                            break item;
-                        }
-                        debounce_queue_inner.notified().await;
-                    }
-                }.await
+                // Queue is idle; block until a fresh event arrives or
+                // the shutdown drains the queue.
+                next_event(&debounce_queue_inner).await
             };
 
-            // Handle shutdown sentinel — if received but queue might have
-            // more events, keep draining. Break only when shutdown + empty.
-            if matches!(next_item, Some(PendingEventOrShutdown::Shutdown)) {
-                if !shutdown_signaled {
-                    shutdown_signaled = true;
-                    // Don't break yet — queue might have more events.
-                    // Next pop() will return None (empty) or Shutdown again.
-                    continue;
-                }
-                // Shutdown already signaled and queue is empty.
-                break;
-            }
-            // If pop() returned None but shutdown was previously signaled,
-            // the queue is empty — exit.
-            if next_item.is_none() && shutdown_signaled {
-                break;
-            }
+            // Shutdown signalled and queue drained — exit.
+            let Some(pending) = next_item else { break };
+            is_burst_active = true;
 
-            // Handle the event.
-            if let Some(PendingEventOrShutdown::Event(pending)) = next_item {
-                is_burst_active = true;
-                // Convert PendingEvent → StrandEvent for processing.
-                let event: domain::events::StrandEvent = match pending.try_into() {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!("[pipeline] invalid pending event: {e}");
-                        continue;
-                    }
-                };
-                // Run agent execution on a blocking thread so the tokio
-                // task yields. This allows the task to be aborted during
-                // shutdown — without this, the synchronous execute() call
-                // blocks the tokio thread with no yield point, preventing
-                // graceful shutdown (process hangs on Ctrl+C).
-                let use_case = Arc::clone(&use_case);
-                let result = tokio::task::spawn_blocking(
-                    move || use_case.execute(event),
-                ).await;
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        eprintln!("[pipeline] ProcessStrand error: {e}");
-                    }
-                    Err(e) => {
-                        eprintln!("[pipeline] ProcessStrand blocking task failed: {e}");
-                    }
+            // Late removal: hand the pending event to ProcessStrand,
+            // which removes the event file exactly once — on success
+            // before the git commit, on failure at the point of failure.
+            // An unconvertible event (unknown kind) is consumed inside
+            // `execute_with_pending`, so it can never poison the loop.
+            //
+            // Run agent execution on a blocking thread so the tokio
+            // task yields. This allows the task to be aborted during
+            // shutdown — without this, the synchronous execute() call
+            // blocks the tokio thread with no yield point, preventing
+            // graceful shutdown (process hangs on Ctrl+C).
+            let pending_for_run = pending.clone();
+            let use_case = Arc::clone(&use_case);
+            let result = tokio::task::spawn_blocking(
+                move || use_case.execute_with_pending(&pending_for_run),
+            ).await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    eprintln!("[pipeline] ProcessStrand error: {e}");
                 }
-                // Loop continues — next poll will use timeout (drain check).
+                Err(e) => {
+                    eprintln!("[pipeline] ProcessStrand blocking task failed: {e}");
+                }
             }
+            // Loop continues — next poll will use timeout (drain check).
         }
     });
 }

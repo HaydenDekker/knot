@@ -62,11 +62,24 @@ fn default_occurred() -> bool {
 /// processed) without depending on the concrete queue type.
 ///
 /// Used by [`ContextProvider`] implementations to determine which
-/// dispatched events are still pending vs. already consumed.
+/// dispatched events are still pending vs. already consumed, and by
+/// `ProcessStrand` to remove the event it just processed (late
+/// removal — the file is deleted after the work is done, not when it
+/// is read for processing).
 pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
     /// Return the strand paths currently sitting in the queue
     /// (debounced, awaiting processing).
     fn pending_strand_paths(&self) -> Vec<std::path::PathBuf>;
+
+    /// Remove the queued event with the given ID.
+    ///
+    /// Called by `ProcessStrand` as the explicit removal step of the
+    /// late-removal (at-least-once) semantics: on success the file is
+    /// deleted just before the git commit (the commit captures
+    /// everything, including the removal); on failure/skip it is
+    /// deleted at the point of failure. Returns `true` if the event
+    /// was found and removed, `false` if it was already gone.
+    fn delete(&self, id: &crate::domain::pending_event::PendingEventId) -> bool;
 }
 
 /// Data required to build dynamic prompt context segments.

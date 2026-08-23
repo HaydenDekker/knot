@@ -99,6 +99,9 @@ pub struct ProcessStrandBuilder {
     /// Real rig directory + real `FileSystemEventDispatcher` — when set,
     /// event dispatch writes real files to disk instead of the mock.
     real_event_dispatcher: Option<PathBuf>,
+    /// Strand event queue for late-removal tests — when set, wired into
+    /// `ProcessStrand` so `execute_with_pending` removes event files.
+    strand_queue: Option<Arc<dyn knot::domain::events::StrandQueueAccessor>>,
 }
 
 impl ProcessStrandBuilder {
@@ -113,6 +116,7 @@ impl ProcessStrandBuilder {
             tracking_event_dispatcher: false,
             tracking_file_checker: false,
             real_event_dispatcher: None,
+            strand_queue: None,
         }
     }
 
@@ -178,6 +182,20 @@ impl ProcessStrandBuilder {
     /// Returns `rig_dir` in the result.
     pub fn with_real_event_dispatcher(mut self, rig_dir: PathBuf) -> Self {
         self.real_event_dispatcher = Some(rig_dir);
+        self
+    }
+
+    /// Wire a strand event queue into the built `ProcessStrand`.
+    ///
+    /// Used by late-removal tests: when set, `execute_with_pending`
+    /// removes the processed event file through this queue (via
+    /// `StrandQueueAccessor::delete`). Defaults to `None` (no removal —
+    /// the queue-less `execute` path).
+    pub fn with_strand_queue(
+        mut self,
+        queue: Arc<dyn knot::domain::events::StrandQueueAccessor>,
+    ) -> Self {
+        self.strand_queue = Some(queue);
         self
     }
 
@@ -262,7 +280,7 @@ impl ProcessStrandBuilder {
             git_port,
             file_checker,
             event_dispatcher,
-            None,
+            self.strand_queue.clone(),
         );
 
         ProcessStrandResult {
