@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use crate::application::ports::{LoomLogPort, PortError};
 use crate::domain::entities::LoomId;
 use crate::domain::events::LoomEvent;
-use crate::domain::knot_file::derive_loom_log_path;
+use crate::domain::knot_file::{derive_loom_log_path, derive_runtime_root};
 
 /// Filesystem-backed implementation of `LoomLogPort`.
 ///
@@ -141,6 +141,39 @@ impl LoomLogPort for FileSystemLoomLog {
         }
 
         Ok(events)
+    }
+
+    fn clear_all(&self) -> Result<(), PortError> {
+        // Enumerate runtime-root subdirectories (one per loom, including
+        // orphans) and truncate files named `.loom-log` directly inside
+        // them. Never descend: dispatch dirs, tie-off files, and other
+        // runtime artifacts are left untouched.
+        let runtime_root = derive_runtime_root(&self.rig_dir);
+        let entries = match fs::read_dir(&runtime_root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Fresh rig — no runtime root yet, nothing to clear.
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(PortError::LoomLogReadFailed(e.to_string()));
+            }
+        };
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| PortError::LoomLogReadFailed(e.to_string()))?;
+            let loom_dir = entry.path();
+            if !loom_dir.is_dir() {
+                continue;
+            }
+            let log_file = loom_dir.join(".loom-log");
+            if log_file.is_file() {
+                // Truncate in place (keeps file identity stable).
+                fs::File::create(&log_file)
+                    .map_err(|e| PortError::LoomLogAppendFailed(e.to_string()))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -575,5 +608,169 @@ mod tests {
                  skipped legacy line), got {other:?}"
             ),
         }
+    }
+
+    /// `clear_all()` truncates every `*/.loom-log` under the runtime root
+    /// in place: prior-run events are gone from all looms, the files
+    /// still exist (empty), and appends after the clear work.
+    #[test]
+    fn loom_log_clear_all_truncates_every_loom_log() {
+        let dir = tempfile::tempdir().unwrap();
+        // Adapter is constructed with the rig dir; the runtime root is
+        // derived as <parent>/tie-offs/<rig-basename>/.
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+
+        let loom_a = LoomId("loom-a".to_string());
+        let loom_b = LoomId("loom-b".to_string());
+        log.append(LoomEvent::LoomStarted {
+            loom_id: loom_a.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        })
+        .unwrap();
+        log.append(LoomEvent::LoomStopped {
+            loom_id: loom_a.clone(),
+            timestamp: "2026-06-10T12:30:00Z".to_string(),
+        })
+        .unwrap();
+        log.append(LoomEvent::LoomStarted {
+            loom_id: loom_b.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(log.read_all(&loom_a).unwrap().len(), 2);
+        assert_eq!(log.read_all(&loom_b).unwrap().len(), 1);
+
+        log.clear_all().unwrap();
+
+        // Both loom-logs emptied, files still exist (truncated, not deleted)
+        assert!(
+            log.read_all(&loom_a).unwrap().is_empty(),
+            "loom-a log must be emptied"
+        );
+        assert!(
+            log.read_all(&loom_b).unwrap().is_empty(),
+            "loom-b log must be emptied"
+        );
+        for loom in [&loom_a, &loom_b] {
+            let path = runtime_root.join(loom.0.as_str()).join(".loom-log");
+            assert!(path.exists(), "clear_all truncates, does not delete");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        }
+
+        // Appends after the clear work and read back
+        log.append(LoomEvent::LoomStarted {
+            loom_id: loom_a.clone(),
+            timestamp: "2026-06-11T09:00:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(log.read_all(&loom_a).unwrap().len(), 1);
+        assert!(log.read_all(&loom_b).unwrap().is_empty());
+    }
+
+    /// `clear_all()` clears loom-logs for looms that no longer exist in
+    /// the rig directory (orphaned runtime dirs) — enumeration is over
+    /// the runtime root, not over discovered looms.
+    #[test]
+    fn loom_log_clear_all_includes_orphan_looms() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+
+        // An orphaned loom dir with a prior-run log and no knot content
+        let orphan_log = runtime_root.join("old-loom").join(".loom-log");
+        fs::create_dir_all(orphan_log.parent().unwrap()).unwrap();
+        fs::write(&orphan_log, "orphan prior-run line\n").unwrap();
+
+        // A live loom with a prior-run log
+        let live = LoomId("live-loom".to_string());
+        log.append(LoomEvent::LoomStarted {
+            loom_id: live.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        })
+        .unwrap();
+
+        log.clear_all().unwrap();
+
+        assert!(
+            log.read_all(&live).unwrap().is_empty(),
+            "live loom log must be emptied"
+        );
+        assert_eq!(
+            fs::read_to_string(&orphan_log).unwrap(),
+            "",
+            "orphaned loom log must be emptied too"
+        );
+    }
+
+    /// `clear_all()` touches only files named `.loom-log` in runtime-root
+    /// subdirectories: tie-off files, dispatch-dir files, `state.json`,
+    /// and `events/` contents are byte-identical afterwards.
+    #[test]
+    fn loom_log_clear_all_leaves_other_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemLoomLog::new(dir.path().join("rig"));
+        let runtime_root = dir.path().join("tie-offs").join("rig");
+
+        let loom = LoomId("keep-loom".to_string());
+        let loom_dir = runtime_root.join("keep-loom");
+        // Prior-run loom-log (will be cleared)
+        log.append(LoomEvent::LoomStarted {
+            loom_id: loom.clone(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        })
+        .unwrap();
+        // Files that must survive byte-identical
+        let tie_off = loom_dir.join("tie-off.md");
+        fs::write(&tie_off, "durable tie-off\n").unwrap();
+        let dispatch_dir = loom_dir.join("KnotCompleted");
+        fs::create_dir_all(&dispatch_dir).unwrap();
+        let dispatch_file = dispatch_dir.join("event-1.md");
+        fs::write(&dispatch_file, "pending dispatch\n").unwrap();
+        let state = runtime_root.join("state.json");
+        fs::write(&state, "{\"looms\":[]}\n").unwrap();
+        let events_dir = runtime_root.join("events");
+        fs::create_dir_all(&events_dir).unwrap();
+        let event_q = events_dir.join("q1.json");
+        fs::write(&event_q, "{\"queued\":true}\n").unwrap();
+        // A file named `.loom-log` one level deeper (dispatch-dir level)
+        // must NOT be touched — only top-level `*/.loom-log`.
+        let deep_log = dispatch_dir.join(".loom-log");
+        fs::write(&deep_log, "deep\n").unwrap();
+
+        log.clear_all().unwrap();
+
+        assert!(log.read_all(&loom).unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(&tie_off).unwrap(),
+            "durable tie-off\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&dispatch_file).unwrap(),
+            "pending dispatch\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&state).unwrap(),
+            "{\"looms\":[]}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&event_q).unwrap(),
+            "{\"queued\":true}\n"
+        );
+        assert_eq!(fs::read_to_string(&deep_log).unwrap(), "deep\n");
+    }
+
+    /// `clear_all()` with a missing runtime root (fresh rig, nothing
+    /// ever written) is a no-op returning `Ok` — first-run startup must
+    /// not fail.
+    #[test]
+    fn loom_log_clear_all_missing_root_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        // Rig dir never created → runtime root tie-offs/<rig> missing
+        let log = FileSystemLoomLog::new(dir.path().join("never-created-rig"));
+        assert!(
+            log.clear_all().is_ok(),
+            "clear_all on a missing runtime root must be a no-op"
+        );
     }
 }

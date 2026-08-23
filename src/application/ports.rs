@@ -361,6 +361,17 @@ pub trait LoomLogPort: Send + Sync {
 
     /// Read all events for a loom.
     fn read_all(&self, loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError>;
+
+    /// Truncate every loom-log under the runtime root in place.
+    ///
+    /// Called at startup so each run's loom-logs contain only
+    /// current-run events — the durable audit history lives in the
+    /// tie-offs, not the logs. Only files named `.loom-log` directly
+    /// inside runtime-root subdirectories are touched: tie-off files,
+    /// dispatch dirs, `state.json`, and `events/` are never modified,
+    /// and orphaned loom dirs (no matching loom in the rig) are still
+    /// cleared. No-op when no loom-logs exist (fresh rig).
+    fn clear_all(&self) -> Result<(), PortError>;
 }
 
 /// Port for watching directories for file system events.
@@ -503,6 +514,13 @@ pub trait RigLogPort: Send + Sync {
 
     /// Read all rig-log events.
     fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError>;
+
+    /// Truncate the rig-log in place.
+    ///
+    /// Called at startup so the rig-log contains only current-run
+    /// events — the durable audit history lives in the tie-offs, not
+    /// the log. No-op when the file does not exist (fresh rig).
+    fn clear(&self) -> Result<(), PortError>;
 }
 
 /// Port for discovering and persisting agent profiles.
@@ -723,7 +741,7 @@ mod tests {
     /// In-memory mock of `LoomLogPort`.
     #[derive(Default)]
     struct MockLoomLogPort {
-        events: Vec<LoomEvent>,
+        events: std::sync::Mutex<Vec<LoomEvent>>,
     }
 
     impl LoomLogPort for MockLoomLogPort {
@@ -736,7 +754,12 @@ mod tests {
         }
 
         fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
-            Ok(self.events.clone())
+            Ok(self.events.lock().unwrap().clone())
+        }
+
+        fn clear_all(&self) -> Result<(), PortError> {
+            self.events.lock().unwrap().clear();
+            Ok(())
         }
     }
 
@@ -812,6 +835,11 @@ mod tests {
 
         fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError> {
             Ok(self.events.lock().unwrap().clone())
+        }
+
+        fn clear(&self) -> Result<(), PortError> {
+            self.events.lock().unwrap().clear();
+            Ok(())
         }
     }
 

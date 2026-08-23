@@ -124,6 +124,11 @@ impl LoomLogPort for MockLoomLogPort {
     fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
         Ok(self.events.lock().unwrap().clone())
     }
+
+    fn clear_all(&self) -> Result<(), PortError> {
+        self.events.lock().unwrap().clear();
+        Ok(())
+    }
 }
 
 // ── Mock LoomRepository ────────────────────────────────────────────────────
@@ -391,6 +396,11 @@ impl RigLogPort for MockRigLogPort {
 
     fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError> {
         Ok(self.events.lock().unwrap().clone())
+    }
+
+    fn clear(&self) -> Result<(), PortError> {
+        self.events.lock().unwrap().clear();
+        Ok(())
     }
 }
 

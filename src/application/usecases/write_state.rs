@@ -327,6 +327,11 @@ mod write_state_tests {
                 .cloned()
                 .unwrap_or_default())
         }
+
+        fn clear_all(&self) -> Result<(), PortError> {
+            self.events.write().unwrap().clear();
+            Ok(())
+        }
     }
 
     /// In-memory mock of `AgentProfileRepository` for WriteState tests.

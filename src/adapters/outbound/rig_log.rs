@@ -82,6 +82,19 @@ impl RigLogPort for FileSystemRigLog {
 
         Ok(events)
     }
+
+    fn clear(&self) -> Result<(), PortError> {
+        let path = self.log_path();
+        if !path.exists() {
+            // Fresh rig — nothing to clear.
+            return Ok(());
+        }
+        // Truncate in place (keeps file identity stable). Appends
+        // reopen in append mode on every write, so no offset desync.
+        fs::File::create(&path)
+            .map_err(|e| PortError::RigLogWriteFailed(e.to_string()))?;
+        Ok(())
+    }
 }
 
 /// Shared wrapper for concurrent append safety.
@@ -307,5 +320,67 @@ mod tests {
         let log = FileSystemRigLog::new(tempfile::tempdir().unwrap().path().to_path_buf());
         // Verify trait is object-safe
         let _obj: &dyn RigLogPort = &log;
+    }
+
+    /// `clear()` truncates the log file in place: prior events are gone,
+    /// `read_all` returns empty, and the file still exists (empty) so
+    /// appends continue against the same path.
+    #[test]
+    fn rig_log_clear_truncates() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemRigLog::new(dir.path().to_path_buf());
+
+        // Append a couple of prior-run events
+        log.append(RigLogEvent::QueueIdle {
+            timestamp: "2026-06-14T10:00:00Z".to_string(),
+        })
+        .unwrap();
+        log.append(RigLogEvent::TimeoutExceeded {
+            loom_id: LoomId("loom-1".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(PathBuf::from("in.md")),
+            error: "timeout".to_string(),
+            timestamp: "2026-06-14T10:01:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(log.read_all().unwrap().len(), 2);
+
+        log.clear().unwrap();
+
+        // read_all is empty and the file exists but is empty
+        assert!(
+            log.read_all().unwrap().is_empty(),
+            "clear must truncate all prior events"
+        );
+        let log_path = dir.path().join(".rig-log");
+        assert!(log_path.exists(), "clear truncates, does not delete");
+        assert_eq!(
+            fs::read_to_string(&log_path).unwrap(),
+            "",
+            "cleared log file must be empty"
+        );
+
+        // Appends after the clear work and read back
+        log.append(RigLogEvent::QueueIdle {
+            timestamp: "2026-06-14T11:00:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(log.read_all().unwrap().len(), 1);
+    }
+
+    /// `clear()` on a fresh directory (no log file yet) is a no-op that
+    /// returns `Ok` — startup must not fail on a first-ever run.
+    #[test]
+    fn rig_log_clear_missing_file_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = FileSystemRigLog::new(dir.path().to_path_buf());
+
+        assert!(!dir.path().join(".rig-log").exists());
+        let result = log.clear();
+        assert!(
+            result.is_ok(),
+            "clear on a missing log file must be a no-op: {result:?}"
+        );
+        assert!(log.read_all().unwrap().is_empty());
     }
 }
