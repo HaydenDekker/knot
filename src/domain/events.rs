@@ -936,7 +936,7 @@ mod tests {
         );
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
         assert!(
-            context.contains("You may not edit dispatched events"),
+            context.contains("do not edit the pending event"),
             "prompt should contain 'do not edit' guidance: {}",
             context
         );
