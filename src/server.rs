@@ -1068,8 +1068,9 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
 ///
 /// Events that occur *during* the step (dispatched agent events,
 /// tie-off writes) are captured into the queue (watchers are
-/// registered, and the debounce buffer is flushed to disk at
-/// shutdown) but **not** executed.
+/// registered, a bounded in-cycle settle gives the watcher time to
+/// deliver them to the debounce buffer, and the buffer is flushed to
+/// disk at shutdown) but **not** executed.
 ///
 /// `event_spec` (`--event`) targets a specific queued event: exact
 /// event id (`.json` optional), unique id prefix, or strand filename.
@@ -1223,6 +1224,13 @@ async fn step_execute_one(
     .await
     .map_err(|e| format!("processing task failed: {e}"))?;
 
+    // In-cycle settle (see below) — the watcher delivers in-cycle file
+    // events to the debounce engine with a delay; this bounded wait
+    // gives them time to reach the debounce buffer before the shutdown
+    // cascade closes the strand channel (the buffer is then flushed to
+    // the queue at channel close).
+    step_settle().await;
+
     match result {
         Ok(()) => {
             println!("[step] event {} processed", pending.id.0);
@@ -1299,19 +1307,42 @@ fn resolve_step_event(
 }
 
 /// Print the queued events (one per line: id, kind, loom, strand).
+///
+/// Goes to **stderr** — this is user-facing output on the error path
+/// (unknown or ambiguous `--event`), not a success message.
 fn print_queued_events(queue: &Arc<DiskBackedEventQueue>) {
     let snapshot = queue.snapshot();
     if snapshot.is_empty() {
-        println!("queue is empty");
+        eprintln!("queue is empty");
         return;
     }
-    println!("queued events:");
+    eprintln!("queued events:");
     for ev in &snapshot {
-        println!(
+        eprintln!(
             "  {}  {}  {}  {}",
             ev.id.0, ev.kind, ev.loom_id, ev.strand_path
         );
     }
+}
+
+/// Bounded in-cycle settle after the step's single execution.
+///
+/// In-cycle file writes — a dispatched consumer event, the agent
+/// modifying its own strand — reach the debounce engine only after the
+/// watcher's poll interval (50 ms) plus delivery. Without this wait,
+/// the shutdown cascade closes the strand channel before the event is
+/// delivered and the event is lost. The settle is 5× the debounce
+/// window (the same internal constant as the empty-queue wait),
+/// floored at 250 ms — on fast test timings the watcher's poll
+/// interval, not the debounce window, dominates.
+async fn step_settle() {
+    let debounce_window = std::env::var("KNOT_TEST_DEBOUNCE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(application::debounce::DEFAULT_DEBOUNCE_WINDOW);
+    let settle = (debounce_window * 5).max(Duration::from_millis(250));
+    tokio::time::sleep(settle).await;
 }
 
 /// Return the FIFO head, waiting up to 5× the debounce window so a

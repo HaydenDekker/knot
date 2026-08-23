@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-23 (plan 073 drafted)
+> **Last Updated:** 2026-08-23 (plan 073 in progress — phases 1-4 complete)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | 📝 Draft | 2026-08-23 |
+| 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | 🟡 In Progress | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
 | 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
 | 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | ✅ Complete | 2026-08-22 |
