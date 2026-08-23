@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-22 (plan 071 drafted)
+> **Last Updated:** 2026-08-23 (plan 072 drafted)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | 📝 Draft | 2026-08-23 |
 | 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
 | 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | ✅ Complete | 2026-08-22 |
 | 69 | [Model Aliases — Rig-Level Model Registry](069-model-aliases/model-aliases-plan.md) | ✅ Complete | 2026-08-20 |
@@ -59,6 +60,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 72. Clear Loom-Logs and Rig-Log at Startup
+
+**Status:** 📝 Draft
+**Created:** 2026-08-23
+**Goal:** Truncate the rig-log and every loom-log at knot startup (after legacy migration, before discovery) so each run's logs contain only current-run events — removing unbounded cross-run growth and the repeated `WARN:` console spam from stale unparseable lines, while tie-offs remain the durable audit history.
+
+Full details in [072-startup-log-clear/startup-log-clear-plan.md](072-startup-log-clear/startup-log-clear-plan.md).
 
 ### 71. Record the Pi Session ID in Tie-Off Sections
 
