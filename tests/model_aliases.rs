@@ -39,7 +39,7 @@ use knot::domain::entities::{Loom, LoomId, RigState, StrandPath};
 use knot::domain::events::{LoomEvent, StrandEvent};
 use knot::domain::knot_file::derive_runtime_root;
 use knot::domain::value_objects::RigAgentConfig;
-use knot::{AppConfig, build_app_context, run_startup};
+use knot::{AppConfig, StartupOptions, build_app_context, run_startup};
 use tempfile::TempDir;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -392,7 +392,7 @@ fn run_startup_creates_models_yml_and_never_overwrites() {
 
     let config = AppConfig::with_rig_dir(rig_dir.clone());
     let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-    run_startup(&ctx, &rig_dir).unwrap();
+    run_startup(&ctx, &rig_dir, &StartupOptions::service()).unwrap();
 
     // File created with the template.
     let models_path = rig_dir.join("models.yml");
@@ -406,7 +406,7 @@ fn run_startup_creates_models_yml_and_never_overwrites() {
     // Second run does NOT overwrite user content.
     let custom = "models:\n  default:\n    provider: anthropic\n    model: claude-sonnet-4-20250514\n";
     fs::write(&models_path, custom).unwrap();
-    run_startup(&ctx, &rig_dir).unwrap();
+    run_startup(&ctx, &rig_dir, &StartupOptions::service()).unwrap();
     let after = fs::read_to_string(&models_path).unwrap();
     assert_eq!(after, custom, "existing models.yml must not be overwritten");
 }

@@ -399,48 +399,46 @@ pub fn start_event_pipeline(
 ///
 /// Wires the process-strand loop to read from the disk-backed queue,
 /// execute agent invocations, and log queue idle events.
+/// Build the `ProcessStrand` use case from the app context.
+///
+/// Shared by the service loop (`spawn_process_strand_loop`) and the
+/// single-event stepper (`step_knot`): both wire the real adapters
+/// (content inspector, filesystem dispatcher) and the queue (for late
+/// removal).
+pub fn build_process_strand(
+    ctx: &AppContext,
+    debounce_queue: &Arc<DiskBackedEventQueue>,
+) -> Arc<application::usecases::ProcessStrand> {
+    Arc::new(application::usecases::ProcessStrand::new(
+        ctx.store.clone(),
+        Arc::clone(&ctx.loom_log_port),
+        Arc::clone(&ctx.agent_runner),
+        Arc::clone(&ctx.tie_off_sink),
+        ctx.rig_config.clone(),
+        ctx.rig_dir.clone(),
+        Arc::clone(&ctx.profile_repo),
+        Arc::clone(&ctx.model_registry),
+        Arc::clone(&ctx.rig_log_port),
+        Arc::clone(&ctx.git_versioning),
+        Arc::new(crate::adapters::outbound::ContentInspectorChecker),
+        Arc::new(
+            crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+        ),
+        Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
+    ))
+}
+
 pub fn spawn_process_strand_loop(
     ctx: &AppContext,
     debounce_queue: Arc<DiskBackedEventQueue>,
     join_set: &mut tokio::task::JoinSet<()>,
 ) {
-    // ProcessStrand loop: read debounced events and process them.
-    let store = ctx.store.clone();
-    let log_port = Arc::clone(&ctx.loom_log_port);
-    let agent_runner = Arc::clone(&ctx.agent_runner);
-    let tie_off_sink = Arc::clone(&ctx.tie_off_sink);
-    let rig_config = ctx.rig_config.clone();
-    let rig_dir = ctx.rig_dir.clone();
-    let profile_repo = Arc::clone(&ctx.profile_repo);
-    let model_registry = Arc::clone(&ctx.model_registry);
-    let rig_log_port = Arc::clone(&ctx.rig_log_port);
-
-    // Git versioning — wired in the composition root (project root).
-    let git_versioning_port = Arc::clone(&ctx.git_versioning);
-
-    // Clone debounce_queue before moving into the closure.
+    // Clone debounce_queue and the rig-log port before moving into
+    // the closure.
     let debounce_queue_inner = Arc::clone(&debounce_queue);
+    let rig_log_port = Arc::clone(&ctx.rig_log_port);
+    let use_case = build_process_strand(ctx, &debounce_queue_inner);
     join_set.spawn(async move {
-        let use_case = Arc::new(application::usecases::ProcessStrand::new(
-            store,
-            log_port,
-            agent_runner,
-            tie_off_sink,
-            rig_config,
-            rig_dir,
-            profile_repo,
-            model_registry,
-            rig_log_port.clone(),
-            git_versioning_port,
-            Arc::new(
-                crate::adapters::outbound::ContentInspectorChecker,
-            ),
-            Arc::new(
-                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
-            ),
-            Some(debounce_queue_inner.clone() as Arc<dyn domain::events::StrandQueueAccessor>),
-        ));
-
         // Process strand events with queue idle detection.
         //
         // After each event, poll for 500ms — if no event arrives,
@@ -678,9 +676,46 @@ fn migrate_legacy_rig_layout(rig_dir: &StdPath) {
 /// proceeds.
 ///
 /// Returns the list of discovered looms.
+/// Startup behaviour switches.
+///
+/// The service runs with [`StartupOptions::service`] (unchanged
+/// behaviour). `step` mode runs with `clear_logs: false` — a
+/// multi-step session accumulates in the logs (tie-offs remain the
+/// durable record) — but keeps `register_watchers: true` so in-cycle
+/// writes (dispatched events, tie-offs) are captured into the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartupOptions {
+    /// Clear loom-logs and rig-log after migration, before discovery
+    /// (per-run scope). `false` in step mode so sequential steps
+    /// accumulate.
+    pub clear_logs: bool,
+    /// Register the rig-directory watch after discovery. Kept `true`
+    /// in step mode so in-cycle file writes trigger queued events.
+    pub register_watchers: bool,
+}
+
+impl StartupOptions {
+    /// Service-mode options (the historical behaviour).
+    pub const fn service() -> Self {
+        Self {
+            clear_logs: true,
+            register_watchers: true,
+        }
+    }
+
+    /// Step-mode options: no log clear, watchers registered.
+    pub const fn step() -> Self {
+        Self {
+            clear_logs: false,
+            register_watchers: true,
+        }
+    }
+}
+
 pub fn run_startup(
     ctx: &AppContext,
     rig_dir: &StdPath,
+    options: &StartupOptions,
 ) -> std::io::Result<Vec<Loom>> {
     // Auto-create the rig directory if it doesn't exist.
     std::fs::create_dir_all(rig_dir).map_err(|e| {
@@ -745,11 +780,15 @@ agent-adapter: pi-stdio
     // content is residue. Runs after migration (moved legacy logs are
     // cleared at their new paths) and before discovery (no fresh event
     // is ever discarded). Non-fatal — a failure must not block startup.
-    if let Err(e) = ctx.loom_log_port.clear_all() {
-        eprintln!("WARNING: failed to clear loom-logs: {e}");
-    }
-    if let Err(e) = ctx.rig_log_port.clear() {
-        eprintln!("WARNING: failed to clear rig-log: {e}");
+    // Skipped in step mode (clear_logs: false) so a multi-step session
+    // accumulates in the logs.
+    if options.clear_logs {
+        if let Err(e) = ctx.loom_log_port.clear_all() {
+            eprintln!("WARNING: failed to clear loom-logs: {e}");
+        }
+        if let Err(e) = ctx.rig_log_port.clear() {
+            eprintln!("WARNING: failed to clear rig-log: {e}");
+        }
     }
 
     // Ensure the rig has its own git repository and the parent project
@@ -773,11 +812,15 @@ agent-adapter: pi-stdio
         })?;
 
     // Register rig directory watch — auto-discover new `*-loom` directories
-    // and knot changes within existing looms.
-    ctx.event_source
-        .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
-    if let Err(e) = ctx.event_source.watch(rig_dir) {
-        eprintln!("WARNING: failed to watch rig dir: {e}");
+    // and knot changes within existing looms. Kept in step mode so
+    // in-cycle writes (dispatched events, tie-offs) are captured into
+    // the queue.
+    if options.register_watchers {
+        ctx.event_source
+            .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
+        if let Err(e) = ctx.event_source.watch(rig_dir) {
+            eprintln!("WARNING: failed to watch rig dir: {e}");
+        }
     }
 
     Ok(looms)
@@ -793,12 +836,18 @@ agent-adapter: pi-stdio
 /// into. The handler updates `LoomStore`, manages watchers, and writes
 /// loom-log entries.
 ///
-/// Spawns the config handler into the provided `JoinSet`.
+/// Spawns the config handler into the provided `JoinSet` and returns
+/// its handle.
+///
+/// `step_knot` aborts this task as part of its shutdown cascade: the
+/// handler holds an `event_source` clone (and with it the strand
+/// channel senders), so aborting it closes the strand channel and the
+/// debounce engine flushes in-cycle events to the queue.
 pub fn start_config_pipeline(
     ctx: &AppContext,
     mut config_rx: mpsc::Receiver<ConfigEvent>,
     join_set: &mut tokio::task::JoinSet<()>,
-) {
+) -> tokio::task::AbortHandle {
     let repository = Arc::clone(&ctx.loom_repo);
     let log_port = Arc::clone(&ctx.loom_log_port);
     let store = ctx.store.clone();
@@ -818,7 +867,7 @@ pub fn start_config_pipeline(
                 eprintln!("ConfigEventHandler error: {e}");
             }
         }
-    });
+    })
 }
 
 /// Start the state writer background task.
@@ -908,13 +957,16 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // create the runtime root before the migration runs, turning
     // legacy `rig/tie-offs/` and `rig/events/` into false conflicts
     // that are never moved.
-    let looms = run_startup(&ctx, &config.rig_dir).unwrap_or_else(|e| {
-        eprintln!("WARNING: startup discovery failed: {e}");
-        Vec::new()
-    });
+    let looms = run_startup(&ctx, &config.rig_dir, &StartupOptions::service())
+        .unwrap_or_else(|e| {
+            eprintln!("WARNING: startup discovery failed: {e}");
+            Vec::new()
+        });
 
-    // Start the config event pipeline: ConfigEventHandler (child of this task)
-    start_config_pipeline(&ctx, config_rx, &mut join_set);
+    // Start the config event pipeline: ConfigEventHandler (child of
+    // this task). The handle is unused here — the service shutdown
+    // drains/aborts the whole JoinSet.
+    let _config_task = start_config_pipeline(&ctx, config_rx, &mut join_set);
 
     // Start the strand event pipeline: creates the queue, loads persisted
     // events, and spawns the debounce engine. Looms are already
@@ -999,6 +1051,302 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     Ok(())
 }
 
+// ── Step: single-event stepping ─────────────────────────────────────────────
+
+/// Process exactly one queued event, then exit — the `knot step`
+/// lifecycle.
+///
+/// Full startup, single execution: legacy-layout migration, config
+/// seeding, rig git init, loom discovery, watcher registration, the
+/// debounce engine, the config pipeline, and the 5-second state writer
+/// all run. Differences from the service:
+///
+/// - logs are **not** cleared ([`StartupOptions::step`] — a multi-step
+///   session accumulates; tie-offs remain the durable record),
+/// - the process-strand loop is **not** spawned — exactly one
+///   `execute_with_pending` runs.
+///
+/// Events that occur *during* the step (dispatched agent events,
+/// tie-off writes) are captured into the queue (watchers are
+/// registered, and the debounce buffer is flushed to disk at
+/// shutdown) but **not** executed.
+///
+/// `event_spec` (`--event`) targets a specific queued event: exact
+/// event id (`.json` optional), unique id prefix, or strand filename.
+/// No match → the queued events are printed and `Err` is returned
+/// (exit 1). When omitted, the FIFO head is processed; an empty queue
+/// waits up to 5× the debounce window (so a just-touched strand can
+/// clear its debounce window) and, still empty, prints "queue empty"
+/// and returns `Ok` (exit 0).
+///
+/// Graceful shutdown uses the same cascade as the service: the
+/// context is dropped (this task's channel senders go away), the
+/// config handler is aborted (it holds the last `event_source` Arc —
+/// dropping it closes the strand channel so the debounce engine
+/// flushes remaining in-cycle events to disk and pushes the shutdown
+/// sentinel), the `JoinSet` is drained with the 5-second timeout, and
+/// `LoomStopped` is written to each loom-log.
+pub async fn step_knot(
+    config: AppConfig,
+    event_spec: Option<String>,
+) -> std::io::Result<()> {
+    let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
+    let mut join_set = tokio::task::JoinSet::new();
+
+    // Full startup, but no log clear (a multi-step session
+    // accumulates) and watchers registered (in-cycle writes are
+    // captured).
+    let looms = run_startup(&ctx, &config.rig_dir, &StartupOptions::step())
+        .unwrap_or_else(|e| {
+            eprintln!("WARNING: startup discovery failed: {e}");
+            Vec::new()
+        });
+
+    // Config pipeline — the handle is kept so shutdown can abort this
+    // task specifically (it holds the last strand-channel sender).
+    let config_task = start_config_pipeline(&ctx, config_rx, &mut join_set);
+
+    // Event pipeline: queue + debounce engine (in-cycle events are
+    // flushed to disk at shutdown).
+    let debounce_queue = start_event_pipeline(&ctx, strand_rx, &mut join_set);
+
+    // State writer — state.json reflects the post-step queue.
+    start_state_writer(&ctx, &mut join_set);
+
+    // No process-strand loop — step executes exactly one event itself.
+
+    // Preserve references needed after AppContext is dropped.
+    let shutdown_loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
+    {
+        ctx.loom_ids = shutdown_loom_ids.clone();
+    }
+    let shutdown_log_port: Arc<dyn application::ports::LoomLogPort> =
+        Arc::clone(&ctx.loom_log_port);
+
+    let use_case = build_process_strand(&ctx, &debounce_queue);
+
+    // Resolve the target event and execute it exactly once.
+    if let Err(e) =
+        step_execute_one(&ctx, &debounce_queue, &use_case, event_spec).await
+    {
+        return Err(std::io::Error::other(e));
+    }
+
+    // ── Graceful shutdown (same cascade as the service) ─────────────
+    //
+    // 1. Drop the context — this task's channel senders and
+    //    event_source Arc go away.
+    // 2. Abort the config handler — it holds the last event_source
+    //    Arc; dropping it closes the strand channel, and the debounce
+    //    engine flushes remaining in-cycle events to disk + pushes the
+    //    shutdown sentinel.
+    // 3. Drain the JoinSet with the 5-second timeout safety net (the
+    //    state writer runs forever and is aborted by the timeout).
+    // 4. LoomStopped to each loom-log.
+    drop(ctx);
+    config_task.abort();
+
+    let drain_timeout = Duration::from_secs(5);
+    let drain_result = tokio::time::timeout(drain_timeout, async {
+        while let Some(res) = join_set.join_next().await {
+            if let Err(e) = res {
+                if e.is_cancelled() {
+                    continue;
+                }
+                eprintln!("Background task failed: {e}");
+            }
+        }
+    })
+    .await;
+
+    if drain_result.is_err() {
+        eprintln!(
+            "WARNING: pipeline tasks did not drain within {:?}, aborting",
+            drain_timeout
+        );
+        join_set.abort_all();
+    }
+
+    for loom_id in &shutdown_loom_ids {
+        let _ = shutdown_log_port.append(
+            domain::events::LoomEvent::LoomStopped {
+                loom_id: loom_id.clone(),
+                timestamp: application::usecases::format_timestamp(),
+            },
+        );
+    }
+
+    Ok(())
+}
+
+/// Resolve the step's target event and execute it exactly once.
+///
+/// `Ok(())` means an event was processed **or** the queue was empty
+/// (both are exit 0). `Err(String)` is a user-facing error message
+/// (exit 1): unknown/ambiguous event, or processing failure.
+async fn step_execute_one(
+    ctx: &AppContext,
+    queue: &Arc<DiskBackedEventQueue>,
+    use_case: &Arc<application::usecases::ProcessStrand>,
+    event_spec: Option<String>,
+) -> Result<(), String> {
+    let pending = match event_spec {
+        Some(spec) => match resolve_step_event(queue, &spec) {
+            Ok(Some(ev)) => ev,
+            Ok(None) => {
+                print_queued_events(queue);
+                return Err(format!("no queued event matches '{spec}'"));
+            }
+            Err(e) => return Err(e),
+        },
+        None => match step_head_event(queue).await {
+            Some(ev) => ev,
+            None => {
+                println!("queue empty");
+                return Ok(());
+            }
+        },
+    };
+
+    println!(
+        "[step] processing event {} (loom={}, knot={}): {}",
+        pending.id.0, pending.loom_id, pending.knot_id, pending.strand_path
+    );
+
+    // Run on a blocking thread so the tokio task yields (same reason
+    // as the service loop — graceful shutdown stays possible).
+    let use_case = Arc::clone(use_case);
+    let pending_for_run = pending.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        use_case.execute_with_pending(&pending_for_run)
+    })
+    .await
+    .map_err(|e| format!("processing task failed: {e}"))?;
+
+    match result {
+        Ok(()) => {
+            println!("[step] event {} processed", pending.id.0);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[step] event {} failed: {e}", pending.id.0);
+            Err(format!("processing failed for event {}: {e}", pending.id.0))
+        }
+    }
+}
+
+/// Match `spec` against the queued events:
+///
+/// 1. **Exact id** (`.json` optional) — always wins.
+/// 2. **Unique id prefix** — exactly one id must start with it.
+/// 3. **Strand filename** — the file name of `strand_path`.
+///
+/// Returns `Ok(None)` when nothing matches (the caller prints the
+/// queue and fails), `Err` when a match is ambiguous.
+fn resolve_step_event(
+    queue: &Arc<DiskBackedEventQueue>,
+    spec: &str,
+) -> Result<Option<domain::pending_event::PendingEvent>, String> {
+    let snapshot = queue.snapshot();
+    let trimmed = spec.trim_end_matches(".json");
+
+    // 1. Exact id (`.json` optional).
+    if let Some(ev) = snapshot
+        .iter()
+        .find(|e| e.id.0 == spec || e.id.0 == trimmed)
+    {
+        return Ok(Some(ev.clone()));
+    }
+
+    // 2. Unique id prefix.
+    let prefix_matches: Vec<_> = snapshot
+        .iter()
+        .filter(|e| e.id.0.starts_with(trimmed))
+        .collect();
+    match prefix_matches.len() {
+        1 => return Ok(Some(prefix_matches[0].clone())),
+        n if n > 1 => {
+            print_queued_events(queue);
+            return Err(format!(
+                "'{}' matches {} queued event ids (ambiguous)",
+                spec, n
+            ));
+        }
+        _ => {}
+    }
+
+    // 3. Strand filename.
+    let file_matches: Vec<_> = snapshot
+        .iter()
+        .filter(|e| {
+            std::path::Path::new(&e.strand_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == spec)
+        })
+        .collect();
+    match file_matches.len() {
+        1 => Ok(Some(file_matches[0].clone())),
+        0 => Ok(None),
+        n => {
+            print_queued_events(queue);
+            Err(format!(
+                "'{}' matches {} queued events (ambiguous)",
+                spec, n
+            ))
+        }
+    }
+}
+
+/// Print the queued events (one per line: id, kind, loom, strand).
+fn print_queued_events(queue: &Arc<DiskBackedEventQueue>) {
+    let snapshot = queue.snapshot();
+    if snapshot.is_empty() {
+        println!("queue is empty");
+        return;
+    }
+    println!("queued events:");
+    for ev in &snapshot {
+        println!(
+            "  {}  {}  {}  {}",
+            ev.id.0, ev.kind, ev.loom_id, ev.strand_path
+        );
+    }
+}
+
+/// Return the FIFO head, waiting up to 5× the debounce window so a
+/// just-touched strand can clear its debounce window before step
+/// declares the queue empty. `None` when still empty after the wait.
+///
+/// The wait is an internal constant (5× the debounce window —
+/// production 100 ms → 500 ms). Tests shorten the debounce window via
+/// `KNOT_TEST_DEBOUNCE_MS`.
+async fn step_head_event(
+    queue: &Arc<DiskBackedEventQueue>,
+) -> Option<domain::pending_event::PendingEvent> {
+    if let Some(ev) = queue.front() {
+        return Some(ev);
+    }
+
+    let debounce_window = std::env::var("KNOT_TEST_DEBOUNCE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(application::debounce::DEFAULT_DEBOUNCE_WINDOW);
+    let deadline = std::time::Instant::now() + debounce_window * 5;
+
+    loop {
+        if let Some(ev) = queue.front() {
+            return Some(ev);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        let _ = tokio::time::timeout(remaining, queue.notified()).await;
+    }
+}
+
 // ── Composition Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1079,7 +1427,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
 
         // Rig directory created
         assert!(rig_dir.is_dir());
@@ -1111,7 +1459,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
 
         // Config file should still be pi-json, not overwritten
         let content = fs::read_to_string(&config_path).unwrap();
@@ -1131,7 +1479,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
 
         assert!(
             rig_dir.join(".git").exists(),
@@ -1143,7 +1491,7 @@ mod composition_tests {
         );
 
         // Idempotent — a second startup does not fail or re-write.
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
         assert!(rig_dir.join(".git").exists());
     }
 
@@ -1447,7 +1795,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
         assert_eq!(looms.len(), 1, "the loom should be discovered");
 
         // Rig-log: exists and is empty — prior-run events (and the
@@ -1574,7 +1922,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
+        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
 
         // Loom discovered
         assert_eq!(looms.len(), 1, "the loom should be discovered");
