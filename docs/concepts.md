@@ -140,6 +140,45 @@ attempts to resume the session using the session ID, up to 10 retries
 with 10-second delays between attempts. The profile's overall timeout
 budget is respected — retries stop when insufficient time remains.
 
+## Event Queue
+
+Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`
+— one JSON file per pending event (the `strand_queue` array in
+[state.json](#rig-state) is the live view of the same queue). The disk
+*is* the queue: pending work survives restarts, and a queued event can
+be inspected or edited with standard tools before it is processed.
+
+### At-Least-Once Delivery (Late Removal)
+
+The queue offers **at-least-once** delivery: a queued event file is
+removed only *after* the work it represents is done, never before it
+starts.
+
+- **On success** the event file is removed as the **last step before the
+  git commit** — the tie-off append, dispatch of emitted events,
+  loom-log entries, and event enforcement all happen first, and the
+  commit captures everything, including the removal.
+- **On failure or skip** the event file is removed **at the point of
+  failure** (consume-on-failure — a broken event does not poison the
+  queue with retry loops).
+- Invariant: *every* return from event processing removes the file
+  exactly once.
+
+Because removal is late, the only window in which a queued event
+survives a crash is **while its processing is in flight**. On restart
+the event is re-queued and the knot re-runs — safe because knots are
+[goal-seeking and idempotent](#goal-seeking-not-scripted).
+
+### Stepping: `knot step`
+
+`knot step` processes exactly **one** queued event and then exits —
+the FIFO head by default, a specific queued event with `--event`, a
+specific rig with `--rig`. It runs the full service startup, executes
+the single event, captures any events dispatched *during* the step
+without executing them, and shuts down gracefully. Use it to observe
+one cycle at a time between events; see the `knot-dispatch` skill for
+the full workflow.
+
 ## Git Versioning
 
 By default, Knot creates a git commit in the **project** repository

@@ -12,7 +12,7 @@ Knot needs a **persistent event queue** so that pending strand events survive re
 
 - [ ] Pending strand events are written to the file system in `rig/events/` so they survive process restarts
 - [ ] On startup, Knot scans `rig/events/` and re-initialises the in-memory queue with any persisted events before starting normal processing
-- [ ] When an event is popped from the queue for processing, its file is removed from `rig/events/` so it is not re-processed on the next restart
+- [ ] When an event is processed, its file is removed from `rig/events/` **after the work is done** (late removal, at-least-once delivery): just before the git commit on success, at the point of failure on failure/skip — so a crash mid-processing re-queues the event instead of losing it
 - [ ] A user can list pending events via the HTTP interface to see what is queued and in what order
 - [ ] A user can delete a pending event via the HTTP interface to cancel processing for that strand
 - [ ] A user can modify a pending event's file on disk to alter its properties before processing (e.g. change the event type)
@@ -80,9 +80,24 @@ As a user, I want events to be stored as individual files I can inspect with sta
 2. Given an event file exists in `rig/events/`, when I `cat` the file, then I see the event data in readable JSON format (strand path, loom ID, knot ID, event type, and timestamp)
 3. Given an event has been processed, when I `ls rig/events/`, then the file for that event is no longer present
 
+### Story 6: Step Through the Queue Manually
+
+As a user, I want to process exactly one queued event and stop, so I
+can inspect rig state between events and debug a misbehaving knot
+without letting the service drain the queue back-to-back.
+
+**Scenarios:**
+
+1. Given events are queued and the service is not running, when I run `knot step`, then exactly one event (the FIFO head) is processed, the rest of the queue is left intact, and the process exits
+2. Given events are queued, when I run `knot step --event <spec>` naming a specific event (exact id, unique id prefix, or strand filename), then only that event is processed — the FIFO head remains queued when it is not the target
+3. Given I run `knot step --event <spec>` and nothing in the queue matches, then the queued events are listed and the exit code is 1
+4. Given the queue is empty, when I run `knot step`, then it prints "queue empty" and exits 0 without running an agent
+5. Given the step processes a producer knot that dispatches an event to a consumer, when the step exits, then the consumer's event file is queued in `rig/events/` but the consumer was **not** executed during the step
+6. Given I run `knot step` twice in a row, when I inspect the loom-log after the second step, then it still contains the first step's processing events (step mode does not clear the per-run logs)
+
 ## Success Criteria
 
-- [ ] Events written to `rig/events/<unique-id>.json` on queue push, removed on pop
+- [ ] Events written to `rig/events/<unique-id>.json` on queue push, removed after the event's work is done (late removal: just-before-commit on success, point of failure on failure/skip)
 - [ ] On startup, `rig/events/` is scanned and valid JSON event files are loaded into the in-memory queue before processing begins
 - [ ] Malformed event files are skipped with a warning — they do not crash the startup
 - [ ] The HTTP interface exposes a `GET` endpoint to list all pending events (reads from the queue, not the disk)

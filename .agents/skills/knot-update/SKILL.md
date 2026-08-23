@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.10.0"
-  compatibility: "Knot 0.34.0+"
+  version: "1.11.0"
+  compatibility: "Knot 0.35.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,64 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### knot step — Single-Event Stepping and Late Queue Removal (Knot 0.35.0, 2026-08-23)
+
+**What changed:** two changes to how queued events are consumed — a new
+CLI command and new queue-removal timing.
+
+1. **New `knot step` command** — processes exactly **one** queued
+   event, then exits, running the full service startup (migration,
+   config seeding, rig git init, loom discovery, watchers, debounce
+   engine, state writer) and the service-identical graceful shutdown
+   cascade. `knot step [--rig <rig-name>] [--event <spec>]`:
+   `--event` targets a specific queued event (exact id, `.json`
+   optional; unique id prefix; or strand filename — no match or an
+   ambiguous match lists the queue on stderr and exits 1); without it
+   the FIFO head is processed; an empty queue prints `queue empty` and
+   exits 0. Events dispatched *during* the step are captured into the
+   queue but not executed. Step mode does **not** clear the
+   loom-logs/rig-log (a multi-step session accumulates) — only
+   service startups clear them. Step rig discovery is stricter than
+   the service: zero `*-rig` matches is an error (no implicit `rig/`
+   creation), multiple matches is an error.
+2. **Late queue removal (at-least-once delivery).** The queued event
+   file is no longer removed when the event is *popped* for
+   processing. On success it is removed as the **last step before the
+   git commit** — dispatch, tie-off append, loom-log entries, and
+   event enforcement all happen first, and the commit captures
+   everything, including the removal. On failure/skip it is removed at
+   the point of failure (consume-on-failure — no poison-pill retry
+   loops). Invariant: every return from event processing removes the
+   file exactly once.
+
+**Affected documents:** none — no project document (profile, knot,
+loom) changes.
+
+| Artifact | Before 0.35.0 | 0.35.0+ |
+|---|---|---|
+| Queued event file removed | when popped, *before* processing | after the work is done (just-before-commit on success; point of failure on failure/skip) |
+| Crash mid-processing | event lost (file already gone) | event survives; restart re-queues it and the knot re-runs (safe by idempotency) |
+| CLI | `knot [rig-name]`, `knot share <rig>` | + `knot step [--rig <rig>] [--event <spec>]` |
+| Service loop | `pop()` (delete-on-read) | `front()` (peek) + explicit removal inside processing |
+
+**Migration: none required.**
+
+- No document format changes — profiles, knots, looms, and tie-offs
+  are untouched.
+- **Pending events from older versions read identically** — the
+  `tie-offs/<rig>/events/*.json` schema is unchanged, so a queue
+  persisted by 0.34.0 (or earlier) is picked up as-is on the first
+  run of 0.35.0. No queue migration, no file edits.
+- Workflows that assumed the event file is gone as soon as processing
+  *starts* must now treat it as present until the work is *done*: during
+  a long agent run the file is still in `events/` (visible in
+  `state.json`'s `strand_queue`).
+- `knot step` is for when the service is **not** running: two
+  processes sharing the disk queue can double-read the same event (the
+  knot re-run is safe by idempotency, but wasteful).
 
 ---
 

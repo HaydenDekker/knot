@@ -4,7 +4,7 @@ description: "Analyse rig productivity and project progress at runtime. Tail the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
+  version: "1.4.0"
   compatibility: "Knot 0.34.0+"
 ---
 
@@ -105,7 +105,7 @@ Tail the last 30 lines per loom. Look for:
 | Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
 | `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
 | `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
-| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `tie-offs/<rig>/events/*.json` and auto-removed on pop — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
+| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `tie-offs/<rig>/events/*.json` and removed from the queue at the point of failure — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
 
 **Produce a summary:**
 

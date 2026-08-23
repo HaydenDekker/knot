@@ -1,11 +1,11 @@
 ---
 name: knot-dispatch
-description: "Trigger knots into action by creating or touching strand files, dispatching events manually, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, verifying triggers via loom-logs and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst)."
+description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via loom-logs and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch, knot step, step event, step queue, process one event, single event, step through queue, observe one cycle. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
-  compatibility: "Knot 0.32.0+"
+  version: "1.3.0"
+  compatibility: "Knot 0.35.0+"
 ---
 
 # Knot Dispatch Skill
@@ -44,7 +44,7 @@ is needed.
 ### Debounce Protects Against Rapid Changes
 
 If multiple changes occur to the same file within the debounce window
-(500ms default), Knot coalesces them into a single `Modified` event.
+(100ms default), Knot coalesces them into a single `Modified` event.
 This prevents re-processing mid-edit. The final processed state
 reflects the last saved content.
 
@@ -65,9 +65,13 @@ Key properties:
   queued `.json` files are reloaded (`load_persisted`) before the
   file watcher begins emitting new events. This preserves FIFO ordering
   across restart boundaries.
-- **Auto-removed on processing**: When `ProcessStrand` pops an event
-  from the queue, the `.json` file is deleted from disk. The event is
-  processed once — it does not linger.
+- **Late removal (at-least-once delivery)**: the `.json` file is
+  removed only *after* the event's work is done — as the last step
+  before the git commit on success, or at the point of failure on
+  failure/skip. Each event file is processed exactly once, but a crash
+  mid-processing leaves the file behind, so a restart re-queues it and
+  the knot re-runs (safe by knot idempotency). While the agent is
+  running, the event file is still in `events/`.
 - **Deduplicated**: If the same file generates multiple events before
   processing (e.g. rapid saves), the older event is replaced. The
   dedup key is `(strand_path, loom_id, knot_id, event_kind)`.
@@ -81,7 +85,9 @@ These are two separate mechanisms:
 **Event queue** (`tie-offs/<rig>/events/*.json`):
 - Holds pending filesystem change events (`Created`, `Modified`,
   `Deleted`) from the file watcher
-- Each `.json` file is a queue entry — removed when popped for processing
+- Each `.json` file is a queue entry — removed after its work is done
+  (late removal: just-before-commit on success, point of failure on
+  failure/skip)
 - `StrandSkipped` entries in the loom-log relate to this queue: the file
   referenced by a queued event was missing when processing reached it
 
@@ -96,6 +102,10 @@ These are two separate mechanisms:
 ---
 
 ## Prerequisites
+
+These apply to the strand-touching trigger workflow below (a running
+service that watches the filesystem). The `knot step` workflow is the
+opposite — it requires the service to be **stopped** (see [Stepping](#stepping-knot-step--one-event-then-stop)).
 
 1. Knot must be running and the rig must be initialised.
    Verify by checking `tie-offs/<rig>/state.json` exists and has fresh
@@ -170,7 +180,7 @@ filesystem directory:
    echo "updated content" >> <strand-dir>/<filename>.md
    ```
 
-4. **Wait for processing**: The debounce window is 500ms. Processing
+4. **Wait for processing**: The debounce window is 100ms. Processing
    typically completes within seconds to minutes depending on the
    agent's work.
 
@@ -286,6 +296,137 @@ After triggering any knot:
 
 ---
 
+## Stepping: `knot step` — One Event, Then Stop
+
+`knot step` processes **exactly one** queued event and then exits. It
+is the manual trigger/observation tool: use it to watch one cycle
+unfold, inspect rig state between events, or debug a misbehaving knot
+(wrong prompt, runaway event loop, event-enforcement follow-ups)
+without letting a long-running service drain the queue back-to-back.
+
+**Use it when the service is NOT running.** Two processes share the
+disk queue, and `knot step` is not safe to run concurrently with the
+service — the same event can be read twice (double execution). That is
+tolerable under knot idempotency but wasteful. To step a queue, stop
+the service first (the queue survives on disk — that is the point of
+the persistent queue).
+
+```
+knot step [--rig <rig-name>] [--event <event-filename>]
+```
+
+| Option | Meaning |
+|--------|---------|
+| `--rig <rig-name>` | Target a specific rig (same `./<name>` resolution as the service's positional). Without it, auto-discovery applies — but **zero matches is an error** (no implicit `rig/` creation) and multiple matches is an error. Stricter than the service on purpose. |
+| `--event <spec>` | Target a specific queued event: exact event id (`.json` optional), unique id prefix, or strand filename. No match → the queued events are listed on **stderr** and the exit code is 1. An ambiguous match (multiple ids share the prefix) also lists the queue and exits 1. |
+| *(neither)* | The FIFO head is processed. |
+
+**Empty queue** → prints `queue empty`, exit 0, no agent run. Before
+declaring the queue empty, the step waits up to 5× the debounce window
+(so a just-touched strand can clear its debounce window first).
+
+**Exit codes:** `0` = an event was processed, or the queue was empty;
+`1` = error (unknown/ambiguous event, no rigs, multiple rigs,
+processing failure).
+
+### What a Step Does
+
+A step runs the **full service startup** — legacy-layout migration,
+config seeding, rig git init, loom discovery, watcher registration,
+debounce engine, config pipeline, and the 5-second state writer — then
+executes exactly one event and shuts down with the same graceful
+cascade as the service (in-cycle debounce buffer flushed to disk,
+pipelines drained, `LoomStopped` written to each loom-log):
+
+- Events that occur **during** the step (a dispatched agent event,
+  the agent modifying its own strand) are captured into
+  `tie-offs/<rig>/events/` but **not executed** — the next step (or a
+  service run) processes them.
+- **Logs are not cleared** in step mode (service startups *do* clear
+  them): sequential steps accumulate in the loom-logs/rig-log, so a
+  multi-step session reads as one continuous session. Each step is a
+  self-contained run, so the loom-logs also carry a fresh
+  `KnotRegistered`/`LoomStarted` … `LoomStopped` bracket per step.
+- `tie-offs/<rig>/state.json` is written during the step, so it
+  reflects the **post-step** queue (processed event removed, the rest
+  listed).
+- Every step takes at least a few seconds (the pipeline drain has a
+  5-second timeout) — expect roughly one service startup per event.
+- On an early error (e.g. unknown `--event`) the step exits before the
+  shutdown cascade, so the `LoomStopped` bracket is missing from that
+  run's loom-logs — expected on error exits.
+
+### Getting an Event Queued for a Step
+
+The file watcher fires only on changes *after* the watch starts, so a
+strand file created before `knot step` begins is **not** picked up
+automatically. Two ways to have work queued:
+
+1. **The natural flow** — let the service queue it: run the service,
+   create/touch a strand (or drop an event file in a dispatch
+   directory), stop the service before or after the event is queued.
+   Whatever is still in `tie-offs/<rig>/events/` survives the stop and
+   is what the steps will process.
+2. **Direct queue write** (deterministic, watcher-free) — write the
+   pending event's JSON file straight into `tie-offs/<rig>/events/`.
+   The disk *is* the queue: the step's startup scan
+   (`load_persisted`) picks it up. The filename is the event id
+   (`{id}.json`); FIFO order is filename sort, so the
+   `{unix_timestamp_ms}` prefix controls ordering:
+   ```bash
+   id="$(date +%s%3N)-0001"
+   cat > "tie-offs/rig/events/${id}.json" << EOF
+   {
+     "id": "${id}",
+     "kind": "Created",
+     "loom_id": "planning-loom",
+     "knot_id": "plan-creator",
+     "strand_path": "/abs/path/to/strand-dir/my-feature.md",
+     "queued_at": "$(date -Iseconds)"
+   }
+   EOF
+   ```
+   `kind` is `Created`, `Modified`, or `Deleted`; `strand_path` is the
+   strand file's absolute path. For `Created`/`Modified` the strand
+   file must exist (a missing file is `StrandSkipped`); for `Deleted`
+   the file is expected to be gone.
+
+### Agent Workflow — Step Through the Queue
+
+When asked to step, process one event, or observe a single cycle:
+
+1. **Ensure the service is not running**: `tie-offs/<rig>/state.json`
+   `updated_at` is not fresh. If it is running, stop it (the queue
+   survives the stop).
+2. **Check what is queued**: `ls tie-offs/<rig>/events/` and/or the
+   `strand_queue` array in `state.json`.
+3. **Queue work if needed** (see above — direct queue write is the
+   deterministic path).
+4. **Run the step**:
+   ```bash
+   knot step                    # FIFO head
+   knot step --rig dev-rig      # named rig
+   knot step --event 1750000000000   # unique id prefix
+   knot step --event my-feature.md   # strand filename
+   ```
+5. **Observe the cycle**:
+   - stdout: `[step] processing event <id> (loom=…, knot=…): <path>`,
+     then `[step] event <id> processed` (or `failed: …` on stderr).
+   - loom-log: `KnotProcessing` → `KnotCompleted` (or `KnotFailed`),
+     `StrandProcessed`, and `EventsDispatched` if the knot emitted
+     events.
+   - tie-off: the new section at the end of
+     `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`.
+   - queue: the processed event's file is gone from
+     `tie-offs/<rig>/events/`; anything dispatched *during* the step
+     now has a new file there (captured, not executed).
+   - `state.json`: reflects the post-step queue.
+6. **Repeat** to step through the rest of the queue. When it prints
+   `queue empty` (exit 0), the queue is drained — start the service
+   again for continuous processing, or leave the rig idle.
+
+---
+
 ## Troubleshooting
 
 ### Knot Did Not Fire
@@ -307,11 +448,12 @@ but the file could not be processed. Two variants exist:
 | Reason | Cause | Action |
 |--------|-------|--------|
 | `"filtered temp file"` | A known temp file pattern (e.g. `sedXXXXXXX` from `sed -i`) triggered the watcher. The file was never a real input — it's normal filesystem noise. | No action needed. Count these to gauge noise levels. |
-| `"missing file (unknown pattern)"` | A real file triggered a `Created` or `Modified` event but was deleted before `ProcessStrand` reached it. This is a race condition: the file watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). | If one-off: no action — the event auto-removes from the queue on pop. If recurring for the same path: investigate what is creating and deleting files in the strand directory. |
+| `"missing file (unknown pattern)"` | A real file triggered a `Created` or `Modified` event but was deleted before `ProcessStrand` reached it. This is a race condition: the file watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). | If one-off: no action — the event is removed from the queue at the point of failure. If recurring for the same path: investigate what is creating and deleting files in the strand directory. |
 
-The event file in `tie-offs/<rig>/events/*.json` is removed when popped — the
-`StrandSkipped` does not recur from the same queued event. It only
-repeats if the file watcher generates a *new* event for the same path.
+The event file in `tie-offs/<rig>/events/*.json` is removed at the point
+of failure — the `StrandSkipped` does not recur from the same queued
+event. It only repeats if the file watcher generates a *new* event for
+the same path.
 
 For `Deleted` strand events, the file check is skipped entirely
 (the file being gone is expected), so `StrandSkipped` never fires
@@ -322,7 +464,7 @@ for `Deleted` events.
 If the same strand keeps re-triggering the same knot:
 
 - **Debounce**: Rapid edits are coalesced. Only one `Modified` event
-  fires after the debounce window closes (500ms after last change).
+  fires after the debounce window closes (100ms after last change).
 - **Idempotency**: Knots should be idempotent (see `knot-design`
   skill). Re-triggering on the same strand should produce
   "no changes needed" after the first run.
@@ -551,6 +693,17 @@ cat tie-offs/rig/planning-loom/tie-off-refactor-planner.md | tail -20
 
 # Check event dispatch in producer's loom-log
 grep EventsDispatched tie-offs/rig/review-loom/.loom-log
+
+# Step one queued event (service must NOT be running)
+knot step
+
+# Target a specific rig / queued event
+knot step --rig dev-rig
+knot step --event 1750000000000        # exact id, .json optional, or unique prefix
+knot step --event my-feature.md        # or strand filename
+
+# Empty queue → "queue empty", exit 0; unknown event → queue listed
+# on stderr, exit 1
 ```
 
 ---
@@ -569,5 +722,9 @@ Related skills:
 4. **knot-design skill** — design knots with correct event contracts
 5. **knot-manage skill** — review the work produced by triggered knots
 
-This skill covers **triggering** — getting knots to run. The other
-skills handle setup, monitoring, and design.
+This skill covers **triggering** — getting knots to run, including
+single-event stepping with `knot step`. The other skills handle setup,
+monitoring, and design.
+
+Related docs: `docs/concepts.md` (Event Queue — at-least-once
+semantics and `knot step`), `docs/troubleshooting.md`.

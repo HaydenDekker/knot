@@ -4,7 +4,7 @@ description: "Review the rig's work using git history and tie-off files. Examine
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
+  version: "1.2.0"
   compatibility: "Knot 0.31.0+"
 ---
 
@@ -424,9 +424,9 @@ are expected and do not indicate problems:
   fires instantly when a file appears, but the file may be short-lived
   (e.g. a script creates it, reads it, and deletes it within milliseconds).
   The event is persisted in the queue (`tie-offs/<rig>/events/*.json`), and when
-  `ProcessStrand` pops it, the file is already gone. The event file is
-  auto-removed from the queue on pop, so this does not recur from the same
-  event. If you see many of these for the same path, investigate what is
+  `ProcessStrand` reaches it, the file is already gone. The event file is
+  removed from the queue at the point of failure, so this does not recur from
+  the same event. If you see many of these for the same path, investigate what is
   creating and deleting files in the strand directory.
 
 - **`StrandIgnored` with reason `"binary file"`** — A binary file appeared in
@@ -474,7 +474,9 @@ misdiagnosis:
   no per-loom queue isolation. The queue is strictly FIFO across all looms.
 - Holds pending filesystem change events (`Created`, `Modified`, `Deleted`)
   triggered by the file watcher watching strand directories
-- Each event file is removed from disk when popped for processing
+- Each event file is removed from disk **after** the event's work is
+  done (late removal: just before the git commit on success, at the
+  point of failure on failure/skip — at-least-once delivery)
 - On Knot restart, persisted event files are reloaded (`load_persisted`)
 - `StrandSkipped` entries relate to this queue — the file referenced by a
   queued event was missing when processing reached it

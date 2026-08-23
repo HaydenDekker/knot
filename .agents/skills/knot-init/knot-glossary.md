@@ -237,12 +237,12 @@ The disk-backed event queue at `tie-offs/<rig>/events/` (in the runtime tree). E
 
 **Lifecycle:**
 - A file is created when an event is pushed (atomic: write to `.json.tmp`, then rename to `.json`)
-- A file is removed when an event is popped (processed) or deleted (by ID)
+- A file is removed **after** the event's work is done — just before the git commit on success, at the point of failure on failure/skip (at-least-once delivery) — or deleted (by ID). A crash mid-processing leaves the file behind, so a restart re-queues the event and the knot re-runs (safe by knot idempotency)
 - On Knot startup, all `.json` files are scanned and re-queued before the file-watcher begins emitting new events
 - Malformed JSON files are skipped with a warning logged to stderr
 - Non-`.json` files are silently ignored
 
-**Why files, not a single queue file?** Each event is an independent unit — it can be inspected, edited, or deleted on disk at any time. `pop()` reads the file fresh from disk, so on-disk edits are honoured when the event is processed. The shutdown sentinel is NOT persisted (it is a runtime-only signal).
+**Why files, not a single queue file?** Each event is an independent unit — it can be inspected, edited, or deleted on disk at any time. The queue head is read fresh from disk (`front()`) when processing starts, so on-disk edits are honoured when the event is processed. The shutdown sentinel is NOT persisted (it is a runtime-only signal).
 
 **JSON schema per file:**
 
