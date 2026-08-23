@@ -288,3 +288,39 @@ pattern):
 - **Open question (decide in Phase 4):** should `step` also accept the service-style
   positional rig (`knot step myrig`)? Default: no — `--rig` only, keeping the command
   grammar unambiguous.
+
+## Implementation Status: ✅ Complete (2026-08-23)
+
+## Completion Notes
+- All 5 phases implemented and committed on `main` (this plan was
+  executed directly on main — no feature branch to merge):
+  - Phase 1 (`19411d6`) — `front()` / `shutdown_signaled()` on the
+    queue port (disk + in-memory adapters), 5 unit tests per adapter.
+  - Phase 2 (`222ba00`) — late removal in `ProcessStrand` via
+    `execute_with_pending` (threaded `event_id`, removal before commit
+    on success, at the point of failure otherwise) and the
+    front-based service loop; 11 acceptance-level tests in
+    `tests/late_removal.rs`.
+  - Phase 3 (`4b785d0`) — pure `parse_args` CLI grammar with
+    `Step { rig, event }`, stricter step rig discovery, usage text.
+  - Phase 4 (`cb15433`) — `step_knot` lifecycle (`StartupOptions`,
+    shared `build_process_strand`, event resolution, 5× debounce
+    empty-queue wait, in-cycle settle, service-identical shutdown
+    cascade); 19 tests in `tests/step.rs` (lib + binary-level).
+  - Phase 5 (`1739338`) — `docs/concepts.md` Event Queue section,
+    `knot step` in the knot-dispatch skill, knot-update 0.35.0
+    changelog entry, PRD goal revision + Story 6, stale wording fixes
+    across knot-manage/knot-analyst/knot-init-glossary/
+    domain-glossary. (Commit `f1c1c19` between phases 4 and 5
+    committed outstanding plan-059 skill wording.)
+- Open question decided: **no** positional rig for `step` —
+  `knot step myrig` is a parse error pointing at `--rig` (Phase 4).
+- Deviations (recorded in the phase docs): the in-cycle settle
+  (`step_settle`, `max(5× debounce window, 250 ms)`) was added beyond
+  the plan text to make in-cycle dispatch capture deterministic, and
+  the queued-events listing on the `--event` error path goes to stderr
+  (plan test contract).
+- Bumped to 0.35.0 (MINOR); release notes recorded in
+  `docs/release-notes.md`; design knowledge extracted to
+  `project/design/design-knot-step.md`; skills published globally.
+- Full `cargo test` green at completion (see phase 5 checklist).

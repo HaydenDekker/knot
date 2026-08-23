@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-23 (plan 073 in progress — phases 1-5 complete; awaiting plan completion)
+> **Last Updated:** 2026-08-23 (plan 073 complete)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | 🟡 In Progress | 2026-08-23 |
+| 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
 | 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
 | 70 | [Unique Event Dispatch Filenames — Per-Batch Sequence Suffix](070-dispatch-filename-collision/dispatch-filename-collision-plan.md) | ✅ Complete | 2026-08-22 |
@@ -61,6 +61,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 73. Knot Step — Single-Event Stepping and Late Queue Removal
+
+**Status:** ✅ Complete (2026-08-23)
+**Created:** 2026-08-23
+**Goal:** Add a `knot step` CLI command that processes exactly one queued event and exits (full startup, single execution, graceful shutdown), and change the disk-backed queue to late removal (at-least-once) so a crash mid-processing re-queues the event instead of losing it.
+
+Completed in Knot 0.35.0: `front()`/`shutdown_signaled()` on the queue port; `ProcessStrand::execute_with_pending` with removal just-before-commit on success and at the point of failure otherwise (exactly-once-removal invariant); front-based service loop; pure unit-tested `parse_args` with `step` (stricter rig discovery — no implicit `rig/`); `step_knot` lifecycle (`StartupOptions` split, shared `build_process_strand`, `--event` resolution, 5× debounce empty-queue wait, in-cycle settle, service-identical shutdown cascade; in-cycle events captured but not executed). 20 new late-removal tests, 19 new step tests (lib + binary-level), 10 parse-args unit tests. Design knowledge in [design/design-knot-step.md](../design/design-knot-step.md).
+
+Full details in [73-knot-step/knot-step-plan.md](73-knot-step/knot-step-plan.md).
 
 ### 72. Clear Loom-Logs and Rig-Log at Startup
 

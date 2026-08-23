@@ -1,5 +1,77 @@
 # Release Notes
 
+## v0.35.0 — 2026-08-23
+
+### Feature — `knot step`: Single-Event Stepping (Plan 073)
+
+`knot step` processes **exactly one** queued event and exits — the
+manual trigger/observation tool for watching a cycle unfold, inspecting
+rig state between events, and debugging a misbehaving knot without
+letting the service drain the queue back-to-back.
+
+```
+knot step [--rig <rig-name>] [--event <event-filename>]
+```
+
+- `--event` targets a specific queued event (exact id, `.json`
+  optional; unique id prefix; or strand filename — no match lists the
+  queue on stderr and exits 1); without it the FIFO head is processed.
+- Empty queue → `queue empty`, exit 0. Exit 1 on unknown/ambiguous
+  event, no rigs, multiple rigs, or processing failure.
+- A step runs the **full service startup** (migration, config seeding,
+  rig git init, discovery, watchers, debounce engine, state writer),
+  executes the single event, and shuts down with the service-identical
+cascade. Events dispatched *during* the step are captured into
+  `tie-offs/<rig>/events/` but **not executed**.
+- **Logs are not cleared** in step mode — a multi-step session
+  accumulates in the loom-logs/rig-log. (Service startups still clear
+  them; see v0.34.0.)
+- Step rig discovery is stricter than the service: zero `*-rig`
+  matches is an error (no implicit `rig/` creation).
+- Use `knot step` when the service is **not** running — two processes
+  sharing the disk queue can double-read the same event (safe by knot
+  idempotency, but wasteful).
+
+### Queue Semantics — Late Removal (At-Least-Once)
+
+The queued event file is no longer removed when the event is *popped*
+for processing — it is removed **after the work is done**:
+
+- **On success** — as the last step before the git commit (dispatch,
+  tie-off append, loom-log entries, and event enforcement all happen
+  first; the commit captures everything, including the removal).
+- **On failure/skip** — at the point of failure (consume-on-failure —
+  no poison-pill retry loops).
+
+The only window in which an event survives a crash is while its
+processing is in flight: a restart re-queues it and the knot re-runs
+(safe by knot idempotency). Previously a crash during a long agent run
+lost the event silently. The service loop now peeks (`front()`) instead
+of popping; the CLI parsing is a pure unit-tested `parse_args`
+function. No new dependencies.
+
+**No document migration:** pending events from older versions read
+identically (the `events/*.json` schema is unchanged). The `knot-update`
+skill carries the 0.35.0 changelog entry.
+
+### Skills and Docs Updated
+
+- `knot-dispatch` (v1.3.0) — new **Stepping: `knot step`** section
+  (flags, event resolution, empty-queue behaviour, exit codes, what a
+  step does, direct queue write, agent workflow); stale pop-removal and
+  debounce-window wording corrected
+- `knot-update` (v1.11.0) — 0.35.0 changelog entry (no migration
+  required; queue files from older versions read identically)
+- `knot-manage` (v1.2.0), `knot-analyst` (v1.4.0), `knot-init`
+  (v4.2.0) glossary — queue-removal wording corrected to late removal
+- `docs/concepts.md` — new Event Queue section (at-least-once
+  semantics, `knot step`)
+- PRD `prd-persistent-events.md` — popped-removal goal revised to late
+  removal; new Story 6 (manual stepping via the CLI)
+- Design reference: `project/design/design-knot-step.md` (late-removal
+  ordering contract, crash windows, the step lifecycle, rejected
+  minimal-startup alternative)
+
 ## v0.34.0 — 2026-08-23
 
 ### Per-Run Logs — Loom-Logs and Rig-Log Cleared at Startup (Plan 072)
