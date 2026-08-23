@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.4.0"
-  compatibility: "Knot 0.32.0+"
+  version: "3.5.0"
+  compatibility: "Knot 0.34.0+"
 ---
 
 # Knot Inspect Skill
@@ -17,7 +17,8 @@ processing status, and agent profiles by reading
 
 **State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
 Knot; default rig: `tie-offs/rig/state.json`)
-**Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL)
+**Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only
+JSONL, **cleared at knot startup** — per-run scope)
 
 ---
 
@@ -226,8 +227,14 @@ When asked to list or view agent profiles:
 ## Activity Log Format
 
 Each loom has an append-only JSONL activity log at
-`tie-offs/<rig>/{loom-id}/.loom-log`. Each line is a JSON object
-representing one event.
+`tie-offs/<rig>/{loom-id}/.loom-log` (append-only within a run —
+**cleared at knot startup**, per-run scope). Each line is a JSON
+object representing one event.
+
+The log always contains only the events of the **current** knot
+process run: it starts with the fresh `KnotRegistered`/`LoomStarted`
+events and ends with `LoomStopped` at shutdown. There is no cross-run
+history in the log — the tie-off files are the durable audit record.
 
 ### Event Types
 

@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.9.0"
-  compatibility: "Knot 0.33.0+"
+  version: "1.10.0"
+  compatibility: "Knot 0.34.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,46 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Per-Run Logs — Loom-Logs and Rig-Log Cleared at Startup (Knot 0.34.0, 2026-08-23)
+
+**What changed:** the operational logs are now per-run. On every
+startup — after legacy-layout migration, before loom discovery — Knot
+truncates the rig-log (`tie-offs/<rig>/.rig-log`) and **every**
+`tie-offs/<rig>/<loom-id>/.loom-log` (including orphaned loom dirs
+whose loom no longer exists in the rig). Each log therefore always
+contains exactly the events of the current knot process run: it
+starts with the fresh `KnotRegistered`/`LoomStarted` events and ends
+with `LoomStopped` at shutdown. Previously the logs grew
+indefinitely across runs, and stale unparseable lines re-fired a
+`WARN:` skip on every 5-second state write, every query, forever.
+
+**Affected documents:** none — no project document (profile, knot,
+loom) changes.
+
+| Artifact | Before 0.34.0 | 0.34.0+ |
+|---|---|---|
+| `.rig-log` | accumulated across runs | truncated at every startup (current run only) |
+| `*/.loom-log` | accumulated across runs | truncated at every startup (current run only) |
+| Tie-off files | unchanged | unchanged (durable audit history) |
+| `state.json`, `events/`, dispatch dirs | unchanged | unchanged |
+
+**Migration: none required.**
+
+- No document format changes — profiles, knots, looms, and tie-offs
+  are untouched.
+- On the **first run of the new binary**, all `.rig-log`/`.loom-log`
+  content from earlier runs is discarded. This is intentional: the
+  logs' purpose is current-run observability, and the durable audit
+  history lives in the git-versioned tie-offs, which are unchanged.
+- Any workflow that assumed cross-run log history (e.g. counting
+  events "in the last 24 hours" from a loom-log) must now count
+  "since the last startup" — the log holds the current run only.
+- Clearing is non-fatal: a failed clear logs a `WARNING:` and startup
+  proceeds. Only files named `.loom-log` (top-level per loom dir) and
+  `.rig-log` are touched — nothing else is deleted or modified.
 
 ---
 

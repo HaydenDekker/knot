@@ -4,8 +4,8 @@ description: "Analyse rig productivity and project progress at runtime. Tail the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
-  compatibility: "Knot 0.31.0+"
+  version: "1.3.0"
+  compatibility: "Knot 0.34.0+"
 ---
 
 # Knot Analyst Skill
@@ -17,9 +17,9 @@ records) to produce a structured assessment of how the rig is performing
 and whether the project is making progress.
 
 **Rig-log:** `tie-offs/<rig>/.rig-log` (append-only JSONL — operational
-events)
+events, **cleared at knot startup** — per-run scope)
 **Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL —
-per-loom activity)
+per-loom activity, **cleared at knot startup** — per-run scope)
 **State file:** `tie-offs/<rig>/state.json` (current rig snapshot)
 
 ---
@@ -80,7 +80,9 @@ Determine whether the rig has been doing meaningful work.
 **Read `tie-offs/<rig>/.rig-log`:**
 
 The rig-log is an append-only JSONL file recording serious operational
-events. Tail the last 50 lines (or the full file if smaller).
+events of the **current run only** — it is truncated at every knot
+startup (per-run scope; the tie-off files hold the durable history).
+Tail the last 50 lines (or the full file if smaller).
 
 Look for:
 
@@ -245,8 +247,10 @@ work.
 
 **Check for error accumulation:**
 
-From loom-logs, count `KnotFailed` events per knot in the last 24 hours.
-If a single knot has 3+ failures, flag it as a recurring problem.
+From loom-logs, count `KnotFailed` events per knot since the last
+startup (the log is cleared at every knot startup, so it holds the
+current run's events only). If a single knot has 3+ failures, flag it
+as a recurring problem.
 
 **Produce a summary:**
 

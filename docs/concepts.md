@@ -161,10 +161,18 @@ Knot maintains several log files for observability:
 | Log | Location | Purpose |
 |-----|----------|---------|
 | **Loom-log** | `tie-offs/<rig>/{loom-id}/.loom-log` | Per-loom activity: knot registration, processing events, errors |
-| **Rig-log** | `tie-offs/<rig>/.rig-log` | Append-only JSONL of serious events: timeouts (`TimeoutExceeded`) and idle periods (`QueueIdle`) |
+| **Rig-log** | `tie-offs/<rig>/.rig-log` | JSONL of serious events: timeouts (`TimeoutExceeded`) and idle periods (`QueueIdle`) |
 
-The rig-log survives server restarts and supports multiple consumers
-(append-only, single-line JSON entries).
+Logs are **per-run**: at every startup, Knot truncates the rig-log and
+every loom-log *before* loom discovery, so each log always contains
+only the events of the current run (it starts with the fresh
+`KnotRegistered`/`LoomStarted` events and ends with `LoomStopped` at
+shutdown). Cross-run history is not kept in the logs — the tie-off
+files are the durable audit record (plain text, git-versioned).
+
+The logs support multiple consumers (append-only within a run,
+single-line JSON entries); knots and operators react to events of the
+*current* run only.
 
 ## Key Principles
 
