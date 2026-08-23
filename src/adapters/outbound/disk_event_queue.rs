@@ -139,6 +139,20 @@ impl StrandEventQueue for DiskBackedEventQueue {
         }
     }
 
+    fn front(&self) -> Option<PendingEvent> {
+        // Scan all events sorted by filename (FIFO order) and read the
+        // head fresh from disk (honours on-disk edits) — without
+        // removing it. The event file survives until the processor
+        // explicitly deletes it after processing (late removal).
+        let events = self.store.scan_events().unwrap_or_default();
+        let first = events.first()?;
+        self.store.read_event(&first.id).ok()
+    }
+
+    fn shutdown_signaled(&self) -> bool {
+        *self.shutdown.lock().unwrap()
+    }
+
     fn snapshot(&self) -> Vec<PendingEvent> {
         // Read fresh from disk — always reflects on-disk state.
         self.store.scan_events().unwrap_or_default()
@@ -301,6 +315,125 @@ mod tests {
         let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
 
         assert!(queue.pop().is_none());
+    }
+
+    // ── front (peek) ──────────────────────────────────────────────
+
+    /// `front` returns the head event twice without removing it:
+    /// same content both times, `len()` unchanged.
+    #[test]
+    fn front_returns_head_without_removing() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let mut e1 = make_pending(created("/file-a.md"));
+        e1.id = PendingEventId("1001-aaa".to_string());
+        let mut e2 = make_pending(created("/file-b.md"));
+        e2.id = PendingEventId("1002-bbb".to_string());
+        queue.push(e1);
+        queue.push(e2);
+
+        let first = queue.front().expect("front should return the head event");
+        assert_eq!(first.strand_path, "/file-a.md");
+
+        // Second peek: same head, nothing consumed
+        let second = queue.front().expect("front should still return the head");
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.strand_path, "/file-a.md");
+
+        // Queue unchanged — both files still on disk
+        assert_eq!(queue.len(), 2, "front must not remove the head event");
+        assert!(dir.path().join("1001-aaa.json").exists());
+        assert!(dir.path().join("1002-bbb.json").exists());
+    }
+
+    /// `front` returns `None` on an empty queue (even after shutdown —
+    /// the sentinel is never surfaced through `front`).
+    #[test]
+    fn front_none_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        assert!(queue.front().is_none());
+
+        queue.push_shutdown();
+        assert!(
+            queue.front().is_none(),
+            "front never returns the shutdown sentinel"
+        );
+    }
+
+    /// `front` follows FIFO (filename-sort) order and advances when the
+    /// head is explicitly deleted (late-removal loop pattern).
+    #[test]
+    fn front_fifo_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        // Push out of order — front follows filename sort
+        let mut e3 = make_pending(created("/file-c.md"));
+        e3.id = PendingEventId("1003-ccc".to_string());
+        let mut e1 = make_pending(created("/file-a.md"));
+        e1.id = PendingEventId("1001-aaa".to_string());
+        let mut e2 = make_pending(created("/file-b.md"));
+        e2.id = PendingEventId("1002-bbb".to_string());
+        queue.push(e3);
+        queue.push(e1);
+        queue.push(e2);
+
+        assert_eq!(queue.front().unwrap().strand_path, "/file-a.md");
+
+        // After deleting the head, front advances to the next in FIFO
+        queue.delete(&PendingEventId("1001-aaa".to_string()));
+        assert_eq!(queue.front().unwrap().strand_path, "/file-b.md");
+    }
+
+    /// `front` reads the file fresh from disk — on-disk edits are
+    /// visible to the peek (the disk file is the source of truth).
+    #[test]
+    fn front_reflects_on_disk_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let event = make_pending(created("/file-a.md"));
+        queue.push(event.clone());
+
+        // Modify the file on disk: change the kind to "Modified"
+        let mut modified_event = event.clone();
+        modified_event.kind = "Modified".to_string();
+        let event_path = dir.path().join(format!("{}.json", event.id.0));
+        std::fs::write(
+            &event_path,
+            serde_json::to_string_pretty(&modified_event).unwrap(),
+        )
+        .unwrap();
+
+        let front = queue.front().expect("front should return the head");
+        assert_eq!(
+            front.kind, "Modified",
+            "front should reflect the on-disk edit"
+        );
+
+        // The file is still there (front does not remove)
+        assert!(event_path.exists());
+    }
+
+    // ── shutdown_signaled ─────────────────────────────────────────
+
+    /// `shutdown_signaled` is false initially and true after
+    /// `push_shutdown`.
+    #[test]
+    fn shutdown_signaled_false_initially_true_after_push_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        assert!(!queue.shutdown_signaled(), "fresh queue: no shutdown");
+
+        queue.push(make_pending(created("/file-a.md")));
+        assert!(!queue.shutdown_signaled());
+
+        queue.push_shutdown();
+        assert!(queue.shutdown_signaled());
     }
 
     // ── push_or_replace ─────────────────────────────────────────────

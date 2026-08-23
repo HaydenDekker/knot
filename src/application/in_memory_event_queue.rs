@@ -92,6 +92,15 @@ impl super::ports::StrandEventQueue for InMemoryEventQueue {
         }
     }
 
+    fn front(&self) -> Option<PendingEvent> {
+        // Peek the head (FIFO order) without removing it.
+        self.events.lock().unwrap().front().cloned()
+    }
+
+    fn shutdown_signaled(&self) -> bool {
+        *self.shutdown.lock().unwrap()
+    }
+
     fn snapshot(&self) -> Vec<PendingEvent> {
         self.events.lock().unwrap().iter().cloned().collect()
     }
@@ -379,6 +388,55 @@ mod tests {
 
     // ── shutdown sentinel ─────────────────────────────────────────
 
+    /// `front` returns the head event twice without removing it.
+    #[test]
+    fn front_returns_head_without_removing() {
+        let queue = InMemoryEventQueue::new();
+        queue.push(make_pending(created("file-a.md")));
+        queue.push(make_pending(created("file-b.md")));
+
+        let first = queue.front().expect("front should return the head");
+        assert_eq!(first.strand_path, "file-a.md");
+
+        let second = queue.front().expect("front should still return the head");
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.strand_path, "file-a.md");
+
+        assert_eq!(queue.len(), 2, "front must not remove the head event");
+    }
+
+    /// `front` returns `None` on an empty queue (even after shutdown —
+    /// the sentinel is never surfaced through `front`).
+    #[test]
+    fn front_none_when_empty() {
+        let queue = InMemoryEventQueue::new();
+        assert!(queue.front().is_none());
+
+        queue.push_shutdown();
+        assert!(queue.front().is_none());
+    }
+
+    /// `front` follows FIFO order and advances after `delete`.
+    #[test]
+    fn front_fifo_order() {
+        let queue = InMemoryEventQueue::new();
+        let e1 = make_pending(created("file-a.md"));
+        let e1_id = e1.id.clone();
+        queue.push(e1);
+        queue.push(make_pending(created("file-b.md")));
+
+        assert_eq!(
+            queue.front().unwrap().strand_path,
+            "file-a.md"
+        );
+
+        assert!(queue.delete(&e1_id));
+        assert_eq!(
+            queue.front().unwrap().strand_path,
+            "file-b.md"
+        );
+    }
+
     /// `push_shutdown` + empty pop returns `Shutdown`.
     #[test]
     fn shutdown_sentinel() {
@@ -390,6 +448,20 @@ mod tests {
             result,
             Some(PendingEventOrShutdown::Shutdown)
         ));
+    }
+
+    /// `shutdown_signaled` is false initially and true after
+    /// `push_shutdown`.
+    #[test]
+    fn shutdown_signaled_false_initially_true_after_push_shutdown() {
+        let queue = InMemoryEventQueue::new();
+        assert!(!queue.shutdown_signaled(), "fresh queue: no shutdown");
+
+        queue.push(make_pending(created("file-a.md")));
+        assert!(!queue.shutdown_signaled());
+
+        queue.push_shutdown();
+        assert!(queue.shutdown_signaled());
     }
 
     /// Events are popped before shutdown sentinel.

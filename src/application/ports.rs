@@ -632,7 +632,29 @@ pub trait StrandEventQueue: Send + Sync {
     /// Returns `Some(PendingEventOrShutdown::Event)` for real events,
     /// `Some(PendingEventOrShutdown::Shutdown)` for the shutdown sentinel,
     /// or `None` if the queue is empty (no sentinel, no events).
+    ///
+    /// Delete-on-read: the event is removed from the queue. The service
+    /// loop no longer uses this (it peeks via [`front`](Self::front) and
+    /// removes explicitly after processing); `pop` remains a valid
+    /// primitive for tests and one-shot consumers.
     fn pop(&self) -> Option<crate::domain::pending_event::PendingEventOrShutdown>;
+
+    /// Read the head event (FIFO order) **without** removing it.
+    ///
+    /// Returns the on-disk content of the front event, or `None` when the
+    /// queue is empty. The shutdown sentinel is never returned — callers
+    /// check [`shutdown_signaled`](Self::shutdown_signaled) separately.
+    ///
+    /// This is the peek primitive for the late-removal (at-least-once)
+    /// loop: the event file survives while processing is in flight, so a
+    /// crash mid-processing re-queues the event instead of losing it.
+    fn front(&self) -> Option<crate::domain::pending_event::PendingEvent>;
+
+    /// Whether a shutdown has been signalled via `push_shutdown`.
+    ///
+    /// Replaces the `pop()`-sentinel shutdown detection for loops that
+    /// use `front()` (which never returns the sentinel).
+    fn shutdown_signaled(&self) -> bool;
 
     /// Take a snapshot of all pending events (excludes shutdown sentinel).
     fn snapshot(&self) -> Vec<crate::domain::pending_event::PendingEvent>;
