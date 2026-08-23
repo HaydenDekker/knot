@@ -4,8 +4,8 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.31.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.32.0+"
 ---
 
 # Knot Dispatch Skill
@@ -127,7 +127,7 @@ Agent invoked with profile + knot instructions
     ↓
 Tie-off appended to tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
     ↓
-Events in tie-off parsed → dispatched to consumer knots (fan-out)
+Event blocks parsed → `occurred: true` events dispatched to consumer knots (fan-out)
 ```
 
 ### Three Trigger Types
@@ -244,7 +244,10 @@ full producer→consumer chain:
 
 3. **Check for event dispatch**: Look for `EventsDispatched` entries
    in the producer's loom-log. These show which events were emitted
-   and which consumer looms received them.
+   and which consumer looms received them. If the producer
+   acknowledged every subscriber event with `occurred: false`, there
+   will be no `EventsDispatched` entry — that is expected, not a
+   failure.
 
 4. **Verify consumer activation**: Read each consumer loom's log for
    `KnotProcessing` entries that follow the dispatch.
@@ -332,7 +335,8 @@ If the same strand keeps re-triggering the same knot:
 |---------|-------|
 | Producer emitted event but consumer idle | Check `EventsDispatched` in producer's loom-log — does it list the consumer's loom? If not, the consumer's `strand-dir` event URI may not match the producer's knot name. |
 | Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot or check loom-log for `KnotRegistered` for the consumer. |
-| `event: None` in tie-off but expected event | The producer agent was instructed to emit an event but chose `None`. Check the producer's tie-off content — it may have decided no event was warranted. |
+| `occurred: false` in tie-off but expected event | The producer explicitly acknowledged the event but determined it did not occur. Read the `description` field in the event block — it states **why** the event wasn't triggered. If the reasoning is wrong, re-trigger the producer. |
+| `KnotEventsMissing` in loom-log | The producer completed with **zero** event blocks. The entry lists `expected_events`. Knot already attempted one follow-up re-entry (a second `KnotEventsMissing` means the follow-up also produced nothing). Re-trigger the knot if the events are still missing. |
 | Multiple consumers, only some fired | Each consumer matches independently. Check each consumer's `strand-dir` event URI against the producer's knot ID. |
 
 ---
@@ -373,44 +377,141 @@ consumer knot receives these as part of the strand file it reads.
 
 ## Producer Event Emission
 
-When a knot has consumers listening for its events, Knot injects event
-instructions at the **beginning** of its prompt. The injected block
-tells the agent which events it may emit and the required format:
+When a knot has consumers listening for its events, Knot injects
+subscriber event instructions at the **beginning** of its prompt. The
+injected block lists each declared event and requires the producer to
+**acknowledge every subscriber event** in its tie-off — whether or not
+the event occurred:
 
-```
-## Agent Events
+````
+# Subscriber Events
 
-Other knots are listening for events you may emit.
+You have a number of subscribers that have requested to be notified if
+certain events occur during this session. You must acknowledge each
+event in your tie-off (final response). Subscribers can't begin their
+work until your events are delivered to them via your tie-off.
 
-Events you may emit:
-- `ReviewCompleted` — Emitted when a quality review is complete.
+The following event/s have been declared by subscribers:
 
-If an event occurred, emit in your output:
+- `PlanCreated` — When a plan is created.
+- `RefactorNeeded` — When the review finds architectural issues.
+
+## Event Format
+
+Emit one ```markdown block **per subscriber event** listed above.
+Each block must have `---` frontmatter delimiters:
+
 ```markdown
 ---
-event: ReviewCompleted
-description: <short summary of what happened>
-<additional fields as relevant>
+event: PlanCreated
+occurred: true
+description: Short summary of what happened
+timestamp: 2026-08-06T14:30:00
+<optional fields if specified in the event description above>
 ---
 
-<Narrative context>
+Freeform narrative context about the event.
 ```
 
-If no events occurred, emit:
-```markdown
+## Rules
+
+- Emit exactly one event block per subscriber event listed above.
+- The `event` and `occurred` fields are required in every block.
+- The `description` field must explain why the event was or wasn't
+  triggered, plus any additional requested information.
+- When `occurred: true`, include the `timestamp` field and any
+  additional fields specified in the event description above.
+- When `occurred: false`, the event is not dispatched but still
+  counts as acknowledgement.
+- If a pending event satisfies the event that has just occurred, set
+  occurred: false to avoid duplicated events.
+- A pending event may already be relevant but require additional
+  context — do not edit the pending event and instead emit a new
+  event of the same type with additional context.
+````
+
+(Shown with cleaned-up wording — the runtime block lists the real
+subscriber events and their descriptions, and appends a
+`## Pending Events` section when events are still queued, see below.)
+
+### The Acknowledgement Convention
+
+This replaces the older `event: None` convention: **silence is no
+longer a valid outcome.** Every declared event must be answered
+explicitly with its own block, and **when an event did not occur, the
+knot must state why** in the `description` field.
+
+| Field | Required | When | Meaning |
+|-------|----------|------|---------|
+| `event` | **Yes** | every block | The subscriber event id (e.g. `PlanCreated`) |
+| `occurred` | **Yes** | every block | `true` = happened during the session; `false` = did not |
+| `description` | **Yes** | every block | **Why** the event was or wasn't triggered, plus any additional requested information |
+| `timestamp` | **Yes** | `occurred: true` | When the event occurred |
+| payload fields | as specified | `occurred: true` | Any fields named in the event description |
+
+An `occurred: false` block is **not dispatched** to consumers — it
+exists solely as acknowledgement of the subscriber requirement. Its
+`description` is the audit trail that distinguishes a conscious
+decision from a forgotten requirement:
+
+````markdown
 ---
-event: None
+event: RefactorNeeded
+occurred: false
+description: Review found no architectural issues — nothing to refactor
 ---
-```
-```
+````
 
-The producer writes this block in its tie-off. Knot parses the
-```markdown code block, extracts the event, and dispatches it to
-matching consumers. The producer does **not** need to declare its
-events — Knot discovers them from consumer subscriptions.
+### Pending Events
 
-**Multiple events** can be emitted in one tie-off — each as a separate
-```markdown block. Each event is dispatched independently.
+When the producer has previously dispatched events that are still
+queued for consumer processing, the injected block also contains a
+**`## Pending Events`** section listing each one (event id,
+description, file name). Two dedup rules apply:
+
+- **Covered outcome:** if a pending event already covers the outcome
+  of the work just done, emit that event with `occurred: false`
+  (description referencing the pending event) instead of re-emitting
+  it.
+- **Needs more context:** if a pending event is relevant but requires
+  additional context, do **not** edit the pending event file — emit a
+  new event of the same type with the additional context.
+
+### Enforcement
+
+If the producer completes with **zero** event blocks despite having
+subscribers, Knot does not silently accept the tie-off:
+
+1. Logs `KnotEventsMissing` to the loom-log, listing the
+   `expected_events`.
+2. Attempts one follow-up re-entry into the agent session (when a
+   session ID is available), re-injecting the event request.
+3. If the follow-up produces event blocks, they are parsed and
+   dispatched as normal (only one `KnotEventsMissing` is logged).
+4. If the follow-up still produces nothing, a second
+   `KnotEventsMissing` is logged.
+
+An `occurred: false` block is a valid event block — its presence
+satisfies enforcement.
+
+### Dispatch
+
+Knot parses the producer's tie-off for event blocks and dispatches
+only `occurred: true` events to matching consumer knots.
+`occurred: false` events are filtered out before dispatch. Multiple
+events in one tie-off are each dispatched independently.
+
+The producer does **not** need to declare its events — Knot discovers
+them from consumer subscriptions.
+
+### Backwards Compatibility
+
+- The `occurred` field **defaults to `true`** when absent, so event
+  blocks written before this convention (without the field) are still
+  parsed and dispatched.
+- A legacy `event: None` block parses as a literal event with id
+  `None` — it satisfies enforcement (a block is present) but matches
+  no consumer, so it is never dispatched.
 
 ---
 
