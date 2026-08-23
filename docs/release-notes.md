@@ -1,5 +1,48 @@
 # Release Notes
 
+## v0.34.0 — 2026-08-23
+
+### Per-Run Logs — Loom-Logs and Rig-Log Cleared at Startup (Plan 072)
+
+The operational logs are now **per-run**. On every startup — after
+legacy-layout migration, before loom discovery — Knot truncates the
+rig-log (`tie-offs/<rig>/.rig-log`) and **every**
+`tie-offs/<rig>/<loom-id>/.loom-log`, including orphaned loom dirs
+whose loom no longer exists in the rig. Each log always contains
+exactly the events of the current run: it starts with the fresh
+`KnotRegistered`/`LoomStarted` events and ends with `LoomStopped` at
+shutdown.
+
+**Why:** the logs exist for current-run observability (event-watching
+knots, `knot-inspect`/`knot-analyst`). The durable audit history lives
+in the git-versioned tie-off files. Previously, stale unparseable lines
+re-fired a `WARN:` skip on every 5-second state write and every query
+— forever — and the logs grew unbounded with residue nothing consumes.
+
+| Artifact | Before | 0.34.0+ |
+|---|---|---|
+| `.rig-log`, `*/.loom-log` | accumulated across runs | truncated at every startup |
+| Tie-off files, `state.json`, `events/`, dispatch dirs | unchanged | unchanged |
+
+**Non-fatal:** a failed clear logs a `WARNING:` and startup proceeds.
+Only log files are touched — nothing else is deleted or modified.
+
+**No document format changes:** profiles, knots, looms, and tie-offs
+are unaffected. On the first run of 0.34.0, all earlier runs'
+`.rig-log`/`.loom-log` content is discarded — intentional (tie-offs
+retain the history).
+
+### Skills and Docs Updated
+
+- `knot-update` (v1.10.0) — 0.34.0 changelog entry (no migration
+  required; first run discards earlier runs' log content)
+- `knot-inspect` (v3.5.0), `knot-analyst` (v1.3.0) — log descriptions
+  annotated per-run scope; analyst failure counting now "since the
+  last startup"
+- `docs/concepts.md` — Logs section rewritten for per-run semantics
+- Design reference: `project/design/design-startup-log-clear.md`
+  (startup sequence, ordering invariants, what the clear touches)
+
 ## v0.31.0 — 2026-08-17
 
 ### Breaking — Rig/Project Repository Split (Plan 068)

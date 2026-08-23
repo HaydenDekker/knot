@@ -224,3 +224,34 @@ occurred — is preserved; document the adjustment in the phase doc.)
   prune loom dirs that contain *only* a now-empty `.loom-log` (no
   tie-offs, no dispatch dirs). Default: **no** — deletion of anything
   beyond log files is out of scope for this plan.
+
+## Implementation Status: ✅ Complete (2026-08-23)
+
+## Completion Notes
+- All 3 phases implemented and committed on branch
+  `refactor/startup-log-clear`.
+- `RigLogPort::clear()` / `LoomLogPort::clear_all()` added as required
+  trait methods; filesystem adapters truncate in place
+  (`fs::File::create`); `clear_all` enumerates the runtime root and
+  touches only top-level `*/.loom-log` (orphans included); all six mock
+  implementations updated (Phase 1, 6 unit tests).
+- `run_startup` clears after legacy migration, before discovery;
+  non-fatal `WARNING:` on error. Acceptance-level composition test
+  `test_startup_clears_logs_before_discovery` pins the full order with
+  real adapters (incl. unparseable rig-log line, orphan dir, durable
+  files byte-identical, post-clear state derivation). `test_startup_`
+  `migrates_legacy_layout` post-startup assertion adjusted to the
+  cleared-at-new-path expectation (Phase 2).
+- Open question decided: **no** pruning of log-only loom dirs (plan
+  default).
+- Docs/skills: `docs/concepts.md` Logs section rewritten; knot-inspect
+  3.5.0, knot-analyst 1.3.0 annotated per-run scope ("last 24 hours" →
+  "since the last startup"); knot-update 1.10.0 with the 0.34.0
+  changelog entry; skills published globally (Phase 3).
+- Bumped to 0.34.0; release notes recorded; design knowledge extracted
+  to `project/design/design-startup-log-clear.md`.
+- Full `cargo test --no-fail-fast` green except one pre-existing lib
+  test failure
+  (`domain::events::tests::build_listener_context_prompt_includes_
+  do_not_edit_guidance`) that fails on a clean tree too — out of scope
+  for this plan.

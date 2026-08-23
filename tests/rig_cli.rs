@@ -480,6 +480,12 @@ fn cli_share_without_rig_name_exits_with_error() {
 /// including before the state writer and event queue create the runtime
 /// root themselves (regression: those tasks used to spawn first and
 /// turn `rig/tie-offs/` and `rig/events/` into false conflicts).
+///
+/// Since 0.34.0 the startup sequence also clears the operational logs
+/// after migration and before discovery, so the moved loom-log is
+/// emptied at its new path and holds only the current run's events —
+/// the move is still proven by the file existing at the new path with
+/// the fresh discovery events.
 #[test]
 fn cli_startup_migrates_legacy_layout() {
     let tmp = tempfile::tempdir().unwrap();
@@ -512,14 +518,21 @@ fn cli_startup_migrates_legacy_layout() {
         runtime_root.join("review-loom").join("tie-off-k.md").exists(),
         "legacy tie-offs should be migrated.\nstderr: {stderr}"
     );
-    assert_eq!(
-        fs::read_to_string(runtime_root.join("review-loom").join(".loom-log"))
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| l.contains("legacy-line"))
-            .count(),
-        1,
-        "moved loom-log should keep its legacy content"
+    // Moved loom-log at the new path: cleared at startup (per-run
+    // scope — the legacy line is residue) and then appended to by
+    // discovery, so it carries the current run's events only.
+    let loom_log = fs::read_to_string(
+        runtime_root.join("review-loom").join(".loom-log"),
+    )
+    .unwrap_or_default();
+    assert!(
+        !loom_log.lines().any(|l| l.contains("legacy-line")),
+        "moved loom-log must be cleared at its new path\nstderr: {stderr}"
+    );
+    assert!(
+        loom_log.contains("LoomStarted"),
+        "discovery must append to the new-path loom-log\
+         (proves migration ran before log appends).\nstderr: {stderr}"
     );
     // The events dir moved — not lost to a conflict with the queue's
     // own directory creation
