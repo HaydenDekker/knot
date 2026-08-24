@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.5.0"
-  compatibility: "Knot 0.34.0+"
+  version: "3.6.0"
+  compatibility: "Knot 0.36.0+"
 ---
 
 # Knot Inspect Skill
@@ -78,6 +78,7 @@ knot) based on user requests.
       "model-ref": "fast",
       "provider": "openai",
       "model": "gpt-4o",
+      "thinking-level": "low",
       "timeout": 600
     },
     {
@@ -102,6 +103,12 @@ profiles the resolved values come from `rig/models.yml`; `null`
 empty, or malformed registry, or an undefined alias) — the profile's
 knots will fail with `ModelRefNotFound` until `rig/models.yml` is
 fixed.
+
+The optional `thinking-level` key shows the **effective** reasoning
+effort — the profile's own `thinking-level` (frontmatter) when set,
+else the alias default from `rig/models.yml`. The key is **absent**
+(not `null`) when neither sets one — in that case pi's own settings
+default applies (absence is not `off`).
 
 ---
 
@@ -128,14 +135,17 @@ When asked to show rig status:
 4. **List profiles**: Extract the `profiles` array from state.
    Present a summary table:
 
-   | Profile | Alias | Provider | Model | Timeout |
-   |---------|-------|----------|---------|---------|
-   | `fast` | `fast` | `openai` | `gpt-4o` | `300` |
-   | `reviewer` | — | `anthropic` | `claude-sonnet-4-20250514` | default |
+   | Profile | Alias | Provider | Model | Thinking | Timeout |
+   |---------|-------|----------|---------|----------|---------|
+   | `fast` | `fast` | `openai` | `gpt-4o` | `low` | `300` |
+   | `reviewer` | — | `anthropic` | `claude-sonnet-4-20250514` | default | default |
 
    `Alias` is the profile's `model-ref` (`—` for direct-spec
    profiles). `Provider`/`Model` are the resolved values — `null`
    means the alias is unresolvable (check `rig/models.yml`).
+   `Thinking` is the effective `thinking-level` — the profile's own
+   value, else the alias default; show `default` when the key is
+   absent (pi's settings default applies — not `off`).
 
 5. **If no looms**: Report "No looms are registered. Use the
    `knot-create` skill to create looms."
@@ -202,7 +212,8 @@ When asked to list or view agent profiles:
 1. **List all profiles**: Read `tie-offs/<rig>/state.json` and extract the
    `profiles` array.
    Present a summary table with: Name, Alias (`model-ref`), Provider,
-   Model, Timeout (show "default" for null/missing timeout). For
+   Model, Thinking (`thinking-level`), Timeout (show "default" for
+   null/missing timeout and for the absent `thinking-level` key). For
    `model-ref` profiles, Provider/Model are the values resolved from
    `rig/models.yml`; show `null` as **unresolvable alias** and point
    the user at `rig/models.yml`.
@@ -211,13 +222,17 @@ When asked to list or view agent profiles:
    - If not found: Report "Profile `{name}` not found. Check
      `tie-offs/<rig>/state.json` to see available profiles."
    - Show: name, model-ref (alias), resolved provider, resolved model,
-     timeout.
+     effective thinking-level (absent key = pi's settings default,
+     not `off`), timeout.
    - If `model-ref` is set but `provider`/`model` are `null`, the
      alias is unresolvable — report that and check `rig/models.yml`
      (missing/empty/malformed file or undefined alias). The profile's
      knots will fail with `ModelRefNotFound` until it is fixed.
    - The state file includes `timeout` (in seconds). A missing or
      null value means the runner default of 300 seconds (5 minutes).
+   - The state file includes the **effective** `thinking-level`
+     (profile override or alias default) when set. An absent key
+     means pi's own settings default applies — it is **not** `off`.
    - The state file does not include `profile_prompt`. If the user
      asks about it, read the file directly from
      `rig/profiles/{name}.md` and check the YAML frontmatter.

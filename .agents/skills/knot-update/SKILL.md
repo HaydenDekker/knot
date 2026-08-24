@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.11.0"
-  compatibility: "Knot 0.35.0+"
+  version: "1.12.0"
+  compatibility: "Knot 0.36.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,95 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Thinking Level — Alias Default with Profile Override (Knot 0.36.0, 2026-08-24)
+
+**What changed:** profiles and model-registry aliases can now set a
+reasoning effort — a **thinking level** — for the pi invocation. Two
+new **optional** fields, both named `thinking-level`, with allowed
+values `off | minimal | low | medium | high | xhigh` (anything else is
+a parse-time rejection):
+
+1. **`rig/models.yml` alias default** — an alias entry may carry a
+   `thinking-level`; it is the default reasoning effort for every
+   profile that resolves the alias.
+2. **Profile frontmatter override** — `rig/profiles/{name}.md` may
+   carry a `thinking-level`; when present it **takes precedence over
+   the alias default** (the profile is more specific than the alias).
+
+Resolution (the **effective** level): a `model-ref` profile resolves
+to its own `thinking-level`, else the alias's; a direct-spec profile
+(`provider` + `model`) uses its own `thinking-level` only — the
+registry is not consulted, mirroring how `provider`/`model` are
+sourced. The effective level is emitted as `--thinking <level>` on
+the pi CLI (placed with the model options, after `--model`).
+
+**`off` vs omission — the asymmetry is intentional:** an explicit
+`off` emits `--thinking off`, *forcing* off and overriding pi's
+settings default. **Omitting** the field emits no flag at all — pi's
+own settings default applies. Absence is **not** `off`.
+
+Error behaviour matches each file's existing conventions: an invalid
+registry value is a warning and the whole registry is treated as
+empty (never blocks processing); an invalid profile value is a hard
+profile parse error (`InvalidThinkingLevel`).
+
+| Artifact | Before 0.36.0 | 0.36.0+ |
+|---|---|---|
+| `rig/models.yml` alias entry | `provider`, `model` | + optional `thinking-level` |
+| Profile frontmatter | `model-ref`/`provider`/`model`, `tools`, `timeout` | + optional `thinking-level` |
+| pi invocation argv | `-p --model <model>` (+ `--tools` …) | + `--thinking <level>` (only when an effective level exists) |
+| `state.json` profile entry | `model-ref`, `provider`, `model`, `timeout` | + `thinking-level` (the **effective** level; key omitted when unset) |
+
+**Migration: none required.**
+
+- Both fields are optional — existing `models.yml` files and profile
+  files parse unchanged on 0.36.0. No file edits are needed.
+- `state.json` readers see the new key **only** when a level is set;
+  it is omitted (never `null`) otherwise, so existing consumers are
+  unaffected.
+- No existing field changed meaning. Profiles and aliases without a
+  `thinking-level` behave exactly as before (pi's settings default
+  applies — no `--thinking` flag is emitted).
+
+#### Adopting (optional)
+
+1. **Set an alias default** in `rig/models.yml` for a reasoning
+   model:
+   ```yaml
+   models:
+     frontier:
+       provider: anthropic
+       model: claude-sonnet-4-20250514
+       thinking-level: high
+   ```
+2. **Override per profile** where a role needs more (or less):
+   ```yaml
+   ---
+   name: analyst
+   model-ref: frontier        # alias default: high
+   thinking-level: xhigh      # profile override wins
+   ---
+   ```
+3. **Verify:** `tie-offs/<rig>/state.json` shows the effective
+   `thinking-level` on the profile entry (profile override or alias
+   default; absent when neither sets one).
+
+#### If Not Migrated
+
+Nothing breaks. Without a `thinking-level` anywhere, no `--thinking`
+flag is emitted and pi's own settings default applies — exactly the
+pre-0.36.0 behaviour.
+
+#### Fields Unchanged by This Migration
+
+Profile frontmatter (`name`, `model-ref`, `provider`, `model`,
+`tools`, `timeout`), knot frontmatter (`name`, `agent-profile-ref`,
+`strand-dir`, `git-versioned`, `strand-source`, `event-description`),
+loom format, and tie-off format are unchanged. `rig/models.yml` and
+profile frontmatter gain the optional `thinking-level` field only.
 
 ---
 

@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.2.0"
+  version: "4.3.0"
   compatibility: "Knot 0.32.0+"
 ---
 
@@ -270,6 +270,13 @@ When asked to initialise a Knot rig:
            provider: <provider-name>
            model: <model-id>
        ```
+     - The seeded alias may optionally carry a `thinking-level`
+       (Knot 0.36.0+): a default reasoning effort (`off | minimal |
+       low | medium | high | xhigh`) for every profile that resolves
+       the alias; a profile's own `thinking-level` overrides it. The
+       auto-created commented template documents the key. The default
+       seed omits it — pi's settings default applies (omission is not
+       `off`).
    - Write the default profile to `rig/profiles/default.md`. The
      prompt lives in the **body** (not frontmatter):
      ```markdown
@@ -367,7 +374,11 @@ Profile entries carry `model-ref` (the alias, `null` for direct-spec
 profiles) plus the **resolved** `provider`/`model` from
 `rig/models.yml`. `null` provider/model means the alias is
 unresolvable — the profile's knots will fail with `ModelRefNotFound`
-until `rig/models.yml` defines the alias.
+until `rig/models.yml` defines the alias. The optional
+`thinking-level` key (Knot 0.36.0+) shows the effective reasoning
+effort — the profile's own value, else the alias default; the key is
+absent when neither sets one (pi's settings default applies — not
+`off`).
 
 The `updated_at` field is an ISO 8601 UTC timestamp. Use it to
 determine if the state file is stale (older than ~10 seconds means

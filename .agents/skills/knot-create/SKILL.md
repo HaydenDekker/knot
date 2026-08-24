@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.6.0"
-  compatibility: "Knot 0.32.0+"
+  version: "5.7.0"
+  compatibility: "Knot 0.36.0+"
 ---
 
 # Knot Create Skill
@@ -119,6 +119,7 @@ first, then create knots that reference it.
    - System prompt: The agent's persona instructions (goes in the
      markdown body after the closing `---`)
    - `tools` (optional): List of pi tool names (e.g. `read`, `write`, `edit`, `bash`)
+   - `thinking-level` (optional): Reasoning effort (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`). Overrides the alias default from `rig/models.yml` when set. Omit to let pi's default apply.
    - `timeout` (optional): Session timeout in seconds. If omitted,
      the runner's default of 300 seconds (5 minutes) is used.
 
@@ -604,6 +605,22 @@ tools:
 You are a fast reviewer. Keep responses concise and direct.
 ```
 
+To make a profile think harder (or less) than its alias default, set a
+profile-level `thinking-level` — it overrides the `rig/models.yml`
+alias default:
+
+```markdown
+---
+name: analyst
+model-ref: frontier        # alias default: high
+thinking-level: xhigh      # profile override wins
+tools:
+  - read
+---
+
+You are a deep analyst. Reason thoroughly before answering.
+```
+
 ### Profile Frontmatter Fields
 
 | Field | Required | Description |
@@ -612,6 +629,7 @@ You are a fast reviewer. Keep responses concise and direct.
 | `model-ref` | **Yes, unless `provider` + `model`** | Alias resolved against `rig/models.yml` at processing time. Takes **highest priority** over direct values. |
 | `provider` | **Yes, unless `model-ref`** | LLM provider (e.g. `openai`, `anthropic`). Ignored (with a parse warning) when `model-ref` is also set. |
 | `model` | **Yes, unless `model-ref`** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`). Ignored (with a parse warning) when `model-ref` is also set. |
+| `thinking-level` | No | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh`. A profile-level **override** that takes precedence over the alias's `thinking-level` default in `rig/models.yml`. For a direct-spec profile only this value applies (the registry is not consulted). When set it is emitted as `--thinking <level>` on the pi invocation; **omitting** it lets pi's own settings default apply (omission is **not** the same as `off`). Any other value is a parse error. |
 | `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
 
@@ -621,25 +639,31 @@ fails to parse (`MissingModelSpec`).
 ### Model Registry (`rig/models.yml`)
 
 The rig-level model registry maps **aliases** to `{provider, model}`
-pairs:
+pairs, with an optional per-alias `thinking-level` default:
 
 ```yaml
 models:
   fast:
     provider: openai
     model: gpt-4o
+    thinking-level: low
   frontier:
     provider: anthropic
     model: claude-sonnet-4-20250514
+    thinking-level: high
 ```
 
 - Top-level `models` map; both `provider` and `model` are required,
-  non-empty per alias.
+  non-empty per alias. `thinking-level` is optional — when set it is the
+  default reasoning effort for every profile resolving the alias, and a
+  profile's own `thinking-level` overrides it. Allowed values:
+  `off | minimal | low | medium | high | xhigh` (any other value is a
+  parse error). Omitting it lets pi's own settings default apply.
 - Alias names: any non-empty string (no slug enforcement). Two aliases
   may target the same model (A/B swapping is a feature).
 - File missing, empty, or comments-only → empty registry. Malformed
-  YAML (or an invalid entry) → warning; treated as an empty registry —
-  never blocks processing.
+  YAML (or an invalid entry, including an invalid `thinking-level`) →
+  warning; treated as an empty registry — never blocks processing.
 - The registry is read **fresh at resolution time** (per strand
   processing, per state write) — never cached. `run_startup`
   auto-creates a commented template when the file is missing and never
@@ -687,10 +711,12 @@ When a strand event triggers a knot:
 
 1. The knot's `agent-profile-ref` is used to load the profile from
    `rig/profiles/{name}.md` (read fresh from disk each time).
-2. The profile provides: `tools`, and the model — either its
+2. The profile provides: `tools`, the model — either its
    `model-ref` alias resolved against a **fresh read** of
    `rig/models.yml`, or its direct `provider` + `model` (alias wins
-   when both are present).
+   when both are present) — and the effective `thinking-level` (the
+   profile's own value, else the alias default; direct-spec profiles use
+   their own value only).
 3. The profile's markdown body is merged with the knot's markdown
    body to form the full system prompt:
    ```
@@ -734,6 +760,7 @@ written atomically every 5 seconds.
       "model-ref": "fast",
       "provider": "openai",
       "model": "gpt-4o",
+      "thinking-level": "low",
       "timeout": 600
     },
     {
@@ -758,8 +785,9 @@ written atomically every 5 seconds.
 | `failed` | Processing failed with an error |
 
 > **Note:** The state file includes `name`, `model-ref`, `provider`,
-> `model`, and `timeout` for profiles but not `tools` or the system
-> prompt (body). `provider`/`model` are the **resolved** values — for
+> `model`, `thinking-level`, and `timeout` for profiles but not `tools`
+> or the system prompt (body). `provider`/`model` are the **resolved**
+> values — for
 > `model-ref` profiles they come from `rig/models.yml` and are `null`
 > when the alias is unresolvable; for direct-spec profiles `model-ref`
 > is `null`. To check those fields, read the profile file directly from

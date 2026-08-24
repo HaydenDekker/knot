@@ -753,12 +753,18 @@ agent-adapter: pi-stdio
 # fresh on every strand, so swapping the model behind an alias is a
 # single edit here — picked up live, without a restart.
 #
-# Both `provider` and `model` are required per alias, e.g.:
+# Both `provider` and `model` are required per alias. `thinking-level`
+# is optional: a default reasoning effort for every profile that
+# resolves the alias. A profile's own `thinking-level` (in its
+# frontmatter) overrides the alias default. Allowed values:
+# `off | minimal | low | medium | high | xhigh`. Omitting it lets pi's
+# own settings default apply (omission is NOT the same as `off`). e.g.:
 #
 # models:
 #   default:
 #     provider: openai
 #     model: gpt-4o
+#     thinking-level: low
 #
 # While `models:` is absent (or empty), the registry is empty: profiles
 # with `model-ref` fail to resolve (ModelRefNotFound); profiles with a
