@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::domain::value_objects::{AgentProfile, PromptTemplate, StrandSource};
+use crate::domain::value_objects::{AgentProfile, PromptTemplate, StrandSource, ThinkingLevel};
 
 pub use crate::domain::value_objects::AgentProfileError;
 
@@ -302,6 +302,10 @@ struct RawProfileFrontmatter {
     tools: Option<Vec<String>>,
     #[serde(default)]
     timeout: Option<u64>,
+    /// Optional `thinking-level`, kept as a raw string so an invalid
+    /// value produces a precise error naming the bad token.
+    #[serde(default, rename = "thinking-level")]
+    thinking_level: Option<String>,
 }
 
 /// Parse an agent profile file from its string content.
@@ -314,7 +318,9 @@ struct RawProfileFrontmatter {
 /// When both `model-ref` and `provider`/`model` are present, the alias
 /// wins and a parse warning is emitted.
 /// Body (after closing `---`) must contain non-empty prompt text.
-/// Optional frontmatter fields: `tools`, `timeout`.
+/// Optional frontmatter fields: `tools`, `timeout`, `thinking-level`
+/// (one of `off | minimal | low | medium | high | xhigh` — any other
+/// value is `AgentProfileError::InvalidThinkingLevel`).
 pub fn parse_agent_profile(
     content: &str,
 ) -> Result<AgentProfile, AgentProfileError> {
@@ -337,6 +343,17 @@ pub fn parse_agent_profile(
         .ok_or(AgentProfileError::MissingProfilePrompt)?;
 
     let tools = raw.tools.unwrap_or_default();
+
+    // Validate thinking-level (lexical only — pi clamps to the model's
+    // capabilities at spawn time).
+    let thinking_level = match raw.thinking_level {
+        None => None,
+        Some(raw_value) => {
+            let level = ThinkingLevel::parse(&raw_value)
+                .ok_or(AgentProfileError::InvalidThinkingLevel(raw_value.clone()))?;
+            Some(level)
+        }
+    };
 
     // Validate model-ref (when present it must be non-empty).
     let model_ref = match raw.model_ref.as_ref() {
@@ -385,7 +402,7 @@ pub fn parse_agent_profile(
         return Err(AgentProfileError::EmptyModel);
     };
 
-    Ok(profile.with_timeout(raw.timeout))
+    Ok(profile.with_timeout(raw.timeout).with_thinking_level(thinking_level))
 }
 
 
@@ -1121,6 +1138,10 @@ Review.
             AgentProfileError::ModelRefNotFound("fast".to_string()).to_string(),
             "model-ref 'fast' not found in rig/models.yml"
         );
+        assert_eq!(
+            AgentProfileError::InvalidThinkingLevel("turbo".to_string()).to_string(),
+            "agent profile has an invalid thinking-level 'turbo'"
+        );
     }
 
     #[test]
@@ -1188,6 +1209,55 @@ Full review with timeout.
         let profile = parse_agent_profile(content).unwrap();
         assert_eq!(profile.timeout, Some(300));
         assert_eq!(profile.tools, vec!["fs", "web"]);
+    }
+
+    #[test]
+    fn parse_profile_with_thinking_level() {
+        let content = "---
+name: deep
+provider: anthropic
+model: claude-sonnet-4-20250514
+thinking-level: xhigh
+---
+
+Deep review.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.name, "deep");
+        assert_eq!(profile.thinking_level, Some(ThinkingLevel::XHigh));
+    }
+
+    #[test]
+    fn parse_profile_thinking_level_absent_is_none() {
+        let content = "---
+name: fast
+provider: openai
+model: gpt-4o
+---
+
+Quick review.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.thinking_level, None);
+    }
+
+    #[test]
+    fn parse_profile_with_thinking_level_and_model_ref() {
+        // Profile-override case: a model-ref profile with its own level.
+        let content = "---\nname: analyst\nmodel-ref: frontier\nthinking-level: xhigh\n---\n\nAnalyze.\n";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("frontier"));
+        assert_eq!(profile.thinking_level, Some(ThinkingLevel::XHigh));
+    }
+
+    #[test]
+    fn parse_profile_invalid_thinking_level() {
+        let content = "---\nname: fast\nprovider: openai\nmodel: gpt-4o\nthinking-level: turbo\n---\n\nReview.\n";
+        let result = parse_agent_profile(content);
+        assert_eq!(
+            result.unwrap_err(),
+            AgentProfileError::InvalidThinkingLevel("turbo".to_string())
+        );
     }
 
     // ── StrandSource and event-description Tests ────────────────

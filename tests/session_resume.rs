@@ -417,6 +417,7 @@ exit 1
             model: "gpt-4o".to_string(),
             tools: vec![],
             extra_args: vec![],
+            thinking_level: None,
         },
         prompt: "test prompt".to_string(),
         profile_prompt: String::new(),

@@ -42,6 +42,8 @@ pub enum AgentProfileError {
     /// The profile's `model-ref` alias does not exist in the model
     /// registry.
     ModelRefNotFound(String),
+    /// The profile's `thinking-level` is not one of the allowed tokens.
+    InvalidThinkingLevel(String),
 }
 
 impl std::fmt::Display for AgentProfileError {
@@ -69,6 +71,9 @@ impl std::fmt::Display for AgentProfileError {
             AgentProfileError::ModelRefNotFound(alias) => {
                 write!(f, "model-ref '{alias}' not found in rig/models.yml")
             }
+            AgentProfileError::InvalidThinkingLevel(value) => {
+                write!(f, "agent profile has an invalid thinking-level '{value}'")
+            }
         }
     }
 }
@@ -86,6 +91,17 @@ pub struct AgentConfig {
     pub provider: String,
     /// The model name to use (e.g. "gpt-4o").
     pub model: String,
+    /// Optional thinking level emitted as `--thinking <level>`.
+    ///
+    /// `None` means the flag is omitted entirely (pi's settings default
+    /// applies). An explicit [`ThinkingLevel::Off`] emits
+    /// `--thinking off` — silence is not the same as forced off.
+    #[serde(
+        default,
+        rename = "thinking-level",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thinking_level: Option<ThinkingLevel>,
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -121,6 +137,7 @@ impl AgentConfig {
             goal,
             provider,
             model,
+            thinking_level: None,
             tools: Vec::new(),
             extra_args: Vec::new(),
         })
@@ -133,6 +150,10 @@ impl AgentConfig {
     /// ["-p", "--model", "<model>"]
     /// ```
     ///
+    /// If `thinking_level` is set, appends `--thinking <level>` between
+    /// `--model <model>` and `--tools` — including an explicit `off`
+    /// (which overrides pi's settings default); when unset the flag is
+    /// omitted entirely.
     /// If `tools` is non-empty, appends `--tools <comma-separated-list>`.
     /// If `extra_args` is non-empty (e.g. `--session-id` from retry loop),
     /// appends those after the standard args.
@@ -148,6 +169,10 @@ impl AgentConfig {
             "--model".to_string(),
             self.model.clone(),
         ];
+        if let Some(level) = self.thinking_level {
+            args.push("--thinking".to_string());
+            args.push(level.to_string());
+        }
         if !self.tools.is_empty() {
             args.push("--tools".to_string());
             args.push(self.tools.join(","));
@@ -524,6 +549,19 @@ pub struct AgentProfile {
         skip_serializing_if = "Option::is_none"
     )]
     pub model_ref: Option<String>,
+    /// Optional profile-level thinking level — an **override** that takes
+    /// precedence over the alias default from `rig/models.yml` (see
+    /// [`AgentProfile::resolve_for_knot`]).
+    ///
+    /// `None` means no profile-level level: the alias default (or pi's
+    /// settings default) applies. Direct-spec profiles use their own level
+    /// only — the registry is not consulted.
+    #[serde(
+        default,
+        rename = "thinking-level",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thinking_level: Option<ThinkingLevel>,
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -575,6 +613,7 @@ impl AgentProfile {
             provider: Some(provider),
             model: Some(model),
             model_ref: None,
+            thinking_level: None,
             tools: Vec::new(),
             profile_prompt,
             timeout: None,
@@ -607,6 +646,7 @@ impl AgentProfile {
             provider: Some(provider),
             model: Some(model),
             model_ref: None,
+            thinking_level: None,
             tools,
             profile_prompt,
             timeout: None,
@@ -652,6 +692,7 @@ impl AgentProfile {
             provider: None,
             model: None,
             model_ref: Some(model_ref),
+            thinking_level: None,
             tools,
             profile_prompt,
             timeout: None,
@@ -664,6 +705,19 @@ impl AgentProfile {
     /// (`DEFAULT_TIMEOUT_SECS`).
     pub fn with_timeout(mut self, timeout: Option<u64>) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the profile-level thinking level (override for the alias
+    /// default from `rig/models.yml`).
+    ///
+    /// Pass `None` to defer to the alias default (or pi's settings
+    /// default when the alias sets no level).
+    pub fn with_thinking_level(
+        mut self,
+        thinking_level: Option<ThinkingLevel>,
+    ) -> Self {
+        self.thinking_level = thinking_level;
         self
     }
 
@@ -720,6 +774,7 @@ impl AgentProfile {
             goal: knot.prompt_template.instructions.clone(),
             provider,
             model,
+            thinking_level: self.thinking_level,
             tools: self.tools.clone(),
             extra_args: Vec::new(),
         })
@@ -1074,6 +1129,110 @@ mod tests {
     }
 
     #[test]
+    fn agent_config_build_cli_args_with_thinking_level() {
+        let mut config = AgentConfig::new(
+            "goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.thinking_level = Some(ThinkingLevel::High);
+
+        let args = config.build_cli_args();
+        assert_eq!(
+            args,
+            vec!["-p", "--model", "gpt-4o", "--thinking", "high"]
+        );
+    }
+
+    #[test]
+    fn agent_config_build_cli_args_thinking_between_model_and_tools() {
+        let mut config = AgentConfig::new(
+            "goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.thinking_level = Some(ThinkingLevel::Low);
+        config.tools = vec!["fs".to_string(), "web".to_string()];
+
+        let args = config.build_cli_args();
+        assert_eq!(
+            args,
+            vec![
+                "-p",
+                "--model",
+                "gpt-4o",
+                "--thinking",
+                "low",
+                "--tools",
+                "fs,web"
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_config_build_cli_args_thinking_off_is_emitted() {
+        // Explicit `off` overrides pi's settings default — silence is
+        // not the same as forced off.
+        let mut config = AgentConfig::new(
+            "goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.thinking_level = Some(ThinkingLevel::Off);
+
+        let args = config.build_cli_args();
+        assert_eq!(
+            args,
+            vec!["-p", "--model", "gpt-4o", "--thinking", "off"]
+        );
+    }
+
+    #[test]
+    fn agent_config_build_cli_args_thinking_with_extra_args() {
+        let mut config = AgentConfig::new(
+            "goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.thinking_level = Some(ThinkingLevel::XHigh);
+        config.extra_args = vec!["--session-id".to_string(), "abc".to_string()];
+
+        let args = config.build_cli_args();
+        assert_eq!(
+            args,
+            vec![
+                "-p",
+                "--model",
+                "gpt-4o",
+                "--thinking",
+                "xhigh",
+                "--session-id",
+                "abc"
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_config_serialization_with_thinking_level() {
+        let mut config = AgentConfig::new(
+            "test goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.thinking_level = Some(ThinkingLevel::Medium);
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, config);
+        assert!(json.contains("\"thinking-level\":\"medium\""));
+    }
+
+    #[test]
     fn agent_config_build_cli_args_no_system_prompt_flag() {
         // build_cli_args no longer emits --system-prompt.
         // Prompt content is delivered via stdin instead.
@@ -1355,6 +1514,94 @@ mod tests {
         .unwrap()
         .with_timeout(Some(600));
         assert_eq!(profile.timeout, Some(600));
+    }
+
+    #[test]
+    fn agent_profile_new_has_no_thinking_level() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        assert_eq!(profile.thinking_level, None);
+    }
+
+    #[test]
+    fn agent_profile_with_thinking_level_sets_field() {
+        let profile = AgentProfile::new(
+            "deep".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Deep review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::High));
+        assert_eq!(profile.thinking_level, Some(ThinkingLevel::High));
+    }
+
+    #[test]
+    fn agent_profile_with_thinking_level_none() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Quick review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(None);
+        assert_eq!(profile.thinking_level, None);
+    }
+
+    #[test]
+    fn agent_profile_serialization_with_thinking_level() {
+        let profile = AgentProfile::with_model_ref(
+            "analyst".to_string(),
+            "frontier".to_string(),
+            "Deep review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::XHigh));
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, profile);
+        // Serde name is kebab-case `thinking-level` with the exact token.
+        assert!(json.contains("\"thinking-level\":\"xhigh\""));
+    }
+
+    #[test]
+    fn agent_profile_serialization_without_thinking_level_omits_key() {
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Quick review.".to_string(),
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: AgentProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.thinking_level, None);
+        // Omitted entirely (skip_serializing_if), not serialised as null.
+        assert!(!json.contains("thinking-level"));
+    }
+
+    #[test]
+    fn agent_profile_legacy_json_without_thinking_level_defaults_to_none() {
+        // Deserialize JSON that has no thinking-level field — old profile
+        // files must parse unchanged.
+        let json = r#"{
+            "name": "legacy",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "tools": [],
+            "profile-prompt": "Legacy profile."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.thinking_level, None);
+        assert_eq!(profile.name, "legacy");
     }
 
     #[test]
@@ -1983,6 +2230,29 @@ mod tests {
             result.unwrap_err(),
             AgentProfileError::ModelRefNotFound("ghost".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_for_knot_copies_profile_thinking_level() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        // Phase 2 scope: the profile's own level flows into the config
+        // (the alias-default hierarchy lands in Phase 3).
+        let profile = AgentProfile::new(
+            "deep".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Deep review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::XHigh));
+
+        let knot = KnotBuilder::new("k1").build();
+
+        let config = profile
+            .resolve_for_knot(&knot, &ModelRegistry::new())
+            .unwrap();
+        assert_eq!(config.thinking_level, Some(ThinkingLevel::XHigh));
     }
 
     #[test]

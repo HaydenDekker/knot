@@ -459,6 +459,7 @@ sleep 300
                 model: "gpt-4o".to_string(),
                 tools: vec![],
                 extra_args: args.iter().map(|s| s.to_string()).collect(),
+                thinking_level: None,
             },
             prompt: "test prompt".to_string(),
             profile_prompt: "You are a test agent.".to_string(),
