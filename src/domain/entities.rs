@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::domain::value_objects::StrandSource;
+use crate::domain::value_objects::{StrandSource, ThinkingLevel};
 
 // Re-export value objects for convenient access through the entities module
 pub use crate::domain::knot_file::KnotFile;
@@ -316,6 +316,10 @@ pub struct RigStateKnot {
 /// for alias profiles they come from `rig/models.yml` at write time;
 /// `null` when the alias is unresolvable (missing registry entry or
 /// missing/malformed registry file).
+///
+/// `thinking_level` is the **effective** thinking level: the profile's own
+/// level (override) or, when the profile sets none, the alias default from
+/// `rig/models.yml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RigStateProfile {
     /// Profile name.
@@ -333,6 +337,16 @@ pub struct RigStateProfile {
     /// `None` (serialised as `null`) when the profile's alias is
     /// unresolvable against the model registry.
     pub model: Option<String>,
+    /// The effective thinking level (profile override, else the alias
+    /// default from `rig/models.yml`).
+    ///
+    /// `None` (key omitted, not `null`) when neither the profile nor its
+    /// alias sets a level — matching the `timeout` convention.
+    #[serde(
+        rename = "thinking-level",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thinking_level: Option<ThinkingLevel>,
     /// Session timeout in seconds. `None` means use the runner's default (300s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
@@ -925,6 +939,7 @@ mod tests {
                 model_ref: None,
                 provider: Some("openai".to_string()),
                 model: Some("gpt-4o".to_string()),
+                thinking_level: None,
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -962,6 +977,7 @@ mod tests {
                 model_ref: None,
                 provider: Some("openai".to_string()),
                 model: Some("gpt-4o".to_string()),
+                thinking_level: None,
                 timeout: None,
             }],
             strand_queue: vec![],
@@ -1180,6 +1196,7 @@ mod tests {
                     model_ref: None,
                     provider: Some("openai".to_string()),
                     model: Some("gpt-4o".to_string()),
+                    thinking_level: None,
                     timeout: None,
                 },
                 RigStateProfile {
@@ -1187,6 +1204,7 @@ mod tests {
                     model_ref: Some("detailed".to_string()),
                     provider: Some("anthropic".to_string()),
                     model: Some("claude-sonnet".to_string()),
+                    thinking_level: None,
                     timeout: Some(600),
                 },
             ],

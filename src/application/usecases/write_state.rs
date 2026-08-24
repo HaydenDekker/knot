@@ -98,28 +98,42 @@ impl WriteState {
         let rig_state_profiles: Vec<RigStateProfile> = profiles
             .into_iter()
             .map(|p| {
-                let (model_ref, provider, model) = match p.model_ref.as_deref() {
-                    Some(alias) => match registry.resolve(alias) {
-                        Some(resolved) => (
-                            Some(alias.to_string()),
-                            Some(resolved.provider.clone()),
-                            Some(resolved.model.clone()),
-                        ),
-                        None => {
-                            eprintln!(
-                                "WARNING: profile '{}' references unknown model alias '{}' — provider/model shown as null in state (check rig/models.yml)",
-                                p.name, alias
-                            );
-                            (Some(alias.to_string()), None, None)
-                        }
-                    },
-                    None => (None, p.provider, p.model),
-                };
+                let (model_ref, provider, model, thinking_level) =
+                    match p.model_ref.as_deref() {
+                        Some(alias) => match registry.resolve(alias) {
+                            Some(resolved) => (
+                                Some(alias.to_string()),
+                                Some(resolved.provider.clone()),
+                                Some(resolved.model.clone()),
+                                // Effective level: the profile's own level
+                                // (override) wins over the alias default.
+                                p.thinking_level.or(resolved.thinking_level),
+                            ),
+                            None => {
+                                eprintln!(
+                                    "WARNING: profile '{}' references unknown model alias '{}' — provider/model shown as null in state (check rig/models.yml)",
+                                    p.name, alias
+                                );
+                                // Alias unresolvable — only the profile's
+                                // own level can apply.
+                                (
+                                    Some(alias.to_string()),
+                                    None,
+                                    None,
+                                    p.thinking_level,
+                                )
+                            }
+                        },
+                        // Direct-spec profiles use their own level only —
+                        // the registry is not consulted.
+                        None => (None, p.provider, p.model, p.thinking_level),
+                    };
                 RigStateProfile {
                     name: p.name,
                     model_ref,
                     provider,
                     model,
+                    thinking_level,
                     timeout: p.timeout,
                 }
             })
@@ -282,6 +296,7 @@ mod write_state_tests {
     use crate::application::store::LoomStore;
     use crate::domain::entities::{Knot, Loom, LoomId, StrandPath, TieOffPath};
     use crate::domain::value_objects::StrandSource;
+    use crate::domain::value_objects::{ModelRef, ModelRegistry, ThinkingLevel};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
@@ -592,6 +607,158 @@ mod write_state_tests {
         let json = serde_json::to_string(&state).unwrap();
         assert!(json.contains("\"provider\":null"));
         assert!(json.contains("\"model\":null"));
+    }
+
+    /// Build a `WriteState` use case with a single profile and a given model
+    /// registry (for testing effective thinking-level resolution).
+    fn build_uc_with_profile_and_registry(
+        profile: AgentProfile,
+        registry: ModelRegistry,
+    ) -> WriteState {
+        let store = LoomStore::new();
+        let log_port: Arc<dyn LoomLogPort> = Arc::new(MockLoomLogForState::default());
+        let concrete_repo = Arc::new(MockProfileRepoForState::default());
+        concrete_repo.add_profile(profile);
+        let profile_repo: Arc<dyn AgentProfileRepository> = concrete_repo;
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
+        model_registry.set_registry(registry);
+        let state_writer: Arc<dyn StateWriterPort> =
+            Arc::new(MockStateWriterForState::default());
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(None));
+
+        WriteState::new(
+            store,
+            log_port,
+            profile_repo,
+            model_registry,
+            state_writer,
+            PathBuf::from("/test/rig"),
+            strand_queue,
+        )
+    }
+
+    // ── Effective thinking-level in state Tests ─────────────────────
+
+    /// Profile-only: a profile that sets its own thinking-level (direct-spec,
+    /// so no alias is consulted) shows the profile's level in state.
+    #[test]
+    fn build_state_thinking_level_profile_only() {
+        let profile = AgentProfile::new(
+            "deep".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Deep review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::XHigh));
+        let registry = ModelRegistry::new();
+        let uc = build_uc_with_profile_and_registry(profile, registry);
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(
+            state.profiles[0].thinking_level,
+            Some(ThinkingLevel::XHigh)
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"thinking-level\":\"xhigh\""));
+    }
+
+    /// Alias-default: a profile with no thinking-level, whose alias sets one,
+    /// shows the alias's level in state.
+    #[test]
+    fn build_state_thinking_level_alias_default() {
+        let profile = AgentProfile::with_model_ref(
+            "analyst".to_string(),
+            "frontier".to_string(),
+            "You are an analyst.".to_string(),
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "frontier".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: Some(ThinkingLevel::High),
+            },
+        );
+        let uc = build_uc_with_profile_and_registry(profile, registry);
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(
+            state.profiles[0].thinking_level,
+            Some(ThinkingLevel::High)
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"thinking-level\":\"high\""));
+    }
+
+    /// Profile-override: a profile with a level wins over its alias's level.
+    #[test]
+    fn build_state_thinking_level_profile_overrides_alias() {
+        let profile = AgentProfile::with_model_ref(
+            "analyst".to_string(),
+            "frontier".to_string(),
+            "You are an analyst.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::Low));
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "frontier".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: Some(ThinkingLevel::High),
+            },
+        );
+        let uc = build_uc_with_profile_and_registry(profile, registry);
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(
+            state.profiles[0].thinking_level,
+            Some(ThinkingLevel::Low)
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"thinking-level\":\"low\""));
+    }
+
+    /// Omitted: when neither the profile nor the alias sets a level, the
+    /// `thinking-level` key is absent from the JSON (not null) — matching the
+    /// `timeout` convention.
+    #[test]
+    fn build_state_thinking_level_omitted_when_neither_sets_it() {
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                thinking_level: None,
+            },
+        );
+        let uc = build_uc_with_profile_and_registry(profile, registry);
+
+        let state = uc.build_state().unwrap();
+        assert_eq!(state.profiles[0].thinking_level, None);
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("thinking-level"),
+            "thinking-level key must be absent, got: {json}"
+        );
     }
 
     #[test]
