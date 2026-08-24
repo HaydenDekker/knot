@@ -734,16 +734,25 @@ impl AgentProfile {
     /// - Otherwise the direct `provider` + `model` spec is used
     ///   (legacy behaviour). A profile with no model spec at all is
     ///   `AgentProfileError::MissingModelSpec`.
+    ///
+    /// Thinking level (effective level on the resulting config):
+    /// - `model-ref` profile: `self.thinking_level.or(alias.thinking_level)`
+    ///   — the profile's own level is an **override** that wins over the
+    ///   alias default from `rig/models.yml`.
+    /// - Direct-spec profile: `self.thinking_level` only — the registry
+    ///   is not consulted, mirroring how `provider`/`model` are sourced.
     pub fn resolve_for_knot(
         &self,
         knot: &crate::domain::entities::Knot,
         registry: &ModelRegistry,
     ) -> Result<AgentConfig, AgentProfileError> {
-        let (provider, model) = match self.model_ref.as_deref() {
+        let (provider, model, thinking_level) = match self.model_ref.as_deref() {
             Some(alias) => match registry.resolve(alias) {
                 Some(resolved) => (
                     resolved.provider.clone(),
                     resolved.model.clone(),
+                    // Profile-level override wins over the alias default.
+                    self.thinking_level.or(resolved.thinking_level),
                 ),
                 None => {
                     return Err(AgentProfileError::ModelRefNotFound(alias.to_string()));
@@ -761,9 +770,12 @@ impl AgentProfile {
                     .map(str::trim)
                     .filter(|m| !m.is_empty());
                 match (provider, model) {
+                    // Direct-spec profiles use their own level only — the
+                    // registry is not consulted.
                     (Some(provider), Some(model)) => (
                         provider.to_string(),
                         model.to_string(),
+                        self.thinking_level,
                     ),
                     _ => return Err(AgentProfileError::MissingModelSpec),
                 }
@@ -774,7 +786,7 @@ impl AgentProfile {
             goal: knot.prompt_template.instructions.clone(),
             provider,
             model,
-            thinking_level: self.thinking_level,
+            thinking_level,
             tools: self.tools.clone(),
             extra_args: Vec::new(),
         })
@@ -2236,8 +2248,8 @@ mod tests {
     fn resolve_for_knot_copies_profile_thinking_level() {
         use crate::application::usecases::test_fixtures::KnotBuilder;
 
-        // Phase 2 scope: the profile's own level flows into the config
-        // (the alias-default hierarchy lands in Phase 3).
+        // Direct-spec profile: its own level flows into the config (the
+        // registry is not consulted).
         let profile = AgentProfile::new(
             "deep".to_string(),
             "anthropic".to_string(),
@@ -2253,6 +2265,148 @@ mod tests {
             .resolve_for_knot(&knot, &ModelRegistry::new())
             .unwrap();
         assert_eq!(config.thinking_level, Some(ThinkingLevel::XHigh));
+    }
+
+    // ── resolve_for_knot thinking-level hierarchy Tests ─────────────────────
+
+    /// Build a `model-ref` profile with an optional profile-level thinking
+    /// level (the **override**).
+    fn thinking_ref_profile(level: Option<ThinkingLevel>) -> AgentProfile {
+        AgentProfile::with_model_ref(
+            "analyst".to_string(),
+            "frontier".to_string(),
+            "You are an analyst.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(level)
+    }
+
+    /// Build a registry whose `frontier` alias carries an optional default
+    /// thinking level.
+    fn thinking_registry(alias_level: Option<ThinkingLevel>) -> ModelRegistry {
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "frontier".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: alias_level,
+            },
+        );
+        registry
+    }
+
+    /// Resolve a profile against a registry and return the effective
+    /// thinking level on the resulting config.
+    fn effective_thinking_level(
+        profile: &AgentProfile,
+        registry: &ModelRegistry,
+    ) -> Option<ThinkingLevel> {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+        let knot = KnotBuilder::new("k1").build();
+        profile
+            .resolve_for_knot(&knot, registry)
+            .unwrap()
+            .thinking_level
+    }
+
+    #[test]
+    fn resolve_for_knot_thinking_matrix_none_none_is_none() {
+        // (profile, alias) = (None, None) -> None
+        let profile = thinking_ref_profile(None);
+        let registry = thinking_registry(None);
+        assert_eq!(effective_thinking_level(&profile, &registry), None);
+    }
+
+    #[test]
+    fn resolve_for_knot_thinking_matrix_profile_only_wins() {
+        // (profile, alias) = (Some, None) -> profile.
+        // An alias without a level still lets the profile's level through.
+        let profile = thinking_ref_profile(Some(ThinkingLevel::XHigh));
+        let registry = thinking_registry(None);
+        assert_eq!(
+            effective_thinking_level(&profile, &registry),
+            Some(ThinkingLevel::XHigh)
+        );
+    }
+
+    #[test]
+    fn resolve_for_knot_thinking_matrix_alias_default_applies() {
+        // (profile, alias) = (None, Some) -> alias default.
+        let profile = thinking_ref_profile(None);
+        let registry = thinking_registry(Some(ThinkingLevel::High));
+        assert_eq!(
+            effective_thinking_level(&profile, &registry),
+            Some(ThinkingLevel::High)
+        );
+    }
+
+    #[test]
+    fn resolve_for_knot_thinking_matrix_profile_overrides_alias() {
+        // (profile, alias) = (Some, Some) -> profile (override wins).
+        let profile = thinking_ref_profile(Some(ThinkingLevel::Low));
+        let registry = thinking_registry(Some(ThinkingLevel::High));
+        assert_eq!(
+            effective_thinking_level(&profile, &registry),
+            Some(ThinkingLevel::Low)
+        );
+    }
+
+    #[test]
+    fn resolve_for_knot_direct_spec_uses_own_level_ignoring_registry() {
+        // A direct-spec profile resolves its own level with the registry
+        // unconsulted — a same-named alias default never leaks in.
+        let profile = AgentProfile::new(
+            "deep".to_string(),
+            "anthropic".to_string(),
+            "claude-sonnet".to_string(),
+            "Deep review.".to_string(),
+        )
+        .unwrap()
+        .with_thinking_level(Some(ThinkingLevel::Low));
+
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "deep".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: Some(ThinkingLevel::XHigh),
+            },
+        );
+
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+        let knot = KnotBuilder::new("k1").build();
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.thinking_level, Some(ThinkingLevel::Low));
+    }
+
+    #[test]
+    fn resolve_for_knot_direct_spec_without_level_is_none_despite_registry() {
+        // A direct-spec profile with no level stays None — the registry is
+        // not consulted, so an alias default does not apply.
+        let profile = AgentProfile::new(
+            "fast".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Quick.".to_string(),
+        )
+        .unwrap();
+
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                thinking_level: Some(ThinkingLevel::High),
+            },
+        );
+
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+        let knot = KnotBuilder::new("k1").build();
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.thinking_level, None);
     }
 
     #[test]
