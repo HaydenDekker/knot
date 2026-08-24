@@ -217,6 +217,67 @@ impl RigAgentConfig {
     }
 }
 
+// ── ThinkingLevel ─────────────────────────────────────────────────────────
+
+/// The pi **thinking level** (reasoning effort) for an agent invocation.
+///
+/// Maps 1:1 to pi's `--thinking <level>` CLI flag:
+/// `off | minimal | low | medium | high | xhigh`. pi clamps the level to
+/// the model's capabilities (non-reasoning models run `off`), so any level
+/// is safe to pass — validation is lexical only.
+///
+/// Serialised as the exact CLI token. The variants are kebab-case, except
+/// `XHigh`, which needs an explicit rename — blanket kebab-case would yield
+/// `x-high`, but pi's token is `xhigh`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThinkingLevel {
+    /// No reasoning. An explicit `off` overrides pi's settings default.
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    /// Maximum reasoning effort (honoured only where the model supports it).
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
+impl ThinkingLevel {
+    /// Parse the exact `thinking-level` token.
+    ///
+    /// Returns `None` for anything that is not one of the six tokens
+    /// (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Matching is
+    /// exact and case-sensitive (no trimming), so typos fail at file parse,
+    /// not at spawn.
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "off" => Some(Self::Off),
+            "minimal" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" => Some(Self::XHigh),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ThinkingLevel {
+    /// The exact `pi --thinking <level>` CLI token.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let token = match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        };
+        write!(f, "{token}")
+    }
+}
+
 // ── Model Registry ─────────────────────────────────────────────────────────
 
 /// Errors produced when parsing a model registry (`rig/models.yml`).
@@ -232,6 +293,8 @@ pub enum ModelRegistryError {
     EmptyProvider { alias: String },
     /// An alias entry's `model` is empty or whitespace-only.
     EmptyModel { alias: String },
+    /// An alias entry's `thinking-level` is not one of the allowed tokens.
+    InvalidThinkingLevel { alias: String, value: String },
 }
 
 impl std::fmt::Display for ModelRegistryError {
@@ -252,6 +315,12 @@ impl std::fmt::Display for ModelRegistryError {
             ModelRegistryError::EmptyModel { alias } => {
                 write!(f, "model registry alias '{alias}' has an empty model")
             }
+            ModelRegistryError::InvalidThinkingLevel { alias, value } => {
+                write!(
+                    f,
+                    "model registry alias '{alias}' has an invalid thinking-level '{value}'"
+                )
+            }
         }
     }
 }
@@ -265,6 +334,16 @@ pub struct ModelRef {
     pub provider: String,
     /// The model name to use (e.g. "gpt-4o").
     pub model: String,
+    /// Default thinking level for every profile that resolves this alias.
+    ///
+    /// `None` when the alias sets no level — the profile's own
+    /// `thinking-level` (or pi's settings default) then applies.
+    #[serde(
+        default,
+        rename = "thinking-level",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thinking_level: Option<ThinkingLevel>,
 }
 
 /// Internal YAML structure for parsing a `rig/models.yml` document.
@@ -282,6 +361,11 @@ struct RawModelsFile {
 struct RawModelEntry {
     provider: Option<String>,
     model: Option<String>,
+    /// Optional `thinking-level`, kept as a raw string so an invalid value
+    /// produces a precise error naming the alias (same pattern as
+    /// `provider`/`model`).
+    #[serde(default, rename = "thinking-level")]
+    thinking_level: Option<String>,
 }
 
 /// Rig-level registry mapping **model aliases** to concrete
@@ -326,7 +410,8 @@ impl ModelRegistry {
     /// YAML `null`) parses to an empty registry. A document without a
     /// `models` key parses to an empty registry. Malformed YAML is an
     /// error, as is any alias entry with a missing or empty
-    /// `provider`/`model`.
+    /// `provider`/`model`, or a `thinking-level` that is not one of the
+    /// allowed tokens.
     pub fn from_yaml(content: &str) -> Result<Self, ModelRegistryError> {
         if content.trim().is_empty() {
             return Ok(Self::default());
@@ -357,7 +442,26 @@ impl ModelRegistry {
                 }
                 Some(m) => m,
             };
-            entries.insert(alias, ModelRef { provider, model });
+            let thinking_level = match entry.thinking_level {
+                None => None,
+                Some(raw) => match ThinkingLevel::parse(&raw) {
+                    Some(level) => Some(level),
+                    None => {
+                        return Err(ModelRegistryError::InvalidThinkingLevel {
+                            alias,
+                            value: raw,
+                        })
+                    }
+                },
+            };
+            entries.insert(
+                alias,
+                ModelRef {
+                    provider,
+                    model,
+                    thinking_level,
+                },
+            );
         }
         Ok(Self { entries })
     }
@@ -1451,6 +1555,65 @@ mod tests {
         assert_eq!(profile.session_timeout(), None);
     }
 
+    // ── ThinkingLevel Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn thinking_level_yaml_roundtrip_all_tokens() {
+        // The `xhigh` variant needs an explicit `#[serde(rename)]` —
+        // blanket kebab-case would yield `x-high`.
+        for (token, level) in [
+            ("off", ThinkingLevel::Off),
+            ("minimal", ThinkingLevel::Minimal),
+            ("low", ThinkingLevel::Low),
+            ("medium", ThinkingLevel::Medium),
+            ("high", ThinkingLevel::High),
+            ("xhigh", ThinkingLevel::XHigh),
+        ] {
+            let parsed: ThinkingLevel = serde_yaml::from_str(token)
+                .unwrap_or_else(|e| panic!("token '{token}': {e}"));
+            assert_eq!(parsed, level, "parse '{token}'");
+            let out = serde_yaml::to_string(&level).unwrap();
+            assert_eq!(out.trim(), token, "serialised form of {level:?}");
+            let restored: ThinkingLevel = serde_yaml::from_str(&out).unwrap();
+            assert_eq!(restored, level, "roundtrip '{token}'");
+        }
+    }
+
+    #[test]
+    fn thinking_level_yaml_rejects_unknown_tokens() {
+        for bad in ["", "turbo", "x-high", "XHigh", "OFF", "very high"] {
+            let result: Result<ThinkingLevel, _> = serde_yaml::from_str(bad);
+            assert!(result.is_err(), "'{bad}' should be rejected");
+        }
+    }
+
+    #[test]
+    fn thinking_level_display_yields_exact_cli_token() {
+        assert_eq!(ThinkingLevel::Off.to_string(), "off");
+        assert_eq!(ThinkingLevel::Minimal.to_string(), "minimal");
+        assert_eq!(ThinkingLevel::Low.to_string(), "low");
+        assert_eq!(ThinkingLevel::Medium.to_string(), "medium");
+        assert_eq!(ThinkingLevel::High.to_string(), "high");
+        assert_eq!(ThinkingLevel::XHigh.to_string(), "xhigh");
+    }
+
+    #[test]
+    fn thinking_level_parse_roundtrips_display() {
+        for level in [
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+            ThinkingLevel::XHigh,
+        ] {
+            assert_eq!(ThinkingLevel::parse(&level.to_string()), Some(level));
+        }
+        assert_eq!(ThinkingLevel::parse("turbo"), None);
+        assert_eq!(ThinkingLevel::parse("x-high"), None);
+        assert_eq!(ThinkingLevel::parse(""), None);
+    }
+
     // ── ModelRegistry Tests ─────────────────────────────────────────────
 
     #[test]
@@ -1529,6 +1692,51 @@ mod tests {
     }
 
     #[test]
+    fn model_registry_from_yaml_accepts_thinking_level() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n    thinking-level: low\n  frontier:\n    provider: anthropic\n    model: claude-sonnet-4-20250514\n    thinking-level: xhigh\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        assert_eq!(
+            registry.resolve("fast").unwrap().thinking_level,
+            Some(ThinkingLevel::Low)
+        );
+        assert_eq!(
+            registry.resolve("frontier").unwrap().thinking_level,
+            Some(ThinkingLevel::XHigh)
+        );
+    }
+
+    #[test]
+    fn model_registry_from_yaml_thinking_level_absent_is_none() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        assert_eq!(registry.resolve("fast").unwrap().thinking_level, None);
+    }
+
+    #[test]
+    fn model_registry_from_yaml_rejects_invalid_thinking_level() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n    thinking-level: turbo\n";
+        let result = ModelRegistry::from_yaml(yaml);
+        assert_eq!(
+            result.unwrap_err(),
+            ModelRegistryError::InvalidThinkingLevel {
+                alias: "fast".to_string(),
+                value: "turbo".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn model_registry_yaml_roundtrip_with_thinking_level() {
+        let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n    thinking-level: high\n";
+        let registry = ModelRegistry::from_yaml(yaml).unwrap();
+        let out = serde_yaml::to_string(&registry).unwrap();
+        let restored: ModelRegistry = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(restored, registry);
+        // Serialised form uses the kebab-case file key.
+        assert!(out.contains("thinking-level: high"));
+    }
+
+    #[test]
     fn model_registry_resolve_miss_returns_none() {
         let yaml = "models:\n  fast:\n    provider: openai\n    model: gpt-4o\n";
         let registry = ModelRegistry::from_yaml(yaml).unwrap();
@@ -1568,6 +1776,14 @@ mod tests {
         assert_eq!(
             ModelRegistryError::EmptyModel { alias: "fast".to_string() }.to_string(),
             "model registry alias 'fast' has an empty model"
+        );
+        assert_eq!(
+            ModelRegistryError::InvalidThinkingLevel {
+                alias: "fast".to_string(),
+                value: "turbo".to_string(),
+            }
+            .to_string(),
+            "model registry alias 'fast' has an invalid thinking-level 'turbo'"
         );
     }
 
@@ -1698,6 +1914,7 @@ mod tests {
             ModelRef {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
+                thinking_level: None,
             },
         );
 
@@ -1735,6 +1952,7 @@ mod tests {
             ModelRef {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
+                thinking_level: None,
             },
         );
 

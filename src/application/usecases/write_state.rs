@@ -516,6 +516,7 @@ mod write_state_tests {
             ModelRef {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
+                thinking_level: None,
             },
         );
         registry.set_registry(reg);

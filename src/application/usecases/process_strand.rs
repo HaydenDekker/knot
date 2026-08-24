@@ -6404,6 +6404,7 @@ mod model_registry_resolution_tests {
                         ModelRef {
                             provider: (*provider).to_string(),
                             model: (*model).to_string(),
+                            thinking_level: None,
                         },
                     )
                 })
