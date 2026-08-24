@@ -1,5 +1,75 @@
 # Release Notes
 
+## v0.36.0 — 2026-08-24
+
+### Feature — Thinking Level: Alias Default with Profile Override (Plan 074)
+
+Profiles and model-registry aliases can now set a reasoning effort — a
+**thinking level** — for the pi invocation. Two new **optional**
+fields, both named `thinking-level` (values: `off | minimal | low |
+medium | high | xhigh`):
+
+```yaml
+# rig/models.yml — per-alias default
+models:
+  frontier:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    thinking-level: high
+```
+
+```yaml
+# rig/profiles/analyst.md — profile override wins
+---
+name: analyst
+model-ref: frontier
+thinking-level: xhigh
+---
+```
+
+- **Resolution (effective level):** a `model-ref` profile resolves to
+  its own `thinking-level`, else the alias's; a direct-spec profile
+  (`provider` + `model`) uses its own value only — the registry is not
+  consulted.
+- **CLI emission:** the effective level is emitted as
+  `--thinking <level>` on the pi invocation (after `--model`, before
+  `--tools`) — for **every** effective value, including an explicit
+  `off`, which forces off and overrides pi's settings default.
+  **Omitting** the field emits no flag at all — pi's own settings
+default applies. Absence is **not** `off`.
+- **State:** `tie-offs/<rig>/state.json` profile entries gain an
+  optional `thinking-level` showing the **effective** level; the key is
+  omitted (never `null`) when neither sets one.
+- **Validation is lexical only** — pi clamps levels to model
+  capability (non-reasoning models run `off`; `xhigh` is honoured only
+  where supported). Invalid values are rejected at file-parse time:
+  registry → warning + empty registry (never blocks processing);
+  profile → hard parse error (`InvalidThinkingLevel`).
+
+**No document migration:** both fields are optional — existing
+`models.yml` files and profile files parse unchanged, and without a
+`thinking-level` anywhere the pi invocation is byte-identical to
+before (no `--thinking` flag). The `knot-update` skill carries the
+0.36.0 changelog entry with adoption steps.
+
+### Skills and Docs Updated
+
+- `knot-create` (v5.7.0) — profile frontmatter table + models.yml
+  section + override example; state.json example carries the key
+- `knot-inspect` (v3.6.0, compat 0.36.0+) — profile listing shows the
+  effective `thinking-level` (absent key shown as `default`, mirroring
+  the `timeout` convention)
+- `knot-init` (v4.3.0) — models.yml seeding note for the optional
+  per-alias default
+- `knot-update` (v1.12.0, compat 0.36.0+) — 0.36.0 changelog entry
+  (field additions, effective-level resolution, off-vs-omission
+  asymmetry; migration: none required)
+- `src/server.rs` — auto-created `models.yml` template documents the
+  new key
+- Design reference: `project/design/design-thinking-level.md`
+  (resolution hierarchy, CLI emission, off-vs-omission asymmetry,
+  lexical-only validation rationale, backward compatibility)
+
 ## v0.35.0 — 2026-08-23
 
 ### Feature — `knot step`: Single-Event Stepping (Plan 073)

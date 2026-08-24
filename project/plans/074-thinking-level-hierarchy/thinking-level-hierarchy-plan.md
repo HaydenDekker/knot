@@ -217,3 +217,43 @@ existing arg-shape or state-shape tests.
 - **Version**: MINOR bump 0.35.0 → 0.36.0 at plan completion (new
   non-breaking feature; `knot-update` changelog entry records the field
   additions).
+
+## Implementation Status: ✅ Complete (2026-08-24)
+
+## Completion Notes
+- All 5 phases implemented and committed on
+  `refactor/thinking-level-hierarchy`, fast-forward merged to `main`:
+  - Phase 1 (`ef91101`) — `ThinkingLevel` value object (six tokens,
+    `Copy`, `xhigh` serde rename, lexical `parse` + exact-token
+    `Display`), `ModelRef.thinking_level`,
+    `ModelRegistryError::InvalidThinkingLevel { alias, value }`;
+    8 new tests.
+  - Phase 2 (`9f299fe`) — profile frontmatter `thinking-level` +
+    `AgentProfileError::InvalidThinkingLevel`, `with_thinking_level`
+    builder, `AgentConfig.thinking_level`, `build_cli_args`
+    `--thinking` emission (explicit `off` emits; omission emits none);
+    16 new tests.
+  - Phase 3 (`c178cf0`) — the `profile.or(alias)` hierarchy in
+    `resolve_for_knot` (direct-spec unconsulted); full four-case
+    matrix pinned; 6 new tests.
+  - Phase 4 (`2152fe2`) — effective `thinking-level` on
+    `RigStateProfile` (skip-if-none, never null) + the
+    `write_state.rs` mapping; 4 new tests (plus a profile-override
+    shape beyond the three required).
+  - Phase 5 (`85db34c`) — acceptance through the real adapters
+    (`tests/thinking_level.rs`: both `PiStdioAgentRunner` and
+    `PiJsonAgentRunner` spawn an argv-recording mock CLI; `--thinking
+    xhigh` asserted in both argvs), `src/server.rs` template comment,
+    skills (knot-create 5.7.0, knot-inspect 3.6.0, knot-init 4.3.0,
+    knot-update 1.12.0 with the 0.36.0 changelog entry), skills
+    published globally and diff-verified.
+- Deviations (recorded in the phase docs): Phase 4 added the
+  unresolvable-alias edge case (state shows the profile's own level
+  alongside the existing null provider/model); Phase 5 found the
+  acceptance tests + template + knot-create content already drafted
+  (uncommitted) and verified/finished them.
+- Bumped to 0.36.0 (MINOR); release notes recorded in
+  `docs/release-notes.md`; design knowledge extracted to
+  `project/design/design-thinking-level.md`; skills published globally.
+- Full `cargo test` green at completion: 862 lib + binary + all
+  integration suites, 0 failures.

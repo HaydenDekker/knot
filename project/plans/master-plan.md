@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-24 (plan 074 in progress — phases 1-5 complete; awaiting plan completion)
+> **Last Updated:** 2026-08-24 (plan 074 completed)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | 🟡 In Progress | 2026-08-24 |
+| 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | ✅ Complete | 2026-08-24 |
 | 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
 | 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
@@ -65,9 +65,11 @@ _Overview sections for active and recently completed plans go here._
 
 ### 74. Thinking Level — Alias Default with Profile Override
 
-**Status:** 🟡 In Progress
+**Status:** ✅ Complete (2026-08-24)
 **Created:** 2026-08-24
 **Goal:** Add an optional `thinking-level` (`off|minimal|low|medium|high|xhigh`) to `rig/models.yml` aliases as a per-model default and to profile frontmatter as an override (profile takes precedence), resolved into `AgentConfig` and emitted as `--thinking <level>` on the pi invocation, with the effective level visible in `state.json`.
+
+Completed in Knot 0.36.0: `ThinkingLevel` value object (lexical validation, exact-token `Display`); optional `thinking-level` on `models.yml` aliases and profile frontmatter (invalid values rejected at parse — registry degrades to warning + empty registry, profile is a hard error); `profile.or(alias)` hierarchy in `resolve_for_knot` (direct-spec profiles use their own level only, registry unconsulted); `--thinking <level>` emitted for every effective value including explicit `off` (omission emits no flag — pi's settings default applies); effective level on `state.json` profile entries (omitted, never null, when unset); acceptance tests through both pi runners with argv capture. No document migration. Design knowledge in [design/design-thinking-level.md](../design/design-thinking-level.md).
 
 Full details in [074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md).
 
