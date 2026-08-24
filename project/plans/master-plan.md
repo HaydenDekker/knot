@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | 📝 Draft | 2026-08-24 |
+| 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | 🟡 In Progress | 2026-08-24 |
 | 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
 | 71 | [Record the Pi Session ID in Tie-Off Sections](071-tie-off-session-id/tie-off-session-id-plan.md) | 📝 Draft | 2026-08-22 |
@@ -65,7 +65,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 74. Thinking Level — Alias Default with Profile Override
 
-**Status:** 📝 Draft
+**Status:** 🟡 In Progress
 **Created:** 2026-08-24
 **Goal:** Add an optional `thinking-level` (`off|minimal|low|medium|high|xhigh`) to `rig/models.yml` aliases as a per-model default and to profile frontmatter as an override (profile takes precedence), resolved into `AgentConfig` and emitted as `--thinking <level>` on the pi invocation, with the effective level visible in `state.json`.
 
