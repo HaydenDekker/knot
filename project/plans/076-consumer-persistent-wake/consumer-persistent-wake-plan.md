@@ -275,4 +275,4 @@ Integration tests:
   [Phase 1 record](consumer-persistent-wake-phase-1.md) for the full
   verification.
 
-## Implementation Status: 🔄 In Progress — Phase 1/3 complete (2026-08-25, `6c0bfb1`, see [Phase 1 record](consumer-persistent-wake-phase-1.md))
+## Implementation Status: 🔄 In Progress — Phases 1–2/3 complete (2026-08-25, `6c0bfb1` + `84f4f58`, see [Phase 1 record](consumer-persistent-wake-phase-1.md) and [Phase 2 record](consumer-persistent-wake-phase-2.md))
