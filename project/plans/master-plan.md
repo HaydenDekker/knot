@@ -72,7 +72,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 75. Queue Entry Identity Self-Heal — Filename Is the Event ID
 
-**Status:** 🟡 In Progress (2026-08-25) — phases 1–2 implemented 2026-08-25; phase 3 pending
+**Status:** 🟡 In Progress (2026-08-25) — all phases implemented 2026-08-25 on `refactor/queue-identity-self-heal-plan`; completion pending (combined 0.37.0 release with plan 076)
 **Goal:** Make the disk event queue self-heal the filename-stem ⇄ JSON-`id` invariant on every scan (filename wins, atomic repair, warning logged) and make `front()`/`pop()`/dedup/late-removal operate on the healed id, so a renamed (e.g. backdated) queue file reorders the FIFO as intended instead of wedging the pipeline with a phantom head — the root cause of the 2026-08-25 borrow-my-stuff idle-with-nonempty-queue incidents.
 
 ### 74. Thinking Level — Alias Default with Profile Override

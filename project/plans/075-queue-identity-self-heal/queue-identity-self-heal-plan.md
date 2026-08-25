@@ -300,4 +300,4 @@ Full `cargo test --no-fail-fast` green; in particular
   the queue is disk-based; the backdate appeared not to reorder
   because `front()` returned `None` for the renamed head.
 
-## Implementation Status: 🔄 In Progress — Phases 1–2/3 complete (2026-08-25, `8b2fdd4` + `088dee5`, see [Phase 1 record](queue-identity-self-heal-phase-1.md) and [Phase 2 record](queue-identity-self-heal-phase-2.md))
+## Implementation Status: ✅ All phases complete (2026-08-25) — completion pending: version bump 0.36.0 → 0.37.0 (combined release with plan 076), release notes, merge. Phases: `8b2fdd4` + `088dee5` + `ed9a29c`, see [Phase 1 record](queue-identity-self-heal-phase-1.md), [Phase 2 record](queue-identity-self-heal-phase-2.md), [Phase 3 record](queue-identity-self-heal-phase-3.md)
