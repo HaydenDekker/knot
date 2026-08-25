@@ -146,7 +146,9 @@ Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`
 — one JSON file per pending event (the `strand_queue` array in
 [state.json](#rig-state) is the live view of the same queue). The disk
 *is* the queue: pending work survives restarts, and a queued event can
-be inspected or edited with standard tools before it is processed.
+be inspected or edited with standard tools before it is processed. A
+queued event always wakes the processor — the only empty-queue state
+is a genuinely empty `events/` directory.
 
 ### At-Least-Once Delivery (Late Removal)
 

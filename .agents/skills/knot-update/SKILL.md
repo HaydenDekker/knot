@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.13.0"
-  compatibility: "Knot 0.36.0+"
+  version: "1.14.0"
+  compatibility: "Knot 0.37.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,52 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Persistent Queue Wake — No Lost Queue Notifications (Knot 0.37.0, 2026-08-25)
+
+**What changed:** internal change to how the event-queue consumer
+waits for work — no document or format change. The queue wake is now
+persistent by construction: `StrandEventQueue::notified()` registers
+its `tokio::sync::Notify` permit **at call time** (armed, not lazy),
+and both consumer loops — the service loop and `knot step`'s head
+wait — **arm the wait before re-checking `front()`**. A push that
+lands before the arm is visible to the fresh `front()` disk scan; a
+push that lands after the arm is captured by the armed permit. The
+wake guarantee is now explicit in Knot's own code, pinned by unit
+tests, and independent of tokio version details.
+
+**Why:** previously the guarantee leaned on a tokio implementation
+detail — the pinned tokio 1.52.3 already stores a `notify_one` permit
+when no waiter is registered — so no wake was being lost in the
+field. This change removes that latent dependency rather than fixing
+a live bug: the wait is correct by construction on any tokio version.
+
+**Wake guarantee:** a queued event always wakes the processor; the
+only empty-queue state is a genuinely empty `events/` directory.
+
+**Affected documents:** none — no project document (profile, knot,
+loom) changes.
+
+| Artifact | Before 0.37.0 | 0.37.0+ |
+|---|---|---|
+| `StrandEventQueue::notified()` | permit registered on first poll (lazy) | permit registered at call time (armed) |
+| Service loop idle wait | `front()` check, then arm + wait | arm, then `front()` check, then await the armed future |
+| `knot step` head wait | `front()` check, then arm + deadline wait | arm, then `front()` check, then deadline-wait the armed future |
+| Document formats, queue file schema (`tie-offs/<rig>/events/*.json`) | — | unchanged |
+
+**Migration: none required.**
+
+- No document format changes — profiles, knots, looms, and tie-offs
+  are untouched, and the queue file schema is unchanged, so a queue
+  persisted by an older version is picked up as-is on the first run
+  of 0.37.0. No queue migration, no file edits.
+- The behaviour change is internal (queue wake reliability). Nothing
+  to migrate; the guarantee — a queued event always wakes the
+  processor, and the only empty-queue state is a genuinely empty
+  `events/` directory — is now explicit in the binary rather than a
+  consequence of the pinned tokio version.
 
 ---
 
