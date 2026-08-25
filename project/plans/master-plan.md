@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-24 (plan 074 completed)
+> **Last Updated:** 2026-08-25 (plans 075/076 added)
 
 ## How to Add a Plan
 
@@ -46,6 +46,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | ⬜ Planned | 2026-08-25 |
+| 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | ⬜ Planned | 2026-08-25 |
 | 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | ✅ Complete | 2026-08-24 |
 | 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
@@ -62,6 +64,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 76. Consumer Persistent Wake — No Lost Queue Notifications
+
+**Status:** ⬜ Planned (2026-08-25)
+**Goal:** Make the queue wake-up persistent — `StrandEventQueue::notified()` arms its `Notify` permit at call time and the consumer loops (service + step) arm it before re-checking `front()` — so a push can never be missed while the loop is idle and the "queue idle with a non-empty queue, no log" symptom class is closed structurally.
+
+### 75. Queue Entry Identity Self-Heal — Filename Is the Event ID
+
+**Status:** ⬜ Planned (2026-08-25)
+**Goal:** Make the disk event queue self-heal the filename-stem ⇄ JSON-`id` invariant on every scan (filename wins, atomic repair, warning logged) and make `front()`/`pop()`/dedup/late-removal operate on the healed id, so a renamed (e.g. backdated) queue file reorders the FIFO as intended instead of wedging the pipeline with a phantom head — the root cause of the 2026-08-25 borrow-my-stuff idle-with-nonempty-queue incidents.
 
 ### 74. Thinking Level — Alias Default with Profile Override
 
