@@ -448,6 +448,14 @@ pub fn spawn_process_strand_loop(
         // (idle, wait for first event) or timed (drain check, detect end
         // of burst). This keeps a single flat loop with no nesting.
         //
+        // Wake persistence: `next_event` arms the `notified()` permit
+        // **before** its `front()` check, so a queued event always
+        // wakes the loop — in the blocking (idle) wait and in the
+        // timed (burst-drain) wait alike. A push before the arm is
+        // visible to the fresh scan; a push after the arm is held by
+        // the armed permit. The only idle state is a genuinely empty
+        // queue.
+        //
         // Late-removal (at-least-once) loop: the queue is **peeked** via
         // `front()` — the event file survives while processing is in
         // flight, and `ProcessStrand::execute_with_pending` removes it
@@ -462,17 +470,25 @@ pub fn spawn_process_strand_loop(
 
         /// Peek the next event without removing it, or `None` when the
         /// shutdown was signalled and the queue has drained.
+        ///
+        /// The `notified()` future is created (permit armed) **before**
+        /// the `front()` check, closing the lost-wake window:
+        /// a push that lands before the arm is visible to the fresh
+        /// `front()` scan, and a push that lands after the arm is
+        /// captured by the armed permit. A front hit drops the armed
+        /// future — harmless, the event is already in hand.
         async fn next_event(
             queue: &Arc<DiskBackedEventQueue>,
         ) -> Option<domain::pending_event::PendingEvent> {
             loop {
+                let wait = queue.notified(); // permit armed before check
                 if let Some(item) = queue.front() {
-                    return Some(item);
+                    return Some(item); // armed future dropped — harmless
                 }
                 if queue.shutdown_signaled() {
                     return None;
                 }
-                queue.notified().await;
+                wait.await;
             }
         }
 
@@ -1373,14 +1389,20 @@ async fn step_head_event(
     let deadline = std::time::Instant::now() + debounce_window * 5;
 
     loop {
+        // Arm the wait before the check: a push that lands between
+        // iterations is caught by the next `front()` scan, and a push
+        // after the arm is captured by the armed permit — no gap. A
+        // front hit or a timeout drops the armed future; the next
+        // iteration re-arms before its check.
+        let wait = queue.notified();
         if let Some(ev) = queue.front() {
-            return Some(ev);
+            return Some(ev); // armed future dropped — harmless
         }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return None;
         }
-        let _ = tokio::time::timeout(remaining, queue.notified()).await;
+        let _ = tokio::time::timeout(remaining, wait).await;
     }
 }
 

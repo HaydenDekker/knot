@@ -241,14 +241,22 @@ mod tests {
     /// Blocks until an event arrives or the shutdown sentinel is pushed.
     /// Returns `Some(PendingEvent)` for real events, `Some(Shutdown)` for
     /// the shutdown sentinel, or `None` on timeout.
+    ///
+    /// The `notified()` future is created (permit armed) **before** the
+    /// `pop()` check, so a push between iterations cannot be missed:
+    /// a push before the arm is visible to the `pop()` below, and a
+    /// push after the arm is captured by the armed permit. A pop hit
+    /// drops the armed future — harmless, the event is already in
+    /// hand. (The 10 ms sleep branch still bounds any residual case.)
     async fn recv_with_timeout(
         queue: &Arc<InMemoryEventQueue>,
         timeout: Duration,
     ) -> Option<PendingEventOrShutdown> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
+            let wait = queue.notified(); // permit armed before the check
             if let Some(item) = queue.pop() {
-                return Some(item);
+                return Some(item); // armed future dropped — harmless
             }
             if tokio::time::Instant::now() >= deadline {
                 return None;
@@ -259,7 +267,7 @@ mod tests {
                     // Timeout reached
                     return None;
                 }
-                _ = queue.notified() => {
+                _ = wait => {
                     // Re-check the queue
                 }
             }

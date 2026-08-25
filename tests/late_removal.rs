@@ -794,3 +794,66 @@ fn failing_event_consumed_once_then_loop_proceeds() {
 
     handle.abort();
 }
+
+/// A push that lands while the loop is in the **blocking** (non-burst)
+/// idle must wake it: the single event is processed without a second
+/// push and without a restart.
+///
+/// The queue starts **empty**, so the loop is in the blocking wait
+/// from startup — no event has ever been processed, so no burst window
+/// has started and no `QueueIdle` has been written. Waiting past one
+/// burst window (500 ms) plus asserting the absence of `QueueIdle`
+/// pins the loop in the blocking wait before the single push. The
+/// push goes through the real pipeline (watcher → debounce → queue);
+/// the armed `notified()` permit (arm-before-check in `next_event`)
+/// is what wakes the blocking wait.
+#[test]
+fn push_while_idle_wakes_loop() {
+    let f = setup_rig(PI_ECHO, &[("review-loom", "review", "./strands")]);
+    let project_root = f.rig_dir.parent().unwrap().to_path_buf();
+
+    let config =
+        knot::AppConfig::with_rig_dir(f.rig_dir.clone()).with_cli_path(f.pi_path.clone());
+    let handle = helpers::start_knot_with_config(config);
+    helpers::wait_for_loom_in_state(&f.rig_dir, "review-loom", 1);
+
+    // Wait past one burst window: with an empty queue the loop can
+    // only be in the blocking wait (a burst — and the QueueIdle that
+    // ends it — requires a processed event).
+    thread::sleep(Duration::from_millis(1_000));
+    assert_eq!(
+        count_event_files(&f.rig_dir),
+        0,
+        "queue must be empty while the loop idles"
+    );
+    assert_eq!(
+        loom_log_completed(&f.rig_dir, "review-loom"),
+        0,
+        "no event may have been processed before the push"
+    );
+    assert!(
+        !rig_log_has_queue_idle(&f.rig_dir),
+        "no QueueIdle before any event: the loop is in the blocking wait"
+    );
+
+    // One push while idle: watcher → debounce → queue.
+    let strands = project_root.join("strands");
+    fs::create_dir_all(&strands).unwrap();
+    fs::write(strands.join("idle.md"), "pushed while idle").unwrap();
+
+    // The single push wakes the blocking loop: processed and the event
+    // file removed by late removal — no second push, no restart.
+    wait_until(
+        || loom_log_completed(&f.rig_dir, "review-loom") >= 1
+            && count_event_files(&f.rig_dir) == 0,
+        30_000,
+        "push while idle to wake the blocking loop",
+    );
+    assert_eq!(
+        loom_log_completed(&f.rig_dir, "review-loom"),
+        1,
+        "the single push must be processed exactly once"
+    );
+
+    handle.abort();
+}
