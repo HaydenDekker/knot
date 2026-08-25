@@ -678,6 +678,14 @@ pub trait StrandEventQueue: Send + Sync {
     /// Await a signal that an item was pushed.
     ///
     /// Returns a boxed future to keep the trait dyn-compatible.
+    ///
+    /// **Armed-at-call contract:** the returned future registers its
+    /// `Notify` permit at creation. A signal sent after the call is
+    /// guaranteed to wake an await of the returned future, even if the
+    /// await has not started. Callers should create the future **before**
+    /// re-checking [`front()`](Self::front) and may drop it if the check
+    /// already returned an event — dropping an unconsumed armed permit is
+    /// harmless and never desynchronises the queue.
     fn notified(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 

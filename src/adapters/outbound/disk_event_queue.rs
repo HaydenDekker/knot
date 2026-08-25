@@ -188,10 +188,12 @@ impl StrandEventQueue for DiskBackedEventQueue {
     }
 
     fn notified(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        let notify = &self.notify;
-        Box::pin(async move {
-            notify.notified().await;
-        })
+        // Arm the permit at call time (not at first poll) so a push that
+        // lands before the returned future is awaited is guaranteed to be
+        // observed by the await — see the port's armed-at-call contract.
+        let mut n = Box::pin(self.notify.notified());
+        n.as_mut().enable();
+        n
     }
 }
 
@@ -668,6 +670,86 @@ mod tests {
         .await
         .expect("notified() should unblock after push")
         .unwrap();
+    }
+
+    /// `notified()` arms the permit at call time: a push that lands
+    /// **before** the returned future is awaited must still wake it.
+    /// Under the old lazy semantics the permit is unregistered when
+    /// the push lands, the signal is dropped, and this test times out.
+    #[tokio::test]
+    async fn armed_notified_wakes_when_push_precedes_await() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        // Create the future — do NOT poll/await it.
+        let fut = queue.notified();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        queue.push(make_pending(created("/file-a.md")));
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            fut,
+        )
+        .await
+        .expect("armed notified() must wake on a push that precedes the await");
+    }
+
+    /// Arming the future, hitting `front()` (pre-seeded queue), and
+    /// dropping the armed future must not desynchronise the queue:
+    /// a later armed wait still wakes on a push. (A push that lands
+    /// with no armed waiter is fine — the event is on disk and the
+    /// fresh `front()` scan sees it; the *next* push is caught by the
+    /// re-armed permit.)
+    #[tokio::test]
+    async fn armed_notified_dropped_on_front_hit_is_harmless() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        // Pre-seed so front() hits.
+        queue.push(make_pending(created("/file-a.md")));
+
+        // Arm, hit front(), drop — the consumer loop's arm-before-
+        // check path when front() already has work.
+        let fut = queue.notified();
+        assert!(queue.front().is_some(), "pre-seeded: front must hit");
+        drop(fut);
+
+        // Push with no armed waiter: the signal is dropped, the event
+        // is on disk (visible to the fresh front() scan).
+        queue.push(make_pending(created("/file-b.md")));
+
+        // Re-arm, then push: the second wait must wake — dropping the
+        // first armed permit left no stale state.
+        let fut2 = queue.notified();
+        queue.push(make_pending(created("/file-c.md")));
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            fut2,
+        )
+        .await
+        .expect("dropped armed permit must not desynchronise the queue");
+    }
+
+    /// An event pushed **before** the `notified()` future is created
+    /// is still visible to the fresh `front()` scan — the scan half
+    /// of the arm-before-check guarantee (the wake half only covers
+    /// pushes after the arm).
+    #[test]
+    fn push_before_arm_is_still_visible_to_front() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let event = make_pending(created("/file-a.md"));
+        queue.push(event.clone());
+
+        // Arm after the push; the front() scan must still see it.
+        let _fut = queue.notified();
+        let front = queue
+            .front()
+            .expect("push before arm must be visible to front()");
+        assert_eq!(front.id, event.id);
+        assert_eq!(front.strand_path, "/file-a.md");
     }
 
     // ── round-trip ──────────────────────────────────────────────────
