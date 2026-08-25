@@ -4,8 +4,8 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
-  compatibility: "Knot 0.35.0+"
+  version: "1.4.0"
+  compatibility: "Knot 0.37.0+"
 ---
 
 # Knot Dispatch Skill
@@ -65,6 +65,15 @@ Key properties:
   queued `.json` files are reloaded (`load_persisted`) before the
   file watcher begins emitting new events. This preserves FIFO ordering
   across restart boundaries.
+- **Reorderable by rename**: FIFO order is filename sort, so renaming
+  a queued event's file (e.g. to an earlier `{timestamp}-{rand}` name)
+  moves it within the queue. This is the supported way to front a
+  queued event (e.g. a manual rectify event). The filename is the
+  queue entry's identity: on the next scan the queue repairs the
+  file's internal id to the filename stem — an atomic rewrite, with
+  one `[queue] repaired …` warning logged to the service log per
+  repaired file. `queued_at` is preserved as the honest record of
+  when the event was queued; only the internal id changes.
 - **Late removal (at-least-once delivery)**: the `.json` file is
   removed only *after* the event's work is done — as the last step
   before the git commit on success, or at the point of failure on

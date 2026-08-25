@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.14.0"
+  version: "1.15.0"
   compatibility: "Knot 0.37.0+"
 ---
 
@@ -56,6 +56,68 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Queue Entry Identity Self-Heal — Filename Is the Event ID (Knot 0.37.0, 2026-08-25)
+
+**What changed:** the filename stem of a queued event file
+(`tie-offs/<rig>/events/{id}.json`) is now the queue entry's
+identity, and the queue self-heals when a file's JSON `id` drifts
+from its name. On every scan, a file whose JSON `id` differs from
+its filename stem is repaired in place — atomically rewritten
+(temp → rename) with `id := stem` — and one warning is logged to
+the service log per repaired file:
+`[queue] repaired event file {name}: id {old} -> {stem} (filename
+is the queue identity)`. `queued_at` and all other fields are
+preserved. The repair is idempotent: after the first scan that
+touches the file, name == id and no further rewrites occur.
+Because FIFO order is filename sort, **renaming a queued event's
+file reorders the FIFO** — that is now the supported way to front
+a queued event (e.g. a manual rectify). A head that vanishes
+between scan and read (concurrent removal) is logged with the file
+name and handled gracefully — no silent wedge, no panic. No
+document or format change.
+
+**Why:** before 0.37.0, FIFO order came from the filename sort
+while every file operation (read, dedup, late removal, restart
+reload) resolved paths from the JSON `id`. A renamed queue file
+(filename ≠ JSON id) therefore made the head unresolvable:
+`front()` swallowed the read failure and returned `None`, the
+consumer loop read a non-empty queue as empty and went permanently
+idle with no log line, and the queue's own bookkeeping amplified
+the divergence — a restart re-wrote the event under its original
+id, duplicating it, and late removal deleted the restored file,
+orphaning the renamed one. One externally touched file could wedge
+a running rig until the file was deleted by hand (2026-08-25
+incident: two permanent idles, each cleared only by a process
+restart).
+
+**Affected documents:** none — no project document (profile, knot,
+loom) changes; the queue file schema is unchanged.
+
+| Artifact | Before 0.37.0 | 0.37.0+ |
+|---|---|---|
+| Queue entry identity | JSON `id` (filename was FIFO sort order only) | filename stem (a drifted `id` is repaired to the stem on scan) |
+| Renamed queue file (filename ≠ `id`) | phantom head: `front()` silent `None` (permanent idle), `pop()` panic | repaired in place on first scan (one warning per file); the rename keeps its FIFO position |
+| Head vanishing between scan and read | silent `None` / panic | warning naming the file; graceful `None` (rescan-and-retry for `pop()`) |
+| Document formats, queue file schema (`tie-offs/<rig>/events/*.json`) | — | unchanged |
+
+**Migration: none required.**
+
+- No document format changes — profiles, knots, looms, and tie-offs
+  are untouched, and the queue file schema is unchanged, so a queue
+  persisted by an older version is picked up as-is on the first run
+  of 0.37.0. No queue migration, no file edits.
+- Queues containing renamed or hand-edited event files (filename ≠
+  JSON `id`) **self-heal on the first scan** of the new binary: the
+  JSON `id` is rewritten to the filename stem (atomic temp → rename)
+  with one stderr warning per repaired file, and the operator's FIFO
+  position is kept. No file edits needed.
+- Renaming a queue file to reorder the FIFO (e.g. fronting a manual
+  rectify event) is a **supported operation** from 0.37.0 — the
+  queue repairs the internal id on the next scan and `queued_at`
+  remains the honest record of when the event was queued.
 
 ---
 

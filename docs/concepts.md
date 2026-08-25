@@ -148,7 +148,10 @@ Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`
 *is* the queue: pending work survives restarts, and a queued event can
 be inspected or edited with standard tools before it is processed. A
 queued event always wakes the processor — the only empty-queue state
-is a genuinely empty `events/` directory.
+is a genuinely empty `events/` directory. The filename stem is the
+queue entry's identity: renaming a queued event's file reorders the
+FIFO, and on its next scan the queue repairs the file's internal id
+to the filename stem (`queued_at` is preserved).
 
 ### At-Least-Once Delivery (Late Removal)
 
