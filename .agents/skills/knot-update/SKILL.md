@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.12.0"
+  version: "1.13.0"
   compatibility: "Knot 0.36.0+"
 ---
 
@@ -536,7 +536,7 @@ so agents on other projects see the change:
 
 ```bash
 cp .agents/skills/knot-init/knot-glossary.md \
-   ~/.agents/skills/knot-init/knot-glossary.md
+   ~/.agents/skills-library/knot-init/knot-glossary.md
 ```
 
 **Affected documents:** none — glossary text only.
@@ -1129,9 +1129,10 @@ When Knot introduces a new format change:
      examples + numbered steps + search patterns)
    - "Fields Unchanged" table to confirm what stays the same
 3. Bump the skill `version` in the frontmatter metadata.
-4. Publish the updated skill globally:
+4. Publish the updated skill to the production library:
    ```bash
-   cp -r .agents/skills/knot-update ~/.agents/skills/knot-update
+   mkdir -p ~/.agents/skills-library/knot-update
+   cp -r .agents/skills/knot-update/. ~/.agents/skills-library/knot-update/
    ```
 
 ---
@@ -1145,8 +1146,9 @@ grep -rl "profile-prompt:" rig/profiles/ 2>/dev/null
 # Find knots using old format (prompt-template in frontmatter)
 grep -rl "prompt-template:" rig/ 2>/dev/null
 
-# Publish updated skill globally
-cp -r .agents/skills/knot-update ~/.agents/skills/knot-update
+# Publish updated skill to the production library
+mkdir -p ~/.agents/skills-library/knot-update
+cp -r .agents/skills/knot-update/. ~/.agents/skills-library/knot-update/
 
 # Verify Knot is reading migrated files
 cat rig/state.json | python3 -m json.tool

@@ -45,35 +45,43 @@ cargo install --path .
 This places the `knot` binary on your `PATH`.
 
 Next, have your agent copy the Knot skills from the repository into
-its skill discovery path. For `pi`, copy them to `~/.agents/skills/`:
+their production locations in `~/.agents/`. For `pi`, sub-skills go
+to `~/.agents/skills-library/` (not auto-discovered — they are read
+on demand via the master's routing table) and the master router goes
+to `~/.agents/skills/` (the only Knot skill auto-discovered):
 
 ```bash
-cp -r knot/.agents/skills/knot-init     ~/.agents/skills/
-cp -r knot/.agents/skills/knot-create   ~/.agents/skills/
-cp -r knot/.agents/skills/knot-dispatch ~/.agents/skills/
-cp -r knot/.agents/skills/knot-inspect  ~/.agents/skills/
-cp -r knot/.agents/skills/knot-manage   ~/.agents/skills/
-cp -r knot/.agents/skills/knot-design   ~/.agents/skills/
-cp -r knot/.agents/skills/knot-analyst  ~/.agents/skills/
-cp -r knot/.agents/skills/knot-update   ~/.agents/skills/
+for skill in knot-init knot-create knot-dispatch knot-inspect
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
+  mkdir -p ~/.agents/skills-library/$skill
+  cp -r knot/.agents/skills/$skill/. ~/.agents/skills-library/$skill/
+done
+# Master router
+mkdir -p ~/.agents/skills/knot
+cp -r knot/.agents/skills/knot/. ~/.agents/skills/knot/
 ```
 
 Knot also ships a glossary of domain terms:
 
 ```bash
 cp knot/.agents/skills/knot-init/knot-glossary.md \
-   ~/.agents/skills/knot-init/knot-glossary.md
+   ~/.agents/skills-library/knot-init/knot-glossary.md
 ```
 
 Verify every copy — `cp` can silently fail:
 
 ```bash
 for skill in knot-init knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update; do
+              knot-manage knot-design knot-analyst knot-update
+              knot-abstractions; do
   diff knot/.agents/skills/$skill/SKILL.md \
-       ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+       ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
 done
+diff knot/.agents/skills/knot/SKILL.md \
+     ~/.agents/skills/knot/SKILL.md > /dev/null 2>&1 && \
+  echo "knot: OK" || echo "knot: FAILED"
 ```
 
 For other agent CLIs, your agent will need to place these skills

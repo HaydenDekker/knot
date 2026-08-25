@@ -35,21 +35,33 @@ cargo install --path .
 ### Skill Installation
 
 Knot skills are developed at the project level (`.agents/skills/`) and
-published globally for use by other projects. After updating a skill at
-project level, install it globally:
+deployed to the personal skills repository (`~/.agents/`) for use by
+other projects. The production layout has two locations:
+
+- `~/.agents/skills/` — **master (router) skills only**. These are the
+  only skills pi auto-discovers into the system prompt.
+- `~/.agents/skills-library/` — **sub-skills**. Not auto-discovered;
+  read on demand via the master's routing table or explicitly with
+  `pi --skill <path>`.
+
+After updating a skill at project level, deploy it:
 
 ```bash
+# Sub-skills -> production library
 for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
-  mkdir -p ~/.agents/skills/$skill
-  cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
+  mkdir -p ~/.agents/skills-library/$skill
+  cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
 # Copy non-SKILL.md files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
   cp .agents/skills/knot-init/knot-glossary.md \
-     ~/.agents/skills/knot-init/knot-glossary.md
+     ~/.agents/skills-library/knot-init/knot-glossary.md
 fi
+# Master router -> auto-discovered skills dir
+mkdir -p ~/.agents/skills/knot
+cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 ```
 
 **Always verify after copying** — `cp` can silently fail:
@@ -59,10 +71,17 @@ for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \
-       ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+       ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
 done
+diff .agents/skills/knot/SKILL.md \
+     ~/.agents/skills/knot/SKILL.md > /dev/null 2>&1 && \
+  echo "knot: OK" || echo "knot: FAILED"
 ```
+
+The project-level master (`.agents/skills/knot/`) is maintained as a
+byte-identical copy of the production master, so deploying is a plain
+copy plus diff verification.
 
 The `knot-init` skill also performs this installation automatically
 (step 4a) when initialising a rig.
@@ -71,8 +90,23 @@ The `knot-init` skill also performs this installation automatically
 
 This project maintains agent skills in `.agents/skills/`. Pi discovers these as project-local skills, which override any same-named global skills in `~/.agents/skills/`.
 
+### Production skill locations (`~/.agents/`)
+
+Deployed skills live in the personal skills repository at `~/.agents/`:
+
+- `~/.agents/skills/<name>/` — master (router) skills; the **only**
+  skills auto-discovered by pi into the system prompt.
+- `~/.agents/skills-library/<name>/` — sub-skills; **not**
+  auto-discovered. They are read on demand via the master's routing
+  table or explicitly with `pi --skill <path>`.
+
+To deploy a change, copy the project-level skill into its matching
+production location (see Skill Installation above).
+
 ### Knot Skills
 
+- **knot** — Master router for all Knot work; routes to the sub-skills
+  below (the only Knot skill auto-discovered in other projects)
 - **knot-abstractions** — Understand the layered architecture (rig, profiles, skills, application)
 - **knot-analyst** — Analyse rig productivity and project progress at runtime
 - **knot-design** — Design looms and knots (idempotency, naming, loops, responsibility)
@@ -84,10 +118,18 @@ This project maintains agent skills in `.agents/skills/`. Pi discovers these as 
 
 ### Workflow
 
-Skills are developed and tested at the project level (`.agents/skills/`) before being installed globally for use by other projects. To publish a skill globally:
+Skills are developed and tested at the project level (`.agents/skills/`) before being deployed to their production locations in `~/.agents/` for use by other projects. To publish a sub-skill:
 
 ```bash
-cp -r .agents/skills/<skill-name> ~/.agents/skills/<skill-name>
+mkdir -p ~/.agents/skills-library/<skill-name>
+cp -r .agents/skills/<skill-name>/. ~/.agents/skills-library/<skill-name>/
+```
+
+To publish the master router:
+
+```bash
+mkdir -p ~/.agents/skills/knot
+cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 ```
 
 ## Knot Glossary

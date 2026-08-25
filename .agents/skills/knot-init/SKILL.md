@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.3.0"
+  version: "4.4.0"
   compatibility: "Knot 0.32.0+"
 ---
 
@@ -82,20 +82,29 @@ When asked to initialise a Knot rig:
    - These directories are managed on disk — Knot auto-discovers them.
 
 4a. **Install Knot skills globally** (idempotent):
-    - Check `~/.agents/skills/` exists. Create it if missing.
-    - Copy the *contents* of each Knot skill directory into
-      `~/.agents/skills/<skill>/` (the trailing `/.` is required —
-      copying onto an existing directory would nest it):
+    - Production layout: sub-skills go to `~/.agents/skills-library/`
+      (not auto-discovered; read on demand via the master's routing
+      table) and the master router goes to `~/.agents/skills/knot/`
+      (auto-discovered). Check both exist. Create them if missing.
+    - Copy the *contents* of each Knot sub-skill directory into
+      `~/.agents/skills-library/<skill>/` (the trailing `/.` is
+      required — copying onto an existing directory would nest it):
       ```bash
       for skill in knot-init knot-create knot-dispatch knot-inspect
                     knot-manage knot-design knot-analyst knot-update
                     knot-abstractions; do
-        mkdir -p ~/.agents/skills/$skill
-        cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
+        mkdir -p ~/.agents/skills-library/$skill
+        cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
       done
       ```
+    - Copy the master router into the auto-discovered location:
+      ```bash
+      mkdir -p ~/.agents/skills/knot
+      cp -r .agents/skills/knot/. ~/.agents/skills/knot/
+      ```
     - Also copy any non-SKILL.md files in skill directories
-      (e.g. `.agents/skills/knot-init/knot-glossary.md`).
+      (e.g. `.agents/skills/knot-init/knot-glossary.md` →
+      `~/.agents/skills-library/knot-init/knot-glossary.md`).
     - **Verify every copy succeeded** — `cp` can silently fail on
       permissions or stale handles. After copying, diff each skill:
       ```bash
@@ -103,9 +112,12 @@ When asked to initialise a Knot rig:
                     knot-manage knot-design knot-analyst knot-update
                     knot-abstractions; do
         diff .agents/skills/$skill/SKILL.md \
-             ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+             ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
           echo "$skill: OK" || echo "$skill: FAILED"
       done
+      diff .agents/skills/knot/SKILL.md \
+           ~/.agents/skills/knot/SKILL.md > /dev/null 2>&1 && \
+        echo "knot: OK" || echo "knot: FAILED"
       ```
     - If any skill reports FAILED, retry the copy for that skill.
     - If the glossary exists in the project skill directory, verify
@@ -113,9 +125,9 @@ When asked to initialise a Knot rig:
       ```bash
       if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
         cp .agents/skills/knot-init/knot-glossary.md \
-           ~/.agents/skills/knot-init/knot-glossary.md
+           ~/.agents/skills-library/knot-init/knot-glossary.md
         diff .agents/skills/knot-init/knot-glossary.md \
-             ~/.agents/skills/knot-init/knot-glossary.md > /dev/null 2>&1 && \
+             ~/.agents/skills-library/knot-init/knot-glossary.md > /dev/null 2>&1 && \
           echo "glossary: OK" || echo "glossary: FAILED"
       fi
       ```
@@ -473,25 +485,36 @@ other skills manage the content.
 ## Global Skill Installation
 
 Knot skills are developed and tested at the project level
-(`.agents/skills/`) before being published globally
-(`~/.agents/skills/`). Step 4a above handles this automatically during
-initialisation.
+(`.agents/skills/`) before being deployed to the production
+locations in the personal skills repository (`~/.agents/`):
+
+- Sub-skills → `~/.agents/skills-library/<skill>/` — **not**
+  auto-discovered by pi; read on demand via the master's routing
+  table or `pi --skill <path>`.
+- Master router → `~/.agents/skills/knot/` — the only Knot skill
+  that enters the system prompt in other projects.
+
+Step 4a above handles this automatically during initialisation.
 
 To install skills manually (e.g. after updating a skill at project
 level):
 
 ```bash
+# Sub-skills -> production library
 for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
-  mkdir -p ~/.agents/skills/$skill
-  cp -r .agents/skills/$skill/. ~/.agents/skills/$skill/
+  mkdir -p ~/.agents/skills-library/$skill
+  cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
 # Copy any extra files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
   cp .agents/skills/knot-init/knot-glossary.md \
-     ~/.agents/skills/knot-init/knot-glossary.md
+     ~/.agents/skills-library/knot-init/knot-glossary.md
 fi
+# Master router -> auto-discovered location
+mkdir -p ~/.agents/skills/knot
+cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 ```
 
 Always verify after copying — `cp` can silently fail:
@@ -501,7 +524,10 @@ for skill in knot-init knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \
-       ~/.agents/skills/$skill/SKILL.md > /dev/null 2>&1 && \
+       ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
 done
+diff .agents/skills/knot/SKILL.md \
+     ~/.agents/skills/knot/SKILL.md > /dev/null 2>&1 && \
+  echo "knot: OK" || echo "knot: FAILED"
 ```

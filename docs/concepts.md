@@ -257,6 +257,7 @@ the rig. Each skill is a `.md` file discovered by the agent framework
 
 | Skill | Purpose |
 |-------|---------|
+| **knot** | Master router — the only Knot skill auto-discovered by pi in other projects; reads the sub-skills below on demand |
 | **knot-init** | Initialise a rig, create profiles, install skills globally |
 | **knot-create** | Create, modify, delete looms, knots, and profiles |
 | **knot-dispatch** | Trigger knots into action by creating or touching strands |
@@ -266,6 +267,9 @@ the rig. Each skill is a `.md` file discovered by the agent framework
 | **knot-design** | Design looms and knots following idempotency and loop patterns |
 | **knot-update** | Migrate project documents between Knot versions |
 
-Skills are stored at `.agents/skills/` in the Knot repository and
-installed to `~/.agents/skills/` for global use. The `knot-init` skill
-handles this installation automatically during rig setup.
+Skills are developed at `.agents/skills/` in the Knot repository and
+deployed to the personal skills repository (`~/.agents/`): the master
+router is installed to `~/.agents/skills/knot/` (auto-discovered by
+pi) and the sub-skills to `~/.agents/skills-library/` (loaded on
+demand via the master's routing table). The `knot-init` skill handles
+this installation automatically during rig setup.
