@@ -300,4 +300,30 @@ Full `cargo test --no-fail-fast` green; in particular
   the queue is disk-based; the backdate appeared not to reorder
   because `front()` returned `None` for the renamed head.
 
-## Implementation Status: ✅ All phases complete (2026-08-25) — completion pending: version bump 0.36.0 → 0.37.0 (combined release with plan 076), release notes, merge. Phases: `8b2fdd4` + `088dee5` + `ed9a29c`, see [Phase 1 record](queue-identity-self-heal-phase-1.md), [Phase 2 record](queue-identity-self-heal-phase-2.md), [Phase 3 record](queue-identity-self-heal-phase-3.md)
+## Implementation Status: ✅ Complete (2026-08-25)
+
+## Completion Notes
+- All 3 phases implemented and committed on
+  `refactor/queue-identity-self-heal-plan`, fast-forward merged to `main`:
+  - Phase 1 (`8b2fdd4`) — scan-time identity normalisation (filename
+    stem authoritative, atomic repair with the plan's exact warning,
+    idempotent), graceful vanished-head warning in `front()`,
+    rescan-and-retry in `pop()` (replacing the `.expect` panic);
+    7 unit tests, 5 red against the pre-fix code.
+  - Phase 2 (`088dee5`) — `tests/queue_identity.rs`: the incident repro
+    (backdated head processes first, drains cleanly, no orphan),
+    restart over duplicate-key files collapses to one, step mode over a
+    renamed head doesn't panic; red-verified by disabling the heal
+    block (all 3 fail as the incident predicts).
+  - Phase 3 (`ed9a29c`) — knot-dispatch "Reorderable by rename"
+    (1.4.0 / "Knot 0.37.0+"), `concepts.md` name/id sentence, knot-update
+    0.37.0 entry (1.15.0), skills published and diff-verified.
+- Deviations (recorded in the phase docs): the vanished-head warning
+  names the file with its `.json` extension; the knot-dispatch
+  frontmatter bump followed the 073-phase-5 convention; the
+  orchestrator's Phase 1 verification hit a transient `thinking_level`
+  environment flake (load-induced, unrelated — see design doc).
+- Bumped to 0.37.0 (MINOR — combined release with plan 076, per the
+  coordination notes); release notes in `docs/release-notes.md`, lasting
+  knowledge in `project/design/design-queue-identity-and-wake.md`.
+- Full `cargo test` green at completion: 1214 tests across 29 suites.

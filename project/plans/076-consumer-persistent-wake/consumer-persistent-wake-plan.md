@@ -275,4 +275,31 @@ Integration tests:
   [Phase 1 record](consumer-persistent-wake-phase-1.md) for the full
   verification.
 
-## Implementation Status: ✅ All phases complete (2026-08-25) — completion pending: version bump 0.36.0 → 0.37.0, release notes, merge. Phases: `6c0bfb1` + `84f4f58` + `e151fcc`, see [Phase 1 record](consumer-persistent-wake-phase-1.md), [Phase 2 record](consumer-persistent-wake-phase-2.md), [Phase 3 record](consumer-persistent-wake-phase-3.md)
+## Implementation Status: ✅ Complete (2026-08-25)
+
+## Completion Notes
+- All 3 phases implemented and committed on
+  `refactor/consumer-persistent-wake-plan`, merged to `main` via the
+  stacked 075 branch (single 0.37.0 release):
+  - Phase 1 (`6c0bfb1`) — armed-at-call `notified()` on the port (both
+    queue implementations; `Box::pin` + `as_mut().enable()` because
+    `Notified` is `!Unpin`), armed-at-call contract documented on the
+    port, 6 unit tests. Key finding: the pinned tokio 1.52.3 already
+    stores `notify_one` permits, so the plan's lost-wake premise does
+    not hold on this version — the change makes the guarantee explicit
+    and version-independent (see Phase 1 record + design doc).
+  - Phase 2 (`84f4f58`) — arm-before-check in `next_event`,
+    `step_head_event` (deadline logic intact) and the
+    `recv_with_timeout` test helper; `push_while_idle_wakes_loop`
+    integration test (single push through the real pipeline wakes the
+    blocking idle).
+  - Phase 3 (`e151fcc`) — `concepts.md` wake-guarantee sentence,
+    knot-update 0.37.0 entry (1.14.0), skill published and
+    diff-verified.
+- Deviations (recorded in the phase docs): the "failing first" TDD step
+  could not fail (tokio finding); the plan's test-2 sequence was
+  unimplementable under any `Notify` semantics — the test pins the
+  actual stated property instead.
+- Bumped to 0.37.0 (MINOR — combined release with plan 075, per the
+  coordination notes); release notes in `docs/release-notes.md`, lasting
+  knowledge in `project/design/design-queue-identity-and-wake.md`.

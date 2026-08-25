@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-25 (plans 075/076 added)
+> **Last Updated:** 2026-08-25 (plans 075/076 completed — v0.37.0)
 
 ## How to Add a Plan
 
@@ -46,8 +46,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | 🟡 In Progress | 2026-08-25 |
-| 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | 🟡 In Progress | 2026-08-25 |
+| 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | ✅ Complete | 2026-08-25 |
+| 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | ✅ Complete | 2026-08-25 |
 | 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | ✅ Complete | 2026-08-24 |
 | 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
@@ -67,12 +67,12 @@ _Overview sections for active and recently completed plans go here._
 
 ### 76. Consumer Persistent Wake — No Lost Queue Notifications
 
-**Status:** 🟡 In Progress (2026-08-25) — all phases implemented on `refactor/consumer-persistent-wake-plan` (2026-08-25); completion pending (bump 0.36.0 → 0.37.0, release notes, merge)
+**Status:** ✅ Complete (2026-08-25) — released in v0.37.0 (combined with plan 075)
 **Goal:** Make the queue wake-up persistent — `StrandEventQueue::notified()` arms its `Notify` permit at call time and the consumer loops (service + step) arm it before re-checking `front()` — so a push can never be missed while the loop is idle and the "queue idle with a non-empty queue, no log" symptom class is closed structurally.
 
 ### 75. Queue Entry Identity Self-Heal — Filename Is the Event ID
 
-**Status:** 🟡 In Progress (2026-08-25) — all phases implemented 2026-08-25 on `refactor/queue-identity-self-heal-plan`; completion pending (combined 0.37.0 release with plan 076)
+**Status:** ✅ Complete (2026-08-25) — released in v0.37.0 (combined with plan 076)
 **Goal:** Make the disk event queue self-heal the filename-stem ⇄ JSON-`id` invariant on every scan (filename wins, atomic repair, warning logged) and make `front()`/`pop()`/dedup/late-removal operate on the healed id, so a renamed (e.g. backdated) queue file reorders the FIFO as intended instead of wedging the pipeline with a phantom head — the root cause of the 2026-08-25 borrow-my-stuff idle-with-nonempty-queue incidents.
 
 ### 74. Thinking Level — Alias Default with Profile Override

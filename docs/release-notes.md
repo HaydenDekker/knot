@@ -1,5 +1,71 @@
 # Release Notes
 
+## v0.37.0 — 2026-08-25
+
+### Fix — Queue Entry Identity Self-Heal: Filename Is the Event ID (Plan 075)
+
+The filename stem of a queued event file (`tie-offs/<rig>/events/{id}.json`)
+is now the queue entry's **identity**, and the queue self-heals when a
+file's JSON `id` drifts from its name:
+
+- **Self-heal on scan** — on every scan, a file whose JSON `id` differs
+  from its filename stem is repaired in place (atomic temp→rename rewrite
+  with `id := stem`) and one warning is logged to the service log per
+  repaired file:
+  `[queue] repaired event file {name}: id {old} -> {stem} (filename is
+  the queue identity)`. The repair is idempotent — after the first scan
+  that touches the file, name == id and no further rewrites occur.
+  `queued_at` and all other fields are preserved.
+- **Renaming reorders the FIFO (now supported)** — FIFO order is
+  filename sort, so renaming a queued event's file (e.g. to an earlier
+  `{timestamp}-{rand}` name) moves it within the queue. This is the
+  supported way to front a queued event (e.g. a manual rectify); the
+  queue repairs the internal id on the next scan.
+- **No more silent wedges or panics** — a head that vanishes between
+  scan and read (concurrent late-removal or `knot step`) is logged with
+  the file name (`[queue] head {name}.json vanished before read
+  (concurrent removal?)`) and handled gracefully: `front()` returns
+  `None`, `pop()` rescans once and retries instead of panicking.
+
+This closes the 2026-08-25 borrow-my-stuff incident class: a renamed
+queue file previously made the head unresolvable (`front()` swallowed
+the read failure and returned `None` — the rig went idle with a
+non-empty queue and no log line), a restart duplicated the event, and
+late removal orphaned the renamed file. All three paths are now pinned
+by unit tests and full-composition incident-reproduction tests
+(`tests/queue_identity.rs`).
+
+**No document or format change.** The queue file schema is unchanged;
+queues containing renamed or hand-edited event files self-heal on the
+first scan of the new binary. No migration required.
+
+### Fix — Consumer Persistent Wake: No Lost Queue Notifications (Plan 076)
+
+The event-queue wake is now persistent **by construction**:
+
+- **Armed-at-call `notified()`** — `StrandEventQueue::notified()`
+  registers its `tokio::sync::Notify` permit at call time (armed, not
+  lazy), and the contract is documented on the port: a signal sent after
+  the call is guaranteed to wake an await of the returned future, even
+  if the await has not started.
+- **Arm-before-check consumer loops** — the service loop (`next_event`)
+  and `knot step`'s head wait create the armed wait *before* re-checking
+  `front()`: a push before the arm is visible to the fresh disk scan, a
+  push after the arm is captured by the permit. A front hit or a timeout
+  drops the armed future (harmless); the next iteration re-arms.
+
+**The wake guarantee:** a queued event always wakes the processor; the
+only empty-queue state is a genuinely empty `events/` directory.
+
+**Internal change, no document change.** Notably, the pinned tokio
+1.52.3 already stores a `notify_one` permit when no waiter is
+registered (verified in the tokio source and by running the new tests
+against the pre-fix code — all pass), so no wake was being lost in the
+field on this tokio version: this release removes that latent
+dependency and makes the guarantee explicit in Knot's own code,
+pinned by unit tests, independent of tokio version details. No
+migration required.
+
 ## v0.36.0 — 2026-08-24
 
 ### Feature — Thinking Level: Alias Default with Profile Override (Plan 074)
