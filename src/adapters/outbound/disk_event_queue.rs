@@ -69,6 +69,20 @@ impl DiskBackedEventQueue {
         // Don't signal notify during load — no consumer is waiting yet.
         count
     }
+
+    /// Log the vanished-head warning naming the file.
+    ///
+    /// The queue adapter has no rig-log port, so stderr (the service
+    /// log) is the channel — matching the store's `[WARN]` style.
+    /// A head that vanishes between scan and read (concurrent
+    /// late-removal or `knot step`) is visible here: never panic,
+    /// never silent.
+    fn log_vanished_head(id: &PendingEventId) {
+        eprintln!(
+            "[queue] head {}.json vanished before read (concurrent removal?)",
+            id
+        );
+    }
 }
 
 impl Default for DiskBackedEventQueue {
@@ -117,11 +131,32 @@ impl StrandEventQueue for DiskBackedEventQueue {
         let events = self.store.scan_events().unwrap_or_default();
 
         if let Some(first) = events.first() {
-            // Read the file fresh from disk (honours any on-disk edits).
-            let event = self
-                .store
-                .read_event(&first.id)
-                .expect("failed to read event file on pop — file may have been removed by another process");
+            // Read the file fresh from disk (honours any on-disk
+            // edits). If the head vanished between scan and read
+            // (concurrent late-removal or `knot step`), rescan once
+            // and retry with the new head; if the head is still
+            // unreadable, return None gracefully (never panic).
+            let event = match self.store.read_event(&first.id) {
+                Ok(event) => event,
+                Err(_) => match self
+                    .store
+                    .scan_events()
+                    .unwrap_or_default()
+                    .first()
+                {
+                    Some(rescanned) => match self.store.read_event(&rescanned.id) {
+                        Ok(event) => event,
+                        Err(_) => {
+                            Self::log_vanished_head(&rescanned.id);
+                            return None;
+                        }
+                    },
+                    None => {
+                        Self::log_vanished_head(&first.id);
+                        return None;
+                    }
+                },
+            };
 
             // Remove the file from disk.
             self.store
@@ -144,9 +179,21 @@ impl StrandEventQueue for DiskBackedEventQueue {
         // head fresh from disk (honours on-disk edits) — without
         // removing it. The event file survives until the processor
         // explicitly deletes it after processing (late removal).
+        //
+        // The scan heals any filename/id divergence first, so a
+        // renamed (backdated) head is returned — never wedged.
         let events = self.store.scan_events().unwrap_or_default();
         let first = events.first()?;
-        self.store.read_event(&first.id).ok()
+        match self.store.read_event(&first.id) {
+            Ok(event) => Some(event),
+            // The head vanished between scan and read (concurrent
+            // late-removal or `knot step`) — graceful None with a
+            // visible warning. Never panic, never silent.
+            Err(_) => {
+                Self::log_vanished_head(&first.id);
+                None
+            }
+        }
     }
 
     fn shutdown_signaled(&self) -> bool {
@@ -866,6 +913,233 @@ mod tests {
         let snap = queue.snapshot();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].kind, "Deleted", "snapshot should reflect on-disk edit");
+    }
+
+    // ── queue identity self-heal (filename is the event id) ────
+
+    /// The incident state: two files, head renamed to an earlier
+    /// timestamp (filename ≠ JSON id). `front()` must return the head
+    /// event with the healed id — not `None` (the pre-fix wedge) — and
+    /// `len()` is unchanged.
+    #[test]
+    fn front_returns_renamed_head_without_wedging() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let mut head = make_pending(created("/file-head.md"));
+        head.id = PendingEventId("1001-aaa".to_string());
+        let mut tail = make_pending(created("/file-tail.md"));
+        tail.id = PendingEventId("1002-bbb".to_string());
+        queue.push(head);
+        queue.push(tail);
+
+        // Operator backdate: rename the head's file to an earlier
+        // timestamp (the 14:52 rename from the incident).
+        std::fs::rename(
+            dir.path().join("1001-aaa.json"),
+            dir.path().join("0900-zzz.json"),
+        )
+        .unwrap();
+
+        let front = queue
+            .front()
+            .expect("front must not wedge on a renamed head");
+        assert_eq!(
+            front.id.0, "0900-zzz",
+            "the peeked id must be healed to the filename stem"
+        );
+        assert_eq!(front.strand_path, "/file-head.md");
+        assert_eq!(queue.len(), 2, "len() is unchanged by the peek");
+
+        // The file on disk is rewritten with the healed id.
+        let content =
+            std::fs::read_to_string(dir.path().join("0900-zzz.json"))
+                .unwrap();
+        let parsed: PendingEvent = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.id.0, "0900-zzz");
+    }
+
+    /// Same incident state through `pop()`: the head event is returned
+    /// (id healed), its file is removed, and the tail is intact.
+    /// Pre-fix `pop` panicked on the unreadable head (`.expect`).
+    #[test]
+    fn pop_reads_renamed_head_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let mut head = make_pending(created("/file-head.md"));
+        head.id = PendingEventId("1001-aaa".to_string());
+        let mut tail = make_pending(created("/file-tail.md"));
+        tail.id = PendingEventId("1002-bbb".to_string());
+        queue.push(head);
+        queue.push(tail);
+
+        std::fs::rename(
+            dir.path().join("1001-aaa.json"),
+            dir.path().join("0900-zzz.json"),
+        )
+        .unwrap();
+
+        let result = queue
+            .pop()
+            .expect("pop must not panic on a renamed head");
+        match result {
+            PendingEventOrShutdown::Event(e) => {
+                assert_eq!(e.id.0, "0900-zzz");
+                assert_eq!(e.strand_path, "/file-head.md");
+            }
+            PendingEventOrShutdown::Shutdown => {
+                panic!("expected Event, got Shutdown");
+            }
+        }
+
+        // The renamed file is gone; the tail is intact.
+        assert!(!dir.path().join("0900-zzz.json").exists());
+        assert_eq!(queue.len(), 1);
+        assert_eq!(
+            queue.front().unwrap().strand_path,
+            "/file-tail.md"
+        );
+    }
+
+    /// The head file is deleted by hand behind the queue's back
+    /// (concurrent removal): `front()` returns `None` gracefully (no
+    /// panic), and a subsequent push is visible again.
+    #[test]
+    fn front_vanished_head_is_graceful_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let event = make_pending(created("/file-a.md"));
+        let id = queue.push(event);
+
+        // Delete the file behind the queue's back.
+        std::fs::remove_file(dir.path().join(format!("{}.json", id.0)))
+            .unwrap();
+
+        assert!(
+            queue.front().is_none(),
+            "vanished head: front must be a graceful None, not a panic"
+        );
+
+        // A subsequent push is visible again.
+        let next = make_pending(created("/file-b.md"));
+        queue.push(next);
+        let front = queue
+            .front()
+            .expect("a push after the vanished head must be visible");
+        assert_eq!(front.strand_path, "/file-b.md");
+    }
+
+    /// The head is deleted by hand behind the queue's back: `pop()`
+    /// rescans once and returns the tail event (pre-fix: panic).
+    #[test]
+    fn pop_vanished_head_rescans_and_returns_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let mut head = make_pending(created("/file-head.md"));
+        head.id = PendingEventId("1001-aaa".to_string());
+        let mut tail = make_pending(created("/file-tail.md"));
+        tail.id = PendingEventId("1002-bbb".to_string());
+        queue.push(head);
+        queue.push(tail);
+
+        // Delete the head behind the queue's back (concurrent
+        // late-removal / `knot step`).
+        std::fs::remove_file(dir.path().join("1001-aaa.json")).unwrap();
+
+        let result = queue
+            .pop()
+            .expect("pop must recover from a vanished head");
+        match result {
+            PendingEventOrShutdown::Event(e) => {
+                assert_eq!(
+                    e.strand_path, "/file-tail.md",
+                    "pop must rescan and return the tail"
+                );
+            }
+            PendingEventOrShutdown::Shutdown => {
+                panic!("expected Event, got Shutdown");
+            }
+        }
+
+        assert!(queue.is_empty(), "the tail is consumed, nothing left");
+    }
+
+    /// The head is renamed (filename ≠ JSON id); `push_or_replace` with
+    /// the same dedup key must remove the renamed file (by the healed
+    /// id) — no dangling duplicate.
+    #[test]
+    fn dedup_removes_renamed_file_by_healed_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let mut head = make_pending(created("/file-a.md"));
+        head.id = PendingEventId("1001-aaa".to_string());
+        queue.push(head);
+
+        // Operator backdate rename.
+        std::fs::rename(
+            dir.path().join("1001-aaa.json"),
+            dir.path().join("0900-zzz.json"),
+        )
+        .unwrap();
+
+        // Push a replacement for the same strand (same dedup key).
+        let mut replacement = make_pending(created("/file-a.md"));
+        replacement.id = PendingEventId("1002-bbb".to_string());
+        queue.push_or_replace(replacement);
+
+        assert!(
+            !dir.path().join("0900-zzz.json").exists(),
+            "dedup must remove the renamed (actually-queued) file"
+        );
+        assert_eq!(queue.len(), 1, "no dangling duplicate may remain");
+
+        let snap = queue.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].id.0, "1002-bbb");
+    }
+
+    /// The exact incident-#2 orphan path: the head file is renamed
+    /// (operator backdate) before the processing cycle. The peek heals
+    /// the id, so late-removal by the peeked id deletes the
+    /// actually-peeked file — no orphan remains.
+    #[test]
+    fn late_removal_deletes_the_peeked_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().to_path_buf());
+
+        let event = make_pending(created("/file-a.md"));
+        let id = queue.push(event);
+
+        // Operator backdate: rename the head's file before the cycle.
+        std::fs::rename(
+            dir.path().join(format!("{}.json", id.0)),
+            dir.path().join("0900-zzz.json"),
+        )
+        .unwrap();
+
+        // Peek (the consumer loop's front()) — the scan heals the id,
+        // so the peeked id already equals the stem.
+        let peeked = queue
+            .front()
+            .expect("front must return the renamed head");
+        assert_eq!(
+            peeked.id.0, "0900-zzz",
+            "the peeked id must equal the filename stem"
+        );
+
+        // Late removal by the peeked id (ProcessStrand's post-run
+        // deletion).
+        assert!(
+            StrandQueueAccessor::delete(&queue, &peeked.id),
+            "late removal must hit the actually-peeked file"
+        );
+
+        assert!(!dir.path().join("0900-zzz.json").exists());
+        assert_eq!(queue.len(), 0, "no orphan may remain");
     }
 
     // ── StrandQueueAccessor ─────────────────────────────────────────

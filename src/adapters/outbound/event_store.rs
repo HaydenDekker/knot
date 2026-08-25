@@ -95,31 +95,96 @@ impl FileSystemEventStore {
     /// Scan the events directory and return all valid events, sorted by
     /// filename (which gives FIFO order due to the timestamp prefix).
     ///
-    /// Malformed JSON files are skipped with a warning logged to stderr.
-    /// Non-`.json` files are silently ignored.
+    /// The filename stem is the queue identity: if a file's JSON `id`
+    /// differs from its stem (e.g. the operator renamed the file to
+    /// reorder the FIFO), the file is repaired in place — atomically
+    /// rewritten (temp → rename) with `id := stem` — and a warning is
+    /// logged. Returned events always carry the healed id, so every
+    /// id-based operation (read, remove, dedup) targets the real file.
+    ///
+    /// Malformed JSON files (and files with a missing or empty `id`)
+    /// are skipped with a warning logged to stderr. Non-`.json` files
+    /// are silently ignored.
     pub fn scan_events(&self) -> std::io::Result<Vec<PendingEvent>> {
-        let mut events: Vec<(String, PendingEvent)> = Vec::new();
-
+        // Collect files first so the repair rewrites (which rename
+        // within the directory) do not race the directory iteration.
+        let mut files: Vec<(String, PathBuf, String)> = Vec::new();
         for entry in fs::read_dir(&self.events_dir)? {
             let entry = entry?;
-            let filename = entry.file_name();
-            let filename_str = filename.to_string_lossy();
+            let filename = entry.file_name().to_string_lossy().into_owned();
 
             // Only process .json files (skip .tmp and everything else)
-            if !filename_str.ends_with(".json") {
+            if !filename.ends_with(".json") {
                 continue;
             }
 
             let path = entry.path();
             let content = fs::read_to_string(&path)?;
+            files.push((filename, path, content));
+        }
 
+        let mut events: Vec<(String, PendingEvent)> = Vec::new();
+
+        for (filename, path, content) in files {
             match serde_json::from_str::<PendingEvent>(&content) {
-                Ok(event) => {
-                    events.push((filename_str.to_string(), event));
+                Ok(mut event) => {
+                    // A missing `id` is a parse failure (the `Err`
+                    // arm); an empty one is malformed too — there is
+                    // no identity to heal from.
+                    if event.id.0.is_empty() {
+                        eprintln!(
+                            "[WARN] skipping malformed event file {}: \
+                             empty `id` (the filename stem is the queue \
+                             identity and must equal the JSON `id` field)",
+                            path.display()
+                        );
+                        continue;
+                    }
+
+                    let stem =
+                        filename.strip_suffix(".json").unwrap_or(&filename);
+                    if stem.is_empty() {
+                        eprintln!(
+                            "[WARN] skipping malformed event file {}: \
+                             filename has no stem (the filename stem is \
+                             the queue identity)",
+                            path.display()
+                        );
+                        continue;
+                    }
+
+                    // The filename stem is the queue identity: heal a
+                    // drifted id in place so id-based operations target
+                    // the real file. The rewrite is idempotent — after
+                    // it, name == id and no further rewrites occur.
+                    if event.id.0 != stem {
+                        let old_id = event.id.0.clone();
+                        event.id = PendingEventId(stem.to_string());
+                        match self.write_event(&event) {
+                            Ok(_) => {
+                                eprintln!(
+                                    "[queue] repaired event file \
+                                     {filename}: id {old_id} -> {stem} \
+                                     (filename is the queue identity)"
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[WARN] failed to repair event file \
+                                     {}: {e}",
+                                    path.display()
+                                );
+                            }
+                        }
+                    }
+
+                    events.push((filename, event));
                 }
                 Err(e) => {
                     eprintln!(
-                        "[WARN] skipping malformed event file {}: {e}",
+                        "[WARN] skipping malformed event file {}: {e} \
+                         (the JSON `id` field must equal the filename \
+                         stem)",
                         path.display()
                     );
                 }
@@ -315,6 +380,58 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].id.0, "1001-aaa");
         assert_eq!(events[1].id.0, "1003-ccc");
+    }
+
+    /// A renamed queue file (filename ≠ JSON id) is repaired on scan:
+    /// the returned event carries the stem as its id, the file on disk
+    /// is atomically rewritten with the healed id, and a second scan
+    /// performs no rewrite (content stable).
+    #[test]
+    fn scan_repairs_renamed_file_and_normalises_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSystemEventStore::new(dir.path().to_path_buf());
+        let event = make_event("1001-aaaa", "/a.md");
+        store.write_event(&event).unwrap();
+
+        // Operator backdate: rename the file to an earlier timestamp
+        // (the incident action — the JSON id is left untouched).
+        std::fs::rename(
+            dir.path().join("1001-aaaa.json"),
+            dir.path().join("1000-bbbb.json"),
+        )
+        .unwrap();
+
+        let events = store.scan_events().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].id.0, "1000-bbbb",
+            "the id must be normalised to the filename stem"
+        );
+        // The rest of the content is preserved (`queued_at` is the
+        // honest record, not rewritten).
+        assert_eq!(events[0].strand_path, "/a.md");
+        assert_eq!(events[0].queued_at, "2026-01-01T00:00:00+00:00");
+
+        // The file on disk is rewritten with the healed id.
+        let content =
+            std::fs::read_to_string(dir.path().join("1000-bbbb.json"))
+                .unwrap();
+        let parsed: PendingEvent = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.id.0, "1000-bbbb");
+
+        // No temp file remains (atomic temp → rename).
+        assert!(!dir.path().join("1000-bbbb.json.tmp").exists());
+
+        // A second scan performs no rewrite (content stable).
+        let events2 = store.scan_events().unwrap();
+        assert_eq!(events2[0].id.0, "1000-bbbb");
+        let content2 =
+            std::fs::read_to_string(dir.path().join("1000-bbbb.json"))
+                .unwrap();
+        assert_eq!(
+            content, content2,
+            "a second scan must not rewrite an already-healed file"
+        );
     }
 
     /// `scan_events` silently ignores non-JSON files.
