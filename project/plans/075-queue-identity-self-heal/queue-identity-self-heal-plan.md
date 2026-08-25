@@ -300,4 +300,4 @@ Full `cargo test --no-fail-fast` green; in particular
   the queue is disk-based; the backdate appeared not to reorder
   because `front()` returned `None` for the renamed head.
 
-## Implementation Status: ⬜ Not Started
+## Implementation Status: 🔄 In Progress — Phase 1/3 complete (2026-08-25, `8b2fdd4`, see [Phase 1 record](queue-identity-self-heal-phase-1.md))

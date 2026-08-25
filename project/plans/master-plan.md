@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | 🟡 In Progress | 2026-08-25 |
-| 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | ⬜ Planned | 2026-08-25 |
+| 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | 🟡 In Progress | 2026-08-25 |
 | 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | ✅ Complete | 2026-08-24 |
 | 73 | [Knot Step — Single-Event Stepping and Late Queue Removal](73-knot-step/knot-step-plan.md) | ✅ Complete | 2026-08-23 |
 | 72 | [Clear Loom-Logs and Rig-Log at Startup](072-startup-log-clear/startup-log-clear-plan.md) | ✅ Complete | 2026-08-23 |
@@ -72,7 +72,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 75. Queue Entry Identity Self-Heal — Filename Is the Event ID
 
-**Status:** ⬜ Planned (2026-08-25)
+**Status:** 🟡 In Progress (2026-08-25) — Phase 1 (identity normalisation) implemented 2026-08-25; phases 2–3 pending
 **Goal:** Make the disk event queue self-heal the filename-stem ⇄ JSON-`id` invariant on every scan (filename wins, atomic repair, warning logged) and make `front()`/`pop()`/dedup/late-removal operate on the healed id, so a renamed (e.g. backdated) queue file reorders the FIFO as intended instead of wedging the pipeline with a phantom head — the root cause of the 2026-08-25 borrow-my-stuff idle-with-nonempty-queue incidents.
 
 ### 74. Thinking Level — Alias Default with Profile Override
