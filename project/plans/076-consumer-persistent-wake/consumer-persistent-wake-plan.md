@@ -263,10 +263,16 @@ Integration tests:
   Together they eliminate both known paths to "idle with a non-empty
   queue". They are independent and can be implemented in either
   order, though 075 addresses the field incident.
-- **Determinism:** the Phase 1 unit test is the deterministic
-  regression proof (it fails under the old semantics); the Phase 2
-  integration test exercises the real loop end-to-end and may be
-  timing-sensitive only in the sense that the old code could fail it —
-  the new code cannot, by construction.
+- **Determinism (corrected after Phase 1):** the plan assumed the
+  Phase 1 unit test would fail under the old lazy semantics. It does
+  not, on the pinned tokio 1.52.3: its `Notify::notify_one()` *stores*
+  a permit when no waiter is registered (verified in the tokio source
+  and by running the new tests against the old code — all pass). The
+  tests therefore pin the armed-at-call contract on our port (keeping
+  the guarantee independent of tokio version details) rather than
+  proving the old code racy; the Phase 2 integration test still
+  exercises the real loop end-to-end. See the
+  [Phase 1 record](consumer-persistent-wake-phase-1.md) for the full
+  verification.
 
-## Implementation Status: ⬜ Not Started
+## Implementation Status: 🔄 In Progress — Phase 1/3 complete (2026-08-25, `6c0bfb1`, see [Phase 1 record](consumer-persistent-wake-phase-1.md))
