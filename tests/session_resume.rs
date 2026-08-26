@@ -12,18 +12,22 @@
 mod helpers;
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use helpers::ProcessStrandBuilder;
 use knot::adapters::pi_stdio::PiStdioAgentRunner;
+use knot::application::in_memory_event_queue::InMemoryEventQueue;
 use knot::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, PortError,
+    StrandEventQueue,
 };
 use knot::application::usecases::test_fixtures::*;
 use knot::domain::entities::{KnotId, LoomId, StrandPath, TieOffStatus};
-use knot::domain::events::{LoomEvent, RigLogEvent};
+use knot::domain::events::{LoomEvent, RigLogEvent, StrandQueueAccessor};
+use knot::domain::pending_event::{PendingEvent, PendingEventId};
 use knot::domain::value_objects::AgentProfile;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -378,6 +382,244 @@ fn test_session_resume_non_resumable_error() {
     assert!(
         !events.iter().any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
         "should NOT have SessionResumed for non-resumable error"
+    );
+}
+
+// ── Plan 078: Empty First Response Requests the Final Response ────────
+
+static EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Build a `PendingEvent` with a unique ID for the given loom/knot/strand.
+fn make_pending(
+    loom_id: &str,
+    knot_id: &str,
+    strand_path: &Path,
+) -> PendingEvent {
+    PendingEvent {
+        id: PendingEventId(format!(
+            "1000000000000-{:04x}",
+            EVENT_COUNTER.fetch_add(1, Ordering::SeqCst)
+        )),
+        kind: "Created".to_string(),
+        loom_id: loom_id.to_string(),
+        knot_id: knot_id.to_string(),
+        strand_path: strand_path.to_string_lossy().into_owned(),
+        queued_at: "2026-01-01T00:00:00".to_string(),
+    }
+}
+
+/// First invocation ends abruptly (exit 0, empty final response, session
+/// ID captured). Plan 078: Knot re-enters the session and requests the
+/// final response; the nudged response is the tie-off — the strand
+/// succeeds transparently.
+/// Verifies: 2 agent calls, --session-id injected in second call,
+/// KnotEmptyResponse + SessionResumed + KnotCompleted in loom-log,
+/// no KnotFailed, tie-off contains the resumed response, rig-log empty.
+#[test]
+fn test_empty_response_requests_final_response() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+        Ok(ok_output_with_sid("", "sess-empty")),
+        Ok(ok_output_with_sid("final response after nudge", "sess-empty")),
+    ]));
+
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        tie_off_content: _content,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
+
+    use_case.execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // Verify 2 agent calls
+    let contexts = captured_runner.get_captured_contexts();
+    assert_eq!(contexts.len(), 2, "should have 2 agent calls");
+
+    // Second call should have --session-id in extra_args
+    let retry_ctx = &contexts[1];
+    let args = &retry_ctx.agent_config.extra_args;
+    assert!(
+        args.contains(&"--session-id".to_string()),
+        "retry should have --session-id in extra_args: {:?}",
+        args
+    );
+    assert!(
+        args.contains(&"sess-empty".to_string()),
+        "retry should have session ID value in extra_args: {:?}",
+        args
+    );
+
+    // Loom-log: KnotEmptyResponse + SessionResumed + KnotCompleted,
+    // no KnotFailed
+    let events = log_events.lock().unwrap();
+    let has_empty = events.iter()
+        .any(|e| matches!(e, LoomEvent::KnotEmptyResponse { .. }));
+    let has_resumed = events.iter()
+        .any(|e| matches!(e, LoomEvent::SessionResumed { .. }));
+    let has_completed = events.iter()
+        .any(|e| matches!(e, LoomEvent::KnotCompleted { .. }));
+    let has_failed = events.iter()
+        .any(|e| matches!(e, LoomEvent::KnotFailed { .. }));
+
+    assert!(has_empty, "should have KnotEmptyResponse for the empty first turn");
+    assert!(has_resumed, "should have SessionResumed for the nudge");
+    assert!(has_completed, "should have KnotCompleted");
+    assert!(!has_failed, "should NOT have KnotFailed");
+
+    // SessionResumed should have correct session_id and attempt
+    let resumed = events.iter()
+        .find_map(|e| {
+            if let LoomEvent::SessionResumed {
+                session_id, attempt, ..
+            } = e {
+                Some((session_id.clone(), *attempt))
+            } else {
+                None
+            }
+        });
+    assert_eq!(
+        resumed,
+        Some(("sess-empty".to_string(), 1)),
+        "SessionResumed should have session_id=sess-empty, attempt=1"
+    );
+
+    // Tie-off contains the resumed response
+    let appends = tie_off_appends.lock().unwrap();
+    assert_eq!(appends.len(), 1, "should have 1 tie-off append");
+    assert_eq!(appends[0].status, TieOffStatus::Produced);
+    assert!(
+        appends[0].content.contains("final response after nudge"),
+        "tie-off should contain the nudged response: {}",
+        appends[0].content
+    );
+
+    // No rig-log events on success
+    let rig = rig_events.lock().unwrap();
+    assert!(rig.is_empty(), "rig-log should be empty on success");
+}
+
+/// First invocation ends abruptly and every nudge also returns an empty
+/// response → retries exhausted (10) → the terminal error is the cause:
+/// `AgentNoResponse` — a failed tie-off (NOT a timeout, so no rig-log
+/// event), with the full attempt count in the content. The queued event
+/// is still consumed exactly once (late-removal invariant).
+#[test]
+fn test_empty_response_exhausted_writes_failed_tieoff() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    // 12 empty responses: 1 initial + 10 retries (MAX_RETRIES) + spare.
+    let responses: Vec<Result<AgentOutput, PortError>> = (0..12)
+        .map(|_| Ok(ok_output_with_sid("", "sess-exhausted")))
+        .collect();
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = Arc::new(MockAgentRunner::new_sequence(responses));
+    let queue = Arc::new(InMemoryEventQueue::new());
+
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile()) // no profile timeout budget
+        .with_strand_queue(Arc::clone(&queue) as Arc<dyn StrandQueueAccessor>)
+        .build();
+
+    let pending = make_pending("review-loom", "review", &strand_path);
+    queue.push(pending.clone());
+
+    // Set zero retry delay for fast test execution
+    unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+    use_case.execute_with_pending(&pending).unwrap();
+    unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+
+    // 11 calls: 1 initial + 10 retries
+    let contexts = captured_runner.get_captured_contexts();
+    assert_eq!(
+        contexts.len(),
+        11,
+        "should have 11 agent calls (1 + 10 retries)"
+    );
+
+    // Loom-log: 11 × KnotEmptyResponse + 10 × SessionResumed + KnotFailed
+    let events = log_events.lock().unwrap();
+    let empty_count = events.iter()
+        .filter(|e| matches!(e, LoomEvent::KnotEmptyResponse { .. }))
+        .count();
+    assert_eq!(
+        empty_count, 11,
+        "should have 11 KnotEmptyResponse events (initial + 10 retries)"
+    );
+    let resumed_count = events.iter()
+        .filter(|e| matches!(e, LoomEvent::SessionResumed { .. }))
+        .count();
+    assert_eq!(
+        resumed_count, 10,
+        "should have 10 SessionResumed events (MAX_RETRIES)"
+    );
+
+    // KnotFailed error should mention the cause and the attempt count
+    let failed = events.iter()
+        .find_map(|e| {
+            if let LoomEvent::KnotFailed { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
+            }
+        });
+    let failed = failed.expect("KnotFailed should be logged on exhaustion");
+    assert!(
+        failed.contains("no final response"),
+        "KnotFailed should mention 'no final response', got: {failed}"
+    );
+    assert!(
+        failed.contains("after 11 attempts"),
+        "KnotFailed should count all attempts (1 + 10 retries), got: {failed}"
+    );
+
+    // Rig-log: empty — an exhausted empty-response nudge is a failure,
+    // not a timeout (no TimeoutExceeded).
+    let rig = rig_events.lock().unwrap();
+    assert!(
+        rig.is_empty(),
+        "rig-log should be empty (not a timeout): {:?}",
+        rig
+    );
+
+    // Tie-off: appended Failed with the cause in the content
+    let appends = tie_off_appends.lock().unwrap();
+    assert_eq!(appends.len(), 1, "should have 1 tie-off append");
+    assert_eq!(appends[0].status, TieOffStatus::Failed);
+    assert!(
+        appends[0].content.contains("no final response"),
+        "tie-off content should contain 'no final response': {}",
+        appends[0].content
+    );
+    assert!(
+        appends[0].content.contains("after 11 attempts"),
+        "tie-off content should count all attempts: {}",
+        appends[0].content
+    );
+
+    // Late-removal invariant: the queued event is consumed exactly once
+    // even when the knot fails.
+    assert!(
+        queue.is_empty(),
+        "queued event must be removed on failure (late removal)"
     );
 }
 

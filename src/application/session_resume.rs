@@ -566,6 +566,37 @@ mod tests {
         )
     }
 
+    // Helper for execute_with_resume calls with NO profile timeout budget
+    // (zero delay) — MAX_RETRIES is the only bound on the retry loop.
+    fn execute_no_budget(
+        runner: &dyn AgentRunner,
+        log: &dyn LoomLogPort,
+    ) -> Result<AgentOutput, PortError> {
+        execute_with_resume_internal(
+            runner,
+            log,
+            &make_loom_id(),
+            &make_knot_id(),
+            &make_strand_path(),
+            &mut None,
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+                thinking_level: None,
+            },
+            "Review this document".to_string(),
+            Some(make_strand_path()),
+            "You are a reviewer.".to_string(),
+            "Created".to_string(),
+            Some("k1".to_string()),
+            None, // no profile timeout budget
+            Duration::from_millis(0),
+        )
+    }
+
     #[test]
     fn retry_succeeds_on_first_retry() {
         let runner = TestAgentRunner::new(vec![
@@ -944,11 +975,18 @@ mod tests {
 
     /// Plan 077: an abrupt turn-end with an empty response is
     /// `AgentNoResponse`, **not** `Timeout` — no deadline was exceeded.
-    /// This test fails before the fix (the code returns `Timeout`);
-    /// it is the bug reproduction.
+    ///
+    /// Plan 078 update: with a session ID the call now *retries* (see
+    /// `empty_response_first_attempt_triggers_retry`); this test is the
+    /// no-session-ID reproduction where the 077 terminal failure stands.
     #[test]
     fn empty_response_first_attempt_logs_knot_empty_response() {
-        let runner = TestAgentRunner::new(vec![Ok(ok_output(""))]);
+        let runner = TestAgentRunner::new(vec![Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })]);
         let log = TestLoomLog::default();
 
         let result = execute(&runner, &log, 120);
@@ -962,10 +1000,10 @@ mod tests {
                     "Expected empty response message, got: {}",
                     message
                 );
-                assert_eq!(
-                    session_id,
-                    Some("sess-abc".to_string()),
-                    "Expected session_id captured from output metadata on empty response"
+                assert!(
+                    session_id.is_none(),
+                    "no session ID → error carries no session_id, got: {:?}",
+                    session_id
                 );
             }
             other => panic!("Expected AgentNoResponse error, got: {other:?}"),
@@ -1026,6 +1064,219 @@ mod tests {
             }
             _ => panic!("Expected SessionResumed, got {:?}", events[2]),
         }
+    }
+
+    // ── Plan 078: first-attempt empty response re-enters the session ──
+
+    /// Plan 078: an abrupt turn-end (empty response) **with** a captured
+    /// session ID re-enters the session to request the final response.
+    /// First attempt: `KnotEmptyResponse(1)`; retry: `SessionResumed(1)`
+    /// with `--session-id` and the final-response request prompt; the
+    /// non-empty follow-up response is returned transparently.
+    #[test]
+    fn empty_response_first_attempt_triggers_retry() {
+        let runner = TestAgentRunner::new(vec![
+            Ok(ok_output_with_sid("", "sess-abc")),
+            Ok(ok_output_with_sid("final response", "sess-abc")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(
+            result.is_ok(),
+            "expected Ok after the final-response nudge, got: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().stdout, "final response");
+
+        // Runner called twice: initial attempt + 1 retry
+        assert_eq!(runner.call_count(), 2);
+
+        // Retry context carries --session-id and the final-response request
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+        let retry_ctx = &contexts[1];
+        assert!(
+            retry_ctx
+                .agent_config
+                .extra_args
+                .contains(&"--session-id".to_string()),
+            "retry extra_args should contain --session-id: {:?}",
+            retry_ctx.agent_config.extra_args
+        );
+        assert!(
+            retry_ctx
+                .agent_config
+                .extra_args
+                .contains(&"sess-abc".to_string()),
+            "retry extra_args should contain the session ID: {:?}",
+            retry_ctx.agent_config.extra_args
+        );
+        assert!(
+            retry_ctx.prompt.contains(
+                "Please produce your final response, or continue if you have not finished."
+            ),
+            "retry prompt should contain the final-response request, got: {}",
+            retry_ctx.prompt
+        );
+
+        // Loom-log: KnotEmptyResponse(1) then SessionResumed(1)
+        let events = log.events();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected KnotEmptyResponse, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::SessionResumed { attempt, session_id, .. } => {
+                assert_eq!(*attempt, 1);
+                assert_eq!(session_id, "sess-abc");
+            }
+            other => panic!("Expected SessionResumed, got {other:?}"),
+        }
+    }
+
+    /// Plan 078: an empty response **without** a session ID (stdio
+    /// adapter / unparseable output) cannot be re-entered — the 077
+    /// terminal failure stands: one runner call, `AgentNoResponse` with
+    /// no session ID, and only `KnotEmptyResponse(1)` in the loom-log
+    /// (no `SessionResumed`).
+    #[test]
+    fn empty_response_without_session_id_no_retry() {
+        let runner = TestAgentRunner::new(vec![Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::AgentNoResponse { session_id, .. } => {
+                assert!(
+                    session_id.is_none(),
+                    "error should carry no session_id, got: {:?}",
+                    session_id
+                );
+            }
+            other => panic!("Expected AgentNoResponse, got: {other:?}"),
+        }
+
+        // Runner called exactly once — no retry without a session ID
+        assert_eq!(runner.call_count(), 1);
+
+        // Loom-log: KnotEmptyResponse(1) only — no SessionResumed
+        let events = log.events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected KnotEmptyResponse, got {other:?}"),
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "no SessionResumed without a session ID"
+        );
+    }
+
+    /// Plan 078: when every attempt (initial + all 10 retries) returns an
+    /// empty response, the terminal error is `AgentNoResponse` — **not**
+    /// `Timeout` — with the full attempt count: the cause was never a
+    /// deadline breach. No profile timeout → MAX_RETRIES is the bound.
+    #[test]
+    fn empty_response_exhausted_returns_no_response_error() {
+        let responses: Vec<Result<AgentOutput, PortError>> = (0..11)
+            .map(|_| Ok(ok_output_with_sid("", "sess-abc")))
+            .collect();
+        let runner = TestAgentRunner::new(responses);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::AgentNoResponse { message, .. } => {
+                assert!(
+                    message.contains("after 11 attempts"),
+                    "message should count all attempts (1 + 10 retries), got: {message}"
+                );
+                assert!(
+                    message.contains("exhausted"),
+                    "message should mention exhaustion, got: {message}"
+                );
+            }
+            other => panic!("Expected AgentNoResponse, got: {other:?}"),
+        }
+
+        // Runner called 11 times: initial + 10 retries
+        assert_eq!(runner.call_count(), 11);
+
+        // Loom-log: 11 × KnotEmptyResponse + 10 × SessionResumed
+        let events = log.events();
+        let empty_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEmptyResponse { .. }))
+            .count();
+        let resumed_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::SessionResumed { .. }))
+            .count();
+        assert_eq!(empty_count, 11, "expected 11 KnotEmptyResponse events");
+        assert_eq!(resumed_count, 10, "expected 10 SessionResumed events");
+    }
+
+    /// Plan 078: when the **last** failure in the nudge loop is a genuine
+    /// timeout (adapter kill mid-retry), the terminal error is
+    /// `PortError::Timeout` — the exhaustion error reflects the cause.
+    #[test]
+    fn empty_response_retry_timeout_terminal_is_timeout() {
+        // First attempt: empty response (with session ID) → nudge loop;
+        // then genuine timeouts until exhaustion (no budget → 10 retries).
+        let responses: Vec<Result<AgentOutput, PortError>> = std::iter::once(Ok(
+            ok_output_with_sid("", "sess-abc"),
+        ))
+        .chain((0..10).map(|_| Err(err_timeout("sess-abc"))))
+        .collect();
+        let runner = TestAgentRunner::new(responses);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::Timeout { message, .. } => {
+                assert!(
+                    message.contains("exhausted"),
+                    "message should mention exhaustion, got: {message}"
+                );
+            }
+            other => panic!(
+                "Expected Timeout (last failure was a real timeout), got: {other:?}"
+            ),
+        }
+
+        // Loom-log: KnotEmptyResponse(1) + 10 × SessionResumed — the
+        // in-loop timeouts do not log KnotEmptyResponse.
+        let events = log.events();
+        let empty_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEmptyResponse { .. }))
+            .count();
+        let resumed_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::SessionResumed { .. }))
+            .count();
+        assert_eq!(empty_count, 1, "expected 1 KnotEmptyResponse (first attempt only)");
+        assert_eq!(resumed_count, 10, "expected 10 SessionResumed events");
     }
 
     // ── inject_event_request Tests (Phase 2) ─────────────────────────

@@ -1418,6 +1418,111 @@ mod execution_tests {
             appends[0].content
         );
     }
+
+    /// Plan 078: an abrupt turn-end (empty response, session ID
+    /// captured) re-enters the session; the nudged response is the
+    /// tie-off, transparent to the outer flow:
+    /// - loom-log receives `KnotProcessing`, `KnotEmptyResponse`,
+    ///   `SessionResumed`, `KnotCompleted`, `StrandProcessed` (no
+    ///   `KnotFailed`)
+    /// - rig-log receives NO events (not a timeout)
+    /// - tie-off IS appended `Produced` with the resumed content
+    #[test]
+    fn process_strand_empty_response_resumed_success() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let empty_output = Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-abc".to_string()),
+                token_usage: None,
+            }),
+        });
+        let final_output = Ok(AgentOutput {
+            stdout: "final".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-abc".to_string()),
+                token_usage: None,
+            }),
+        });
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            empty_output,
+            final_output,
+        ]));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        // Zero retry delay for fast test execution
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotEmptyResponse, SessionResumed,
+        // KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 5, "should have 5 loom-log events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("expected KnotEmptyResponse, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("expected SessionResumed, got {other:?}"),
+        }
+        match &events[3] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!("expected KnotCompleted, got {other:?}"),
+        }
+        match &events[4] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_none(), "no error on success");
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+        assert!(
+            !events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+            "should NOT have KnotFailed after successful nudge"
+        );
+
+        // Rig-log: NO events (an empty response is not a timeout)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should be empty on successful nudge"
+        );
+
+        // Tie-off: appended with the resumed (final) content
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(appends[0].content, "final");
+    }
 }
 
 // ── Execution: deleted event context extraction ───────────────────────
