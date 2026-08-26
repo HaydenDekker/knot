@@ -448,6 +448,24 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// The agent session's context hit (or approached) the model window
+    /// and pi compacted it. One entry per compaction observed in an
+    /// invocation's JSON stream. `reason` is `"overflow"` (the context
+    /// limit was hit — compacted to continue) or `"threshold"` (pi
+    /// proactively compacted before the limit). The entry marks context
+    /// pressure so the prompt/strand scope can be narrowed.
+    ContextCompacted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        reason: String,
+        tokens_before: Option<u64>,
+        /// Attempt the compaction was observed on
+        /// (1 = first attempt, 2 = first retry, …).
+        attempt: u32,
+        timestamp: String,
+    },
     /// One or more agent events were dispatched to consumer knots.
     ///
     /// Recorded after a knot completes successfully and structured agent

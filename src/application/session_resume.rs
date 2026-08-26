@@ -44,6 +44,38 @@ fn format_timestamp() -> String {
     crate::adapters::logging::format_timestamp()
 }
 
+/// Append one `ContextCompacted` loom event per successful compaction in
+/// the invocation's metadata (plan 079). Best-effort: observability must
+/// never fail a strand.
+fn log_compactions(
+    loom_log: &dyn LoomLogPort,
+    loom_id: &LoomId,
+    knot_id: &KnotId,
+    strand_path: &StrandPath,
+    attempt: u32,
+    output: &AgentOutput,
+) {
+    let Some(metadata) = output.metadata.as_ref() else {
+        return;
+    };
+    for record in metadata
+        .compactions
+        .iter()
+        .filter(|r| r.error.is_none())
+    {
+        let _ = loom_log.append(LoomEvent::ContextCompacted {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            session_id: metadata.session_id.clone().unwrap_or_default(),
+            reason: record.reason.clone(),
+            tokens_before: record.tokens_before,
+            attempt,
+            timestamp: format_timestamp(),
+        });
+    }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /// Attempt to re-enter the session to request missing events.
@@ -232,6 +264,9 @@ fn execute_with_resume_internal(
                     *session_id = Some(sid.clone());
                 }
             }
+            // Plan 079: record successful compactions observed on the
+            // first attempt (best-effort).
+            log_compactions(loom_log, loom_id, knot_id, strand_path, 1, &output);
             return Ok(output);
         }
     } else {
@@ -367,6 +402,16 @@ fn execute_with_resume_internal(
                         *session_id = Some(sid.clone());
                     }
                 }
+                // Plan 079: record successful compactions observed on
+                // this retry (KnotEmptyResponse convention: attempt + 1).
+                log_compactions(
+                    loom_log,
+                    loom_id,
+                    knot_id,
+                    strand_path,
+                    attempt + 1,
+                    &output,
+                );
                 return Ok(output);
             }
             Err(e) => {
