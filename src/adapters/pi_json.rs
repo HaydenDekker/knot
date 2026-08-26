@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::application::ports::{
-    AgentInvocationMetadata, AgentOutput, AgentRunner, ExecutionContext,
-    PortError, TokenUsage,
+    AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionRecord,
+    ExecutionContext, PortError, TokenUsage,
 };
 use crate::domain::entities::StrandPath;
 use crate::domain::value_objects::AgentConfig;
@@ -130,6 +130,7 @@ impl PiJsonAgentRunner {
         session_id: &mut Option<String>,
         response_text: &mut String,
         token_usage: &mut Option<TokenUsage>,
+        compactions: &mut Vec<CompactionRecord>,
     ) -> bool {
         let value: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -148,6 +149,31 @@ impl PiJsonAgentRunner {
                 // Ignored — agent_end has the complete message array with
                 // stopReason filtering. message_end cannot distinguish
                 // intermediate tool-use messages from final responses.
+            }
+            Some("compaction_end") => {
+                // Plan 079: record the compaction for loom-log visibility
+                // and terminal-overflow detection. `result` is absent on
+                // failed compactions (pi omits undefined keys in JSON),
+                // so `tokens_before` is `None` there.
+                compactions.push(CompactionRecord {
+                    reason: value
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    tokens_before: value
+                        .get("result")
+                        .and_then(|r| r.get("tokensBefore"))
+                        .and_then(|t| t.as_u64()),
+                    will_retry: value
+                        .get("willRetry")
+                        .and_then(|b| b.as_bool())
+                        .unwrap_or(false),
+                    error: value
+                        .get("errorMessage")
+                        .and_then(|e| e.as_str())
+                        .map(String::from),
+                });
             }
             Some("agent_end") => {
                 // Extract token usage from usage object
@@ -221,13 +247,21 @@ impl PiJsonAgentRunner {
     }
 
     /// Parse JSON-L from raw stdout, extracting session_id, response,
-    /// and token usage. Returns `true` if all lines parsed as valid JSON.
+    /// token usage, and compaction events. Returns `true` if all lines
+    /// parsed as valid JSON.
     fn parse_stdout(
         raw_stdout: &str,
-    ) -> (bool, Option<String>, String, Option<TokenUsage>) {
+    ) -> (
+        bool,
+        Option<String>,
+        String,
+        Option<TokenUsage>,
+        Vec<CompactionRecord>,
+    ) {
         let mut session_id: Option<String> = None;
         let mut response_text = String::new();
         let mut token_usage: Option<TokenUsage> = None;
+        let mut compactions: Vec<CompactionRecord> = Vec::new();
         let mut had_parse_error = false;
 
         for line in raw_stdout.lines() {
@@ -239,6 +273,7 @@ impl PiJsonAgentRunner {
                 &mut session_id,
                 &mut response_text,
                 &mut token_usage,
+                &mut compactions,
             ) {
                 had_parse_error = true;
             }
@@ -249,6 +284,7 @@ impl PiJsonAgentRunner {
             session_id,
             response_text,
             token_usage,
+            compactions,
         )
     }
 }
@@ -413,6 +449,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 session_id,
                 _response,
                 _token_usage,
+                _compactions,
             ) = Self::parse_stdout(&raw_stdout);
             return Err(PortError::Timeout {
                 message: format!(
@@ -431,6 +468,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 session_id,
                 _response,
                 _token_usage,
+                _compactions,
             ) = Self::parse_stdout(&raw_stdout);
             return Err(PortError::AgentExecutionFailed {
                 message: format!(
@@ -457,7 +495,7 @@ impl AgentRunner for PiJsonAgentRunner {
             });
         }
 
-        let (had_parse_error, session_id, response_text, token_usage) =
+        let (had_parse_error, session_id, response_text, token_usage, compactions) =
             Self::parse_stdout(&raw_stdout);
 
         if had_parse_error {
@@ -476,6 +514,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 metadata: Some(AgentInvocationMetadata {
                     session_id,
                     token_usage,
+                    compactions,
                 }),
             })
         }
@@ -663,21 +702,14 @@ sleep 300
     // ── JSON-L Parser Unit Tests (direct, no subprocess) ─────────────
 
     /// Helper to call parse_stdout from tests.
-    fn run_parse_stdout(raw: &str) -> (bool, Option<String>, String, Option<TokenUsage>) {
-        PiJsonAgentRunner::parse_stdout(raw)
-    }
-
-    /// Plan 079: helper for the 5-tuple `parse_stdout` (gains a
-    /// `compactions` out-param when the parser records `compaction_end`
-    /// events — Phase 1).
-    fn run_parse_stdout_compactions(
+    fn run_parse_stdout(
         raw: &str,
     ) -> (
         bool,
         Option<String>,
         String,
         Option<TokenUsage>,
-        Vec<crate::application::ports::CompactionRecord>,
+        Vec<CompactionRecord>,
     ) {
         PiJsonAgentRunner::parse_stdout(raw)
     }
@@ -687,7 +719,7 @@ sleep 300
     fn test_json_runner_parses_session_id() {
         let raw = r#"{"type":"session","id":"abc-123"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"hello"}]}]}"#;
-        let (had_error, session_id, response_text, _usage) =
+        let (had_error, session_id, response_text, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(!had_error, "should parse cleanly");
         assert_eq!(session_id.as_deref(), Some("abc-123"));
@@ -699,7 +731,7 @@ sleep 300
     fn test_json_runner_parses_token_usage() {
         let raw = r#"{"type":"session","id":"sess-1"}
 {"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, usage) =
+        let (_had_error, _session_id, _response, usage, _compactions) =
             run_parse_stdout(raw);
         let usage = usage.unwrap();
         assert_eq!(usage.input, 100);
@@ -714,7 +746,7 @@ sleep 300
     fn test_json_runner_parses_response_text() {
         let raw = r#"{"type":"session","id":"sess-x"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"the response text"}]}]}"#;
-        let (_had_error, _session_id, response_text, _usage) =
+        let (_had_error, _session_id, response_text, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(response_text.contains("the response text"));
     }
@@ -723,7 +755,7 @@ sleep 300
     #[test]
     fn test_json_runner_timeout_captures_session_id() {
         let raw = r#"{"type":"session","id":"timeout-sess"}"#;
-        let (_had_error, session_id, _response, _usage) =
+        let (_had_error, session_id, _response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("timeout-sess"));
     }
@@ -732,7 +764,7 @@ sleep 300
     #[test]
     fn test_json_runner_nonzero_exit_captures_session_id() {
         let raw = r#"{"type":"session","id":"fail-sess"}"#;
-        let (_had_error, session_id, _response, _usage) =
+        let (_had_error, session_id, _response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("fail-sess"));
     }
@@ -764,7 +796,7 @@ sleep 300
     #[test]
     fn test_json_runner_malformed_json_fallback() {
         let raw = "not json at all\ngarbled output\n";
-        let (had_error, _session_id, response, _usage) =
+        let (had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(had_error, "should have parse errors");
         // parse_stdout doesn't accumulate raw lines — response_text
@@ -777,7 +809,7 @@ sleep 300
     #[test]
     fn test_json_runner_empty_output() {
         let raw = "";
-        let (had_error, _session_id, response, _usage) =
+        let (had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(!had_error);
         assert!(response.is_empty());
@@ -800,7 +832,7 @@ sleep 300
     fn test_json_runner_parses_message_end_response() {
         let raw = r#"{"type":"session","id":"msg-sess"}
 {"type":"message_end","role":"assistant","content":"response from message_end"}"#;
-        let (_had_error, _session_id, response, _usage) =
+        let (_had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         // message_end no longer extracts text — response should be empty
         assert!(response.is_empty());
@@ -812,7 +844,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_tool_use_messages() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Let me check the file..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"The file contains 42 lines."}]}]}"#;
-        let (_had_error, _session_id, response, _usage) =
+        let (_had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(response.contains("42 lines"), "should contain final response");
         assert!(
@@ -827,7 +859,7 @@ sleep 300
     #[test]
     fn test_json_runner_includes_length_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"truncated response"}]}]}"#;
-        let (_had_error, _session_id, response, _usage) =
+        let (_had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(response.contains("truncated response"));
     }
@@ -837,7 +869,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_error_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"error output"}]}]}"#;
-        let (_had_error, _session_id, response, _usage) =
+        let (_had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(response.is_empty());
     }
@@ -850,7 +882,7 @@ sleep 300
 {"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}]}"#;
         let (_had_error, _session_id, _response, _usage, compactions) =
-            run_parse_stdout_compactions(raw);
+            run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
         assert_eq!(compactions[0].tokens_before, Some(150000));
@@ -868,7 +900,7 @@ sleep 300
 {"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt."}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}"#;
         let (_had_error, _session_id, response, _usage, compactions) =
-            run_parse_stdout_compactions(raw);
+            run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
         assert!(!compactions[0].will_retry);
@@ -896,7 +928,7 @@ sleep 300
 {"type":"compaction_start","reason":"overflow"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
         let (_had_error, _session_id, _response, _usage, compactions) =
-            run_parse_stdout_compactions(raw);
+            run_parse_stdout(raw);
         assert!(
             compactions.is_empty(),
             "compaction_start must not produce a record"
@@ -908,7 +940,7 @@ sleep 300
     #[test]
     fn test_json_runner_multiple_tool_use_then_stop() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Checking config..."}]},{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Reading database..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Config and database are in sync."}]}]}"#;
-        let (_had_error, _session_id, response, _usage) =
+        let (_had_error, _session_id, response, _usage, _compactions) =
             run_parse_stdout(raw);
         assert!(response.contains("in sync"), "should contain final response");
         assert!(

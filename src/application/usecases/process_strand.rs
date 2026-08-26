@@ -1470,6 +1470,7 @@ mod execution_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         });
         let final_output = Ok(AgentOutput {
@@ -1479,6 +1480,7 @@ mod execution_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         });
         let runner = Arc::new(MockAgentRunner::new_sequence(vec![
@@ -5810,6 +5812,7 @@ mod event_enforcement_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         }
     }
@@ -6022,6 +6025,7 @@ mod event_enforcement_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         });
         let runner = Arc::new(MockAgentRunner::new(output.clone()));
@@ -6093,6 +6097,7 @@ mod event_enforcement_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         };
         let followup_output = AgentOutput {
@@ -6102,6 +6107,7 @@ mod event_enforcement_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         };
         let runner = Arc::new(MockAgentRunner::new_sequence(vec![
@@ -6176,6 +6182,7 @@ mod event_enforcement_tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         };
         let runner = Arc::new(MockAgentRunner::new(Ok(output)));

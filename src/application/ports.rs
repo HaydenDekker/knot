@@ -307,6 +307,22 @@ pub struct TokenUsage {
     pub total: u64,
 }
 
+/// One `compaction_end` event observed in the agent's JSON stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionRecord {
+    /// pi's compaction reason: `"overflow"` (context limit hit),
+    /// `"threshold"` (proactive), or `"manual"`.
+    pub reason: String,
+    /// Context tokens before compaction
+    /// (`compaction_end.result.tokensBefore`); `None` when the
+    /// compaction failed (no result).
+    pub tokens_before: Option<u64>,
+    /// True when pi auto-retries the prompt after compaction.
+    pub will_retry: bool,
+    /// pi's error message when compaction failed (`errorMessage`).
+    pub error: Option<String>,
+}
+
 /// Metadata captured from an agent invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInvocationMetadata {
@@ -314,6 +330,11 @@ pub struct AgentInvocationMetadata {
     pub session_id: Option<String>,
     /// Token usage from the LLM provider.
     pub token_usage: Option<TokenUsage>,
+    /// Compactions observed in the agent's JSON stream (plan 079) —
+    /// one record per `compaction_end`, in stream order. Empty when
+    /// the adapter does not report them (e.g. the stdio adapter).
+    #[serde(default)]
+    pub compactions: Vec<CompactionRecord>,
 }
 
 /// Output captured from agent execution.
@@ -1496,6 +1517,7 @@ mod tests {
                 cache_write: 5,
                 total: 165,
             }),
+            compactions: vec![],
         };
         let output = AgentOutput {
             stdout: "response".to_string(),

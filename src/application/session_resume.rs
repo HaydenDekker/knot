@@ -556,6 +556,7 @@ mod tests {
             metadata: Some(AgentInvocationMetadata {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
+                compactions: vec![],
             }),
         }
     }
