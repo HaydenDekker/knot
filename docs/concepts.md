@@ -158,6 +158,36 @@ untouched (`TimeoutExceeded` records genuine deadline breaches only).
 Without a session ID (stdio adapter, unparseable output) there is no
 re-entry — the terminal failure stands after the first attempt.
 
+### Context Compaction (Compact-and-Continue)
+
+A session whose context approaches the model's context window is not a
+failure: pi **compacts the session in-process and continues**. The
+built-in compaction is enabled for rig sessions via a project-level
+`.pi/settings.json` (`{"compaction": {"enabled": true}}`) — the
+`knot-init` skill seeds the file at rig initialisation
+(create-if-absent, never overwrites). Project-level so interactive pi
+outside the rig directory is unaffected.
+
+- **Proactive** — pi compacts before the hard limit
+  (`contextTokens > contextWindow − reserveTokens`; 16k reserved by
+default).
+- **Reactive** — when the model rejects an over-full context, pi
+  compacts and auto-retries the prompt in-process. Recovery is once
+  per user message, so every session-resume re-entry gets a fresh
+  recovery chance.
+- **Loom-log visibility** — each observed compaction is recorded as a
+  `ContextCompacted` loom entry: `reason` (`"overflow"` = the context
+  limit was hit — the entries to count when narrowing prompt scope;
+  `"threshold"` = proactive), `tokens_before` (the pre-compaction
+  size), `session_id`, and `attempt` (1 = first attempt, 2 = first
+  retry). Failed compactions are not logged. The entries mark context
+  pressure so the prompt and strand scope can be narrowed.
+- **Terminal overflow fails fast** — if the kept context itself
+  cannot fit the window even after compaction, the strand fails
+  immediately with `context limit reached: …` — no session-resume
+  retries, no clock-up, and no rig-log timeout (no deadline was
+  exceeded).
+
 ## Event Queue
 
 Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`

@@ -111,6 +111,7 @@ value in the knot file.
 |-------|-------|-----|
 | TimeoutExceeded | Agent session exceeded the profile timeout | Increase `timeout` in the profile's frontmatter |
 | no final response: … | Agent ended its turn without a final response (abrupt turn-end — a failure, not a timeout). Knot re-enters the session up to 10 times (or the profile timeout budget) asking for the final response; a successful nudge completes the strand transparently | If it still fails, check provider/model health and consider a larger profile `timeout` so the nudge attempts fit the budget. A failed tie-off section was written with the attempt count (`after N attempts`) |
+| context limit reached | The session's context exceeded the model window and pi's own compact-and-retry could not recover it — the kept context still does not fit. No retries (re-entry cannot help); a `Failed` tie-off is written and the rig-log is untouched | Narrow the prompt/strand scope: smaller strand files, tighter knot instructions, `@file` references instead of inlined content — or use a profile with a larger-window model. Check `ContextCompacted` entries in the loom-log for frequency (`reason: "overflow"` = limit hit) |
 | ProfileNotFound | Profile referenced by knot does not exist | Create the profile file |
 | KnotParseWarning | Invalid YAML in knot file | Fix frontmatter syntax |
 | Strand dir not found | `strand-dir` points to non-existent directory | Create the directory or fix the path |

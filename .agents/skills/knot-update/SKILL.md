@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.15.0"
-  compatibility: "Knot 0.37.0+"
+  version: "1.16.0"
+  compatibility: "Knot 0.38.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,59 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Context Overflow — Compact and Continue, with Loom-Log Visibility (Knot 0.38.0, 2026-08-26)
+
+**What changed:** pi's built-in compaction is now enabled for rig
+sessions via a project-level `.pi/settings.json`
+(`{"compaction": {"enabled": true}}`) — `knot-init` seeds the file at
+rig initialisation (create-if-absent only; an existing settings file
+is never overwritten). Knot records each successful compaction
+observed in an invocation's JSON stream as a new `ContextCompacted`
+loom-log entry (`reason` — `"overflow"` = the context limit was hit,
+`"threshold"` = proactive; `tokens_before`; `session_id`; `attempt`),
+and fails the strand immediately with `context limit reached: …` when
+pi's own compact-and-retry could not recover a terminal overflow (new
+`PortError::ContextLimitReached` — not resumable: no session-resume
+retries, `Failed` tie-off, no rig-log timeout). No profile, knot,
+loom, or tie-off format change.
+
+**Why:** with compaction disabled, an over-full context surfaced as
+the model's overflow error; pi exits 0 in JSON mode in that case, the
+final-response filter drops the error message, and the session-resume
+nudge loop re-entered the *same* over-full session until all 10
+retries burned — none could succeed, and every retry clocked up
+against the budget. Compaction-on lets pi recover in-process
+(compact-and-continue); the loom entries make context pressure
+visible so prompts and strand scope can be narrowed; the fail-fast
+removes the pure clock-up when the kept context itself cannot fit.
+
+**Affected documents:** none — no project document (profile, knot,
+loom, tie-off) format changes.
+
+| Artifact | Before 0.38.0 | 0.38.0+ |
+|---|---|---|
+| `.pi/settings.json` at the project root | not created by knot-init | seeded with `{"compaction": {"enabled": true}}` at init, only if absent |
+| Context overflow in a rig session | nudge loop re-enters the same over-full session; all retries burn → `no final response: … (session resume exhausted)` | pi compacts and continues in-process; terminal overflow fails immediately with `context limit reached: …` |
+| Loom-log compaction visibility | none | `ContextCompacted` entry per successful compaction (reason, tokens_before, session_id, attempt) |
+| Rig-log on terminal overflow | only reachable via budget exhaustion (`TimeoutExceeded`) | none — the failure is a `Failed` tie-off; no deadline was exceeded |
+| Profile/knot/loom/tie-off formats, event queue schema | — | unchanged |
+
+**Migration: none required.**
+
+- No profile, knot, loom, or tie-off format changes — existing rigs
+  keep working as-is on 0.38.0.
+- The new `ContextCompacted` loom-log variant degrades gracefully:
+  older binaries reading a 0.38.0 loom-log skip the line with a
+  warning (the 0.33.0 `EventsDispatched`-tuple precedent); 0.38.0
+  reads old logs unchanged. No log migration.
+- New rigs get `.pi/settings.json` automatically when `knot-init`
+  initialises them. **Existing rigs** (already initialised) can opt
+  in by creating the one-line file at the project root:
+  `{ "compaction": { "enabled": true } }` — without it, 0.38.0
+  behaves as before for over-full contexts.
 
 ---
 

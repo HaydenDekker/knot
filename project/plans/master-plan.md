@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-26 (plan 079 phases 0–5 complete — compact-and-continue; phase 6 pending)
+> **Last Updated:** 2026-08-26 (plan 079 complete — context overflow compact-and-continue, released in v0.38.0)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | 🟡 In Progress (phases 0–5 done) | 2026-08-26 |
+| 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
 | 78 | [Final-Response Request — Re-enter on Abrupt Turn-End](078-final-response-request/final-response-request-plan.md) | ✅ Complete | 2026-08-26 |
 | 77 | [Empty Response Is Not a Timeout](077-empty-response-not-timeout/empty-response-not-timeout-plan.md) | ✅ Complete | 2026-08-25 |
 | 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | ✅ Complete | 2026-08-25 |

@@ -1,5 +1,56 @@
 # Release Notes
 
+## v0.38.0 — 2026-08-26
+
+### Feature — Context Overflow: Compact and Continue, with Loom-Log Visibility (Plan 079)
+
+When a knot's pi session hits the model's context limit, Knot no longer
+burns all 10 session-resume retries against the same over-full context
+— each re-entry overflowed again, and every retry clocked up against
+the budget. Instead, **pi's own built-in compaction** handles the
+overflow in-process (compact-and-continue), Knot makes every
+compaction visible, and a terminal overflow fails fast.
+
+- **Compaction enabled for rig sessions** — a project-level
+  `.pi/settings.json` (`{"compaction": {"enabled": true}}`) overrides
+  the global setting; it applies only to rig sessions in that
+  directory (knot spawns pi inheriting the rig project's CWD).
+  `knot-init` seeds the file at rig initialisation (create-if-absent,
+  never overwrites an existing settings file). With compaction on, pi
+  proactively compacts before the hard limit (16k reserved by
+  default) and, when the model rejects an over-full context, compacts
+  and auto-retries the prompt in-process — recovery is once per user
+  message, so every session-resume re-entry gets a fresh recovery
+  chance.
+- **`ContextCompacted` loom-log entries** — one entry per successful
+  compaction observed in an invocation's JSON stream: `reason`
+  (`"overflow"` = the context limit was hit — the entries to count
+  when narrowing prompt scope; `"threshold"` = proactive),
+  `tokens_before` (pre-compaction size), `session_id`, and `attempt`
+  (1 = first attempt, 2 = first retry). The entries mark context
+  pressure so the prompt and strand scope can be narrowed; the append
+  is best-effort — observability never fails a strand.
+- **`ContextLimitReached` fail-fast** — when the stream shows a
+  terminal overflow (recovery ran — `willRetry: true` — and the
+  context still does not fit — `willRetry: false`), the strand fails
+  immediately with `context limit reached: …` (pi's message when
+  present). The error is **not resumable**: no session-resume
+  retries, no clock-up, a `Failed` tie-off with the message, and **no**
+  rig-log timeout (no deadline was exceeded — the same class as plan
+  077). A compaction that failed *without* ever running (missing
+  model/auth, transient summarisation error) is not fail-fast: the
+  nudge loop keeps its job, and the new user message gives pi a fresh
+  recovery attempt.
+- **No new budget mechanism** — compaction happens inside pi within
+  the existing per-attempt timeout and the retry loop's
+  `MIN_REMAINING_SECS` bail; the profile timeout still caps strand
+  wall time.
+
+No change to profile, knot, loom, tie-off, or event formats. The new
+loom-log event variant degrades gracefully: older binaries skip a
+`ContextCompacted` line with a warning, and 0.38.0 reads old logs
+unchanged. **No rig-document migration required.**
+
 ## v0.37.2 — 2026-08-26
 
 ### Feature — Final-Response Request on Abrupt Turn-End (Plan 078)
