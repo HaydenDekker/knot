@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.5.0"
+  version: "4.6.0"
   compatibility: "Knot 0.37.2+"
 ---
 
@@ -244,6 +244,28 @@ When asked to initialise a Knot rig:
      Required for session resume and invocation visibility features.
    - To switch: edit `rig/.workspace-agent-config.yaml`, change
      `agent-adapter` to `pi-json`, restart Knot.
+
+5a. **Enable pi compaction for rig sessions** (`.pi/settings.json`;
+   idempotent, create-if-absent only):
+   - Check whether `.pi/settings.json` exists at the project root.
+     If it exists, **leave it untouched** — never overwrite an
+     existing settings file (it may carry operator choices beyond
+     compaction).
+   - If it does not exist, create the `.pi/` directory and write:
+     ```json
+     { "compaction": { "enabled": true } }
+     ```
+   - Read the file back and verify it parses as JSON and contains
+     the compaction block.
+   - Why: pi resolves the project-level `.pi/settings.json` over the
+     global settings, and knot spawns pi inheriting the rig project's
+     CWD — so compaction applies only to rig sessions in this
+     directory, never to interactive pi elsewhere. With compaction on,
+     pi recovers from a context overflow in-process
+     (compact-and-continue) instead of ending the turn in error; knot
+     records each compaction as a `ContextCompacted` loom-log entry
+     and fails the strand immediately (`ContextLimitReached`) when
+     the context still cannot fit after compaction (Knot 0.38.0+).
 
 6. **Check for existing profiles**:
    - Read `tie-offs/<rig>/state.json` and extract the `profiles` array.
