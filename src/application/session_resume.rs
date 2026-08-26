@@ -182,10 +182,13 @@ fn execute_with_resume_internal(
     );
 
     if let Ok(output) = &result {
-        // Check for empty response — log and treat as resumable
+        // Check for empty response — log and return AgentNoResponse.
+        // No deadline was exceeded, so this is not a Timeout (plan 077).
         if output.stdout.trim().is_empty() {
-            // Capture session_id from output metadata before returning error
-            // so the caller can retry via session-resume.
+            // Capture session_id from output metadata so the error carries
+            // it — plan 078 re-enters the session to request the final
+            // response. This plan does not retry here; the caller
+            // (ProcessStrand) has no retry of its own.
             let sid = output.metadata.as_ref()
                 .and_then(|m| m.session_id.clone());
             let _ = loom_log.append(LoomEvent::KnotEmptyResponse {
@@ -195,7 +198,7 @@ fn execute_with_resume_internal(
                 attempt: 1,
                 timestamp: format_timestamp(),
             });
-            return Err(PortError::Timeout {
+            return Err(PortError::AgentNoResponse {
                 message: "agent returned empty response".to_string(),
                 session_id: sid,
             });
@@ -318,8 +321,9 @@ fn execute_with_resume_internal(
                         attempt: attempt + 1,
                         timestamp: format_timestamp(),
                     });
-                    // Treat as resumable error — continue retry loop
-                    let error = PortError::Timeout {
+                    // Resumable error (not a timeout — no deadline was
+                    // exceeded) — continue retry loop
+                    let error = PortError::AgentNoResponse {
                         message: "agent returned empty response".to_string(),
                         session_id: session_id.clone(),
                     };
@@ -938,6 +942,10 @@ mod tests {
         );
     }
 
+    /// Plan 077: an abrupt turn-end with an empty response is
+    /// `AgentNoResponse`, **not** `Timeout` — no deadline was exceeded.
+    /// This test fails before the fix (the code returns `Timeout`);
+    /// it is the bug reproduction.
     #[test]
     fn empty_response_first_attempt_logs_knot_empty_response() {
         let runner = TestAgentRunner::new(vec![Ok(ok_output(""))]);
@@ -945,10 +953,10 @@ mod tests {
 
         let result = execute(&runner, &log, 120);
 
-        // Returns error (treated as resumable, but no session_id → returns)
+        // Returns error — an empty response is a failure, not a timeout
         assert!(result.is_err());
         match result.unwrap_err() {
-            PortError::Timeout { message, session_id } => {
+            PortError::AgentNoResponse { message, session_id } => {
                 assert!(
                     message.contains("empty response"),
                     "Expected empty response message, got: {}",
@@ -960,7 +968,7 @@ mod tests {
                     "Expected session_id captured from output metadata on empty response"
                 );
             }
-            _ => panic!("Expected Timeout error"),
+            other => panic!("Expected AgentNoResponse error, got: {other:?}"),
         }
 
         // KnotEmptyResponse logged with attempt 1

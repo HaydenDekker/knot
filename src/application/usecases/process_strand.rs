@@ -1107,7 +1107,7 @@ mod execution_test_shared {
 mod execution_tests {
     use super::execution_test_shared::{build_knot, build_process_strand};
     use super::*;
-    use crate::application::ports::AgentOutput;
+    use crate::application::ports::{AgentInvocationMetadata, AgentOutput};
     use crate::domain::entities::{KnotId, TieOffStatus};
     use crate::domain::events::RigLogEvent;
     use std::sync::Arc;
@@ -1311,6 +1311,112 @@ mod execution_tests {
         assert_eq!(appends.len(), 1);
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "agent output");
+    }
+
+    /// Plan 077: an abrupt turn-end — the agent exits 0 with an empty
+    /// final response (session ID captured) — is a *failure*, not a
+    /// timeout:
+    /// - loom-log receives `KnotProcessing`, `KnotEmptyResponse`,
+    ///   `KnotFailed`, `StrandProcessed` (error carries "no final
+    ///   response", not "timeout")
+    /// - rig-log receives NO events (no `TimeoutExceeded`)
+    /// - tie-off IS appended with `Failed` status and "no final
+    ///   response" content
+    #[test]
+    fn process_strand_empty_response_writes_failed_tieoff_no_rig_log() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-abc".to_string()),
+                token_usage: None,
+            }),
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+
+        // execute() always returns Ok (errors are logged, not propagated)
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotEmptyResponse, KnotFailed,
+        // StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 4, "should have 4 loom-log events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotEmptyResponse { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("expected KnotEmptyResponse, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::KnotFailed { knot_id, error, .. } => {
+                assert_eq!(knot_id.0, "k1");
+                assert!(
+                    error.contains("no final response"),
+                    "error should contain 'no final response', got: {error}"
+                );
+                assert!(
+                    !error.contains("timeout"),
+                    "error should not be classified as a timeout: {error}"
+                );
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+        match &events[3] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_some(), "error should be present");
+                let err = error.as_ref().unwrap();
+                assert!(
+                    err.contains("no final response"),
+                    "error should contain 'no final response', got: {err}"
+                );
+                assert!(
+                    !err.contains("timeout"),
+                    "error should not be classified as a timeout: {err}"
+                );
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+
+        // Rig-log: NO events (an empty response is not a timeout)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should be empty for an empty response (not a timeout)"
+        );
+
+        // Tie-off: IS appended with failed status
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        assert_eq!(appends[0].status, TieOffStatus::Failed);
+        assert!(
+            appends[0].content.contains("no final response"),
+            "tie-off content should contain 'no final response': {}",
+            appends[0].content
+        );
     }
 }
 

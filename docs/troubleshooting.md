@@ -110,6 +110,7 @@ value in the knot file.
 | Error | Cause | Fix |
 |-------|-------|-----|
 | TimeoutExceeded | Agent session exceeded the profile timeout | Increase `timeout` in the profile's frontmatter |
+| no final response: … | Agent ended its turn without a final response (abrupt turn-end — a failure, not a timeout) | Check provider/model health. A failed tie-off section was written; see plan 078 for automatic final-response requests |
 | ProfileNotFound | Profile referenced by knot does not exist | Create the profile file |
 | KnotParseWarning | Invalid YAML in knot file | Fix frontmatter syntax |
 | Strand dir not found | `strand-dir` points to non-existent directory | Create the directory or fix the path |

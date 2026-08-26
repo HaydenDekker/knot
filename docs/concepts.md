@@ -140,6 +140,12 @@ attempts to resume the session using the session ID, up to 10 retries
 with 10-second delays between attempts. The profile's overall timeout
 budget is respected — retries stop when insufficient time remains.
 
+An abrupt turn-end — the agent exits cleanly (exit 0) but produces no
+final response — is a **failure**, not a timeout: the knot ends with
+status `failed` and `no final response: …` as the error, a failed
+tie-off section is written, and the rig-log stays untouched
+(`TimeoutExceeded` records genuine deadline breaches only).
+
 ## Event Queue
 
 Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`

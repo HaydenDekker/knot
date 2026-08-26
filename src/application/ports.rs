@@ -50,6 +50,17 @@ pub enum PortError {
         message: String,
         session_id: Option<String>,
     },
+    /// The agent session ended without producing a final response.
+    ///
+    /// Distinct from `Timeout`: no deadline was exceeded — the session
+    /// simply stopped (e.g. provider returned immediately, turn ended with
+    /// only intermediate tool-use messages). Resumable when a session ID
+    /// was captured (plan 078 re-enters the session to request the final
+    /// response).
+    AgentNoResponse {
+        message: String,
+        session_id: Option<String>,
+    },
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
     /// An agent profile was not found.
@@ -116,6 +127,9 @@ impl std::fmt::Display for PortError {
             PortError::Timeout { message, .. } => {
                 write!(f, "timeout: {message}")
             }
+            PortError::AgentNoResponse { message, .. } => {
+                write!(f, "no final response: {message}")
+            }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
             }
@@ -161,7 +175,9 @@ impl PortError {
         match self {
             PortError::Timeout { session_id, .. }
             | PortError::AgentExecutionFailed { session_id, .. }
-                => session_id.as_ref(),
+            | PortError::AgentNoResponse { session_id, .. } => {
+                session_id.as_ref()
+            }
             _ => None,
         }
     }
@@ -172,6 +188,7 @@ impl PortError {
             self,
             PortError::Timeout { .. }
                 | PortError::AgentExecutionFailed { .. }
+                | PortError::AgentNoResponse { .. }
         )
     }
 }
@@ -180,7 +197,8 @@ impl PortError {
 ///
 /// Returns `true` only when both conditions are met:
 /// 1. A `session_id` was captured from the agent invocation.
-/// 2. The error is resumable (`Timeout` or `AgentExecutionFailed`).
+/// 2. The error is resumable (`Timeout`, `AgentExecutionFailed`, or
+///    `AgentNoResponse`).
 ///
 /// If either condition is not met (no session ID, or a fatal error like
 /// `CommandNotFound`), the invocation is not retryable via session resume.
@@ -1356,6 +1374,49 @@ mod tests {
         let err = PortError::LoomNotFound(LoomId("x".to_string()));
         // Verify it implements std::error::Error
         let _: &dyn std::error::Error = &err;
+    }
+
+    /// Plan 077: `AgentNoResponse` is distinct from `Timeout` — it carries a
+    /// session ID (a live session can be re-entered by plan 078), it is
+    /// resumable, and it displays without the "timeout:" prefix.
+    #[test]
+    fn agent_no_response_is_resumable() {
+        let err = PortError::AgentNoResponse {
+            message: "agent returned empty response".to_string(),
+            session_id: Some("sess-abc".to_string()),
+        };
+
+        assert!(
+            err.is_resumable(),
+            "AgentNoResponse should be resumable (session can be re-entered)"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-abc"),
+            "session_id() should return the captured session ID"
+        );
+        assert!(
+            err.to_string().starts_with("no final response:"),
+            "Display should start with 'no final response:', got: {}",
+            err
+        );
+        assert!(!err.to_string().starts_with("timeout:"));
+    }
+
+    /// Plan 077: without a session ID, the error is not resumable via
+    /// session-resume (`is_session_resumable` gates on both conditions).
+    #[test]
+    fn agent_no_response_without_session() {
+        let err = PortError::AgentNoResponse {
+            message: "agent returned empty response".to_string(),
+            session_id: None,
+        };
+
+        assert!(err.session_id().is_none());
+        assert!(
+            !is_session_resumable(&None, &err),
+            "is_session_resumable must be false without a session ID"
+        );
     }
 
     #[test]

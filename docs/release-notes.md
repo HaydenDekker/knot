@@ -1,5 +1,36 @@
 # Release Notes
 
+## v0.37.1 — 2026-08-26
+
+### Fix — Empty Response Is Not a Timeout (Plan 077)
+
+When a pi session ends its turn abruptly — exit code 0 but **no final
+response** (e.g. `agent_end` carries only intermediate `toolUse`
+messages, or the provider stopped generating) — Knot previously
+reported a **timeout**: a spurious rig-log `TimeoutExceeded` event and
+no tie-off record, with the work silently lost.
+
+An empty response is now its own error
+(`no final response: agent returned empty response`), semantically
+distinct from a deadline breach:
+
+- **Failed tie-off written** — the tie-off file gains a `failed`
+  section (`Processing failed: no final response: …`), so the terminal
+  state is visible in the tie-off and in state (`knot status failed`)
+  instead of a skipped write.
+- **No spurious rig-log entry** — `TimeoutExceeded` now strictly means
+  "the agent session exceeded the profile timeout"; an abrupt turn-end
+  does not touch the rig-log.
+- **Loom-log** — `KnotProcessing`, `KnotEmptyResponse`, `KnotFailed`
+  (error carries `no final response: …`), `StrandProcessed`.
+- **Genuine timeouts unchanged** — the adapter's SIGKILL timeout and
+  the retry loop's overall budget exhaustion remain `TimeoutExceeded`
+  rig-log events.
+
+No retry or session re-entry yet — plan 078 builds on the new error
+variant to make the situation recoverable. **No document or format
+change.** No migration required.
+
 ## v0.37.0 — 2026-08-25
 
 ### Fix — Queue Entry Identity Self-Heal: Filename Is the Event ID (Plan 075)

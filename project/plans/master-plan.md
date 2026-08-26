@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-25 (plans 075/076 completed — v0.37.0)
+> **Last Updated:** 2026-08-26 (plan 077 completed — v0.37.1)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 77 | [Empty Response Is Not a Timeout](077-empty-response-not-timeout/empty-response-not-timeout-plan.md) | ✅ Complete | 2026-08-25 |
 | 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | ✅ Complete | 2026-08-25 |
 | 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | ✅ Complete | 2026-08-25 |
 | 74 | [Thinking Level — Alias Default with Profile Override](074-thinking-level-hierarchy/thinking-level-hierarchy-plan.md) | ✅ Complete | 2026-08-24 |
@@ -64,6 +65,11 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 77. Empty Response Is Not a Timeout
+
+**Status:** ✅ Complete (2026-08-26) — released in v0.37.1
+**Goal:** Make an abrupt turn-end (agent exits 0 with no final response) a first-class failure instead of a spurious timeout — a new `PortError::AgentNoResponse` (resumable, carries the session ID for plan 078) is produced by both empty-response paths in session resume, and `TieOffOutcome::derive` maps it to a failed tie-off so the rig-log's `TimeoutExceeded` records genuine deadline breaches only.
 
 ### 76. Consumer Persistent Wake — No Lost Queue Notifications
 

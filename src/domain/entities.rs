@@ -55,8 +55,12 @@ pub enum TieOffStatus {
 /// and what should be written (tie-off, rig-log, etc.).
 ///
 /// Derived from `Result<AgentOutput, PortError>` by classifying the
-/// error type: timeout errors skip the tie-off write (preserve unchanged),
-/// all other errors write an error tie-off.
+/// error type:
+/// - `Timeout` → skip the tie-off write, log to the rig-log instead
+///   (genuine deadline breach)
+/// - `AgentNoResponse` → failed tie-off (the agent ended its turn
+///   without a final response — a failure, not a timeout)
+/// - other errors → failed tie-off
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TieOffOutcome {
     /// Agent succeeded — write tie-off with output content.
@@ -72,6 +76,7 @@ impl TieOffOutcome {
     ///
     /// - `Ok(AgentOutput)` → `Produced`
     /// - `Err(PortError::Timeout)` → `TimeoutSkipped`
+    /// - `Err(PortError::AgentNoResponse)` → `Failed`
     /// - `Err(other)` → `Failed`
     pub fn derive(
         result: Result<
@@ -86,6 +91,12 @@ impl TieOffOutcome {
                     crate::application::ports::PortError::Timeout { .. }) =>
             {
                 Self::TimeoutSkipped { error: err.to_string() }
+            }
+            Err(err)
+                if matches!(err, crate::application::ports::PortError::
+                    AgentNoResponse { .. }) =>
+            {
+                Self::Failed { error: err.to_string() }
             }
             Err(err) => Self::Failed { error: err.to_string() },
         }
@@ -1489,6 +1500,13 @@ mod tests {
         }
     }
 
+    fn err_agent_no_response() -> PortError {
+        PortError::AgentNoResponse {
+            message: "agent returned empty response".to_string(),
+            session_id: Some("sess-abc".to_string()),
+        }
+    }
+
     #[test]
     fn tieoff_outcome_derive_success() {
         let outcome = TieOffOutcome::derive(Ok(ok_output("agent result")));
@@ -1520,6 +1538,25 @@ mod tests {
         if let TieOffOutcome::Failed { error } = outcome {
             assert!(error.contains("crash"));
         }
+    }
+
+    /// Plan 077: an agent that ends its turn without a final response is a
+    /// failure (tie-off written), not a timeout (rig-log).
+    #[test]
+    fn derive_agent_no_response_is_failed() {
+        let outcome = TieOffOutcome::derive(Err(err_agent_no_response()));
+
+        assert!(matches!(outcome, TieOffOutcome::Failed { .. }));
+        if let TieOffOutcome::Failed { error } = &outcome {
+            assert!(
+                error.contains("no final response"),
+                "expected 'no final response' in error, got: {error}"
+            );
+        }
+        assert_eq!(outcome.tie_off_status(), Some(TieOffStatus::Failed));
+        assert!(outcome.should_write_tie_off());
+        assert!(!outcome.is_timeout());
+        assert!(outcome.error_message().is_some());
     }
 
     #[test]
