@@ -1,10 +1,12 @@
 //! Session-resume retry module.
 //!
 //! When an agent invocation fails with a resumable error (timeout, mid-stream
-//! failure) and a session ID was captured, this module retries the invocation
-//! using `--session-id <id>` to continue the same Pi session. Retries are
-//! limited to 10 attempts or the profile's overall timeout budget, whichever
-//! comes first.
+//! failure) — or ends its turn abruptly without a final response (plan 078) —
+//! and a session ID was captured, this module retries the invocation using
+//! `--session-id <id>` to continue the same Pi session. The retry prompt is
+//! the original prompt plus the final-response request
+//! ([`FINAL_RESPONSE_REQUEST`]). Retries are limited to 10 attempts or the
+//! profile's overall timeout budget, whichever comes first.
 
 use std::time::{Duration, Instant};
 
@@ -27,6 +29,15 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 /// If less than this amount of budget remains, the loop bails rather
 /// than starting an attempt that is almost certain to time out.
 const MIN_REMAINING_SECS: u64 = 5;
+
+/// The final-response request appended to the prompt on every session
+/// resume (plan 078). One message covers both failure shapes:
+/// "produce your final response" for the abrupt turn-end (empty
+/// response), "continue if you have not finished" for the mid-stream
+/// case (timeout, non-zero exit). User-facing agent text — keep it
+/// greppable.
+const FINAL_RESPONSE_REQUEST: &str =
+    "Please produce your final response, or continue if you have not finished.";
 
 /// Timestamp helper for loom-log events.
 fn format_timestamp() -> String {
@@ -294,12 +305,14 @@ fn execute_with_resume_internal(
         }
 
         // Prepare agent_config and prompt for retry
-        // Append --session-id to extra_args and "please continue" to prompt.
+        // Append --session-id to extra_args and the final-response
+        // request (plan 078) to the prompt.
         if let Some(sid) = session_id {
             agent_config.extra_args.push("--session-id".to_string());
             agent_config.extra_args.push(sid.clone());
         }
-        prompt.push_str("\n\nplease continue");
+        prompt.push_str("\n\n");
+        prompt.push_str(FINAL_RESPONSE_REQUEST);
 
         // Log SessionResumed event
         loom_log.append(LoomEvent::SessionResumed {
@@ -843,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_appends_please_continue() {
+    fn retry_appends_final_response_request() {
         let runner = TestAgentRunner::new(vec![
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success")),
@@ -862,10 +875,10 @@ mod tests {
             "Review this document"
         );
 
-        // Retry: prompt includes "please continue"
+        // Retry: prompt includes the final-response request (plan 078)
         assert!(
-            contexts[1].prompt.contains("please continue"),
-            "Retry prompt should contain 'please continue', got: {}",
+            contexts[1].prompt.contains(FINAL_RESPONSE_REQUEST),
+            "Retry prompt should contain the final-response request, got: {}",
             contexts[1].prompt
         );
     }

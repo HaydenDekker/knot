@@ -1,9 +1,10 @@
 //! Application-level tests for session-resume retry on invocation failure.
 //!
-//! Verifies: session ID capture, --session-id passthrough, "please continue"
-//! prompt append, budget tracking, retry delay, exhaustion, and non-resumable
-//! errors. All tests use mocked ports (\`MockAgentRunner\`, \`TrackingTieOffSink\`
-//! etc.) — no \`start_knot()\`, no \`TEST_MUTEX\`, no PATH manipulation.
+//! Verifies: session ID capture, --session-id passthrough, the
+//! final-response request prompt append (plan 078), budget tracking, retry
+//! delay, exhaustion, and non-resumable errors. All tests use mocked ports
+//! (\`MockAgentRunner\`, \`TrackingTieOffSink\` etc.) — no \`start_knot()\`, no
+//! \`TEST_MUTEX\`, no PATH manipulation.
 //!
 //! One adapter test (\`session_resume_adapter_stdio_no_retry\`) verifies that
 //! the \`PiStdioAgentRunner\` adapter does NOT capture session_id from stdout,
