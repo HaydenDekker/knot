@@ -1314,14 +1314,18 @@ mod execution_tests {
     }
 
     /// Plan 077: an abrupt turn-end — the agent exits 0 with an empty
-    /// final response (session ID captured) — is a *failure*, not a
-    /// timeout:
+    /// final response — is a *failure*, not a timeout:
     /// - loom-log receives `KnotProcessing`, `KnotEmptyResponse`,
     ///   `KnotFailed`, `StrandProcessed` (error carries "no final
     ///   response", not "timeout")
     /// - rig-log receives NO events (no `TimeoutExceeded`)
     /// - tie-off IS appended with `Failed` status and "no final
     ///   response" content
+    ///
+    /// Plan 078 update: with a session ID the call now retries (see
+    /// `process_strand_empty_response_resumed_success`); this test is
+    /// the no-session-ID reproduction where the 077 terminal failure
+    /// stands (single attempt, no `SessionResumed`).
     #[test]
     fn process_strand_empty_response_writes_failed_tieoff_no_rig_log() {
         let dir = TempDir::new().unwrap();
@@ -1333,10 +1337,7 @@ mod execution_tests {
             stdout: String::new(),
             stderr: String::new(),
             exit_code: 0,
-            metadata: Some(AgentInvocationMetadata {
-                session_id: Some("sess-abc".to_string()),
-                token_usage: None,
-            }),
+            metadata: None,
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 

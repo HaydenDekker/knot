@@ -181,55 +181,70 @@ fn execute_with_resume_internal(
         profile_timeout,
     );
 
-    if let Ok(output) = &result {
-        // Check for empty response — log and return AgentNoResponse.
-        // No deadline was exceeded, so this is not a Timeout (plan 077).
+    let mut first_error;
+    if let Ok(output) = result {
         if output.stdout.trim().is_empty() {
-            // Capture session_id from output metadata so the error carries
-            // it — plan 078 re-enters the session to request the final
-            // response. This plan does not retry here; the caller
-            // (ProcessStrand) has no retry of its own.
+            // Abrupt turn-end (plan 078): log, then request the final
+            // response by re-entering the session. No deadline was
+            // exceeded, so the failure is AgentNoResponse, not Timeout
+            // (plan 077).
             let sid = output.metadata.as_ref()
                 .and_then(|m| m.session_id.clone());
-            let _ = loom_log.append(LoomEvent::KnotEmptyResponse {
+            loom_log.append(LoomEvent::KnotEmptyResponse {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 attempt: 1,
                 timestamp: format_timestamp(),
-            });
-            return Err(PortError::AgentNoResponse {
+            })?;
+            if sid.is_none() {
+                // No session ID (stdio adapter / unparseable output) —
+                // cannot re-enter; the 077 terminal failure stands.
+                return Err(PortError::AgentNoResponse {
+                    message: "agent returned empty response (no session id — cannot request final response)".to_string(),
+                    session_id: None,
+                });
+            }
+            // `Some` is guaranteed by the check above — narrow the type.
+            let sid = sid.unwrap();
+            *session_id = Some(sid.clone());
+            first_error = PortError::AgentNoResponse {
                 message: "agent returned empty response".to_string(),
-                session_id: sid,
-            });
+                session_id: Some(sid),
+            };
+            // Fall through to the retry loop — the nudge re-enters the
+            // session and requests the final response.
+        } else {
+            // Capture session_id from successful output metadata
+            if let Some(ref metadata) = output.metadata {
+                if let Some(ref sid) = metadata.session_id {
+                    *session_id = Some(sid.clone());
+                }
+            }
+            return Ok(output);
         }
-        // Capture session_id from successful output metadata
-        if let Some(ref metadata) = output.metadata {
-            if let Some(ref sid) = metadata.session_id {
+    } else {
+        let err = result.unwrap_err();
+
+        // Check if the first failure is resumable.
+        // The session_id for retry comes from the error itself (captured by
+        // the JSON adapter from Pi's first JSONL line before generation
+        // starts). If the error carries no session_id, we cannot resume.
+        let error_session_id = err.session_id().cloned();
+        if !err.is_resumable() || error_session_id.is_none() {
+            // Not resumable or no session_id — extract what we can and
+            // return
+            if let Some(sid) = err.session_id() {
                 *session_id = Some(sid.clone());
             }
+            return Err(err);
         }
-        return Ok(output.clone());
+
+        // Capture session_id from error for retry.
+        // At this point we know error_session_id is Some (checked above).
+        *session_id = error_session_id;
+        first_error = err;
     }
-
-    let mut first_error = result.unwrap_err();
-
-    // Check if the first failure is resumable.
-    // The session_id for retry comes from the error itself (captured by the
-    // JSON adapter from Pi's first JSONL line before generation starts).
-    // If the error carries no session_id, we cannot resume.
-    let error_session_id = first_error.session_id().cloned();
-    if !first_error.is_resumable() || error_session_id.is_none() {
-        // Not resumable or no session_id — extract what we can and return
-        if let Some(sid) = first_error.session_id() {
-            *session_id = Some(sid.clone());
-        }
-        return Err(first_error);
-    }
-
-    // Capture session_id from error for retry.
-    // At this point we know error_session_id is Some (checked above).
-    *session_id = error_session_id;
 
     // --- Retry loop ---
     for attempt in 1..=MAX_RETRIES {
