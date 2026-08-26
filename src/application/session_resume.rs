@@ -401,17 +401,32 @@ fn execute_with_resume_internal(
         }
     }
 
-    // Exhausted all retries
-    Err(PortError::Timeout {
-        message: format!(
-            "session resume exhausted {} retries{}",
-            MAX_RETRIES,
-            profile_timeout
-                .map(|t| format!(" (overall timeout: {}s)", t.as_secs()))
-                .unwrap_or_default(),
-        ),
-        session_id: session_id.clone(),
-    })
+    // Exhausted all retries — classify by the last failure (plan 078):
+    // the terminal error reflects the cause.
+    let budget_suffix = profile_timeout
+        .map(|t| format!(" (overall timeout: {}s)", t.as_secs()))
+        .unwrap_or_default();
+    match &first_error {
+        // The last failure was a genuine timeout (adapter kill mid-retry)
+        // — a deadline did run out: Timeout (rig-log `TimeoutExceeded`).
+        PortError::Timeout { .. } => Err(PortError::Timeout {
+            message: format!(
+                "session resume exhausted {MAX_RETRIES} retries{budget_suffix}"
+            ),
+            session_id: session_id.clone(),
+        }),
+        // The last failure was not a timeout — typically the empty
+        // response that started the nudge chain. No deadline was
+        // exceeded, so this is a failure, not a timeout (plan 077).
+        _ => Err(PortError::AgentNoResponse {
+            message: format!(
+                "agent returned empty response after {} attempts \
+                 (session resume exhausted)",
+                MAX_RETRIES + 1
+            ),
+            session_id: session_id.clone(),
+        }),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
