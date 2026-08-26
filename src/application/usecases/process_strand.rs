@@ -1107,7 +1107,9 @@ mod execution_test_shared {
 mod execution_tests {
     use super::execution_test_shared::{build_knot, build_process_strand};
     use super::*;
-    use crate::application::ports::{AgentInvocationMetadata, AgentOutput};
+    use crate::application::ports::{
+        AgentInvocationMetadata, AgentOutput, CompactionRecord,
+    };
     use crate::domain::entities::{KnotId, TieOffStatus};
     use crate::domain::events::RigLogEvent;
     use std::sync::Arc;
@@ -1117,6 +1119,32 @@ mod execution_tests {
     use super::super::test_fixtures::{
         build_loom, MockAgentRunner,
     };
+
+    /// Plan 079: terminal context-overflow error (adapter fail-fast).
+    fn err_context_limit(sid: &str) -> PortError {
+        PortError::ContextLimitReached {
+            message: "session context cannot fit the model window even after compaction".to_string(),
+            session_id: Some(sid.to_string()),
+        }
+    }
+
+    /// Plan 079: successful output carrying compaction records.
+    fn ok_output_with_compactions(
+        stdout: &str,
+        sid: &str,
+        compactions: Vec<CompactionRecord>,
+    ) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions,
+            }),
+        }
+    }
 
     /// On `PortError::Timeout`:
     /// - loom-log receives `KnotProcessing`, `KnotFailed`, `StrandProcessed`
@@ -1523,6 +1551,175 @@ mod execution_tests {
         assert_eq!(appends.len(), 1, "tie-off should be appended");
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "final");
+    }
+
+    /// Plan 079: a terminal context overflow fails the strand
+    /// **immediately** — no retry clock-up:
+    /// - loom-log receives `KnotProcessing`, `KnotFailed` (error carries
+    ///   "context limit reached"), `StrandProcessed` — no
+    ///   `SessionResumed`, no `KnotEmptyResponse`
+    /// - rig-log receives NO event (no deadline was exceeded — the same
+    ///   class as plan 077)
+    /// - tie-off IS appended with `Failed` status and the context-limit
+    ///   error
+    #[test]
+    fn process_strand_terminal_overflow_failed_tieoff() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Err(err_context_limit("sess-ctx")),
+        ]));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        // Zero retry delay (defensive — the error must not trigger a
+        // retry).
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, KnotFailed, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 3, "should have 3 loom-log events");
+        match &events[0] {
+            LoomEvent::KnotProcessing { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::KnotFailed { knot_id, error, .. } => {
+                assert_eq!(knot_id.0, "k1");
+                assert!(
+                    error.contains("context limit reached"),
+                    "error should contain 'context limit reached', got: {error}"
+                );
+                assert!(
+                    !error.contains("timeout"),
+                    "a terminal overflow is not a timeout: {error}"
+                );
+            }
+            other => panic!("expected KnotFailed, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_some(), "error should be present");
+                assert!(
+                    error
+                        .as_ref()
+                        .unwrap()
+                        .contains("context limit reached"),
+                    "StrandProcessed error should carry the context-limit failure, got: {:?}",
+                    error
+                );
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "no SessionResumed for a non-resumable terminal overflow"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::KnotEmptyResponse { .. })),
+            "no KnotEmptyResponse for a terminal overflow"
+        );
+
+        // Rig-log: empty (no deadline was exceeded)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should be empty for a terminal overflow (not a timeout), got: {rig:?}"
+        );
+
+        // Tie-off: appended with Failed status
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        assert_eq!(appends[0].status, TieOffStatus::Failed);
+        assert!(
+            appends[0].content.contains("context limit reached"),
+            "tie-off content should contain the context-limit error: {}",
+            appends[0].content
+        );
+    }
+
+    /// Plan 079: a successful compaction observed during a successful
+    /// strand is visible in the loom-log: `ContextCompacted { attempt: 1 }`
+    /// alongside `KnotCompleted`; the tie-off is appended `Produced`.
+    #[test]
+    fn process_strand_compaction_visible_on_success() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let output = Ok(ok_output_with_compactions(
+            "done",
+            "sess-compact",
+            vec![CompactionRecord {
+                reason: "overflow".to_string(),
+                tokens_before: Some(150000),
+                will_retry: true,
+                error: None,
+            }],
+        ));
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![output]));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, ContextCompacted, KnotCompleted,
+        // StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 4, "should have 4 loom-log events");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                LoomEvent::ContextCompacted { attempt, .. } if *attempt == 1
+            )),
+            "loom-log should contain ContextCompacted {{ attempt: 1 }}: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::KnotCompleted { .. })),
+            "loom-log should contain KnotCompleted: {events:?}"
+        );
+
+        // Rig-log: empty
+        let rig = rig_events.lock().unwrap();
+        assert!(rig.is_empty(), "rig-log should be empty on success");
+
+        // Tie-off: appended Produced with the agent output
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1);
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(appends[0].content, "done");
     }
 }
 

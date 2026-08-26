@@ -578,6 +578,27 @@ echo ""
         )
     }
 
+    /// Create a PiJsonAgentRunner whose mock binary emits the given
+    /// JSON-L script (plan 079 compaction tests). Returns `(runner,
+    /// tempdir)` — caller must keep `tempdir` alive.
+    fn make_json_emitting_runner(script: &str) -> (PiJsonAgentRunner, tempfile::TempDir) {
+        let (path, dir) = make_json_mock_path();
+        std::fs::write(&path, script).ok();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        (
+            PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string()),
+            dir,
+        )
+    }
+
     /// Blocking mock script: sleeps for a long time.
     /// Used by timeout tests so the timeout thread actually fires.
     fn make_json_blocking_mock_script() -> String {
@@ -643,6 +664,21 @@ sleep 300
 
     /// Helper to call parse_stdout from tests.
     fn run_parse_stdout(raw: &str) -> (bool, Option<String>, String, Option<TokenUsage>) {
+        PiJsonAgentRunner::parse_stdout(raw)
+    }
+
+    /// Plan 079: helper for the 5-tuple `parse_stdout` (gains a
+    /// `compactions` out-param when the parser records `compaction_end`
+    /// events — Phase 1).
+    fn run_parse_stdout_compactions(
+        raw: &str,
+    ) -> (
+        bool,
+        Option<String>,
+        String,
+        Option<TokenUsage>,
+        Vec<crate::application::ports::CompactionRecord>,
+    ) {
         PiJsonAgentRunner::parse_stdout(raw)
     }
 
@@ -806,6 +842,67 @@ sleep 300
         assert!(response.is_empty());
     }
 
+    /// Plan 079: a successful `compaction_end` is recorded in stream
+    /// order with the pre-compaction token count from `result`.
+    #[test]
+    fn test_json_runner_parses_compaction_end() {
+        let raw = r#"{"type":"session","id":"sess-compact"}
+{"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}]}"#;
+        let (_had_error, _session_id, _response, _usage, compactions) =
+            run_parse_stdout_compactions(raw);
+        assert_eq!(compactions.len(), 1, "one compaction recorded");
+        assert_eq!(compactions[0].reason, "overflow");
+        assert_eq!(compactions[0].tokens_before, Some(150000));
+        assert!(compactions[0].will_retry);
+        assert!(compactions[0].error.is_none());
+    }
+
+    /// Plan 079: a failed `compaction_end` (no `result` — pi omits the
+    /// key on failure) records the error message and no token count; the
+    /// `stopReason: "error"` final message is excluded, so the response
+    /// text is empty.
+    #[test]
+    fn test_json_runner_parses_compaction_end_failed() {
+        let raw = r#"{"type":"session","id":"sess-compact-fail"}
+{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt."}
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}"#;
+        let (_had_error, _session_id, response, _usage, compactions) =
+            run_parse_stdout_compactions(raw);
+        assert_eq!(compactions.len(), 1, "one compaction recorded");
+        assert_eq!(compactions[0].reason, "overflow");
+        assert!(!compactions[0].will_retry);
+        assert_eq!(
+            compactions[0].tokens_before,
+            None,
+            "no result on failed compaction → no token count"
+        );
+        assert_eq!(
+            compactions[0].error.as_deref(),
+            Some("Context overflow recovery failed after one compact-and-retry attempt."),
+            "errorMessage should be captured"
+        );
+        assert!(
+            response.is_empty(),
+            "error stopReason is excluded from response: {response}"
+        );
+    }
+
+    /// Plan 079: `compaction_start` carries no data of interest — the end
+    /// event carries everything — so it produces no record.
+    #[test]
+    fn test_json_runner_ignores_compaction_start() {
+        let raw = r#"{"type":"session","id":"sess-compact-start"}
+{"type":"compaction_start","reason":"overflow"}
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
+        let (_had_error, _session_id, _response, _usage, compactions) =
+            run_parse_stdout_compactions(raw);
+        assert!(
+            compactions.is_empty(),
+            "compaction_start must not produce a record"
+        );
+    }
+
     /// Unit test: multiple tool-use messages followed by a final stop.
     /// Only the final (stop) message text appears in response.
     #[test]
@@ -824,6 +921,83 @@ sleep 300
             "should not contain second tool-use message: {}",
             response
         );
+    }
+
+    /// Plan 079: a terminal overflow — recovery ran (`willRetry: true`)
+    /// and the context overflowed again (`willRetry: false`) — is
+    /// classified as `PortError::ContextLimitReached` carrying the
+    /// session ID and pi's error message.
+    #[test]
+    fn test_json_runner_terminal_overflow_returns_context_limit_reached() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-ctx"}'
+echo '{"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}'
+echo '{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt. The session context is still too large."}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_err(),
+            "terminal overflow should fail, got: {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::ContextLimitReached { .. }),
+            "expected ContextLimitReached, got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-ctx"),
+            "error should carry the session ID"
+        );
+        assert!(
+            err.to_string().contains("Context overflow recovery failed"),
+            "message should carry pi's errorMessage, got: {err}"
+        );
+    }
+
+    /// Plan 079: a recovered overflow — compaction ran, pi retried
+    /// in-process, the turn ended with a normal final response — is a
+    /// plain success: the response text is returned and the compaction
+    /// is recorded in the metadata.
+    #[test]
+    fn test_json_runner_overflow_recovered_is_success() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-ctx-ok"}'
+echo '{"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done after compact"}]}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_ok(),
+            "recovered overflow should succeed: {result:?}"
+        );
+        let output = result.unwrap();
+        assert!(
+            output.stdout.contains("done after compact"),
+            "stdout should contain the final response: {}",
+            output.stdout
+        );
+        let metadata = output.metadata.expect("metadata should be present");
+        assert_eq!(
+            metadata.compactions.len(),
+            1,
+            "one compaction recorded in metadata"
+        );
+        assert_eq!(metadata.compactions[0].reason, "overflow");
+        assert_eq!(metadata.compactions[0].tokens_before, Some(150000));
+        assert!(metadata.compactions[0].will_retry);
+        assert!(metadata.compactions[0].error.is_none());
     }
 
     /// Integration test: mock echoes stdin which contains the prompt.

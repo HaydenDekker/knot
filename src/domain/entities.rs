@@ -1559,6 +1559,29 @@ mod tests {
         assert!(outcome.error_message().is_some());
     }
 
+    /// Plan 079: a terminal context overflow is a **failure** (tie-off
+    /// written), not a timeout (rig-log) — no deadline was exceeded;
+    /// the context simply cannot fit the model window.
+    #[test]
+    fn derive_context_limit_reached_is_failed() {
+        let outcome = TieOffOutcome::derive(Err(PortError::ContextLimitReached {
+            message: "session context cannot fit the model window even after compaction".to_string(),
+            session_id: Some("sess-ctx".to_string()),
+        }));
+
+        assert!(matches!(outcome, TieOffOutcome::Failed { .. }));
+        if let TieOffOutcome::Failed { error } = &outcome {
+            assert!(
+                error.contains("context limit reached"),
+                "expected 'context limit reached' in error, got: {error}"
+            );
+        }
+        assert_eq!(outcome.tie_off_status(), Some(TieOffStatus::Failed));
+        assert!(outcome.should_write_tie_off());
+        assert!(!outcome.is_timeout());
+        assert!(outcome.error_message().is_some());
+    }
+
     #[test]
     fn tieoff_outcome_produced_status_and_content() {
         let outcome = TieOffOutcome::derive(Ok(ok_output("hello")));

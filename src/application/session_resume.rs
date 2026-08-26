@@ -578,6 +578,48 @@ mod tests {
         PortError::CommandNotFound("pi not found".to_string())
     }
 
+    /// Plan 079: build a compaction record for mock metadata.
+    fn comp_rec(
+        reason: &str,
+        tokens_before: Option<u64>,
+        will_retry: bool,
+        error: Option<&str>,
+    ) -> crate::application::ports::CompactionRecord {
+        crate::application::ports::CompactionRecord {
+            reason: reason.to_string(),
+            tokens_before,
+            will_retry,
+            error: error.map(String::from),
+        }
+    }
+
+    /// Plan 079: successful output with compaction records in the
+    /// metadata.
+    fn ok_output_with_compactions(
+        stdout: &str,
+        sid: &str,
+        compactions: Vec<crate::application::ports::CompactionRecord>,
+    ) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions,
+            }),
+        }
+    }
+
+    /// Plan 079: terminal context-overflow error.
+    fn err_context_limit(sid: &str) -> PortError {
+        PortError::ContextLimitReached {
+            message: "session context cannot fit the model window even after compaction".to_string(),
+            session_id: Some(sid.to_string()),
+        }
+    }
+
     // Helper for execute_with_resume calls with zero-delay for tests.
     fn execute(
         runner: &dyn AgentRunner,
@@ -1320,6 +1362,187 @@ mod tests {
             .count();
         assert_eq!(empty_count, 1, "expected 1 KnotEmptyResponse (first attempt only)");
         assert_eq!(resumed_count, 10, "expected 10 SessionResumed events");
+    }
+
+    // ── Plan 079: compaction visibility + terminal overflow ──────
+
+    /// Plan 079: a successful compaction observed on the **first attempt**
+    /// is logged as `ContextCompacted { attempt: 1 }` — no `SessionResumed`
+    /// (nothing failed).
+    #[test]
+    fn compaction_logged_on_first_attempt() {
+        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_compactions(
+            "done",
+            "sess-abc",
+            vec![comp_rec("overflow", Some(150000), true, None)],
+        ))]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+        assert!(
+            result.is_ok(),
+            "first-attempt success: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().stdout, "done");
+
+        let events = log.events();
+        assert_eq!(events.len(), 1, "exactly one loom-log event");
+        match &events[0] {
+            LoomEvent::ContextCompacted {
+                reason,
+                tokens_before,
+                attempt,
+                ..
+            } => {
+                assert_eq!(reason, "overflow");
+                assert_eq!(*tokens_before, Some(150000));
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected ContextCompacted, got {other:?}"),
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "no SessionResumed on a successful first attempt"
+        );
+    }
+
+    /// Plan 079: a successful compaction observed on a **retry** is logged
+    /// after the `SessionResumed` that started the retry, with the
+    /// `KnotEmptyResponse` attempt convention (attempt 2 = first retry).
+    #[test]
+    fn compaction_logged_on_retry_attempt() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output_with_compactions(
+                "done",
+                "sess-abc",
+                vec![comp_rec("threshold", Some(90000), true, None)],
+            )),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+        assert!(
+            result.is_ok(),
+            "retry success: {:?}",
+            result.err()
+        );
+
+        let events = log.events();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected SessionResumed, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::ContextCompacted { reason, attempt, .. } => {
+                assert_eq!(reason, "threshold");
+                assert_eq!(
+                    *attempt, 2,
+                    "attempt follows the KnotEmptyResponse convention"
+                );
+            }
+            other => panic!("Expected ContextCompacted, got {other:?}"),
+        }
+    }
+
+    /// Plan 079: a **failed** compaction (`error: Some(…)`) is not logged —
+    /// only successful compactions mark context pressure. The non-empty
+    /// stdout means the turn still produced a final response.
+    #[test]
+    fn failed_compaction_not_logged() {
+        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_compactions(
+            "done",
+            "sess-abc",
+            vec![comp_rec(
+                "overflow",
+                None,
+                false,
+                Some("Context overflow recovery failed after one compact-and-retry attempt."),
+            )],
+        ))]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+        assert!(
+            result.is_ok(),
+            "non-empty stdout is a success: {:?}",
+            result.err()
+        );
+
+        assert!(
+            log.events().is_empty(),
+            "failed compactions are not logged, got: {:?}",
+            log.events()
+        );
+    }
+
+    /// Plan 079: a terminal context overflow on the **first attempt** is
+    /// returned immediately — the error is not resumable, so the runner
+    /// is called exactly once and nothing is logged (no `SessionResumed`).
+    #[test]
+    fn terminal_overflow_first_attempt_no_retry() {
+        let runner =
+            TestAgentRunner::new(vec![Err(err_context_limit("sess-ctx"))]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::ContextLimitReached { .. } => {}
+            other => panic!("Expected ContextLimitReached, got: {other:?}"),
+        }
+        assert_eq!(
+            runner.call_count(),
+            1,
+            "no retry for a non-resumable error"
+        );
+        assert!(
+            log.events().is_empty(),
+            "no loom-log events for a first-attempt terminal overflow, got: {:?}",
+            log.events()
+        );
+    }
+
+    /// Plan 079: a terminal context overflow **inside the retry loop**
+    /// exits immediately — the loop does not clock up the remaining
+    /// retries. The loom-log holds only the `SessionResumed` that
+    /// preceded the failing attempt; the runner is called twice.
+    #[test]
+    fn terminal_overflow_in_loop_exits() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Err(err_context_limit("sess-abc")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::ContextLimitReached { .. } => {}
+            other => panic!("Expected ContextLimitReached, got: {other:?}"),
+        }
+        assert_eq!(
+            runner.call_count(),
+            2,
+            "exits on the terminal error — no further retries"
+        );
+
+        let events = log.events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoomEvent::SessionResumed { attempt, .. } => {
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected SessionResumed, got {other:?}"),
+        }
     }
 
     // ── inject_event_request Tests (Phase 2) ─────────────────────────

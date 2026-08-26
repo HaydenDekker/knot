@@ -319,6 +319,41 @@ exit 0
         );
     }
 
+    /// Plan 079: a `willRetry: false` overflow **without** a preceding
+    /// `willRetry: true` means compaction never ran (e.g. missing
+    /// summarisation model, transient API error) — NOT terminal. The
+    /// adapter returns `Ok` with empty stdout so the nudge loop keeps
+    /// its job: a fresh user message gives pi a new recovery attempt.
+    #[test]
+    fn overflow_without_prior_recovery_is_not_fail_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-no-recovery"}'
+echo '{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt."}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}'
+exit 0
+"#;
+        let mock_path = create_mock_script(&dir, "mock-pi-no-recovery", script);
+        let runner = PiJsonAgentRunner::with_cli_path_and_timeout(
+            mock_path.to_string_lossy().to_string(),
+            Duration::from_secs(10),
+        );
+
+        let ctx = make_context(&mock_path.to_string_lossy());
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_ok(),
+            "compaction failure without prior recovery is not terminal: {result:?}"
+        );
+        let output = result.unwrap();
+        assert!(
+            output.stdout.trim().is_empty(),
+            "empty response → the nudge loop keeps its job, got: {}",
+            output.stdout
+        );
+    }
+
     /// `stopReason: "length"` → included (truncated response).
     #[test]
     fn stop_reason_length_included() {

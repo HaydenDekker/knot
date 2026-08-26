@@ -1419,6 +1419,37 @@ mod tests {
         );
     }
 
+    /// Plan 079: a terminal context overflow is NOT resumable —
+    /// session-resume re-entry cannot fit a context that already does
+    /// not fit. It carries a session ID and displays with the
+    /// "context limit reached:" prefix.
+    #[test]
+    fn context_limit_reached_not_resumable() {
+        let err = PortError::ContextLimitReached {
+            message: "session context cannot fit the model window even after compaction".to_string(),
+            session_id: Some("sess-ctx".to_string()),
+        };
+
+        assert!(
+            !err.is_resumable(),
+            "ContextLimitReached must not be resumable — re-entry cannot help"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-ctx"),
+            "session_id() should return the captured session ID"
+        );
+        assert!(
+            err.to_string().contains("context limit reached"),
+            "Display should contain 'context limit reached', got: {}",
+            err
+        );
+        assert!(
+            !is_session_resumable(&Some("sess-ctx".to_string()), &err),
+            "is_session_resumable must be false for ContextLimitReached"
+        );
+    }
+
     #[test]
     fn processing_status_variants() {
         assert!(matches!(
