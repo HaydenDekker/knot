@@ -61,6 +61,14 @@ pub enum PortError {
         message: String,
         session_id: Option<String>,
     },
+    /// The session's context exceeds the model window and pi's own
+    /// compact-and-retry could not recover it — the kept context
+    /// itself cannot fit. Terminal: session-resume re-entry cannot
+    /// help, so this is NOT resumable.
+    ContextLimitReached {
+        message: String,
+        session_id: Option<String>,
+    },
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
     /// An agent profile was not found.
@@ -130,6 +138,9 @@ impl std::fmt::Display for PortError {
             PortError::AgentNoResponse { message, .. } => {
                 write!(f, "no final response: {message}")
             }
+            PortError::ContextLimitReached { message, .. } => {
+                write!(f, "context limit reached: {message}")
+            }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
             }
@@ -175,7 +186,8 @@ impl PortError {
         match self {
             PortError::Timeout { session_id, .. }
             | PortError::AgentExecutionFailed { session_id, .. }
-            | PortError::AgentNoResponse { session_id, .. } => {
+            | PortError::AgentNoResponse { session_id, .. }
+            | PortError::ContextLimitReached { session_id, .. } => {
                 session_id.as_ref()
             }
             _ => None,
@@ -183,6 +195,10 @@ impl PortError {
     }
 
     /// Classify error as resumable (session can be retried) or fatal.
+    ///
+    /// `ContextLimitReached` is deliberately excluded: the context does
+    /// not fit the model window even after pi's own compact-and-retry,
+    /// so session-resume re-entry cannot help (plan 079).
     pub fn is_resumable(&self) -> bool {
         matches!(
             self,

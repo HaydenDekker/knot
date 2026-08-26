@@ -287,6 +287,31 @@ impl PiJsonAgentRunner {
             compactions,
         )
     }
+
+    /// The failing record when the stream shows a terminal overflow:
+    /// an overflow compaction with `will_retry: false` that follows an
+    /// overflow compaction with `will_retry: true` (recovery ran, the
+    /// context still does not fit).
+    fn terminal_overflow(
+        records: &[CompactionRecord],
+    ) -> Option<&CompactionRecord> {
+        let failing_idx = records
+            .iter()
+            .rposition(|r| r.reason == "overflow" && !r.will_retry)?;
+        if records[..failing_idx]
+            .iter()
+            .any(|r| r.reason == "overflow" && r.will_retry)
+        {
+            Some(&records[failing_idx])
+        } else {
+            // A `willRetry: false` overflow without a preceding
+            // successful compaction means compaction could not even run
+            // (missing model/auth, transient summarisation API error) —
+            // not terminal: the nudge loop's fresh user message gives
+            // pi a new recovery attempt.
+            None
+        }
+    }
 }
 
 impl AgentRunner for PiJsonAgentRunner {
@@ -500,24 +525,43 @@ impl AgentRunner for PiJsonAgentRunner {
 
         if had_parse_error {
             // Graceful degradation — treat as plain text.
-            Ok(AgentOutput {
+            return Ok(AgentOutput {
                 stdout: raw_stdout,
                 stderr,
                 exit_code,
                 metadata: None,
-            })
-        } else {
-            Ok(AgentOutput {
-                stdout: response_text,
-                stderr,
-                exit_code,
-                metadata: Some(AgentInvocationMetadata {
-                    session_id,
-                    token_usage,
-                    compactions,
-                }),
-            })
+            });
         }
+
+        // Plan 079: terminal overflow — pi's own compact-and-retry
+        // ran and the context still does not fit, and no final
+        // response survived the stopReason filter. Session-resume
+        // re-entry cannot help; fail fast instead of clocking up
+        // the retries.
+        let terminal_rec = if response_text.trim().is_empty() {
+            Self::terminal_overflow(&compactions)
+        } else {
+            None
+        };
+        if let Some(rec) = terminal_rec {
+            return Err(PortError::ContextLimitReached {
+                message: rec.error.clone().unwrap_or_else(|| {
+                    "session context cannot fit the model window even after compaction".to_string()
+                }),
+                session_id,
+            });
+        }
+
+        Ok(AgentOutput {
+            stdout: response_text,
+            stderr,
+            exit_code,
+            metadata: Some(AgentInvocationMetadata {
+                session_id,
+                token_usage,
+                compactions,
+            }),
+        })
     }
 
     fn execute_with_config(
