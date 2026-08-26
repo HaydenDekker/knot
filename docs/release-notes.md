@@ -1,5 +1,47 @@
 # Release Notes
 
+## v0.37.2 — 2026-08-26
+
+### Feature — Final-Response Request on Abrupt Turn-End (Plan 078)
+
+When a pi session ends its turn abruptly — exit code 0 but **no final
+response** (plan 077's scenario) — and a session ID was captured, Knot
+no longer gives up: it **re-enters the same session** (`--session-id`)
+and requests the tie-off, re-sending the original prompt with the
+final-response request appended — *“Please produce your final response,
+or continue if you have not finished.”* — one nudge for **all** session
+resumes (“continue if you have not finished” covers the mid-stream
+case; “produce your final response” covers the abrupt-stop case).
+
+- **Transparent recovery** — a non-empty follow-up response is the
+  tie-off: normal `Produced` path (tie-off section, `KnotCompleted`,
+  event dispatch, late removal, git commit). The strand succeeds as if
+  the first attempt had worked. The loom-log tells the whole story with
+  existing events: `KnotProcessing` → `KnotEmptyResponse(1)` →
+  `SessionResumed(1)` → `KnotCompleted` (nudge worked) or
+  `KnotFailed` (exhausted).
+- **Bounded by the existing loop** — up to 10 retries with 10-second
+  delays, and the profile's overall timeout budget still bounds timed
+  profiles (`MIN_REMAINING_SECS = 5s` bail; the budget, not the retry
+  cap, is the primary bound for timed profiles).
+- **Cause-accurate exhaustion errors** — when retries or the budget run
+  out, the terminal error reflects the *last* failure: exhausted empty
+  responses → `no final response: agent returned empty response after
+  11 attempts (session resume exhausted)` (failed tie-off, **no**
+  rig-log entry); a genuine timeout as the last failure → `Timeout`
+  (`TimeoutSkipped`, rig-log `TimeoutExceeded`); budget bail-out →
+  `Timeout` as before (`overall timeout budget exhausted after N
+  attempt(s)`).
+- **No session ID → no re-entry** — stdio adapter or unparseable
+  output: the 077 terminal failure stands after the first attempt
+  (`no session id — cannot request final response`).
+- **Composes with event enforcement (059)** — a nudged response flows
+  through the normal success path, including the `KnotEventsMissing`
+  follow-up if events were expected but still missing.
+
+No change to event enforcement, mid-stream retry gating, adapters, or
+document formats. **No rig-document migration required.**
+
 ## v0.37.1 — 2026-08-26
 
 ### Fix — Empty Response Is Not a Timeout (Plan 077)

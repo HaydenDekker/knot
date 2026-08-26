@@ -143,15 +143,18 @@ Ask your agent to manage profiles using `knot-create`:
 
 ## Session Resume
 
-If an agent invocation fails (timeout, network error, process crash),
-Knot automatically attempts to resume the session:
+If an agent invocation fails (timeout, network error, process crash)
+or ends its turn abruptly without a final response, Knot automatically
+attempts to resume the session:
 
 - Up to **10 retries** per strand event
 - **10-second delay** between retries (for network recovery)
 - Retries stop when the profile's **timeout budget** is nearly
   exhausted (minimum 5 seconds remaining)
-- Each retry appends "please continue" to the session
+- Each retry appends the final-response request — *"Please produce
+  your final response, or continue if you have not finished."* — to the
+  session (one prompt for all resumes)
 - Session resume events are logged as `SessionResumed` in the loom-log
 
-This makes Knot resilient to transient failures without losing agent
-context.
+This makes Knot resilient to transient failures and abrupt turn-ends
+without losing agent context.

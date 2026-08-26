@@ -110,7 +110,7 @@ value in the knot file.
 | Error | Cause | Fix |
 |-------|-------|-----|
 | TimeoutExceeded | Agent session exceeded the profile timeout | Increase `timeout` in the profile's frontmatter |
-| no final response: … | Agent ended its turn without a final response (abrupt turn-end — a failure, not a timeout) | Check provider/model health. A failed tie-off section was written; see plan 078 for automatic final-response requests |
+| no final response: … | Agent ended its turn without a final response (abrupt turn-end — a failure, not a timeout). Knot re-enters the session up to 10 times (or the profile timeout budget) asking for the final response; a successful nudge completes the strand transparently | If it still fails, check provider/model health and consider a larger profile `timeout` so the nudge attempts fit the budget. A failed tie-off section was written with the attempt count (`after N attempts`) |
 | ProfileNotFound | Profile referenced by knot does not exist | Create the profile file |
 | KnotParseWarning | Invalid YAML in knot file | Fix frontmatter syntax |
 | Strand dir not found | `strand-dir` points to non-existent directory | Create the directory or fix the path |

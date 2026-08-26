@@ -135,16 +135,28 @@ File change in strand-dir
 
 ### Session Resume
 
-If an agent invocation fails (timeout, network error), Knot automatically
-attempts to resume the session using the session ID, up to 10 retries
-with 10-second delays between attempts. The profile's overall timeout
-budget is respected — retries stop when insufficient time remains.
+If an agent invocation fails (timeout, network error, process crash)
+— or ends its turn abruptly without a final response — and a session ID
+was captured, Knot automatically re-enters the same session using
+`--session-id`, up to 10 retries with 10-second delays between attempts.
+Each retry re-sends the original prompt with the final-response request
+appended — *“Please produce your final response, or continue if you have
+not finished.”* — one nudge for all resumes: “continue if you have not
+finished” covers the mid-stream case, “produce your final response”
+covers the abrupt-stop case. The profile's overall timeout budget is
+respected — retries stop when insufficient time remains. A successful
+resume completes the strand transparently, as if the first attempt had
+succeeded.
 
 An abrupt turn-end — the agent exits cleanly (exit 0) but produces no
-final response — is a **failure**, not a timeout: the knot ends with
-status `failed` and `no final response: …` as the error, a failed
-tie-off section is written, and the rig-log stays untouched
-(`TimeoutExceeded` records genuine deadline breaches only).
+final response — is a **failure**, not a timeout: Knot re-enters the
+session to request the final response (above); only when the nudges are
+exhausted does the knot end with status `failed` and
+`no final response: … after N attempts (session resume exhausted)` as
+the error. A failed tie-off section is written and the rig-log stays
+untouched (`TimeoutExceeded` records genuine deadline breaches only).
+Without a session ID (stdio adapter, unparseable output) there is no
+re-entry — the terminal failure stands after the first attempt.
 
 ## Event Queue
 
