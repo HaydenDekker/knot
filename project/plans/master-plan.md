@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-26 (plan 077 completed — v0.37.1)
+> **Last Updated:** 2026-08-26 (plan 079 added — context overflow compact-and-continue)
 
 ## How to Add a Plan
 
@@ -46,6 +46,8 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | 📝 Draft | 2026-08-26 |
+| 78 | [Final-Response Request — Re-enter on Abrupt Turn-End](078-final-response-request/final-response-request-plan.md) | ✅ Complete | 2026-08-26 |
 | 77 | [Empty Response Is Not a Timeout](077-empty-response-not-timeout/empty-response-not-timeout-plan.md) | ✅ Complete | 2026-08-25 |
 | 76 | [Consumer Persistent Wake — No Lost Queue Notifications](076-consumer-persistent-wake/consumer-persistent-wake-plan.md) | ✅ Complete | 2026-08-25 |
 | 75 | [Queue Entry Identity Self-Heal — Filename Is the Event ID](075-queue-identity-self-heal/queue-identity-self-heal-plan.md) | ✅ Complete | 2026-08-25 |
@@ -65,6 +67,21 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 79. Context Overflow — Compact and Continue, with Loom-Log Visibility
+
+**Status:** 📝 Draft
+**Created:** 2026-08-26
+**Goal:** Enable pi's built-in compaction for rig sessions (project-level `.pi/settings.json`, seeded by knot-init) so context overruns compact and continue inside pi instead of burning all session-resume retries; add a `ContextCompacted` loom-log entry per compaction so context pressure is visible for prompt-scoping; and fail fast on unrecoverable overflow (new non-resumable `PortError::ContextLimitReached`) so a context that cannot fit even after compaction stops immediately instead of clocking up 10 retries.
+
+Full details in [079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md).
+
+### 78. Final-Response Request — Re-enter the Session When the Agent Stops Without a Final Response
+
+**Status:** ✅ Complete (2026-08-26) — released in v0.37.2
+**Goal:** When the agent ends its turn without a final response and a session ID was captured, re-enter the session (`--session-id`) with the final-response request — *"Please produce your final response, or continue if you have not finished."* — through the existing session-resume retry loop, so an abrupt stop is nudged once per attempt (bounded by the profile timeout budget) instead of failing immediately.
+
+Full details in [078-final-response-request/final-response-request-plan.md](078-final-response-request/final-response-request-plan.md).
 
 ### 77. Empty Response Is Not a Timeout
 
