@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.16.0"
-  compatibility: "Knot 0.38.0+"
+  version: "1.17.0"
+  compatibility: "Knot 0.38.1+"
 ---
 
 # Knot Update Skill
@@ -109,6 +109,62 @@ loom, tie-off) format changes.
   in by creating the one-line file at the project root:
   `{ "compaction": { "enabled": true } }` — without it, 0.38.0
   behaves as before for over-full contexts.
+
+---
+
+### Overflow Without Compaction — Fail Fast, Warn at Startup (Knot 0.38.1, 2026-08-27)
+
+**What changed:** 0.38.0's fail-fast only fired when pi's own
+compaction had run (detected via `compaction_end` stream events). For
+rigs where compaction is **disabled** (e.g. initialised before
+knot-init 4.6.0 seeded `.pi/settings.json`, with the global setting
+off), pi emits no compaction events at all — the overflow surfaced as
+the provider's error message on the failed turn and the session-resume
+nudge loop burned all 11 attempts, each re-entry making the over-full
+session fuller. 0.38.1 closes the gap:
+
+- The JSON adapter now captures the failed turn's provider error
+  message and classifies it against the common context-overflow
+  signatures (llama.cpp, Anthropic, OpenAI, Gemini, xAI, Groq,
+  OpenRouter, Together, Copilot, LM Studio, MiniMax, Kimi, z.ai, and
+  generic token-limit fallbacks; rate-limit/throttling messages
+  excluded). A match with an empty response fails the strand
+  immediately with `context limit reached: context overflow, but pi
+  auto-compaction did not run (…provider error…). Enable compaction
+  for rig sessions with a project-level .pi/settings.json: …` — no
+  session-resume retries. Non-overflow errors (e.g. rate limits) keep
+  the existing nudge-loop behaviour.
+- At startup (service and `knot step`), knot resolves the effective pi
+  compaction setting the same way pi does (project
+  `.pi/settings.json` over global `~/.pi/agent/settings.json`, pi's
+  default enabled) and prints a WARNING naming the project settings
+  file when it resolves to disabled.
+
+**Why:** the 0.38.0 fix assumed compaction was enabled for every rig
+session; pre-4.6.0 rigs were not, and the failure mode regressed to
+exactly the 11-attempt clock-up 0.38.0 set out to stop (observed in
+the `borrow-my-stuff` rig). The startup warning makes the gap visible
+before a strand hits the wall.
+
+**Affected documents:** none — no project document (profile, knot,
+loom, tie-off) format change.
+
+| Artifact | Before 0.38.1 | 0.38.1+ |
+|---|---|---|
+| Context overflow with compaction disabled in pi settings | empty response → nudge loop re-enters the over-full session; all 11 attempts burn → `no final response: … (session resume exhausted)` | immediate `context limit reached: …` failure naming the provider error and the `.pi/settings.json` fix; no retries |
+| Context overflow with compaction enabled | unchanged (0.38.0 `compaction_end`-based detection) | unchanged |
+| Non-overflow provider error (rate limit, 5xx) | unchanged (nudge loop retries) | unchanged |
+| Startup when compaction resolves to disabled | silent | WARNING with the project settings file path |
+| Profile/knot/loom/tie-off formats, event queue schema | — | unchanged |
+
+**Migration: none required.**
+
+- No document format changes — existing rigs keep working as-is.
+- Rigs where compaction is still disabled (no project
+  `.pi/settings.json`) now fail overflows fast and clearly instead of
+  burning retries; to get in-process recovery, create the one-line
+  file at the project root: `{ "compaction": { "enabled": true } }`
+  (or re-run `knot-init` — it seeds the file create-if-absent).
 
 ---
 

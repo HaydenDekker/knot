@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-26 (plan 079 complete — context overflow compact-and-continue, released in v0.38.0)
+> **Last Updated:** 2026-08-27 (plan 080 complete — overflow without compaction fail-fast, released in v0.38.1)
 
 ## How to Add a Plan
 
@@ -46,6 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 80 | [Context Overflow Without Compaction — Fail Fast, Warn at Startup](080-overflow-error-fail-fast/overflow-error-fail-fast-plan.md) | ✅ Complete (2026-08-27) — released in v0.38.1 | 2026-08-27 |
 | 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
 | 78 | [Final-Response Request — Re-enter on Abrupt Turn-End](078-final-response-request/final-response-request-plan.md) | ✅ Complete | 2026-08-26 |
 | 77 | [Empty Response Is Not a Timeout](077-empty-response-not-timeout/empty-response-not-timeout-plan.md) | ✅ Complete | 2026-08-25 |

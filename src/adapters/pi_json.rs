@@ -131,6 +131,7 @@ impl PiJsonAgentRunner {
         response_text: &mut String,
         token_usage: &mut Option<TokenUsage>,
         compactions: &mut Vec<CompactionRecord>,
+        error_message: &mut Option<String>,
     ) -> bool {
         let value: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -211,12 +212,29 @@ impl PiJsonAgentRunner {
                                 msg.get("role").and_then(|r| r.as_str())
                             {
                                 if role == "assistant" {
+                                    let stop_reason = msg.get("stopReason")
+                                        .and_then(|r| r.as_str());
+                                    // Plan 080: capture the provider error
+                                    // message of failed turns for overflow
+                                    // classification (see
+                                    // `is_context_overflow_message`). When
+                                    // pi's compaction never ran, this is
+                                    // the only overflow signal in the stream.
+                                    if stop_reason == Some("error") {
+                                        if let Some(err) = msg
+                                            .get("errorMessage")
+                                            .and_then(|e| e.as_str())
+                                        {
+                                            *error_message =
+                                                Some(err.to_string());
+                                        }
+                                    }
                                     // Only include final responses, not intermediate
                                     // tool-use messages (stopReason: "toolUse").
-                                    let is_final = msg.get("stopReason")
-                                        .and_then(|r| r.as_str())
-                                        .map(|r| r == "stop" || r == "length")
-                                        .unwrap_or(false);
+                                    let is_final = matches!(
+                                        stop_reason,
+                                        Some("stop") | Some("length")
+                                    );
                                     if is_final {
                                         if let Some(content) = msg.get("content") {
                                             if let Some(carr) = content.as_array() {
@@ -247,8 +265,8 @@ impl PiJsonAgentRunner {
     }
 
     /// Parse JSON-L from raw stdout, extracting session_id, response,
-    /// token usage, and compaction events. Returns `true` if all lines
-    /// parsed as valid JSON.
+    /// token usage, compaction events, and the failed turn's provider
+    /// error message. Returns `true` if all lines parsed as valid JSON.
     fn parse_stdout(
         raw_stdout: &str,
     ) -> (
@@ -257,11 +275,13 @@ impl PiJsonAgentRunner {
         String,
         Option<TokenUsage>,
         Vec<CompactionRecord>,
+        Option<String>,
     ) {
         let mut session_id: Option<String> = None;
         let mut response_text = String::new();
         let mut token_usage: Option<TokenUsage> = None;
         let mut compactions: Vec<CompactionRecord> = Vec::new();
+        let mut error_message: Option<String> = None;
         let mut had_parse_error = false;
 
         for line in raw_stdout.lines() {
@@ -274,6 +294,7 @@ impl PiJsonAgentRunner {
                 &mut response_text,
                 &mut token_usage,
                 &mut compactions,
+                &mut error_message,
             ) {
                 had_parse_error = true;
             }
@@ -285,6 +306,7 @@ impl PiJsonAgentRunner {
             response_text,
             token_usage,
             compactions,
+            error_message,
         )
     }
 
@@ -311,6 +333,85 @@ impl PiJsonAgentRunner {
             // pi a new recovery attempt.
             None
         }
+    }
+
+    /// Classify a provider error message as a context overflow.
+    ///
+    /// Plan 080: when pi's compaction never ran (disabled in pi
+    /// settings — e.g. a rig initialised before knot-init seeded
+    /// `.pi/settings.json`), an over-full context surfaces only as the
+    /// provider's error message on the `stopReason: "error"` message —
+    /// no `compaction_end` events, so [`Self::terminal_overflow`] finds
+    /// nothing and the failure degenerates into plan 078's nudge loop,
+    /// which re-enters the same over-full session and burns every
+    /// retry. Nudging cannot succeed (each nudge adds tokens), so the
+    /// signature is matched here and the strand fails fast with
+    /// [`PortError::ContextLimitReached`].
+    ///
+    /// Substrings mirror the common cases of pi's `OVERFLOW_PATTERNS`
+    /// (pi-ai `utils/overflow.js`), kept as plain case-insensitive
+    /// substrings. Bedrock-style throttling ("Too many tokens, please
+    /// wait…") is excluded, as in pi's `NON_OVERFLOW_PATTERNS`.
+    pub fn is_context_overflow_message(message: &str) -> bool {
+        const NON_OVERFLOW: &[&str] = &[
+            "rate limit",
+            "too many requests",
+            "throttl",
+        ];
+        const SIGNATURES: &[&str] = &[
+            "exceeds the available context size", // llama.cpp server
+            "prompt is too long", // Anthropic / Ollama
+            "request_too_large", // Anthropic HTTP 413
+            "input is too long for requested model", // Amazon Bedrock
+            "exceeds the context window", // OpenAI
+            "maximum context length", // OpenAI-compatible / OpenRouter / Mistral
+            "exceeds the maximum number of tokens", // Google Gemini
+            "maximum prompt length is", // xAI
+            "reduce the length of the messages", // Groq
+            "maximum allowed input length", // OpenRouter / Poolside
+            "is longer than the model", // Together AI
+            "exceeds the limit of", // GitHub Copilot
+            "greater than the context length", // LM Studio
+            "context window exceeds limit", // MiniMax
+            "exceeded model token limit", // Kimi For Coding
+            "model_context_window_exceeded", // z.ai
+            "context_length_exceeded", // generic
+            "context length exceeded", // generic
+            "too many tokens", // generic
+            "token limit exceeded", // generic
+        ];
+        let lower = message.to_lowercase();
+        if NON_OVERFLOW.iter().any(|s| lower.contains(s)) {
+            return false;
+        }
+        SIGNATURES.iter().any(|s| lower.contains(s))
+    }
+
+    /// Read `compaction.enabled` from a pi settings file.
+    ///
+    /// Returns `Some(true|false)` when the file exists, parses as
+    /// JSON, and carries an explicit boolean `compaction.enabled`;
+    /// `None` otherwise (absent file, unparseable JSON, key missing).
+    pub fn read_pi_compaction_enabled(
+        settings_path: &std::path::Path,
+    ) -> Option<bool> {
+        let raw = std::fs::read_to_string(settings_path).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        value.get("compaction")?.get("enabled")?.as_bool()
+    }
+
+    /// Effective pi compaction state for a project (plan 080):
+    /// the project-level `.pi/settings.json` overrides the global
+    /// `~/.pi/agent/settings.json`, which defaults to `true` when
+    /// neither sets the key (pi's own default — `settings-manager.js`:
+    /// `compaction?.enabled ?? true`).
+    pub fn effective_pi_compaction_enabled(
+        project_settings: &std::path::Path,
+        global_settings: &std::path::Path,
+    ) -> bool {
+        Self::read_pi_compaction_enabled(project_settings)
+            .or_else(|| Self::read_pi_compaction_enabled(global_settings))
+            .unwrap_or(true)
     }
 }
 
@@ -475,6 +576,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 _response,
                 _token_usage,
                 _compactions,
+                _error_message,
             ) = Self::parse_stdout(&raw_stdout);
             return Err(PortError::Timeout {
                 message: format!(
@@ -494,6 +596,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 _response,
                 _token_usage,
                 _compactions,
+                _error_message,
             ) = Self::parse_stdout(&raw_stdout);
             return Err(PortError::AgentExecutionFailed {
                 message: format!(
@@ -520,7 +623,7 @@ impl AgentRunner for PiJsonAgentRunner {
             });
         }
 
-        let (had_parse_error, session_id, response_text, token_usage, compactions) =
+        let (had_parse_error, session_id, response_text, token_usage, compactions, error_message) =
             Self::parse_stdout(&raw_stdout);
 
         if had_parse_error {
@@ -538,18 +641,37 @@ impl AgentRunner for PiJsonAgentRunner {
         // response survived the stopReason filter. Session-resume
         // re-entry cannot help; fail fast instead of clocking up
         // the retries.
-        let terminal_rec = if response_text.trim().is_empty() {
-            Self::terminal_overflow(&compactions)
-        } else {
-            None
-        };
-        if let Some(rec) = terminal_rec {
-            return Err(PortError::ContextLimitReached {
-                message: rec.error.clone().unwrap_or_else(|| {
-                    "session context cannot fit the model window even after compaction".to_string()
-                }),
-                session_id,
-            });
+        //
+        // Plan 080: overflow without compaction — when pi's
+        // compaction never ran (disabled in pi settings), the stream
+        // carries no compaction_end events at all: the only overflow
+        // signal is the provider's error message on the
+        // stopReason:"error" message. The same fail-fast applies —
+        // the nudge loop re-enters the same over-full session and
+        // cannot succeed (each nudge adds tokens).
+        if response_text.trim().is_empty() {
+            if let Some(rec) = Self::terminal_overflow(&compactions) {
+                return Err(PortError::ContextLimitReached {
+                    message: rec.error.clone().unwrap_or_else(|| {
+                        "session context cannot fit the model window even after compaction".to_string()
+                    }),
+                    session_id,
+                });
+            }
+            if let Some(ref err_msg) = error_message {
+                if Self::is_context_overflow_message(err_msg) {
+                    return Err(PortError::ContextLimitReached {
+                        message: format!(
+                            "context overflow, but pi auto-compaction did \
+                             not run ({err_msg}). Enable compaction for \
+                             rig sessions with a project-level \
+                             .pi/settings.json: \
+                             {{\"compaction\": {{\"enabled\": true}}}}",
+                        ),
+                        session_id,
+                    });
+                }
+            }
         }
 
         Ok(AgentOutput {
@@ -754,6 +876,7 @@ sleep 300
         String,
         Option<TokenUsage>,
         Vec<CompactionRecord>,
+        Option<String>,
     ) {
         PiJsonAgentRunner::parse_stdout(raw)
     }
@@ -763,7 +886,7 @@ sleep 300
     fn test_json_runner_parses_session_id() {
         let raw = r#"{"type":"session","id":"abc-123"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"hello"}]}]}"#;
-        let (had_error, session_id, response_text, _usage, _compactions) =
+        let (had_error, session_id, response_text, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(!had_error, "should parse cleanly");
         assert_eq!(session_id.as_deref(), Some("abc-123"));
@@ -775,7 +898,7 @@ sleep 300
     fn test_json_runner_parses_token_usage() {
         let raw = r#"{"type":"session","id":"sess-1"}
 {"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, usage, _compactions) =
+        let (_had_error, _session_id, _response, usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         let usage = usage.unwrap();
         assert_eq!(usage.input, 100);
@@ -790,7 +913,7 @@ sleep 300
     fn test_json_runner_parses_response_text() {
         let raw = r#"{"type":"session","id":"sess-x"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"the response text"}]}]}"#;
-        let (_had_error, _session_id, response_text, _usage, _compactions) =
+        let (_had_error, _session_id, response_text, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(response_text.contains("the response text"));
     }
@@ -799,7 +922,7 @@ sleep 300
     #[test]
     fn test_json_runner_timeout_captures_session_id() {
         let raw = r#"{"type":"session","id":"timeout-sess"}"#;
-        let (_had_error, session_id, _response, _usage, _compactions) =
+        let (_had_error, session_id, _response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("timeout-sess"));
     }
@@ -808,7 +931,7 @@ sleep 300
     #[test]
     fn test_json_runner_nonzero_exit_captures_session_id() {
         let raw = r#"{"type":"session","id":"fail-sess"}"#;
-        let (_had_error, session_id, _response, _usage, _compactions) =
+        let (_had_error, session_id, _response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("fail-sess"));
     }
@@ -840,7 +963,7 @@ sleep 300
     #[test]
     fn test_json_runner_malformed_json_fallback() {
         let raw = "not json at all\ngarbled output\n";
-        let (had_error, _session_id, response, _usage, _compactions) =
+        let (had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(had_error, "should have parse errors");
         // parse_stdout doesn't accumulate raw lines — response_text
@@ -853,7 +976,7 @@ sleep 300
     #[test]
     fn test_json_runner_empty_output() {
         let raw = "";
-        let (had_error, _session_id, response, _usage, _compactions) =
+        let (had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(!had_error);
         assert!(response.is_empty());
@@ -876,7 +999,7 @@ sleep 300
     fn test_json_runner_parses_message_end_response() {
         let raw = r#"{"type":"session","id":"msg-sess"}
 {"type":"message_end","role":"assistant","content":"response from message_end"}"#;
-        let (_had_error, _session_id, response, _usage, _compactions) =
+        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         // message_end no longer extracts text — response should be empty
         assert!(response.is_empty());
@@ -888,7 +1011,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_tool_use_messages() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Let me check the file..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"The file contains 42 lines."}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions) =
+        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("42 lines"), "should contain final response");
         assert!(
@@ -903,7 +1026,7 @@ sleep 300
     #[test]
     fn test_json_runner_includes_length_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"truncated response"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions) =
+        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("truncated response"));
     }
@@ -913,7 +1036,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_error_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"error output"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions) =
+        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(response.is_empty());
     }
@@ -925,7 +1048,7 @@ sleep 300
         let raw = r#"{"type":"session","id":"sess-compact"}
 {"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}]}"#;
-        let (_had_error, _session_id, _response, _usage, compactions) =
+        let (_had_error, _session_id, _response, _usage, compactions, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
@@ -943,7 +1066,7 @@ sleep 300
         let raw = r#"{"type":"session","id":"sess-compact-fail"}
 {"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt."}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, compactions) =
+        let (_had_error, _session_id, response, _usage, compactions, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
@@ -971,7 +1094,7 @@ sleep 300
         let raw = r#"{"type":"session","id":"sess-compact-start"}
 {"type":"compaction_start","reason":"overflow"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, _usage, compactions) =
+        let (_had_error, _session_id, _response, _usage, compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(
             compactions.is_empty(),
@@ -984,7 +1107,7 @@ sleep 300
     #[test]
     fn test_json_runner_multiple_tool_use_then_stop() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Checking config..."}]},{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Reading database..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Config and database are in sync."}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions) =
+        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("in sync"), "should contain final response");
         assert!(
@@ -1074,6 +1197,187 @@ exit 0
         assert_eq!(metadata.compactions[0].tokens_before, Some(150000));
         assert!(metadata.compactions[0].will_retry);
         assert!(metadata.compactions[0].error.is_none());
+    }
+
+    // ── Plan 080: overflow without compaction (fail-fast) ──────
+
+    /// Plan 080: `parse_stdout` captures the provider error message of
+    /// a `stopReason: "error"` assistant message from `agent_end`.
+    #[test]
+    fn test_json_runner_parses_error_message() {
+        let raw = r#"{"type":"session","id":"sess-err"}
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400 request (200287 tokens) exceeds the available context size (200192 tokens), try increasing it"}]}"#;
+        let (_had_error, _session_id, response, _usage, _compactions, error_message) =
+            run_parse_stdout(raw);
+        assert!(
+            response.is_empty(),
+            "error stopReason is excluded from response: {response}"
+        );
+        assert_eq!(
+            error_message.as_deref(),
+            Some(
+                "400 request (200287 tokens) exceeds the available context size (200192 tokens), try increasing it"
+            ),
+            "errorMessage should be captured, got: {error_message:?}"
+        );
+    }
+
+    /// Plan 080: a `stopReason: "stop"` message with no errorMessage
+    /// leaves the captured error `None` (no error to classify).
+    #[test]
+    fn test_json_runner_no_error_message_on_success() {
+        let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
+        let (_had_error, _session_id, _response, _usage, _compactions, error_message) =
+            run_parse_stdout(raw);
+        assert!(error_message.is_none(), "no errorMessage on a clean turn: {error_message:?}");
+    }
+
+    /// Plan 080: the borrow-my-stuff shape — compaction disabled in pi
+    /// settings, so the stream has **no** compaction_end events; the
+    /// overflow surfaces only as the provider's 400 on the error
+    /// message. Classified as `ContextLimitReached` (fail-fast) with
+    /// the provider message and the settings hint, not an empty
+    /// response for the nudge loop.
+    #[test]
+    fn test_json_runner_overflow_error_without_compaction_is_context_limit() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-nocomp"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400 request (216476 tokens) exceeds the available context size (200192 tokens), try increasing it"}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_err(),
+            "overflow error without compaction should fail, got: {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::ContextLimitReached { .. }),
+            "expected ContextLimitReached, got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-nocomp"),
+            "error should carry the session ID"
+        );
+        assert!(
+            err.to_string().contains("exceeds the available context size"),
+            "message should carry pi's provider errorMessage, got: {err}"
+        );
+        assert!(
+            err.to_string().contains(".pi/settings.json"),
+            "message should hint at the settings fix, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("compaction did not run"),
+            "message should state compaction never ran, got: {err}"
+        );
+    }
+
+    /// Plan 080: a non-overflow provider error (rate limiting) on the
+    /// error message is **not** `ContextLimitReached` — the turn ends
+    /// with empty response text and the nudge loop keeps its job
+    /// (transient errors can recover).
+    #[test]
+    fn test_json_runner_non_overflow_error_without_compaction_stays_ok() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-ratelimit"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"429 rate limit exceeded: too many requests, please retry later"}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_ok(),
+            "non-overflow error should not fail fast: {result:?}"
+        );
+        assert!(
+            result.unwrap().stdout.trim().is_empty(),
+            "error stopReason is excluded from the response"
+        );
+    }
+
+    /// Plan 080: the overflow classifier matches the provider
+    /// signatures and rejects non-overflow errors — including the
+    /// Bedrock throttling message that contains "Too many tokens".
+    #[test]
+    fn test_is_context_overflow_message_classification() {
+        // Positive — the real signature from the borrow-my-stuff incident
+        // (llama.cpp server) plus the other common providers.
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "400 request (200287 tokens) exceeds the available context size (200192 tokens), try increasing it"
+        ));
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "prompt is too long: 213462 tokens > 200000 maximum"
+        ));
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "Your input exceeds the context window of this model"
+        ));
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "Requested token count exceeds the model's maximum context length of 131072 tokens"
+        ));
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
+        ));
+        assert!(PiJsonAgentRunner::is_context_overflow_message(
+            "413 {\"error\":{\"type\":\"request_too_large\"}}"
+        ));
+        // Negative — non-overflow provider errors.
+        assert!(!PiJsonAgentRunner::is_context_overflow_message(
+            "429 rate limit exceeded: too many requests"
+        ));
+        assert!(!PiJsonAgentRunner::is_context_overflow_message(
+            "ThrottlingException: Too many tokens, please wait before trying again."
+        ));
+        assert!(!PiJsonAgentRunner::is_context_overflow_message(
+            "401 invalid api key"
+        ));
+        assert!(!PiJsonAgentRunner::is_context_overflow_message(
+            "500 internal server error"
+        ));
+        assert!(!PiJsonAgentRunner::is_context_overflow_message(""));
+    }
+
+    /// Plan 080: effective compaction resolution — project-level
+    /// `.pi/settings.json` overrides global; pi's default is enabled.
+    #[test]
+    fn test_effective_pi_compaction_enabled_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join(".pi").join("settings.json");
+        let global = dir.path().join("global-settings.json");
+        let absent = dir.path().join("absent.json");
+
+        // Both absent → pi's default: enabled.
+        assert!(PiJsonAgentRunner::effective_pi_compaction_enabled(&absent, &absent));
+
+        // Global disabled, project absent → disabled (the
+        // borrow-my-stuff shape before the fix).
+        std::fs::write(&global, r#"{"compaction": {"enabled": false}}"#).unwrap();
+        assert!(!PiJsonAgentRunner::effective_pi_compaction_enabled(&absent, &global));
+
+        // Project enabled overrides global disabled.
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::write(&project, r#"{"compaction": {"enabled": true}}"#).unwrap();
+        assert!(PiJsonAgentRunner::effective_pi_compaction_enabled(&project, &global));
+
+        // Project file without the compaction key falls through to global.
+        std::fs::write(&project, r#"{"theme": "dark"}"#).unwrap();
+        assert!(!PiJsonAgentRunner::effective_pi_compaction_enabled(&project, &global));
+
+        // Unparseable project settings fall through to global.
+        std::fs::write(&project, "not json").unwrap();
+        assert!(!PiJsonAgentRunner::effective_pi_compaction_enabled(&project, &global));
+
+        // Project disabled is honoured (explicit operator choice).
+        std::fs::write(&project, r#"{"compaction": {"enabled": false}}"#).unwrap();
+        assert!(!PiJsonAgentRunner::effective_pi_compaction_enabled(&project, &global));
     }
 
     /// Integration test: mock echoes stdin which contains the prompt.

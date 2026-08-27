@@ -606,6 +606,51 @@ fn move_legacy_path(src: &StdPath, dst: &StdPath, label: &str, moved: &mut Vec<S
 /// the destination and warn; the source stays for manual resolution.
 /// All failures are non-fatal warnings — the rig directory is left
 /// source-only whenever a move succeeds.
+
+/// Plan 080: warn at startup when pi's auto-compaction is disabled for
+/// this project.
+///
+/// Knot's context-overflow recovery relies on pi's built-in
+/// compact-and-continue (plan 079), which pi settings alone control —
+/// there is no CLI flag. When the effective setting resolves to
+/// disabled (global `~/.pi/agent/settings.json` sets
+/// `compaction.enabled: false` and no project-level
+/// `.pi/settings.json` overrides it — the shape of rigs initialised
+/// before knot-init 4.6.0 seeded that file), an overflow fails the
+/// strand with `ContextLimitReached` instead of recovering. The warning
+/// makes that gap visible at startup. Non-fatal: the settings are the
+/// operator's to change.
+fn warn_if_pi_compaction_disabled(rig_dir: &StdPath) {
+    // The project root hosts `.pi/settings.json`: the rig dir's parent
+    // (plan 068 layout), falling back to CWD for a bare relative rig
+    // dir, then to the rig dir itself (filesystem-root degenerate case,
+    // mirroring `derive_runtime_root`).
+    let project_root = rig_dir
+        .parent()
+        .map(StdPath::to_path_buf)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| rig_dir.to_path_buf());
+    let project_settings = project_root.join(".pi").join("settings.json");
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let global_settings = std::path::Path::new(&home).join(".pi/agent/settings.json");
+    if PiJsonAgentRunner::effective_pi_compaction_enabled(
+        &project_settings,
+        &global_settings,
+    ) {
+        return;
+    }
+    eprintln!(
+        "WARNING: pi auto-compaction is disabled for this project — \
+         context overflow cannot auto-recover in rig sessions (plan 079); \
+         strands fail with ContextLimitReached instead. To enable \
+         compaction, write \
+         {{\"compaction\": {{\"enabled\": true}}}} to {}",
+        project_settings.display(),
+    );
+}
 ///
 /// Must run before discovery and watcher registration so that moved
 /// dispatch directories, loom-logs, and the event queue are used at
@@ -791,6 +836,14 @@ agent-adapter: pi-stdio
             e
         })?;
     }
+
+    // Plan 080: warn when pi compaction is disabled for this project —
+    // rig sessions cannot then recover from a context overflow
+    // in-process (plan 079), and the strand fails fast with
+    // ContextLimitReached instead of continuing. The check reads the
+    // same settings files pi resolves (project .pi/settings.json over
+    // global ~/.pi/agent/settings.json; pi's default is enabled).
+    warn_if_pi_compaction_disabled(rig_dir);
 
     // Migrate the legacy layout (runtime artifacts inside the rig dir)
     // to the project-level runtime root. Idempotent and non-fatal —
