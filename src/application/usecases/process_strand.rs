@@ -547,6 +547,10 @@ impl ProcessStrand {
     /// loom-store order for the consumers), so the filename suffixes
     /// follow the producer's emission order.
     ///
+    /// Events with `occurred: false` are acknowledgements — they are never
+    /// dispatched to consumers. The filter is applied here so every caller
+    /// (main dispatch path and event-enforcement follow-up) is covered.
+    ///
     /// Returns the list of `(event_id, consumer_knot_id, consumer_loom_id,
     /// created_file_path)` dispatches performed — the path is the file the
     /// dispatcher created for that dispatch (delivery traceability).
@@ -558,6 +562,12 @@ impl ProcessStrand {
         all_knot_ids: &[&str],
     ) -> Result<Vec<(String, String, String, String)>, PortError> {
         let all_looms = self.store.list();
+
+        // Only dispatch events that actually occurred. Events with
+        // `occurred: false` are acknowledgements — they count for
+        // enforcement but must not be dispatched to consumers.
+        let events: Vec<&AgentEvent> =
+            events.iter().filter(|e| e.occurred).collect();
 
         /// A single (event, consumer loom, consumer knot) match found in
         /// the subscription scan.
@@ -577,7 +587,7 @@ impl ProcessStrand {
         // Pass 1 — collect all matches in scan order (events in tie-off
         // block order; consumers in loom-store order).
         let mut matches: Vec<Match<'_>> = Vec::new();
-        for event in events {
+        for &event in &events {
             for loom in &all_looms {
                 for consumer_knot in &loom.knots {
                     let resolved = consumer_knot

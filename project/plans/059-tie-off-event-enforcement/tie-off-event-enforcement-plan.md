@@ -206,3 +206,11 @@ Key design points:
 - **`pi-stdio` graceful degradation:** Without session ID capture, enforcement can only log the failure — it cannot re-enter the session. This is documented as a known limitation. The user sees the `KnotEventsMissing` entry and can `touch` the strand to reprocess.
 - **The `expected_events` list** comes from `build_listener_context()` output parsing. Since we already build the listener context before execution, we can extract the event IDs from the consumer knots' subscriptions. Pass the event IDs alongside the enforcement check.
 - **Domain glossary update:** Add `Event Enforcement` and `KnotEventsMissing` terms.
+
+### Phase 5: Bugfix — Enforcement Follow-Up Dispatched Acknowledgements (2026-09-01)
+
+The enforcement follow-up path dispatched `occurred: false` acknowledgement events to consumers as real event files. The main dispatch path (`dispatch_agent_events`) filters `occurred: true` before dispatching, but the follow-up in `process_strand_helpers.rs` passed the raw parsed events straight to `dispatch_events_to_consumers`, so a follow-up responding with acknowledgements only ("nothing happened") produced spurious queue work for every matching consumer — observed as 4 acknowledgement events dispatched as real files.
+
+- **What was wrong:** The `occurred` filter lived at the main-path call site only; the enforcement follow-up bypassed it, violating the documented contract that `occurred: false` events count for enforcement but are never dispatched.
+- **How it was fixed:** Moved the filter into `dispatch_events_to_consumers` itself (the single choke point all callers pass through), so every current and future caller is covered. The main path keeps its call-site filter (it drives the `EventsDispatched` log decision). Acknowledgements still count as an enforcement response — no second `KnotEventsMissing` is logged when the follow-up acknowledges.
+- **Tests:** Added regression test `test_event_enforcement_followup_occurred_false_not_dispatched` (follow-up acknowledgement → dispatcher never called, exactly one `KnotEventsMissing`, strand completes). Full suite green (904 unit + all integration tests). Released in v0.38.2.

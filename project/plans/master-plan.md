@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-08-27 (plan 080 complete — overflow without compaction fail-fast, released in v0.38.1)
+> **Last Updated:** 2026-09-01 (bugfix v0.38.2 — event-enforcement follow-up no longer dispatches `occurred: false` acknowledgements, recorded in plan 059 Phase 5)
 
 ## How to Add a Plan
 

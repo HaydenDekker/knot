@@ -366,7 +366,10 @@ pub fn handle_success(
 
                         if !followup_events.is_empty() {
                             // Dispatch follow-up events
-                            // (dispatch failures are non-fatal)
+                            // (dispatch failures are non-fatal).
+                            // `occurred: false` acknowledgements count
+                            // here (agent responded) but are filtered
+                            // inside dispatch_events_to_consumers.
                             let _ = ps.dispatch_events_to_consumers(
                                 &followup_events,
                                 knot,

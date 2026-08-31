@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.17.0"
-  compatibility: "Knot 0.38.1+"
+  version: "1.18.0"
+  compatibility: "Knot 0.38.2+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,33 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Enforcement Follow-Up No Longer Dispatches Acknowledgements (Knot 0.38.2, 2026-09-01)
+
+**What changed:** When a knot emits no event blocks but consumers
+are listening, the enforcement follow-up re-enters the session and
+dispatches any events found in the follow-up response. Until 0.38.1,
+that follow-up path skipped the `occurred: true` filter the main
+dispatch path applies: an `occurred: false` acknowledgement block
+("nothing happened") in the follow-up response was dispatched to
+consumers as a real event file, creating spurious queue work.
+0.38.2 moves the filter into the shared dispatch choke point, so
+acknowledgements are never dispatched from any path. Acknowledgements
+still count as an enforcement response — a follow-up that only
+acknowledges does not log a second `KnotEventsMissing`.
+
+**Affected documents:** none — no project document (profile, knot,
+loom, tie-off) format change.
+
+| Artifact | Before 0.38.2 | 0.38.2+ |
+|---|---|---|
+| Enforcement follow-up emits `occurred: false` only | acknowledgement dispatched as a real event file to each matching consumer | no dispatch; acknowledgement counts for enforcement, no second `KnotEventsMissing` |
+| Main-path `occurred: false` handling | unchanged (already filtered) | unchanged |
+| Profile/knot/loom/tie-off formats, event queue schema | — | unchanged |
+
+**Migration: none required.**
 
 ---
 

@@ -822,3 +822,93 @@ fn test_event_enforcement_regression_normal_dispatch() {
         "event dispatcher should have been called"
     );
 }
+
+/// Regression: the enforcement follow-up responds with `occurred: false`
+/// acknowledgement events only. Acknowledgements count as an enforcement
+/// response (no second KnotEventsMissing) but must NOT be dispatched to
+/// consumers as real event files.
+#[test]
+fn test_event_enforcement_followup_occurred_false_not_dispatched() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path =
+        create_strand_file(&dir, "feature.md", "new feature request");
+
+    let producer_knot = build_producer_knot("plan-creator");
+    let consumer_knot =
+        build_consumer_knot("plan-validator", "plan-creator", "PlanCreated");
+
+    let producer_loom = build_loom("planning-loom", vec![producer_knot]);
+    let consumer_loom = build_loom("validation-loom", vec![consumer_knot]);
+
+    // Initial response: no events → enforcement kicks in.
+    let initial_output = success_output_with_session(
+        "Plan created. No events emitted.",
+        "sess-abc123",
+    );
+    // Follow-up response: acknowledgement events with occurred: false.
+    let followup_output = success_output_with_session(
+        concat!(
+            "No changes this run.\n\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: false\n",
+            "description: Nothing happened this session\n",
+            "---\n",
+            "```",
+        ),
+        "sess-abc123",
+    );
+    let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+        Ok(initial_output),
+        Ok(followup_output),
+    ]));
+
+    let _dummy_loom = Loom { id: LoomId(String::new()), knots: vec![] };
+    let result = ProcessStrandBuilder::new(_dummy_loom, runner.clone())
+        .with_looms(vec![producer_loom, consumer_loom])
+        .with_tracking_event_dispatcher()
+        .build();
+    let event_dispatcher = result
+        .event_dispatcher
+        .as_ref()
+        .expect("event_dispatcher should be Some");
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        ..
+    } = result;
+
+    let event = created_event(
+        "planning-loom",
+        "plan-creator",
+        strand_path,
+    );
+
+    let exec_result = use_case.execute(event);
+    assert!(exec_result.is_ok());
+
+    let events = log_events.lock().unwrap();
+
+    // Acknowledgement counts for enforcement: only the initial
+    // KnotEventsMissing is logged, not a second one.
+    let missing_count = count_event_type(&events, "KnotEventsMissing");
+    assert_eq!(
+        missing_count, 1,
+        "should have 1 KnotEventsMissing (follow-up acknowledged)"
+    );
+
+    // Strand still completes.
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::KnotCompleted { .. })),
+        "should have KnotCompleted"
+    );
+
+    // occurred: false must NOT be dispatched to consumers.
+    let dispatches = event_dispatcher.get_dispatches();
+    assert!(
+        dispatches.is_empty(),
+        "occurred: false acknowledgements must not be dispatched, got {:?}",
+        dispatches
+    );
+}
