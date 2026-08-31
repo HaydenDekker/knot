@@ -4,7 +4,7 @@ description: "Analyse rig productivity and project progress at runtime. Tail the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
+  version: "1.5.0"
   compatibility: "Knot 0.34.0+"
 ---
 
@@ -124,7 +124,8 @@ Rig-log highlights: 3 timeouts on `coder` knot in last 24h.
 ### Dimension 2 — Git History
 
 Git history provides an independent measure of whether work is
-producing tangible output.
+producing tangible output. It also reveals recent changes to the rig
+itself — the context needed to interpret the operational signals.
 
 **Run:** `git log --oneline --since="7 days ago" | head -30`
 
@@ -153,7 +154,32 @@ Commits: 24
 Last commit: 2 hours ago
 Files most modified: project/plans/ (14), project/adrs/ (6), src/ (4)
 Trend: Active — consistent commit frequency
+Recent rig changes: timeout lowered on `coder` knot 2 days ago — likely
+cause of the timeout spike
 ```
+
+**Rig change awareness:** Before interpreting the operational signals, take
+a peek at what recently changed under `rig/` (looms, knots, profiles,
+`models.yml`):
+
+**Run:** `git log --oneline --since="14 days ago" -- rig/ | head -20`
+
+| Signal | What it may explain |
+|--------|--------------------|
+| New loom or knot files | New activity (or new failures) that did not exist before |
+| Modified knot definition | New parse warnings, changed triggers, new oscillations |
+| Profile changes (model, timeout, prompt) | Shifts in session behaviour, cost, or timeout rate |
+| `rig/models.yml` changes | Model swap — shifts in behaviour and capability |
+
+**Relevance decays with age.** Changes from the last few days are
+directly relevant — they may be the *cause* of a signal you are about to
+flag as a blocker. Changes a few weeks old are context only. Older
+changes are noise; do not dig into old rig history unless a specific
+signal points at it.
+
+If a recent rig change correlates with a newly appearing signal (e.g.
+timeouts began right after a knot's timeout was lowered), report the
+change as the likely cause rather than raising an independent blocker.
 
 ---
 
@@ -343,6 +369,8 @@ Rig-log highlights: ...
 - Last commit: X ago
 - Files most modified: ...
 - Trend: ...
+- Recent rig changes: ... (changes under `rig/` in last 14 days that
+  affect interpretation of current signals)
 
 ## Project Progress
 Plans / Phases / Acceptance specs / Decision records summary.
@@ -413,6 +441,9 @@ for log in tie-offs/rig/*/.loom-log; do echo "=== $log ==="; tail -5 "$log"; don
 
 # Recent git activity
 git log --oneline --since="7 days ago" | head -20
+
+# Recent changes to the rig itself (looms, knots, profiles)
+git log --oneline --since="14 days ago" -- rig/
 
 # Files touched recently
 git diff --stat HEAD~5
