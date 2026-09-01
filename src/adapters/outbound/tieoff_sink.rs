@@ -75,6 +75,15 @@ impl TieOffSink for FileSystemTieOffSink {
         new_content.push_str(&format!(
             "## {knot_name} triggered by {event_label} {strand_label}\nTimestamp: {timestamp}\n"
         ));
+        // Optional pi session ID for this execution — same category as
+        // the timestamp (describes *this* run), so it goes directly
+        // after it and before the trigger metadata below. Omitted
+        // entirely when no session ID was captured (stdio adapter,
+        // unparseable output), keeping the section byte-identical to
+        // the pre-session format.
+        if let Some(ref session_id) = tie_off.session_id {
+            new_content.push_str(&format!("session: {session_id}\n"));
+        }
         // Append structured event metadata for a2a traceability.
         // Present when this strand was triggered by an event file
         // (intent-based routing consumer).
@@ -134,6 +143,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         let result = sink.write(tie_off);
@@ -174,6 +184,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         })
         .unwrap();
 
@@ -188,6 +199,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         })
         .unwrap();
 
@@ -218,6 +230,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         let sub_dir = dir.path().join("sub/dir");
@@ -274,6 +287,7 @@ mod tests {
             timestamp: Some("2026-06-05T00:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         assert!(
@@ -322,6 +336,7 @@ mod tests {
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
         sink.append(tie_off_1).unwrap();
 
@@ -336,6 +351,7 @@ mod tests {
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
         sink.append(tie_off_2).unwrap();
 
@@ -408,6 +424,7 @@ mod tests {
                 timestamp: Some(ts.clone()),
                 agent_events: Vec::new(),
                 event_metadata: EventMetadata::default(),
+                session_id: None,
             };
             sink.append(tie_off).unwrap();
         }
@@ -456,5 +473,127 @@ mod tests {
             "should have multiple delimiters for 3 sections, found {}: {}",
             delimiter_count, content
         );
+    }
+
+    #[test]
+    fn append_emits_session_line_after_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("session.tie-off");
+
+        let tie_off = TieOff {
+            content: "Section body".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some("strand.md".to_string()),
+            timestamp: Some("2026-08-22T12:00:00+00:00".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
+            session_id: Some("sess-123".to_string()),
+        };
+        sink.append(tie_off).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        // session line comes directly after the Timestamp line
+        let ts_idx = lines
+            .iter()
+            .position(|l| l.starts_with("Timestamp: "))
+            .expect("timestamp line present");
+        assert_eq!(
+            lines[ts_idx + 1],
+            "session: sess-123",
+            "session line must follow Timestamp line: {content}"
+        );
+        // and before the closing --- separator
+        let sep_idx = lines
+            .iter()
+            .position(|l| *l == "---")
+            .expect("separator present");
+        assert!(
+            ts_idx + 1 < sep_idx,
+            "session line must precede --- separator: {content}"
+        );
+    }
+
+    #[test]
+    fn append_omits_session_line_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("nosession.tie-off");
+
+        let tie_off = TieOff {
+            content: "Section body".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
+            event_type: Some("Created".to_string()),
+            strand_path: Some("strand.md".to_string()),
+            timestamp: Some("2026-08-22T12:00:00+00:00".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
+            session_id: None,
+        };
+        sink.append(tie_off).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        // Byte-identical to the pre-change section format.
+        assert_eq!(
+            content,
+            "## review triggered by Created strand.md\n\
+             Timestamp: 2026-08-22T12:00:00+00:00\n\
+             ---\n\
+             Section body",
+            "no-session output must keep the exact current shape"
+        );
+        assert!(!content.contains("session:"));
+    }
+
+    #[test]
+    fn append_session_line_ordered_before_event_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileSystemTieOffSink::new(dir.path().to_path_buf());
+        let file_path = dir.path().join("combined.tie-off");
+
+        let tie_off = TieOff {
+            content: "Body".to_string(),
+            path: TieOffPath(file_path.clone()),
+            status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
+            event_type: Some("Modified".to_string()),
+            strand_path: Some("strand.md".to_string()),
+            timestamp: Some("2026-08-22T12:00:00+00:00".to_string()),
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata {
+                event_id: Some("PlanCreated".to_string()),
+                source_knot: Some("producer-knot".to_string()),
+                original_strand: Some("project/plans/x.md".to_string()),
+            },
+            session_id: Some("sess-999".to_string()),
+        };
+        sink.append(tie_off).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        let idx = |prefix: &str| -> usize {
+            lines
+                .iter()
+                .position(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("{prefix} line missing: {content}"))
+        };
+        let ts = idx("Timestamp: ");
+        let session = idx("session: ");
+        let event = idx("event: ");
+        let source = idx("source: ");
+        let original = idx("original_strand: ");
+        let sep = idx("---");
+        assert_eq!(session, ts + 1, "session directly after Timestamp");
+        assert!(
+            session < event && event < source && source < original,
+            "event metadata keeps its order after session: {content}"
+        );
+        assert!(original < sep, "metadata block precedes ---: {content}");
     }
 }

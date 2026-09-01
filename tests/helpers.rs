@@ -99,6 +99,10 @@ pub struct ProcessStrandBuilder {
     /// Real rig directory + real `FileSystemEventDispatcher` — when set,
     /// event dispatch writes real files to disk instead of the mock.
     real_event_dispatcher: Option<PathBuf>,
+    /// Real rig directory + real `FileSystemTieOffSink` — when set, tie-off
+    /// appends write real files to disk under the runtime root instead of
+    /// the tracking sink (plan 071).
+    real_tie_off_sink: Option<PathBuf>,
     /// Strand event queue for late-removal tests — when set, wired into
     /// `ProcessStrand` so `execute_with_pending` removes event files.
     strand_queue: Option<Arc<dyn knot::domain::events::StrandQueueAccessor>>,
@@ -116,6 +120,7 @@ impl ProcessStrandBuilder {
             tracking_event_dispatcher: false,
             tracking_file_checker: false,
             real_event_dispatcher: None,
+            real_tie_off_sink: None,
             strand_queue: None,
         }
     }
@@ -185,6 +190,20 @@ impl ProcessStrandBuilder {
         self
     }
 
+    /// Wire the **real** `FileSystemTieOffSink` against a real rig
+    /// directory (default is the tracking sink that records appends
+    /// without touching the filesystem).
+    ///
+    /// `rig_dir` must be an existing directory; tie-off sections are
+    /// written under the runtime root — `tie-offs/<rig-basename>/`
+    /// next to it. Returns `rig_dir` in the result. With the real sink
+    /// wired, `tie_off_appends` stays empty — assert on the on-disk
+    /// files instead (plan 071).
+    pub fn with_real_tie_off_sink(mut self, rig_dir: PathBuf) -> Self {
+        self.real_tie_off_sink = Some(rig_dir);
+        self
+    }
+
     /// Wire a strand event queue into the built `ProcessStrand`.
     ///
     /// Used by late-removal tests: when set, `execute_with_pending`
@@ -207,8 +226,20 @@ impl ProcessStrandBuilder {
         }
 
         let (log_port, log_events) = MockLoomLogPort::new();
-        let (tie_off_sink, tie_off_appends, tie_off_content) =
+        let (tracking_sink, tie_off_appends, tie_off_content) =
             TrackingTieOffSink::new();
+        // With `.with_real_tie_off_sink(rig_dir)`, tie-off appends go to
+        // the real filesystem sink under the runtime root; the tracking
+        // handles above stay empty.
+        let tie_off_sink: Arc<dyn knot::application::ports::TieOffSink> =
+            match &self.real_tie_off_sink {
+                Some(rig_dir) => Arc::new(
+                    knot::adapters::outbound::tieoff_sink::FileSystemTieOffSink::new(
+                        rig_dir.join("tie-offs"),
+                    ),
+                ),
+                None => Arc::new(tracking_sink),
+            };
         let (rig_log, rig_events) = MockRigLogPort::new();
 
         let profile = self.profile.unwrap_or_else(default_profile);
@@ -265,13 +296,20 @@ impl ProcessStrandBuilder {
             event_dispatcher = Arc::new(MockEventDispatcher::default());
         }
 
+        // A real rig directory from either real port also anchors the
+        // tie-off/event paths; otherwise the synthetic `/rig` is used.
+        let effective_rig_dir = self
+            .real_event_dispatcher
+            .clone()
+            .or_else(|| self.real_tie_off_sink.clone());
+
         let strand = ProcessStrand::new(
             store.clone(),
             Arc::new(log_port),
             self.agent_runner.clone() as Arc<dyn AgentRunner>,
-            Arc::new(tie_off_sink),
+            tie_off_sink,
             RigAgentConfig::default_config(),
-            self.real_event_dispatcher
+            effective_rig_dir
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("/rig")),
             profile_repo,
@@ -295,7 +333,7 @@ impl ProcessStrandBuilder {
             git_commits,
             file_checker: file_checker_concrete,
             event_dispatcher: event_dispatcher_concrete,
-            rig_dir: self.real_event_dispatcher.clone(),
+            rig_dir: effective_rig_dir,
         }
     }
 }

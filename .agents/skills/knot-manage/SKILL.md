@@ -4,7 +4,7 @@ description: "Review the rig's work using git history and tie-off files. Examine
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "Knot 0.31.0+"
 ---
 
@@ -356,6 +356,7 @@ header followed by the agent's output:
 ```markdown
 ## {knot-name} triggered by {event-type} {strand-path}
 Timestamp: 2026-07-24T12:00:00Z
+session: 1f2e3d4c-...       ← present when the pi session ID was captured
 event: PlanCreated          ← present if this was triggered by an event
 source: producer-knot       ← present if event-triggered
 original_strand: ...        ← original strand that caused the event
@@ -384,6 +385,7 @@ Agent output for the second event...
 | `event-type` | `Created`, `Modified`, or `Deleted` (the strand event that triggered processing) |
 | `strand-path` | Path of the strand file processed |
 | `Timestamp` | ISO 8601 UTC timestamp of processing |
+| `session` | Present when the pi session ID was captured (Knot 0.39.0+, JSON adapter runs) — the ID of the pi session that produced this section; resume/inspect it with `pi --session-id <id>` |
 | `event` | Present when triggered by an event strand — shows the event ID |
 | `source` | Present when event-triggered — shows the producing knot's name |
 | `original_strand` | Present when event-triggered — shows the original strand that caused the upstream event |

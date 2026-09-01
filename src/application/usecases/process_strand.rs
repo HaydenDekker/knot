@@ -346,6 +346,10 @@ impl ProcessStrand {
             Ok(resolved) => resolved,
             Err(err) => {
                 let error_msg = err.to_string();
+                // Capture any session ID the error carries (adapters
+                // that parsed a session line before failing) before
+                // the error is consumed by the return (plan 071).
+                let session_id = err.session_id().cloned();
                 // Write error tie-off
                 let tie_off = TieOff {
                     content: format!("Processing failed: {}", error_msg),
@@ -357,6 +361,7 @@ impl ProcessStrand {
                     timestamp: None,
                     agent_events: Vec::new(),
                     event_metadata: crate::domain::entities::EventMetadata::default(),
+                    session_id,
                 };
                 let _ = self.tie_off_sink.append(tie_off);
                 // Append KnotFailed to loom-log
@@ -386,9 +391,12 @@ impl ProcessStrand {
         };
         let outcome = resolved.outcome.clone();
 
-        // Write tie-off (skipped for timeout).
+        // Write tie-off (skipped for timeout). The session ID captured
+        // during execution (success metadata or PortError) is recorded
+        // on the section (plan 071).
         super::process_strand_helpers::write_tie_off(
             self, &outcome, knot, &tie_off_path, &strand_path, &event_label,
+            &resolved.session_id,
         );
 
         // Write rig-log for timeout (preserve unchanged).
@@ -5214,6 +5222,7 @@ mod tieoff_event_metadata_tests {
                 source_knot: Some("plan-creator".to_string()),
                 original_strand: Some("001-feature.md".to_string()),
             },
+            session_id: None,
         };
 
         sink.append(tie_off).unwrap();
@@ -5265,6 +5274,7 @@ mod tieoff_event_metadata_tests {
             timestamp: Some("2026-07-09T12:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         sink.append(tie_off).unwrap();
@@ -5309,6 +5319,7 @@ mod tieoff_event_metadata_tests {
                 source_knot: None,
                 original_strand: None,
             },
+            session_id: None,
         };
 
         sink.append(tie_off).unwrap();
@@ -7085,5 +7096,184 @@ mod model_registry_resolution_tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].agent_config.model, "gpt-4o");
         assert_eq!(all[1].agent_config.model, "claude-sonnet-4-20250514");
+    }
+}
+
+// ── Execution: tie-off session ID threading (plan 071) ────────────────
+
+#[cfg(test)]
+mod tieoff_session_id_tests {
+    use super::execution_test_shared::{build_knot, build_process_strand};
+    use super::*;
+    use crate::application::ports::{
+        AgentInvocationMetadata, AgentOutput,
+    };
+    use crate::domain::entities::{KnotId, TieOffStatus};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    use super::super::test_fixtures::{build_loom, MockAgentRunner};
+
+    /// Successful output carrying a session ID in its metadata.
+    fn ok_output_with_session(stdout: &str, sid: &str) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions: vec![],
+            }),
+        }
+    }
+
+    /// Build a Created event for a temp strand file.
+    fn strand_event(
+        dir: &TempDir,
+        loom_id: &str,
+        knot_id: &str,
+    ) -> StrandEvent {
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+        StrandEvent::Created {
+            loom_id: LoomId(loom_id.to_string()),
+            knot_id: KnotId(knot_id.to_string()),
+            strand_path: StrandPath(strand_path),
+        }
+    }
+
+    /// Success whose metadata carries a session ID → the tie-off append
+    /// records it.
+    #[test]
+    fn success_tieoff_records_session_id_from_metadata() {
+        let dir = TempDir::new().unwrap();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let runner = Arc::new(MockAgentRunner::new(Ok(
+            ok_output_with_session("agent output", "sess-a"),
+        )));
+
+        let (use_case, _log, tie_off_appends, _rig, _content, _r) =
+            build_process_strand(loom, runner);
+        use_case
+            .execute(strand_event(&dir, "test-loom", "k1"))
+            .unwrap();
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "one tie-off append expected");
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(
+            appends[0].session_id,
+            Some("sess-a".to_string()),
+            "success append must carry the metadata session ID"
+        );
+    }
+
+    /// Failure whose PortError carries a session ID → the failure
+    /// tie-off append records it.
+    ///
+    /// Uses `ContextLimitReached` (terminal, tie-off written):
+    /// `Timeout` outcomes skip tie-off writing entirely, so they cannot
+    /// carry the ID anywhere.
+    #[test]
+    fn failure_tieoff_records_session_id_from_error() {
+        let dir = TempDir::new().unwrap();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let runner =
+            Arc::new(MockAgentRunner::new_sequence(vec![Err(
+                PortError::ContextLimitReached {
+                    message: "context cannot fit the window".to_string(),
+                    session_id: Some("sess-b".to_string()),
+                },
+            )]));
+
+        let (use_case, _log, tie_off_appends, _rig, _content, _r) =
+            build_process_strand(loom, runner);
+        let event = strand_event(&dir, "test-loom", "k1");
+        // Consume-on-failure: a failed outcome is recorded (tie-off,
+        // loom-log) and the event is consumed, so execute returns Ok.
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok(), "terminal failure is recorded, not propagated");
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "one failure tie-off append");
+        assert_eq!(appends[0].status, TieOffStatus::Failed);
+        assert_eq!(
+            appends[0].session_id,
+            Some("sess-b".to_string()),
+            "failure append must carry the PortError session ID"
+        );
+    }
+
+    /// Stdio-style run (no metadata at all) → append has no session ID
+    /// and the tie-off keeps its current shape.
+    #[test]
+    fn tieoff_without_metadata_has_no_session_id() {
+        let dir = TempDir::new().unwrap();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let runner = Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+            stdout: "plain output".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })));
+
+        let (use_case, _log, tie_off_appends, _rig, _content, _r) =
+            build_process_strand(loom, runner);
+        use_case
+            .execute(strand_event(&dir, "test-loom", "k1"))
+            .unwrap();
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "one tie-off append expected");
+        assert_eq!(
+            appends[0].session_id, None,
+            "no metadata means no session ID on the append"
+        );
+    }
+
+    /// Session-resume path (empty first response, resumed success in the
+    /// same session) → the single append carries the one session ID.
+    #[test]
+    fn resumed_tieoff_carries_single_session_id() {
+        let dir = TempDir::new().unwrap();
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let empty_output = Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-abc".to_string()),
+                token_usage: None,
+                compactions: vec![],
+            }),
+        });
+        let final_output =
+            Ok(ok_output_with_session("final", "sess-abc"));
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            empty_output,
+            final_output,
+        ]));
+
+        let (use_case, _log, tie_off_appends, _rig, _content, _r) =
+            build_process_strand(loom, runner);
+        let event = strand_event(&dir, "test-loom", "k1");
+
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok());
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "one tie-off append expected");
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert_eq!(appends[0].content, "final");
+        assert_eq!(
+            appends[0].session_id,
+            Some("sess-abc".to_string()),
+            "resumed run must record the single session ID"
+        );
     }
 }

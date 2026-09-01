@@ -33,6 +33,10 @@ pub struct ResolvedExecution {
 /// Construct a `TieOff` from execution outcome and write it.
 ///
 /// Skipped for timeout outcomes (tie-off preserved unchanged).
+///
+/// `session_id` is the pi session captured for this execution (from
+/// output metadata on success, from the `PortError` on failure); recorded
+/// on the tie-off so a reviewer can resume the exact session (plan 071).
 pub fn write_tie_off(
     ps: &ProcessStrand,
     outcome: &TieOffOutcome,
@@ -40,6 +44,7 @@ pub fn write_tie_off(
     tie_off_path: &TieOffPath,
     strand_path: &StrandPath,
     event_label: &str,
+    session_id: &Option<String>,
 ) {
     if !outcome.should_write_tie_off() {
         return;
@@ -61,6 +66,7 @@ pub fn write_tie_off(
         timestamp: None,
         agent_events: Vec::new(),
         event_metadata: event_metadata.unwrap_or_default(),
+        session_id: session_id.clone(),
     };
     let _ = ps.tie_off_sink.append(tie_off);
 }

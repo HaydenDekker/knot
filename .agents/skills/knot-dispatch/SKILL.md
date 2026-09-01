@@ -4,7 +4,7 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
+  version: "1.5.0"
   compatibility: "Knot 0.37.0+"
 ---
 
@@ -299,9 +299,15 @@ After triggering any knot:
    ```
    ## {knot-name} triggered by Created {strand-filename}
    Timestamp: 2026-07-24T12:00:00Z
+   session: 1f2e3d4c-...   ← present when the pi session ID was captured
    ---
    Agent output here...
    ```
+
+   The optional `session:` line (Knot 0.39.0+) carries the pi session
+   ID that produced this section — open it with `pi --session-id <id>`
+   to see the exact conversation. It is omitted when no session ID was
+   captured (e.g. the stdio adapter).
 
 ---
 

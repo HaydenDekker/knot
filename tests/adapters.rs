@@ -404,6 +404,7 @@ mod tieoff_sink_adapter {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         assert!(sink.write(tie_off).is_ok());
@@ -432,6 +433,7 @@ mod tieoff_sink_adapter {
             timestamp: Some("2026-06-05T10:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         })
         .unwrap();
 
@@ -446,6 +448,7 @@ mod tieoff_sink_adapter {
             timestamp: Some("2026-06-05T11:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         })
         .unwrap();
 
@@ -487,6 +490,7 @@ mod tieoff_sink_adapter {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         assert!(sink.write(tie_off).is_ok());

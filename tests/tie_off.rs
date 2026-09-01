@@ -346,3 +346,185 @@ fn tie_off_contains_metadata() {
         "tie-off should reference the strand path"
     );
 }
+// ── Acceptance: session line on disk with the real tie-off sink (plan 071) ──
+
+/// Success runner whose output metadata carries a pi session ID.
+fn success_runner_with_session(output: &str, sid: &str) -> Arc<MockAgentRunner> {
+    use knot::application::ports::AgentInvocationMetadata;
+    Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+        stdout: output.to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+        metadata: Some(AgentInvocationMetadata {
+            session_id: Some(sid.to_string()),
+            token_usage: None,
+            compactions: vec![],
+        }),
+    })))
+}
+
+/// Build a `StrandEvent::Modified` for the given loom/knot/strand.
+fn modified_event(
+    loom_id: &str,
+    knot_id: &str,
+    strand_path: PathBuf,
+) -> knot::domain::events::StrandEvent {
+    knot::domain::events::StrandEvent::Modified {
+        loom_id: LoomId(loom_id.to_string()),
+        knot_id: KnotId(knot_id.to_string()),
+        strand_path: StrandPath(strand_path),
+    }
+}
+
+/// Acceptance: with the real `FileSystemTieOffSink`, a run whose
+/// metadata carries a session ID produces an on-disk tie-off containing
+/// `session: <id>` between `Timestamp:` and `---`.
+#[test]
+fn acceptance_real_sink_writes_session_line_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig_dir = dir.path().join("rig");
+    std::fs::create_dir_all(&rig_dir).unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = success_runner_with_session("output", "accept-sess");
+
+    let helpers::ProcessStrandResult { strand: use_case, .. } =
+        ProcessStrandBuilder::new(loom, runner)
+            .with_real_tie_off_sink(rig_dir)
+            .build();
+
+    use_case
+        .execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    // Runtime root: <tmp>/tie-offs/rig/review-loom/tie-off-review.md
+    let file_path = dir
+        .path()
+        .join("tie-offs/rig/review-loom/tie-off-review.md");
+    let content = std::fs::read_to_string(&file_path)
+        .unwrap_or_else(|e| panic!("tie-off file should exist at {file_path:?}: {e}"));
+
+    let lines: Vec<&str> = content.lines().collect();
+    let ts = lines
+        .iter()
+        .position(|l| l.starts_with("Timestamp: "))
+        .expect("Timestamp line");
+    let sep = lines
+        .iter()
+        .position(|l| *l == "---")
+        .expect("--- separator");
+    assert_eq!(
+        lines[ts + 1],
+        "session: accept-sess",
+        "session line must follow Timestamp on disk: {content}"
+    );
+    assert!(ts + 1 < sep, "session line must precede ---: {content}");
+}
+
+/// Acceptance: stdio-style run (no metadata) → on-disk file contains no
+/// `session:` line and its header block matches today's exact shape:
+/// header / Timestamp / --- with nothing in between.
+#[test]
+fn acceptance_real_sink_no_session_line_without_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig_dir = dir.path().join("rig");
+    std::fs::create_dir_all(&rig_dir).unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = success_runner("output");
+
+    let helpers::ProcessStrandResult { strand: use_case, .. } =
+        ProcessStrandBuilder::new(loom, runner)
+            .with_real_tie_off_sink(rig_dir)
+            .build();
+
+    use_case
+        .execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    let file_path = dir
+        .path()
+        .join("tie-offs/rig/review-loom/tie-off-review.md");
+    let content = std::fs::read_to_string(&file_path).unwrap();
+
+    assert!(
+        !content.contains("session:"),
+        "no session line without metadata: {content}"
+    );
+    // Header block keeps today's exact shape.
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(
+        lines[0].starts_with("## review triggered by Created "),
+        "header line unchanged: {content}"
+    );
+    assert!(
+        lines[1].starts_with("Timestamp: "),
+        "timestamp directly after header: {content}"
+    );
+    assert_eq!(lines[2], "---", "separator directly after timestamp: {content}");
+    assert!(content.contains("output"), "body present: {content}");
+}
+
+/// Acceptance: two appended sections (each with a session ID) both
+/// parse via `tieoff_parser::parse_sections` — the session line lands in
+/// the section body, header and timestamp stay structured. This pins
+/// the "parser unchanged" decision.
+#[test]
+fn acceptance_real_sink_append_sections_still_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig_dir = dir.path().join("rig");
+    std::fs::create_dir_all(&rig_dir).unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = success_runner_with_session("first output", "accept-sess");
+
+    let helpers::ProcessStrandResult { strand: use_case, .. } =
+        ProcessStrandBuilder::new(loom, runner)
+            .with_real_tie_off_sink(rig_dir)
+            .build();
+
+    use_case
+        .execute(created_event("review-loom", "review", strand_path.clone()))
+        .unwrap();
+    use_case
+        .execute(modified_event("review-loom", "review", strand_path))
+        .unwrap();
+
+    let file_path = dir
+        .path()
+        .join("tie-offs/rig/review-loom/tie-off-review.md");
+    let content = std::fs::read_to_string(&file_path).unwrap();
+
+    let sections =
+        knot::domain::tieoff_parser::parse_sections(&content);
+    assert_eq!(
+        sections.len(),
+        2,
+        "both sections should parse: {content}"
+    );
+    for section in &sections {
+        assert_eq!(section.knot_name, "review");
+        assert!(
+            section.timestamp.starts_with("20"),
+            "timestamp still structured: {:?}",
+            section.timestamp
+        );
+    }
+    assert_eq!(sections[0].event_type, "Created");
+    assert_eq!(sections[1].event_type, "Modified");
+    // The session line is carried in the body of each section — the
+    // parser is deliberately unchanged (plan 071, Target 4).
+    assert!(
+        sections[0].body.contains("session: accept-sess"),
+        "session line belongs to the section body: {:?}",
+        sections[0].body
+    );
+    assert!(
+        sections[1].body.contains("session: accept-sess"),
+        "second section body carries it too: {:?}",
+        sections[1].body
+    );
+}

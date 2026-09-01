@@ -266,6 +266,14 @@ pub struct TieOff {
     /// traced from tie-off content alone.
     #[serde(default, skip_serializing_if = "EventMetadata::is_none")]
     pub event_metadata: EventMetadata,
+    /// Pi session ID that produced this tie-off, when captured.
+    ///
+    /// Present for JSON-adapter runs (success or failure with a parsed
+    /// session line); absent for the stdio adapter or unparseable output.
+    /// Recorded so a reviewer can resume/inspect the exact session
+    /// (`pi --session-id <id>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 // ── RigState — File-first state snapshot ─────────────────────────────
@@ -639,6 +647,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         assert_eq!(tieoff.content, content);
@@ -759,6 +768,7 @@ mod tests {
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -778,6 +788,7 @@ mod tests {
             timestamp: None,
             agent_events: Vec::new(),
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         assert_eq!(tieoff.status, TieOffStatus::Failed);
@@ -812,6 +823,7 @@ mod tests {
             timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             agent_events: vec![event],
             event_metadata: EventMetadata::default(),
+            session_id: None,
         };
 
         let json = serde_json::to_string(&tieoff).unwrap();
@@ -822,6 +834,64 @@ mod tests {
             deserialized.agent_events[0].event_id,
             "PlanCreated"
         );
+    }
+
+    #[test]
+    fn tieoff_session_id_round_trip() {
+        let mut tieoff = TieOff {
+            content: "output".to_string(),
+            path: TieOffPath(PathBuf::from("out.md")),
+            status: TieOffStatus::Produced,
+            knot_name: Some("review".to_string()),
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
+            session_id: Some(
+                "1f2e3d4c-5678-4abc-89ef-0123456789ab".to_string()
+            ),
+        };
+
+        let json = serde_json::to_string(&tieoff).unwrap();
+        assert!(json.contains("\"session_id\""));
+        let deserialized: TieOff = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, tieoff);
+
+        tieoff.session_id = None;
+        let json = serde_json::to_string(&tieoff).unwrap();
+        let deserialized: TieOff = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, tieoff);
+    }
+
+    #[test]
+    fn tieoff_session_id_none_skipped_in_json() {
+        let tieoff = TieOff {
+            content: "output".to_string(),
+            path: TieOffPath(PathBuf::from("out.md")),
+            status: TieOffStatus::Produced,
+            knot_name: None,
+            event_type: None,
+            strand_path: None,
+            timestamp: None,
+            agent_events: Vec::new(),
+            event_metadata: EventMetadata::default(),
+            session_id: None,
+        };
+
+        let json = serde_json::to_string(&tieoff).unwrap();
+        assert!(
+            !json.contains("session_id"),
+            "session_id must be absent from JSON when None, got: {json}"
+        );
+    }
+
+    #[test]
+    fn tieoff_legacy_json_without_session_id_deserialises_to_none() {
+        // Legacy serialized tie-offs have no session_id field.
+        let json = r#"{"content":"hello","path":"out.md","status":"produced","knot_name":"review"}"#;
+        let tieoff: TieOff = serde_json::from_str(json).unwrap();
+        assert_eq!(tieoff.session_id, None);
     }
 
     #[test]

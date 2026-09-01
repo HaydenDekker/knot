@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.18.0"
+  version: "1.19.0"
   compatibility: "Knot 0.38.2+"
 ---
 
@@ -56,6 +56,34 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Tie-Off Sections Record the Pi Session ID (Knot 0.39.0, 2026-09-01)
+
+**What changed:** Every tie-off section written in append mode may now
+carry an optional `session:` metadata line, placed directly after
+`Timestamp:` and before the event-trigger metadata (`event:`,
+`source:`, `original_strand:`). The line records the pi session ID
+that produced the section, so a reviewer can resume or inspect the
+exact conversation with `pi --session-id <id>` (sessions live under
+`~/.pi/agent/sessions/`). The line is present whenever a session ID
+was captured — JSON-adapter runs on success and on failure with a
+parsed session line — and is **omitted entirely** otherwise (stdio
+adapter, unparseable output, pre-session errors), so unaffected
+sections keep their exact previous shape.
+
+**No migration required:** old tie-off files are untouched; the
+section parser treats `session:` like the other body-metadata lines
+(it lands in the parsed section body). New readers tolerate its
+absence.
+
+**Affected documents:** none — no project document (profile, knot,
+loom) format change. Tie-off files are rig output, not rig input.
+
+| Artifact | Before 0.39.0 | 0.39.0+ |
+|---|---|---|
+| Tie-off section header | `Timestamp:` followed by event metadata or `---` | Optional `session: <id>` line directly after `Timestamp:` (present when the pi session ID was captured) |
 
 ---
 
