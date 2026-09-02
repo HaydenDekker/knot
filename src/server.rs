@@ -203,29 +203,37 @@ pub fn build_app_context(
         Arc::new(crate::adapters::outbound::FileSystemTieOffSink::new(
             config.rig_dir.clone(),
         ));
+    // Plan 081: the inactivity watchdog window flows from the rig config
+    // (loaded at startup — restart Knot after editing the file); `None`
+    // (`inactivity-timeout-seconds: 0`) disables the watchdog.
+    let inactivity_timeout = rig_config.inactivity_timeout();
     let agent_runner: Arc<dyn application::ports::AgentRunner> =
         match rig_config.agent_adapter {
             AgentAdapter::PiJson => {
                 if let Some(ref cli_path) = config.cli_path {
-                    Arc::new(PiJsonAgentRunner::with_cli_path_and_timeout(
+                    Arc::new(PiJsonAgentRunner::with_cli_path_and_timeouts(
                         cli_path.to_string_lossy().to_string(),
                         config.agent_timeout,
+                        inactivity_timeout,
                     ))
                 } else {
-                    Arc::new(PiJsonAgentRunner::with_timeout(
+                    Arc::new(PiJsonAgentRunner::with_timeouts(
                         config.agent_timeout,
+                        inactivity_timeout,
                     ))
                 }
             }
             AgentAdapter::PiStdio => {
                 if let Some(ref cli_path) = config.cli_path {
-                    Arc::new(PiStdioAgentRunner::with_cli_path_and_timeout(
+                    Arc::new(PiStdioAgentRunner::with_cli_path_and_timeouts(
                         cli_path.to_string_lossy().to_string(),
                         config.agent_timeout,
+                        inactivity_timeout,
                     ))
                 } else {
-                    Arc::new(PiStdioAgentRunner::with_timeout(
+                    Arc::new(PiStdioAgentRunner::with_timeouts(
                         config.agent_timeout,
+                        inactivity_timeout,
                     ))
                 }
             }
@@ -1526,6 +1534,81 @@ mod composition_tests {
             "pi-stdio",
             "expected PiStdioAgentRunner for agent_adapter: pi-stdio",
         );
+    }
+
+    /// Plan 081: the rig config's inactivity window flows through the
+    /// composition root into the adapter — a silent mock CLI is killed
+    /// by the inactivity watchdog (not by the 30s per-context budget
+    /// below), and the composed runner reports `AgentInactivity` with
+    /// the configured window. Exercises the non-`cli_path` branch (the
+    /// runner resolves the mock via `KNOT_TEST_CLI_PATH` at
+    /// construction).
+    #[test]
+    fn test_composition_wires_inactivity_timeout() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        fs::create_dir_all(&rig_dir).unwrap();
+
+        // Mock CLI: emit one session line, then stay silent.
+        let cli = dir.path().join("mock-pi.sh");
+        fs::write(
+            &cli,
+            "#!/usr/bin/env bash\necho '{\"type\":\"session\",\"id\":\"sess-wire\"}'\nsleep 300\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Rig config: 1s inactivity window — far below the 30s
+        // per-context budget, so only the watchdog can account for the
+        // kill (the total timeout is preserved but never reached).
+        let config_path = rig_dir.join(".workspace-agent-config.yaml");
+        fs::write(
+            &config_path,
+            "agent-adapter: pi-json\ninactivity-timeout-seconds: 1\n",
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var(
+                "KNOT_TEST_CLI_PATH",
+                cli.to_string_lossy().to_string(),
+            );
+        }
+        let config = AppConfig::with_rig_dir(rig_dir);
+        let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
+        unsafe { std::env::remove_var("KNOT_TEST_CLI_PATH"); }
+
+        let exec_ctx = application::ports::ExecutionContext {
+            agent_config: crate::domain::value_objects::AgentConfig {
+                goal: "test".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+                thinking_level: None,
+            },
+            prompt: "do nothing".to_string(),
+            profile_prompt: String::new(),
+            strand_path: domain::entities::StrandPath(PathBuf::from("strand.md")),
+            event_type: "Created".to_string(),
+            knot_name: Some("k1".to_string()),
+            timeout: Some(Duration::from_secs(30)),
+        };
+
+        let result = ctx.agent_runner.execute(exec_ctx);
+        match result {
+            Err(application::ports::PortError::AgentInactivity {
+                window_secs,
+                ..
+            }) => assert_eq!(
+                window_secs, 1,
+                "composed runner should carry the rig config's inactivity window"
+            ),
+            other => panic!(
+                "expected AgentInactivity from the composed runner, got: {other:?}"
+            ),
+        }
     }
 
     /// `run_startup()` creates `.workspace-agent-config.yaml` if missing.

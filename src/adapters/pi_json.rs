@@ -68,6 +68,24 @@ impl PiJsonAgentRunner {
         }
     }
 
+    /// Create a new runner with a custom total timeout and inactivity
+    /// window (plan 081).
+    ///
+    /// Used by the composition root (`build_app_context`) when
+    /// `AppConfig::cli_path` is not set: the CLI path is resolved via
+    /// [`Self::resolve_cli_path`]; the inactivity window kills a silent
+    /// session early (`None` disables the watchdog).
+    pub fn with_timeouts(
+        timeout: Duration,
+        inactivity_timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            timeout,
+            inactivity_timeout,
+            cli_path: Self::resolve_cli_path(),
+        }
+    }
+
     /// Create a new runner with a specific CLI path.
     /// Used by integration tests to inject a mock binary.
     #[cfg(test)]
