@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-02 (plan 081 phases 0–3 complete — inactivity timeout watchdog, error, outcome, loom event; phase 4 pending)
+> **Last Updated:** 2026-09-02 (plan 081 phases 0–4 complete — inactivity watchdog, error, outcome, loom event, restart with blocking-call note; phase 5 pending)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | 🟡 In Progress (phases 0–3 done) | 2026-09-02 |
+| 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | 🟡 In Progress (phases 0–4 done) | 2026-09-02 |
 | 80 | [Context Overflow Without Compaction — Fail Fast, Warn at Startup](080-overflow-error-fail-fast/overflow-error-fail-fast-plan.md) | ✅ Complete (2026-08-27) — released in v0.38.1 | 2026-08-27 |
 | 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
 | 78 | [Final-Response Request — Re-enter on Abrupt Turn-End](078-final-response-request/final-response-request-plan.md) | ✅ Complete | 2026-08-26 |
