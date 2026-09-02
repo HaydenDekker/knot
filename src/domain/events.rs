@@ -500,6 +500,31 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// The agent session produced no output for the inactivity window
+    /// and was killed by the watchdog; the session is being restarted
+    /// with the blocking-call note (plan 081). Logged per stall so the
+    /// user can see repeated stalls during retries.
+    AgentInactivity {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// The captured session ID; `""` when none was captured
+        /// (pre-session stall or the `pi-stdio` adapter) — the restart
+        /// is then a fresh session.
+        session_id: String,
+        /// How long the session was silent (seconds).
+        silent_secs: u64,
+        /// The configured inactivity window (seconds).
+        window_secs: u64,
+        /// The blocked call, when derivable from the stream
+        /// (e.g. `bash("npm run build")`).
+        blocked_call: Option<String>,
+        /// Number of the attempt that stalled
+        /// (1 = first attempt, 2 = first retry, etc.).
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
 }
 
 /// A Knot was registered with a Loom.
@@ -2351,6 +2376,91 @@ mod tests {
             }
             _ => panic!("Expected KnotEventsMissing variant"),
         }
+    }
+
+    // ── AgentInactivity Tests (Plan 081) ─────────────────────────────
+
+    /// `LoomEvent::AgentInactivity` carries `loom_id`, `knot_id`,
+    /// `strand_path`, `session_id`, `silent_secs`, `window_secs`,
+    /// `blocked_call`, `attempt`, and `timestamp`. Verifies the variant
+    /// shape and JSON round-trip serialisation (field order stable —
+    /// it is a new variant, no compatibility concern).
+    #[test]
+    fn agent_inactivity_event_serialisation() {
+        let loom_id = LoomId("prds".to_string());
+        let knot_id = KnotId("review".to_string());
+        let strand_path =
+            StrandPath(PathBuf::from("project/prds/my-prd.md"));
+        let session_id = "sess-inact-42".to_string();
+        let silent_secs: u64 = 300;
+        let window_secs: u64 = 300;
+        let blocked_call = Some("bash(\"npm run build\")".to_string());
+        let attempt: u32 = 2;
+        let ts = "2026-09-02T10:00:00Z".to_string();
+
+        let event = LoomEvent::AgentInactivity {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            session_id: session_id.clone(),
+            silent_secs,
+            window_secs,
+            blocked_call: blocked_call.clone(),
+            attempt,
+            timestamp: ts.clone(),
+        };
+
+        // Verify fields via pattern matching
+        match &event {
+            LoomEvent::AgentInactivity {
+                loom_id: lid,
+                knot_id: kid,
+                strand_path: sp,
+                session_id: sid,
+                silent_secs: ss,
+                window_secs: ws,
+                blocked_call: bc,
+                attempt: a,
+                timestamp: t,
+            } => {
+                assert_eq!(*lid, loom_id);
+                assert_eq!(*kid, knot_id);
+                assert_eq!(*sp, strand_path);
+                assert_eq!(sid, &session_id);
+                assert_eq!(*ss, silent_secs);
+                assert_eq!(*ws, window_secs);
+                assert_eq!(bc, &blocked_call);
+                assert_eq!(*a, attempt);
+                assert_eq!(t, &ts);
+            }
+            _ => panic!("Expected AgentInactivity variant"),
+        }
+
+        // Verify serialisation round-trip
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    /// A stall with no captured session (pre-session line, `pi-stdio`)
+    /// serialises with an empty `session_id` and no blocked call.
+    #[test]
+    fn agent_inactivity_event_without_session_roundtrips() {
+        let event = LoomEvent::AgentInactivity {
+            loom_id: LoomId("prds".to_string()),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
+            session_id: String::new(),
+            silent_secs: 42,
+            window_secs: 300,
+            blocked_call: None,
+            attempt: 1,
+            timestamp: "2026-09-02T10:00:01Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
     }
 
     // ── Phase 0: ContextProvider and BuildContext Tests ──────────────

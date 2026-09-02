@@ -1821,4 +1821,208 @@ mod tests {
             extra_args
         );
     }
+
+    // ── Plan 081: inactivity kill restarts with the blocking-call note ──
+
+    /// Plan 081: build an inactivity error with the given session ID
+    /// (300s silent in a 300s window).
+    fn err_inactivity(sid: Option<&str>) -> PortError {
+        PortError::AgentInactivity {
+            message: "no output for 300s (inactivity window 300s) (mock)"
+                .to_string(),
+            silent_secs: 300,
+            window_secs: 300,
+            blocked_call: None,
+            session_id: sid.map(str::to_string),
+        }
+    }
+
+    /// Plan 081: an inactivity kill with a captured session ID re-enters
+    /// the same session; the retry prompt carries the inactivity restart
+    /// note (with the secs values), NOT the bare final-response request.
+    #[test]
+    fn inactivity_retry_reenters_session_with_note() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_inactivity(Some("sess-inact"))),
+            Ok(ok_output("done")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+        assert!(
+            result.is_ok(),
+            "should succeed on the retry: {:?}",
+            result.err()
+        );
+        assert_eq!(runner.call_count(), 2);
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+
+        // Second call re-enters the same session.
+        let extra_args = &contexts[1].agent_config.extra_args;
+        assert!(
+            extra_args.contains(&"--session-id".to_string()),
+            "retry should carry --session-id: {extra_args:?}"
+        );
+        assert!(
+            extra_args.contains(&"sess-inact".to_string()),
+            "retry should carry the session ID: {extra_args:?}"
+        );
+
+        // Retry prompt carries the inactivity note with the secs values
+        // (300s silent, 300s window → "5-minute window" phrasing), and
+        // NOT the bare 078 final-response request.
+        let prompt = &contexts[1].prompt;
+        assert!(
+            prompt.contains("blocked for more than 300 seconds"),
+            "retry prompt should carry the inactivity note: {prompt}"
+        );
+        assert!(
+            prompt.contains("5-minute window"),
+            "retry prompt should name the window in minutes: {prompt}"
+        );
+        assert!(
+            !prompt.contains(FINAL_RESPONSE_REQUEST),
+            "inactivity retry must not carry the bare 078 text: {prompt}"
+        );
+
+        // Loom-log: AgentInactivity { attempt: 1 } + SessionResumed { attempt: 1 }
+        let events = log.events();
+        let inactivity_attempt = events
+            .iter()
+            .find_map(|e| {
+                if let LoomEvent::AgentInactivity { attempt, .. } = e {
+                    Some(*attempt)
+                } else {
+                    None
+                }
+            });
+        assert_eq!(
+            inactivity_attempt,
+            Some(1),
+            "expected AgentInactivity {{ attempt: 1 }}, got: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { attempt: 1, .. })),
+            "expected SessionResumed {{ attempt: 1 }}: {events:?}"
+        );
+    }
+
+    /// Plan 081: an inactivity kill WITHOUT a session ID is still
+    /// retried — the one deliberate gate exception (a fresh restart is
+    /// safe: knots are idempotent). The retry prompt carries the note;
+    /// no `--session-id` is passed.
+    #[test]
+    fn inactivity_retry_fresh_without_session() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_inactivity(None)),
+            Ok(ok_output("done")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+        assert!(
+            result.is_ok(),
+            "should succeed on the fresh retry: {:?}",
+            result.err()
+        );
+        assert_eq!(runner.call_count(), 2);
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+
+        let extra_args = &contexts[1].agent_config.extra_args;
+        assert!(
+            !extra_args.contains(&"--session-id".to_string()),
+            "fresh restart must not pass --session-id: {extra_args:?}"
+        );
+        assert!(
+            contexts[1].prompt.contains("blocked for more than 300 seconds"),
+            "retry prompt should carry the inactivity note: {}",
+            contexts[1].prompt
+        );
+    }
+
+    /// Plan 081 regression (078): a plain timeout retry still carries
+    /// the `FINAL_RESPONSE_REQUEST` — only inactivity kills swap the
+    /// note for the blocking-call text.
+    #[test]
+    fn inactivity_note_replaces_final_response_request() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("done")),
+        ]);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+        assert!(
+            result.is_ok(),
+            "should succeed on the retry: {:?}",
+            result.err()
+        );
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+        let prompt = &contexts[1].prompt;
+        assert!(
+            prompt.contains(FINAL_RESPONSE_REQUEST),
+            "timeout retry should still carry the final-response request: {prompt}"
+        );
+        assert!(
+            !prompt.contains("blocked for more than"),
+            "timeout retry must not carry the inactivity note: {prompt}"
+        );
+    }
+
+    /// Plan 081: when every attempt is an inactivity kill, the terminal
+    /// error is `PortError::AgentInactivity` (cause-accurate exhaustion,
+    /// per 077/078) — not `Timeout` and not `AgentNoResponse`. No profile
+    /// timeout → MAX_RETRIES is the only bound: 11 agent calls, 11 ×
+    /// AgentInactivity + 10 × SessionResumed in the loom-log.
+    #[test]
+    fn inactivity_exhausted_terminal() {
+        let responses: Vec<Result<AgentOutput, PortError>> = (0..11)
+            .map(|_| Err(err_inactivity(Some("sess-inact"))))
+            .collect();
+        let runner = TestAgentRunner::new(responses);
+        let log = TestLoomLog::default();
+
+        let result = execute_no_budget(&runner, &log);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PortError::AgentInactivity { message, .. } => {
+                assert!(
+                    message.contains("exhausted"),
+                    "message should mention exhaustion: {message}"
+                );
+            }
+            other => panic!("expected terminal AgentInactivity, got: {other:?}"),
+        }
+
+        // Runner called 11 times: initial + 10 retries
+        assert_eq!(runner.call_count(), 11);
+
+        // Loom-log: 11 × AgentInactivity + 10 × SessionResumed
+        let events = log.events();
+        let inactivity_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::AgentInactivity { .. }))
+            .count();
+        let resumed_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::SessionResumed { .. }))
+            .count();
+        assert_eq!(
+            inactivity_count, 11,
+            "expected 11 AgentInactivity events, got: {events:?}"
+        );
+        assert_eq!(
+            resumed_count, 10,
+            "expected 10 SessionResumed events, got: {events:?}"
+        );
+    }
 }

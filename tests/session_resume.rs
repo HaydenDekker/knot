@@ -100,6 +100,18 @@ fn err_timeout(sid: &str) -> PortError {
     }
 }
 
+/// Build an inactivity error (plan 081) with the given session ID
+/// (300s silent in a 300s window).
+fn err_inactivity(sid: Option<&str>) -> PortError {
+    PortError::AgentInactivity {
+        message: "no output for 300s (inactivity window 300s) (mock)".to_string(),
+        silent_secs: 300,
+        window_secs: 300,
+        blocked_call: None,
+        session_id: sid.map(str::to_string),
+    }
+}
+
 /// Build a non-resumable (fatal) error.
 fn err_fatal() -> PortError {
     PortError::CommandNotFound("pi not found".to_string())
@@ -695,5 +707,212 @@ exit 1
     assert!(
         err.session_id().is_none(),
         "Error should have no session_id"
+    );
+}
+
+// ── Plan 081: Inactivity Kill Restarts with the Blocking-Call Note ──────
+
+/// First invocation is killed for inactivity (with a session ID); the
+/// restarted session succeeds. Verifies: 2 agent calls, `--session-id`
+/// on the second invocation, the inactivity restart note in the captured
+/// retry prompt (not the bare 078 text), AgentInactivity + SessionResumed
+/// + KnotCompleted in the loom-log, tie-off `Produced`, rig-log empty.
+#[test]
+fn test_inactivity_restarts_with_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+        Err(err_inactivity(Some("sess-inact"))),
+        Ok(ok_output_with_sid("final after note", "sess-inact")),
+    ]));
+
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile())
+        .build();
+
+    unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+    use_case
+        .execute(created_event("review-loom", "review", strand_path))
+        .unwrap();
+    unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+
+    // Verify 2 agent calls
+    let contexts = captured_runner.get_captured_contexts();
+    assert_eq!(contexts.len(), 2, "should have 2 agent calls");
+
+    // Second call re-enters the same session
+    let args = &contexts[1].agent_config.extra_args;
+    assert!(
+        args.contains(&"--session-id".to_string()),
+        "retry should have --session-id in extra_args: {args:?}"
+    );
+    assert!(
+        args.contains(&"sess-inact".to_string()),
+        "retry should have the session ID in extra_args: {args:?}"
+    );
+
+    // The retry prompt carries the inactivity note (with the secs
+    // values), not the bare final-response request.
+    let prompt = &contexts[1].prompt;
+    assert!(
+        prompt.contains("blocked for more than 300 seconds"),
+        "retry prompt should carry the inactivity note: {prompt}"
+    );
+    assert!(
+        prompt.contains("5-minute window"),
+        "retry prompt should name the window in minutes: {prompt}"
+    );
+
+    // Loom-log: AgentInactivity + SessionResumed + KnotCompleted,
+    // no KnotFailed
+    let events = log_events.lock().unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::AgentInactivity { .. })),
+        "should have AgentInactivity: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+        "should have SessionResumed: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, LoomEvent::KnotCompleted { .. })),
+        "should have KnotCompleted: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, LoomEvent::KnotFailed { .. })),
+        "should NOT have KnotFailed: {events:?}"
+    );
+
+    // Tie-off: Produced with the restarted session's output
+    let appends = tie_off_appends.lock().unwrap();
+    assert_eq!(appends.len(), 1, "should have 1 tie-off append");
+    assert_eq!(appends[0].status, TieOffStatus::Produced);
+    assert!(
+        appends[0].content.contains("final after note"),
+        "tie-off should contain the restarted response: {}",
+        appends[0].content
+    );
+
+    // No rig-log events on success
+    let rig = rig_events.lock().unwrap();
+    assert!(rig.is_empty(), "rig-log should be empty on success: {rig:?}");
+}
+
+/// Every attempt is an inactivity kill → retries exhausted → a deadline
+/// did fire (`TimeoutSkipped`): no new tie-off section appended (prior
+/// content intact), rig-log has `TimeoutExceeded` carrying the
+/// inactivity cause, and the queued event is removed (late-removal
+/// invariant).
+#[test]
+fn test_inactivity_exhausted_preserves_tieoff() {
+    let dir = tempfile::tempdir().unwrap();
+    let strand_path = create_strand_file(&dir, "feature.md", "content");
+
+    // 12 inactivity kills: 1 initial + 10 retries (MAX_RETRIES) + spare.
+    let responses: Vec<Result<AgentOutput, PortError>> = (0..12)
+        .map(|_| Err(err_inactivity(Some("sess-inact"))))
+        .collect();
+
+    let loom = build_loom("review-loom", vec![build_knot("review")]);
+    let runner = Arc::new(MockAgentRunner::new_sequence(responses));
+    let queue = Arc::new(InMemoryEventQueue::new());
+
+    let helpers::ProcessStrandResult {
+        strand: use_case,
+        log_events,
+        tie_off_appends,
+        rig_events,
+        agent_runner: captured_runner,
+        ..
+    } = ProcessStrandBuilder::new(loom, runner)
+        .with_profile(default_profile()) // no profile timeout budget
+        .with_strand_queue(Arc::clone(&queue) as Arc<dyn StrandQueueAccessor>)
+        .build();
+
+    let pending = make_pending("review-loom", "review", &strand_path);
+    queue.push(pending.clone());
+
+    // Set zero retry delay for fast test execution
+    unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+    use_case.execute_with_pending(&pending).unwrap();
+    unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+
+    // 11 calls: 1 initial + 10 retries
+    let contexts = captured_runner.get_captured_contexts();
+    assert_eq!(
+        contexts.len(),
+        11,
+        "should have 11 agent calls (1 + 10 retries)"
+    );
+
+    // Tie-off: NO new section appended — prior content intact
+    let appends = tie_off_appends.lock().unwrap();
+    assert!(
+        appends.is_empty(),
+        "tie-off should NOT be appended on exhausted inactivity: {appends:?}"
+    );
+
+    // Rig-log: TimeoutExceeded carrying the inactivity cause
+    let rig = rig_events.lock().unwrap();
+    let exceeded = rig
+        .iter()
+        .find_map(|e| {
+            if let RigLogEvent::TimeoutExceeded { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
+            }
+        })
+        .expect("rig-log should have TimeoutExceeded: {rig:?}");
+    assert!(
+        exceeded.contains("inactivity"),
+        "TimeoutExceeded should carry the inactivity cause: {exceeded}"
+    );
+
+    // Loom-log: KnotFailed (inactivity cause) + StrandProcessed { error }
+    let events = log_events.lock().unwrap();
+    let failed = events
+        .iter()
+        .find_map(|e| {
+            if let LoomEvent::KnotFailed { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
+            }
+        })
+        .expect("KnotFailed should be logged on exhaustion");
+    assert!(
+        failed.contains("inactivity"),
+        "KnotFailed should carry the inactivity cause: {failed}"
+    );
+    let processed_error = events
+        .iter()
+        .find_map(|e| {
+            if let LoomEvent::StrandProcessed { error, .. } = e {
+                Some(error.clone())
+            } else {
+                None
+            }
+        })
+        .expect("StrandProcessed should be logged");
+    assert!(
+        processed_error.is_some(),
+        "StrandProcessed should carry an error on exhaustion"
+    );
+
+    // Late-removal invariant: the queued event is consumed exactly once
+    // even when the knot fails.
+    assert!(
+        queue.is_empty(),
+        "queued event must be removed on failure (late removal)"
     );
 }

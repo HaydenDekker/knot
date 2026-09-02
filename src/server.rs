@@ -791,10 +791,10 @@ pub fn run_startup(
         let config = r#"# Rig-level agent configuration.
 #
 # agent-adapter: which adapter to use for Pi invocations.
-#   pi-stdio — plain text stdout (default, current behaviour)
-#   pi-json  — JSON-L stream with session ID + token usage capture
+#   pi-json  — JSON-L stream with session ID + token usage capture (default)
+#   pi-stdio — plain text stdout
 #
-agent-adapter: pi-stdio
+agent-adapter: pi-json
 "#;
         std::fs::write(&config_path, config).map_err(|e| {
             eprintln!("WARNING: failed to write {}: {e}", config_path.display());
@@ -1489,22 +1489,22 @@ mod composition_tests {
         );
     }
 
-    /// With `agent_adapter: pi-stdio` or default, composition wires
-    /// `PiStdioAgentRunner`.
+    /// With no config file, composition defaults to `PiJsonAgentRunner`
+    /// (default flip, plan 081).
     #[test]
-    fn test_composition_uses_stdio_runner() {
+    fn test_composition_defaults_to_json_runner() {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         fs::create_dir_all(&rig_dir).unwrap();
 
-        // No config file — defaults to pi-stdio
+        // No config file — defaults to pi-json
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
 
         assert_eq!(
             ctx.agent_runner.runner_type(),
-            "pi-stdio",
-            "expected PiStdioAgentRunner for default adapter",
+            "pi-json",
+            "expected PiJsonAgentRunner for default adapter",
         );
     }
 
@@ -1549,12 +1549,12 @@ mod composition_tests {
         assert!(config_path.exists(), "config file should be created");
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(
-            content.contains("agent-adapter: pi-stdio"),
-            "config should default to pi-stdio"
+            content.contains("agent-adapter: pi-json"),
+            "config should default to pi-json"
         );
         assert!(
-            content.contains("pi-json"),
-            "config should document pi-json as available adapter"
+            content.contains("pi-stdio"),
+            "config should document pi-stdio as available adapter"
         );
     }
 

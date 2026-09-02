@@ -217,6 +217,13 @@ pub enum AgentAdapter {
     PiJson,
 }
 
+/// Default inactivity watchdog window in seconds.
+///
+/// Applied when `inactivity-timeout-seconds` is absent from
+/// `.workspace-agent-config.yaml`. A value of `0` disables the
+/// watchdog.
+pub const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 300;
+
 /// Rig-level agent configuration. One config per rig,
 /// shared by all knots in that rig.
 ///
@@ -227,17 +234,47 @@ pub enum AgentAdapter {
 pub struct RigAgentConfig {
     #[serde(default = "default_agent_adapter")]
     pub agent_adapter: AgentAdapter,
+    /// Inactivity watchdog window in seconds: when the agent session
+    /// produces no output for this long it is killed and restarted
+    /// with a blocking-call note. `0` disables the watchdog.
+    ///
+    /// Defaults to [`DEFAULT_INACTIVITY_TIMEOUT_SECS`] (300) when the
+    /// key is absent, so old config files keep working unchanged.
+    #[serde(
+        rename = "inactivity-timeout-seconds",
+        default = "default_inactivity_timeout_secs"
+    )]
+    pub inactivity_timeout_secs: u64,
 }
 
 fn default_agent_adapter() -> AgentAdapter {
-    AgentAdapter::PiStdio
+    AgentAdapter::PiJson
+}
+
+fn default_inactivity_timeout_secs() -> u64 {
+    DEFAULT_INACTIVITY_TIMEOUT_SECS
 }
 
 impl RigAgentConfig {
-    /// Create a default workspace config (`agent_adapter = PiStdio`).
+    /// Create a default workspace config (`agent_adapter = PiJson`,
+    /// inactivity window 300s).
     pub fn default_config() -> Self {
         Self {
-            agent_adapter: AgentAdapter::PiStdio,
+            agent_adapter: AgentAdapter::PiJson,
+            inactivity_timeout_secs: DEFAULT_INACTIVITY_TIMEOUT_SECS,
+        }
+    }
+
+    /// The inactivity watchdog window as a `Duration`.
+    ///
+    /// Returns `None` when the watchdog is disabled
+    /// (`inactivity_timeout_secs == 0`), otherwise
+    /// `Duration::from_secs(value)`.
+    pub fn inactivity_timeout(&self) -> Option<std::time::Duration> {
+        if self.inactivity_timeout_secs == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(self.inactivity_timeout_secs))
         }
     }
 }
@@ -1285,9 +1322,20 @@ mod tests {
 
     #[test]
     fn rig_agent_config_defaults() {
-        // Default config uses PiStdio adapter
+        // Default config uses PiJson adapter (default flip, plan 081)
+        // with the 300s inactivity window.
         let config = RigAgentConfig::default_config();
-        assert_eq!(config.agent_adapter, AgentAdapter::PiStdio);
+        assert_eq!(config.agent_adapter, AgentAdapter::PiJson);
+        assert_eq!(config.inactivity_timeout_secs, DEFAULT_INACTIVITY_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn rig_agent_config_default_adapter_is_pi_json() {
+        // Fresh rigs (no explicit `agent-adapter` in the config file)
+        // get pi-json — session IDs, token usage, and inactivity
+        // restart with blocked-call identification.
+        let config = RigAgentConfig::default_config();
+        assert_eq!(config.agent_adapter, AgentAdapter::PiJson);
     }
 
     #[test]
@@ -1316,8 +1364,80 @@ mod tests {
     fn rig_agent_config_serialization() {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
+            inactivity_timeout_secs: 300,
         };
         let json = serde_json::to_string(&config).unwrap();
+        let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, config);
+    }
+
+    // ── Inactivity timeout config (plan 081) ────────────────────────────
+
+    #[test]
+    fn rig_agent_config_inactivity_yaml_default_when_absent() {
+        // Absent key → 300 (old config files keep working — no migration).
+        let yaml = "agent-adapter: pi-json";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.inactivity_timeout_secs, 300);
+
+        // Empty document → both defaults (PiJson + 300).
+        let config: RigAgentConfig = serde_yaml::from_str("").unwrap();
+        assert_eq!(config.agent_adapter, AgentAdapter::PiJson);
+        assert_eq!(config.inactivity_timeout_secs, 300);
+    }
+
+    #[test]
+    fn rig_agent_config_inactivity_yaml_explicit_value() {
+        let yaml = "inactivity-timeout-seconds: 120";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.inactivity_timeout_secs, 120);
+    }
+
+    #[test]
+    fn rig_agent_config_inactivity_zero_disables() {
+        // Explicit 0 disables the watchdog (distinct from absent → 300).
+        let yaml = "inactivity-timeout-seconds: 0";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.inactivity_timeout_secs, 0);
+        assert_eq!(config.inactivity_timeout(), None);
+    }
+
+    #[test]
+    fn rig_agent_config_inactivity_timeout_duration_mapping() {
+        let mut config = RigAgentConfig::default_config();
+        assert_eq!(
+            config.inactivity_timeout(),
+            Some(std::time::Duration::from_secs(300))
+        );
+        config.inactivity_timeout_secs = 90;
+        assert_eq!(
+            config.inactivity_timeout(),
+            Some(std::time::Duration::from_secs(90))
+        );
+        config.inactivity_timeout_secs = 0;
+        assert_eq!(config.inactivity_timeout(), None);
+    }
+
+    #[test]
+    fn rig_agent_config_inactivity_yaml_roundtrip() {
+        let config = RigAgentConfig {
+            agent_adapter: AgentAdapter::PiJson,
+            inactivity_timeout_secs: 45,
+        };
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(yaml.contains("inactivity-timeout-seconds: 45"));
+        let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn rig_agent_config_inactivity_json_roundtrip() {
+        let config = RigAgentConfig {
+            agent_adapter: AgentAdapter::PiStdio,
+            inactivity_timeout_secs: 0,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"inactivity-timeout-seconds\":0"));
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
     }
@@ -2452,11 +2572,11 @@ mod tests {
     // ── AgentAdapter Tests ──────────────────────────────────────────────────
 
     #[test]
-    fn test_agent_adapter_default_pistdio() {
-        // Missing field defaults to PiStdio
+    fn test_agent_adapter_default_pijson() {
+        // Missing field defaults to PiJson (default flip, plan 081)
         let yaml = "";
         let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.agent_adapter, AgentAdapter::PiStdio);
+        assert_eq!(config.agent_adapter, AgentAdapter::PiJson);
     }
 
     #[test]
@@ -2484,6 +2604,7 @@ mod tests {
     fn test_rig_agent_config_serialization_roundtrip() {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
+            inactivity_timeout_secs: 300,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();

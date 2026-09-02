@@ -332,6 +332,7 @@ fn loom_event_name(e: &LoomEvent) -> &'static str {
         LoomEvent::EventsDispatched { .. } => "EventsDispatched",
         LoomEvent::KnotEventsMissing { .. } => "KnotEventsMissing",
         LoomEvent::ContextCompacted { .. } => "ContextCompacted",
+        LoomEvent::AgentInactivity { .. } => "AgentInactivity",
     }
 }
 

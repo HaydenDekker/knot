@@ -11,10 +11,13 @@
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::adapters::live_output::{
+    join_all, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
+};
 use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionRecord,
     ExecutionContext, PortError, TokenUsage,
@@ -31,6 +34,10 @@ pub struct PiJsonAgentRunner {
     /// Maximum duration the agent may run before being killed.
     /// Defaults to 120 seconds.
     timeout: Duration,
+    /// Plan 081: kill the session when it produces no output for this
+    /// window. `None` disables the inactivity watchdog (the total
+    /// timeout still bounds the attempt).
+    inactivity_timeout: Option<Duration>,
     /// Path to the agent CLI binary. Resolved once at construction time
     /// to avoid PATH lookup races at execution time.
     cli_path: String,
@@ -40,6 +47,7 @@ impl Default for PiJsonAgentRunner {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            inactivity_timeout: None,
             cli_path: Self::resolve_cli_path(),
         }
     }
@@ -55,6 +63,7 @@ impl PiJsonAgentRunner {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             timeout,
+            inactivity_timeout: None,
             cli_path: Self::resolve_cli_path(),
         }
     }
@@ -65,6 +74,7 @@ impl PiJsonAgentRunner {
     pub fn with_cli_path(cli_path: String) -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            inactivity_timeout: None,
             cli_path,
         }
     }
@@ -74,7 +84,30 @@ impl PiJsonAgentRunner {
     /// Used by the composition root (`build_app_context`) when
     /// `AppConfig::cli_path` is set.
     pub fn with_cli_path_and_timeout(cli_path: String, timeout: Duration) -> Self {
-        Self { timeout, cli_path }
+        Self {
+            timeout,
+            inactivity_timeout: None,
+            cli_path,
+        }
+    }
+
+    /// Create a new runner with an explicit CLI path, total timeout,
+    /// and inactivity window (plan 081).
+    ///
+    /// Used by the composition root (`build_app_context`): the total
+    /// timeout bounds the whole attempt (existing behaviour); the
+    /// inactivity window kills a silent session early (`None` disables
+    /// the watchdog).
+    pub fn with_cli_path_and_timeouts(
+        cli_path: String,
+        timeout: Duration,
+        inactivity_timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            timeout,
+            inactivity_timeout,
+            cli_path,
+        }
     }
 
     /// Resolve the CLI path for the agent binary.
@@ -310,6 +343,74 @@ impl PiJsonAgentRunner {
         )
     }
 
+    /// Plan 081: name the blocked call from the accumulated JSON-L
+    /// stream — the most recent `tool_execution_start` with no
+    /// matching `tool_execution_end`, as
+    /// `{toolName}({args preview})`. The args preview is the `command`
+    /// field when present, else the first 80 chars of the args JSON.
+    ///
+    /// Best-effort: malformed lines are ignored and `None` is fine —
+    /// the restart note works without the call name.
+    fn parse_blocked_call(raw_stdout: &str) -> Option<String> {
+        #[derive(Debug)]
+        struct OpenCall {
+            id: String,
+            label: String,
+        }
+        let mut open: Vec<OpenCall> = Vec::new();
+        for line in raw_stdout.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue, // malformed lines ignored
+            };
+            match value.get("type").and_then(|t| t.as_str()) {
+                Some("tool_execution_start") => {
+                    let id = value
+                        .get("toolCallId")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool_name = value
+                        .get("toolName")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("unknown");
+                    let args = value.get("args");
+                    let args_preview = if let Some(cmd) = args
+                        .and_then(|a| a.get("command"))
+                        .and_then(|c| c.as_str())
+                    {
+                        cmd.to_string()
+                    } else if let Some(a) = args {
+                        let json = a.to_string();
+                        let mut preview: String = json.chars().take(80).collect();
+                        if json.chars().count() > 80 {
+                            preview.push('…');
+                        }
+                        preview
+                    } else {
+                        String::new()
+                    };
+                    open.push(OpenCall {
+                        id,
+                        label: format!("{tool_name}({args_preview})"),
+                    });
+                }
+                Some("tool_execution_end") => {
+                    if let Some(id) = value.get("toolCallId").and_then(|i| i.as_str()) {
+                        if let Some(pos) = open.iter().position(|c| c.id == id) {
+                            open.remove(pos);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        open.last().map(|c| c.label.clone())
+    }
+
     /// The failing record when the stream shows a terminal overflow:
     /// an overflow compaction with `will_retry: false` that follows an
     /// overflow compaction with `will_retry: true` (recovery ran, the
@@ -461,36 +562,68 @@ impl AgentRunner for PiJsonAgentRunner {
         };
 
         let child_pid = child.id() as i32;
-        let cli_path_clone = cli_path.clone();
         let strand_desc = ctx.strand_path.0.display().to_string();
-        let strand_desc_warn = strand_desc.clone();
         let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
 
-        // Shared flag: set to true when the child exits normally.
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let cancelled_for_thread = Arc::clone(&cancelled);
+        // Plan 081: shared liveness state — drained output buffers,
+        // last-activity timestamp (stamped at spawn, so the
+        // pre-first-byte window counts), and the watchdog's kill
+        // reason.
+        let live = LiveOutput::new();
 
-        // Spawn a background thread that kills the child on timeout.
-        let _timeout_thread = std::thread::Builder::new()
-            .name("json-timeout".to_string())
-            .spawn(move || {
-                std::thread::sleep(effective_timeout);
-                if cancelled_for_thread.load(Ordering::Relaxed) {
-                    return;
-                }
-                // Kill the entire process group (child + subprocesses)
-                let _ = unsafe { libc::kill(-child_pid, libc::SIGKILL) };
-                eprintln!(
-                    "WARNING: killed '{}' after timeout of {:?} (strand: {})",
-                    cli_path_clone, effective_timeout, strand_desc_warn
-                );
-            })
+        // Shared flag: set once the child has exited so the watchdog
+        // suppresses its kill + warning.
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        // Reader threads drain stdout/stderr while the child runs —
+        // any byte resets the inactivity timer (byte-level stall
+        // detection, plan 081).
+        let stdout_reader =
+            spawn_reader(
+                "json-stdout",
+                child.stdout.take().expect("stdout was piped"),
+                &live.stdout,
+                &live.last_activity,
+            )
             .map_err(|e| {
                 PortError::AgentExecutionFailed {
-                    message: format!("failed to spawn timeout thread: {e}"),
+                    message: format!("failed to spawn stdout reader: {e}"),
                     session_id: None,
                 }
             })?;
+        let stderr_reader =
+            spawn_reader(
+                "json-stderr",
+                child.stderr.take().expect("stderr was piped"),
+                &live.stderr,
+                &live.last_activity,
+            )
+            .map_err(|e| {
+                PortError::AgentExecutionFailed {
+                    message: format!("failed to spawn stderr reader: {e}"),
+                    session_id: None,
+                }
+            })?;
+
+        // Watchdog thread: polls every 250 ms against the inactivity
+        // window (checked first — the more specific diagnosis) and the
+        // total budget; kills the process group on either deadline.
+        let _watchdog = spawn_watchdog(
+            "json-watchdog",
+            child_pid,
+            cli_path.clone(),
+            strand_desc.clone(),
+            effective_timeout,
+            self.inactivity_timeout,
+            &live,
+            Arc::clone(&cancelled),
+        )
+        .map_err(|e| {
+            PortError::AgentExecutionFailed {
+                message: format!("failed to spawn watchdog thread: {e}"),
+                session_id: None,
+            }
+        })?;
 
         // Write the prompt to the child's stdin.
         let mut stdin = child.stdin.take().expect("stdin was piped");
@@ -508,13 +641,13 @@ impl AgentRunner for PiJsonAgentRunner {
             })?;
         drop(stdin);
 
-        // Wait for the child and capture output.
-        // Use a thread + timeout so we don't block forever if
-        // `wait_with_output()` hangs (e.g. orphaned child processes
-        // preventing pipe close).
+        // Wait for the child to exit and the readers to drain.
+        // Use a thread + 2×-deadline join guard so we don't block
+        // forever if an orphaned grandchild keeps a pipe open (the
+        // `wait_with_output` hazard, preserved).
         let wait_handle = std::thread::Builder::new()
             .name("json-wait".to_string())
-            .spawn(move || child.wait_with_output())
+            .spawn(move || child.wait())
             .map_err(|e| {
                 PortError::AgentExecutionFailed {
                     message: format!("failed to spawn wait thread: {e}"),
@@ -522,54 +655,40 @@ impl AgentRunner for PiJsonAgentRunner {
                 }
             })?;
 
-        // Wait up to 2x the effective timeout for the child to exit.
-        // The timeout thread kills the child after effective_timeout,
-        // so 2x gives it time to clean up.
+        // Wait up to 2x the effective timeout for the child to exit
+        // and the readers to drain; the join guard force-kills the
+        // process group at the deadline.
         let wait_deadline = effective_timeout.saturating_mul(2)
             .max(Duration::from_secs(5));
-        let start_wait = std::time::Instant::now();
-        let mut output = None;
-        loop {
-            if wait_handle.is_finished() {
-                output = Some(wait_handle.join().expect("wait thread panicked"));
-                break;
-            }
-            if start_wait.elapsed() > wait_deadline {
-                // Child didn't exit in time — force kill again and wait.
-                // Kill the entire process group.
-                let _ = unsafe { libc::kill(-child_pid, libc::SIGKILL) };
-                // Give it a moment, then try joining anyway.
-                std::thread::sleep(Duration::from_millis(500));
-                output = Some(
-                    wait_handle
-                        .join()
-                        .expect("wait thread panicked"),
-                );
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let output = output.unwrap().map_err(|e| {
+        let status = join_all(
+            wait_handle,
+            stdout_reader,
+            stderr_reader,
+            child_pid,
+            wait_deadline,
+            &cancelled,
+        )
+        .map_err(|e| {
             PortError::AgentExecutionFailed {
-                message: format!(
-                    "failed to wait for '{}': {}",
-                    cli_path, e
-                ),
+                message: format!("failed to wait for '{cli_path}': {e}"),
                 session_id: None,
             }
         })?;
 
-        // Mark cancelled so the timeout thread suppresses its warning.
-        cancelled.store(true, Ordering::Relaxed);
-
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let raw_stdout =
-            String::from_utf8_lossy(&output.stdout).into_owned();
+        let stdout_bytes =
+            live.stdout.lock().expect("stdout buffer poisoned").clone();
+        let stderr_bytes =
+            live.stderr.lock().expect("stderr buffer poisoned").clone();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+        let raw_stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
         // If status code is None, the process was killed by a signal
-        // (SIGKILL from our timeout thread).
-        if output.status.code().is_none() {
+        // (SIGKILL from the watchdog, or an external signal).
+        if status.code().is_none() {
+            // Plan 081: classify by the watchdog's kill reason — the
+            // child lost the race to a deadline. `None` is an
+            // external signal kill: keep the legacy Timeout shape.
+            let reason = *live.kill_reason.lock().expect("kill reason poisoned");
             let (
                 _had_error,
                 session_id,
@@ -578,16 +697,41 @@ impl AgentRunner for PiJsonAgentRunner {
                 _compactions,
                 _error_message,
             ) = Self::parse_stdout(&raw_stdout);
-            return Err(PortError::Timeout {
-                message: format!(
-                    "'{}' exceeded timeout of {:?} (strand: {})",
-                    cli_path, effective_timeout, strand_desc
-                ),
-                session_id,
-            });
+            match reason {
+                Some(KillReason::Inactivity) => {
+                    let blocked_call = Self::parse_blocked_call(&raw_stdout);
+                    let silent_secs = live.silence().as_secs();
+                    let window_secs = self
+                        .inactivity_timeout
+                        .map(|w| w.as_secs())
+                        .unwrap_or(0);
+                    let blocked_part = blocked_call
+                        .as_deref()
+                        .map(|b| format!(", last call: {b}"))
+                        .unwrap_or_default();
+                    return Err(PortError::AgentInactivity {
+                        message: format!(
+                            "no output for {silent_secs}s (inactivity window {window_secs}s){blocked_part} ({cli_path}, strand: {strand_desc})"
+                        ),
+                        silent_secs,
+                        window_secs,
+                        blocked_call,
+                        session_id,
+                    });
+                }
+                Some(KillReason::Total) | None => {
+                    return Err(PortError::Timeout {
+                        message: format!(
+                            "'{}' exceeded timeout of {:?} (strand: {})",
+                            cli_path, effective_timeout, strand_desc
+                        ),
+                        session_id,
+                    });
+                }
+            }
         }
 
-        let exit_code = output.status.code().unwrap_or(-1);
+        let exit_code = status.code().unwrap_or(-1);
 
         if exit_code != 0 {
             let (
@@ -1419,6 +1563,320 @@ exit 0
         assert!(
             elapsed < Duration::from_secs(5),
             "should use context timeout, not runner default"
+        );
+    }
+
+    // ── Plan 081: inactivity watchdog ────────────────────────────────
+
+    /// Plan 081: the most recent `tool_execution_start` with no
+    /// matching end is named `{toolName}({args preview})` — the
+    /// `command` field when present. Malformed lines are ignored.
+    #[test]
+    fn test_parse_blocked_call_open_tool_is_named() {
+        let raw = "not json at all\n\
+                       {\"type\":\"session\",\"id\":\"sess-blocked\"}\n\
+                       {\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"args\":{\"command\":\"npm run build\"}}";
+        assert_eq!(
+            PiJsonAgentRunner::parse_blocked_call(raw),
+            Some("bash(npm run build)".to_string())
+        );
+    }
+
+    /// Plan 081: a matching `tool_execution_end` closes the call → no
+    /// blocked call.
+    #[test]
+    fn test_parse_blocked_call_matched_end_is_none() {
+        let raw = "{\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"args\":{\"command\":\"npm run build\"}}\n\
+                   {\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"content\":\"done\"}";
+        assert_eq!(
+            PiJsonAgentRunner::parse_blocked_call(raw),
+            None
+        );
+    }
+
+    /// Plan 081: with multiple open calls, the LAST open one is the
+    /// blocked call.
+    #[test]
+    fn test_parse_blocked_call_multiple_starts_last_open() {
+        let raw = "{\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"args\":{\"command\":\"first\"}}\n\
+                   {\"type\":\"tool_execution_start\",\"toolCallId\":\"t2\",\"toolName\":\"read\",\"args\":{\"path\":\"/tmp/x\"}}";
+        assert_eq!(
+            PiJsonAgentRunner::parse_blocked_call(raw),
+            Some("read({\"path\":\"/tmp/x\"})".to_string())
+        );
+    }
+
+    /// Plan 081: matching is by `toolCallId` — an earlier call ending
+    /// keeps the later open call blocked.
+    #[test]
+    fn test_parse_blocked_call_earlier_end_keeps_later_open() {
+        let raw = "{\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"args\":{\"command\":\"first\"}}\n\
+                   {\"type\":\"tool_execution_start\",\"toolCallId\":\"t2\",\"toolName\":\"read\",\"args\":{\"path\":\"/tmp/x\"}}\n\
+                   {\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\"}";
+        assert_eq!(
+            PiJsonAgentRunner::parse_blocked_call(raw),
+            Some("read({\"path\":\"/tmp/x\"})".to_string())
+        );
+    }
+
+    /// Plan 081: args without a `command` field fall back to the first
+    /// 80 chars of the args JSON (truncation marked).
+    #[test]
+    fn test_parse_blocked_call_args_preview_truncated() {
+        let long = "x".repeat(100);
+        let raw = format!(
+            "{{\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"edit\",\"args\":{{\"path\":\"{long}\"}}}}"
+        );
+        let label =
+            PiJsonAgentRunner::parse_blocked_call(&raw).expect("open call named");
+        assert!(label.starts_with("edit({\"path\":\"xxx"), "label: {label}");
+        // `edit(` + 80 chars of JSON preview + `…` + `)`
+        assert_eq!(
+            label.chars().count(),
+            "edit(".chars().count() + 80 + 1 + 1,
+            "label: {label}"
+        );
+    }
+
+    /// Plan 081: an empty stream has no blocked call.
+    #[test]
+    fn test_parse_blocked_call_empty_stream() {
+        assert_eq!(PiJsonAgentRunner::parse_blocked_call(""), None);
+    }
+
+    /// Create a PiJsonAgentRunner with the given mock script, total
+    /// timeout, and inactivity window (plan 081). Returns `(runner,
+    /// tempdir)` — caller must keep `tempdir` alive.
+    fn make_json_inactivity_runner(
+        script: &str,
+        total_timeout: Duration,
+        inactivity_timeout: Option<Duration>,
+    ) -> (PiJsonAgentRunner, tempfile::TempDir) {
+        let (path, dir) = make_json_mock_path();
+        std::fs::write(&path, script).ok();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        (
+            PiJsonAgentRunner::with_cli_path_and_timeouts(
+                path.to_string_lossy().to_string(),
+                total_timeout,
+                inactivity_timeout,
+            ),
+            dir,
+        )
+    }
+
+    /// Plan 081: a session that is silent for the inactivity window is
+    /// killed by the watchdog → `AgentInactivity` with the captured
+    /// session ID, the silence length (≥ window), and a
+    /// `no output for` message. The total timeout is far away, so the
+    /// kill is the inactivity watchdog, not the budget.
+    #[test]
+    fn execute_inactivity_kill() {
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"session","id":"sess-inact"}'
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_secs(30),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for inactivity");
+        match result.unwrap_err() {
+            PortError::AgentInactivity {
+                message,
+                silent_secs,
+                window_secs,
+                session_id,
+                ..
+            } => {
+                assert_eq!(session_id.as_deref(), Some("sess-inact"));
+                assert!(
+                    silent_secs >= window_secs,
+                    "silent_secs ({silent_secs}) should be >= window_secs ({window_secs})"
+                );
+                assert!(
+                    message.contains("no output for"),
+                    "message should contain 'no output for': {message}"
+                );
+            }
+            other => panic!("expected AgentInactivity, got: {other:?}"),
+        }
+    }
+
+    /// Plan 081: with the watchdog disabled (inactivity `None`), a silent
+    /// session falls to the **total** timeout — the two watchdogs are
+    /// distinct and disabling inactivity does not remove the budget.
+    #[test]
+    fn execute_inactivity_disabled() {
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"session","id":"sess-inact-off"}'
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_millis(500),
+            None,
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        let err = result
+            .err()
+            .expect("should error (total timeout, not inactivity)");
+        assert!(
+            matches!(err, PortError::Timeout { .. }),
+            "with inactivity disabled the total timeout should fire, got: {err:?}"
+        );
+    }
+
+    /// Plan 081: steady output keeps the watchdog quiet — a line every
+    /// 100 ms for ~2 s against a 200 ms window → the session completes
+    /// normally (the timer kept resetting on every byte).
+    #[test]
+    fn execute_inactivity_reset_by_output() {
+        let script = r#"#!/usr/bin/env bash
+for i in $(seq 1 20); do
+  echo '{"type":"tool_execution_update","toolCallId":"t1","content":"progress $i"}'
+  sleep 0.1
+done
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_secs(15),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_ok(),
+            "an outputting session should complete (timer kept resetting): {result:?}"
+        );
+    }
+
+    /// Plan 081: output resets the timer continuously — one line, then
+    /// silence. The kill proves the reset is per-byte (not just the
+    /// pre-first-byte spawn window), and a non-session stream still
+    /// yields `AgentInactivity` (no session ID captured).
+    #[test]
+    fn execute_inactivity_reset_then_stall() {
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"tool_execution_update","toolCallId":"t1","content":"progress 1"}'
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_secs(30),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for inactivity");
+        match result.unwrap_err() {
+            PortError::AgentInactivity { session_id, .. } => {
+                assert!(
+                    session_id.is_none(),
+                    "no session line was emitted — no session ID"
+                );
+            }
+            other => panic!("expected AgentInactivity, got: {other:?}"),
+        }
+    }
+
+    /// Plan 081: the blocked call is named in the message — the most
+    /// recent `tool_execution_start` without a matching end.
+    #[test]
+    fn execute_inactivity_names_blocked_tool() {
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"session","id":"sess-blocked"}'
+echo '{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"npm run build"}}'
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_secs(30),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for inactivity");
+        let err = result.unwrap_err();
+        match &err {
+            PortError::AgentInactivity { message, .. } => {
+                assert!(
+                    message.contains("bash"),
+                    "message should name the blocked tool: {message}"
+                );
+                assert!(
+                    message.contains("npm run build"),
+                    "message should carry the command preview: {message}"
+                );
+            }
+            other => panic!("expected AgentInactivity, got: {other:?}"),
+        }
+    }
+
+    /// Plan 081: silence from spawn (no output at all, not even a
+    /// session line) → `AgentInactivity { session_id: None }` — the
+    /// pre-first-byte window counts.
+    #[test]
+    fn execute_inactivity_before_session_line() {
+        let script = r#"#!/usr/bin/env bash
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_secs(30),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for inactivity");
+        match result.unwrap_err() {
+            PortError::AgentInactivity { session_id, .. } => {
+                assert!(
+                    session_id.is_none(),
+                    "no session line was emitted — no session ID"
+                );
+            }
+            other => panic!("expected AgentInactivity, got: {other:?}"),
+        }
+    }
+
+    /// Plan 081 regression: silent script, inactivity **disabled**, small
+    /// total → `PortError::Timeout` — the two watchdogs are distinct.
+    #[test]
+    fn execute_total_timeout_still_timeout() {
+        let script = r#"#!/usr/bin/env bash
+sleep 300
+"#;
+        let (runner, _dir) = make_json_inactivity_runner(
+            script,
+            Duration::from_millis(500),
+            None,
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        let err = result.err().expect("should error (total timeout)");
+        assert!(
+            matches!(err, PortError::Timeout { .. }),
+            "expected Timeout, got: {err:?}"
         );
     }
 }

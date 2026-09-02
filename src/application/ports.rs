@@ -69,6 +69,23 @@ pub enum PortError {
         message: String,
         session_id: Option<String>,
     },
+    /// The agent session produced no output for the inactivity window —
+    /// killed by the watchdog, most likely a blocked tool call or
+    /// stalled provider (plan 081). Resumable; unlike `Timeout` it is
+    /// resumable **without** a session ID (a fresh restart with the
+    /// blocking-call note is meaningful — knots are idempotent).
+    AgentInactivity {
+        /// Human-readable description (Display / loom-log / rig-log text).
+        message: String,
+        /// How long the session was silent (seconds).
+        silent_secs: u64,
+        /// The configured inactivity window (seconds).
+        window_secs: u64,
+        /// The blocked call, when derivable from the stream
+        /// (e.g. `bash("npm run build")`).
+        blocked_call: Option<String>,
+        session_id: Option<String>,
+    },
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
     /// An agent profile was not found.
@@ -141,6 +158,9 @@ impl std::fmt::Display for PortError {
             PortError::ContextLimitReached { message, .. } => {
                 write!(f, "context limit reached: {message}")
             }
+            PortError::AgentInactivity { message, .. } => {
+                write!(f, "inactivity: {message}")
+            }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
             }
@@ -187,7 +207,8 @@ impl PortError {
             PortError::Timeout { session_id, .. }
             | PortError::AgentExecutionFailed { session_id, .. }
             | PortError::AgentNoResponse { session_id, .. }
-            | PortError::ContextLimitReached { session_id, .. } => {
+            | PortError::ContextLimitReached { session_id, .. }
+            | PortError::AgentInactivity { session_id, .. } => {
                 session_id.as_ref()
             }
             _ => None,
@@ -205,6 +226,7 @@ impl PortError {
             PortError::Timeout { .. }
                 | PortError::AgentExecutionFailed { .. }
                 | PortError::AgentNoResponse { .. }
+                | PortError::AgentInactivity { .. }
         )
     }
 }
@@ -1486,6 +1508,66 @@ mod tests {
             !is_session_resumable(&Some("sess-ctx".to_string()), &err),
             "is_session_resumable must be false for ContextLimitReached"
         );
+    }
+
+    /// Plan 081: `AgentInactivity` is resumable, carries its session
+    /// ID, and displays with the greppable `inactivity:` prefix
+    /// (mirrors the `timeout:` / `no final response:` prefixes).
+    #[test]
+    fn agent_inactivity_is_resumable_with_session() {
+        let err = PortError::AgentInactivity {
+            message: "no output for 300s (inactivity window 300s) (mock)"
+                .to_string(),
+            silent_secs: 300,
+            window_secs: 300,
+            blocked_call: Some("bash(\"npm run build\")".to_string()),
+            session_id: Some("sess-inact".to_string()),
+        };
+
+        assert!(
+            err.is_resumable(),
+            "AgentInactivity should be resumable (the session can be restarted)"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-inact"),
+            "session_id() should return the captured session ID"
+        );
+        assert!(
+            err.to_string().starts_with("inactivity:"),
+            "Display should start with 'inactivity:', got: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("no output for 300s"),
+            "Display should carry the message, got: {err}"
+        );
+        assert!(!err.to_string().starts_with("timeout:"));
+    }
+
+    /// Plan 081: without a session ID the error is still resumable —
+    /// the one deliberate exception: a fresh restart with the
+    /// blocking-call note is meaningful (knots are idempotent).
+    #[test]
+    fn agent_inactivity_is_resumable_without_session() {
+        let err = PortError::AgentInactivity {
+            message: "no output for 42s (inactivity window 300s) (mock)"
+                .to_string(),
+            silent_secs: 42,
+            window_secs: 300,
+            blocked_call: None,
+            session_id: None,
+        };
+
+        assert!(
+            err.is_resumable(),
+            "AgentInactivity is resumable even without a session ID"
+        );
+        assert!(err.session_id().is_none());
+        // Note: is_session_resumable still gates on the session ID —
+        // the gate exception lives in the resume loop (plan 081,
+        // phase 4), not in this helper.
+        assert!(!is_session_resumable(&None, &err));
     }
 
     #[test]

@@ -94,6 +94,9 @@ impl LoomLogPort for FileSystemLoomLog {
             LoomEvent::ContextCompacted { loom_id, .. } => {
                 loom_id.clone()
             }
+            LoomEvent::AgentInactivity { loom_id, .. } => {
+                loom_id.clone()
+            }
         };
 
         let line = serde_json::to_string(&event)

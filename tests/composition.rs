@@ -19,7 +19,7 @@ fn app_config_with_rig_dir_uses_custom_path() {
     let config = AppConfig::with_rig_dir(custom.clone());
 
     assert_eq!(config.rig_dir, custom);
-    assert_eq!(config.rig_config.agent_adapter, knot::AgentAdapter::PiStdio);
+    assert_eq!(config.rig_config.agent_adapter, knot::AgentAdapter::PiJson);
 }
 
 /// Verify `AppConfig::with_rig_dir()` works with relative paths.
@@ -70,7 +70,9 @@ fn build_app_context_wires_layers() {
     // Agent runner is present (subprocess)
     let _runner: &dyn AgentRunner = &*ctx.agent_runner;
 
-    // Workspace config is loaded with defaults
+    // Workspace config is loaded from ./rig/.workspace-agent-config.yaml
+    // — this repo's dev rig pins pi-stdio explicitly, which wins over
+    // the pi-json default (plan 081).
     assert_eq!(ctx.rig_config.agent_adapter, knot::AgentAdapter::PiStdio);
 
     // Both event senders are present; receivers are returned for wiring

@@ -6,10 +6,13 @@
 
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::adapters::live_output::{
+    join_all, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
+};
 use crate::application::ports::{
     AgentOutput, AgentRunner, ExecutionContext, PortError,
 };
@@ -25,6 +28,10 @@ pub struct PiStdioAgentRunner {
     /// Maximum duration the agent may run before being killed.
     /// Defaults to 120 seconds.
     timeout: Duration,
+    /// Plan 081: kill the session when it produces no output for this
+    /// window. `None` disables the inactivity watchdog (the total
+    /// timeout still bounds the attempt).
+    inactivity_timeout: Option<Duration>,
     /// Path to the agent CLI binary. Resolved once at construction time
     /// to avoid PATH lookup races at execution time.
     cli_path: String,
@@ -34,6 +41,7 @@ impl Default for PiStdioAgentRunner {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            inactivity_timeout: None,
             cli_path: Self::resolve_cli_path(),
         }
     }
@@ -49,6 +57,7 @@ impl PiStdioAgentRunner {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             timeout,
+            inactivity_timeout: None,
             cli_path: Self::resolve_cli_path(),
         }
     }
@@ -59,6 +68,7 @@ impl PiStdioAgentRunner {
     pub fn with_cli_path(cli_path: String) -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            inactivity_timeout: None,
             cli_path,
         }
     }
@@ -68,7 +78,30 @@ impl PiStdioAgentRunner {
     /// Used by the composition root (`build_app_context`) when
     /// `AppConfig::cli_path` is set.
     pub fn with_cli_path_and_timeout(cli_path: String, timeout: Duration) -> Self {
-        Self { timeout, cli_path }
+        Self {
+            timeout,
+            inactivity_timeout: None,
+            cli_path,
+        }
+    }
+
+    /// Create a new runner with an explicit CLI path, total timeout,
+    /// and inactivity window (plan 081).
+    ///
+    /// Used by the composition root (`build_app_context`): the total
+    /// timeout bounds the whole attempt (existing behaviour); the
+    /// inactivity window kills a silent session early (`None` disables
+    /// the watchdog).
+    pub fn with_cli_path_and_timeouts(
+        cli_path: String,
+        timeout: Duration,
+        inactivity_timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            timeout,
+            inactivity_timeout,
+            cli_path,
+        }
     }
 
     /// Resolve the CLI path for the agent binary.
@@ -162,42 +195,69 @@ impl AgentRunner for PiStdioAgentRunner {
         };
 
         let child_pid = child.id() as i32;
-        let cli_path_clone = cli_path.clone();
         let strand_desc = ctx.strand_path.0.display().to_string();
-        let strand_desc_warn = strand_desc.clone(); // for timeout thread closure
         let effective_timeout = ctx.timeout.unwrap_or(self.timeout);
 
-        // Shared flag: set to true when the child exits normally so the
-        // timeout thread can suppress its warning (avoids spurious messages
-        // when the agent finishes well before the deadline).
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let cancelled_for_thread = Arc::clone(&cancelled);
+        // Plan 081: shared liveness state — drained output buffers,
+        // last-activity timestamp (stamped at spawn, so the
+        // pre-first-byte window counts), and the watchdog's kill
+        // reason.
+        let live = LiveOutput::new();
 
-        // Spawn a background thread that kills the child on timeout.
-        let _timeout_thread = std::thread::Builder::new()
-            .name("stdio-timeout".to_string())
-            .spawn(move || {
-                std::thread::sleep(effective_timeout);
-                // If the child already exited, skip the kill + warning.
-                if cancelled_for_thread.load(Ordering::Relaxed) {
-                    return;
-                }
-                // Kill the entire process group (child + subprocesses)
-                // using negative PID to target the process group.
-                let _ = unsafe {
-                    libc::kill(-child_pid, libc::SIGKILL)
-                };
-                eprintln!(
-                    "WARNING: killed '{}' after timeout of {:?} (strand: {})",
-                    cli_path_clone, effective_timeout, strand_desc_warn
-                );
-            })
+        // Shared flag: set once the child has exited so the watchdog
+        // suppresses its kill + warning (avoids spurious messages when
+        // the agent finishes well before the deadline).
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        // Reader threads drain stdout/stderr while the child runs —
+        // any byte resets the inactivity timer (byte-level stall
+        // detection, plan 081).
+        let stdout_reader =
+            spawn_reader(
+                "stdio-stdout",
+                child.stdout.take().expect("stdout was piped"),
+                &live.stdout,
+                &live.last_activity,
+            )
             .map_err(|e| {
                 PortError::AgentExecutionFailed {
-                    message: format!("failed to spawn timeout thread: {e}"),
+                    message: format!("failed to spawn stdout reader: {e}"),
                     session_id: None,
                 }
             })?;
+        let stderr_reader =
+            spawn_reader(
+                "stdio-stderr",
+                child.stderr.take().expect("stderr was piped"),
+                &live.stderr,
+                &live.last_activity,
+            )
+            .map_err(|e| {
+                PortError::AgentExecutionFailed {
+                    message: format!("failed to spawn stderr reader: {e}"),
+                    session_id: None,
+                }
+            })?;
+
+        // Watchdog thread: polls every 250 ms against the inactivity
+        // window (checked first — the more specific diagnosis) and the
+        // total budget; kills the process group on either deadline.
+        let _watchdog = spawn_watchdog(
+            "stdio-watchdog",
+            child_pid,
+            cli_path.clone(),
+            strand_desc.clone(),
+            effective_timeout,
+            self.inactivity_timeout,
+            &live,
+            Arc::clone(&cancelled),
+        )
+        .map_err(|e| {
+            PortError::AgentExecutionFailed {
+                message: format!("failed to spawn watchdog thread: {e}"),
+                session_id: None,
+            }
+        })?;
 
         // Write the prompt to the child's stdin.
         let mut stdin = child.stdin.take().expect("stdin was piped");
@@ -218,13 +278,13 @@ impl AgentRunner for PiStdioAgentRunner {
         // Drop stdin to close the pipe (signals EOF to the child).
         drop(stdin);
 
-        // Wait for the child and capture output.
-        // Use a thread + timeout so we don't block forever if
-        // `wait_with_output()` hangs (e.g. orphaned child processes
-        // preventing pipe close).
+        // Wait for the child to exit and the readers to drain.
+        // Use a thread + 2×-deadline join guard so we don't block
+        // forever if an orphaned grandchild keeps a pipe open (the
+        // `wait_with_output` hazard, preserved).
         let wait_handle = std::thread::Builder::new()
             .name("stdio-wait".to_string())
-            .spawn(move || child.wait_with_output())
+            .spawn(move || child.wait())
             .map_err(|e| {
                 PortError::AgentExecutionFailed {
                     message: format!("failed to spawn wait thread: {e}"),
@@ -232,58 +292,71 @@ impl AgentRunner for PiStdioAgentRunner {
                 }
             })?;
 
-        // Wait up to 2x the effective timeout for the child to exit.
-        // The timeout thread kills the child after effective_timeout,
-        // so 2x gives it time to clean up.
+        // Wait up to 2x the effective timeout for the child to exit
+        // and the readers to drain; the join guard force-kills the
+        // process group at the deadline.
         let wait_deadline = effective_timeout.saturating_mul(2)
             .max(Duration::from_secs(5));
-        let start_wait = std::time::Instant::now();
-        let mut output = None;
-        loop {
-            if wait_handle.is_finished() {
-                output = Some(wait_handle.join().expect("wait thread panicked"));
-                break;
-            }
-            if start_wait.elapsed() > wait_deadline {
-                // Child didn't exit in time — force kill again and wait.
-                // Kill the entire process group.
-                let _ = unsafe { libc::kill(-child_pid, libc::SIGKILL) };
-                std::thread::sleep(Duration::from_millis(500));
-                output = Some(wait_handle.join().expect("wait thread panicked"));
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let output = output.unwrap().map_err(|e| {
+        let status = join_all(
+            wait_handle,
+            stdout_reader,
+            stderr_reader,
+            child_pid,
+            wait_deadline,
+            &cancelled,
+        )
+        .map_err(|e| {
             PortError::AgentExecutionFailed {
-                message: format!(
-                    "failed to wait for '{}': {}",
-                    cli_path, e
-                ),
+                message: format!("failed to wait for '{cli_path}': {e}"),
                 session_id: None,
             }
         })?;
 
-        // Mark cancelled so the background timeout thread suppresses its
-        // warning if the child exited before the deadline.
-        cancelled.store(true, Ordering::Relaxed);
-
         // If status code is None, the process was killed by a signal
-        // (SIGKILL from our timeout thread).
-        if output.status.code().is_none() {
-            return Err(PortError::Timeout {
-                message: format!(
-                    "'{}' exceeded timeout of {:?} (strand: {})",
-                    cli_path, effective_timeout, strand_desc
-                ),
-                session_id: None,
-            });
+        // (SIGKILL from the watchdog, or an external signal).
+        if status.code().is_none() {
+            // Plan 081: classify by the watchdog's kill reason — the
+            // child lost the race to a deadline. `None` is an
+            // external signal kill: keep the legacy Timeout shape.
+            let reason = *live.kill_reason.lock().expect("kill reason poisoned");
+            match reason {
+                Some(KillReason::Inactivity) => {
+                    let silent_secs = live.silence().as_secs();
+                    let window_secs = self
+                        .inactivity_timeout
+                        .map(|w| w.as_secs())
+                        .unwrap_or(0);
+                    return Err(PortError::AgentInactivity {
+                        message: format!(
+                            "no output for {silent_secs}s (inactivity window {window_secs}s) ({cli_path}, strand: {strand_desc})"
+                        ),
+                        silent_secs,
+                        window_secs,
+                        // The stdio adapter has no structured stream —
+                        // the blocked call is not derivable.
+                        blocked_call: None,
+                        session_id: None,
+                    });
+                }
+                Some(KillReason::Total) | None => {
+                    return Err(PortError::Timeout {
+                        message: format!(
+                            "'{}' exceeded timeout of {:?} (strand: {})",
+                            cli_path, effective_timeout, strand_desc
+                        ),
+                        session_id: None,
+                    });
+                }
+            }
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout_bytes =
+            live.stdout.lock().expect("stdout buffer poisoned").clone();
+        let stderr_bytes =
+            live.stderr.lock().expect("stderr buffer poisoned").clone();
+        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+        let exit_code = status.code().unwrap_or(-1);
 
         if exit_code != 0 {
             return Err(PortError::AgentExecutionFailed {
@@ -732,5 +805,101 @@ sleep 300
 
         let result = runner.execute(ctx);
         assert!(result.is_ok(), "should succeed: {result:?}");
+    }
+
+    // ── Plan 081: inactivity watchdog ────────────────────────────────
+
+    /// Create a PiStdioAgentRunner with the given mock script, total
+    /// timeout, and inactivity window (plan 081). The script lives in a
+    /// per-test temp dir (unique path — no cross-test ETXTBSY). Returns
+    /// `(runner, tempdir)` — caller must keep `tempdir` alive.
+    fn make_stdio_inactivity_runner(
+        script: &str,
+        total_timeout: Duration,
+        inactivity_timeout: Option<Duration>,
+    ) -> (PiStdioAgentRunner, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mock-pi-inactivity");
+        write_script_atomic(&path, script);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        (
+            PiStdioAgentRunner::with_cli_path_and_timeouts(
+                path.to_string_lossy().to_string(),
+                total_timeout,
+                inactivity_timeout,
+            ),
+            dir,
+        )
+    }
+
+    /// Plan 081: a silent session is killed by the inactivity watchdog →
+    /// `AgentInactivity`. The stdio adapter captures no session ID, so a
+    /// resume is a fresh restart.
+    #[test]
+    fn execute_inactivity_kill() {
+        let script = r#"#!/usr/bin/env bash
+sleep 300
+"#;
+        let (runner, _dir) = make_stdio_inactivity_runner(
+            script,
+            Duration::from_secs(30),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(result.is_err(), "should error for inactivity");
+        match result.unwrap_err() {
+            PortError::AgentInactivity {
+                message, session_id, ..
+            } => {
+                assert!(
+                    session_id.is_none(),
+                    "the stdio adapter captures no session ID"
+                );
+                assert!(
+                    message.contains("no output for"),
+                    "message should contain 'no output for': {message}"
+                );
+            }
+            other => panic!("expected AgentInactivity, got: {other:?}"),
+        }
+    }
+
+    /// Plan 081: steady output keeps the watchdog quiet — a line every
+    /// 100 ms for ~2 s against a 200 ms window → the session completes
+    /// normally (the timer kept resetting on every byte).
+    #[test]
+    fn execute_inactivity_reset_by_output() {
+        let script = r#"#!/usr/bin/env bash
+for i in $(seq 1 20); do
+  echo "progress $i"
+  sleep 0.1
+done
+"#;
+        let (runner, _dir) = make_stdio_inactivity_runner(
+            script,
+            Duration::from_secs(15),
+            Some(Duration::from_millis(200)),
+        );
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_ok(),
+            "an outputting session should complete (timer kept resetting): {result:?}"
+        );
+        assert!(
+            result.unwrap().stdout.contains("progress 1"),
+            "stdout should carry the streamed output"
+        );
     }
 }

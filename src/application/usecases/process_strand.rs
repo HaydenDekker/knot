@@ -1741,6 +1741,227 @@ mod execution_tests {
         assert_eq!(appends[0].status, TieOffStatus::Produced);
         assert_eq!(appends[0].content, "done");
     }
+
+    // ── Plan 081: inactivity kill + restart with the blocking-call note ──
+
+    /// Plan 081: build an inactivity error with the given session ID.
+    fn err_inactivity(sid: Option<&str>) -> PortError {
+        PortError::AgentInactivity {
+            message: "no output for 300s (inactivity window 300s) (mock, strand: strand.md)".to_string(),
+            silent_secs: 300,
+            window_secs: 300,
+            blocked_call: None,
+            session_id: sid.map(str::to_string),
+        }
+    }
+
+    /// Plan 081: successful output with a session ID.
+    fn ok_output_with_sid(stdout: &str, sid: &str) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions: vec![],
+            }),
+        }
+    }
+
+    /// Plan 081: an inactivity kill followed by a successful retry is
+    /// transparent to the strand:
+    /// - loom-log: `KnotProcessing`, `AgentInactivity { attempt: 1 }`,
+    ///   `SessionResumed { attempt: 1 }`, `KnotCompleted`,
+    ///   `StrandProcessed` (no error); no `KnotFailed`
+    /// - rig-log: empty (the stall recovered)
+    /// - tie-off: appended `Produced` with the retry's final output
+    #[test]
+    fn process_strand_inactivity_resumed_success() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Err(err_inactivity(Some("sess-inact"))),
+            Ok(ok_output_with_sid("final", "sess-inact")),
+        ]));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        // Zero retry delay (one retry is expected in this test).
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, AgentInactivity, SessionResumed,
+        // KnotCompleted, StrandProcessed
+        let events = log_events.lock().unwrap();
+        assert_eq!(events.len(), 5, "should have 5 loom-log events: {events:?}");
+        match &events[0] {
+            LoomEvent::KnotProcessing { knot_id, .. } => {
+                assert_eq!(knot_id.0, "k1");
+            }
+            other => panic!("expected KnotProcessing, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::AgentInactivity { attempt, session_id, .. } => {
+                assert_eq!(*attempt, 1);
+                assert_eq!(session_id, "sess-inact");
+            }
+            other => panic!("expected AgentInactivity, got {other:?}"),
+        }
+        match &events[2] {
+            LoomEvent::SessionResumed { attempt, session_id, .. } => {
+                assert_eq!(*attempt, 1);
+                assert_eq!(session_id, "sess-inact");
+            }
+            other => panic!("expected SessionResumed, got {other:?}"),
+        }
+        match &events[3] {
+            LoomEvent::KnotCompleted { .. } => {}
+            other => panic!("expected KnotCompleted, got {other:?}"),
+        }
+        match &events[4] {
+            LoomEvent::StrandProcessed { error, .. } => {
+                assert!(error.is_none(), "error should be absent on success");
+            }
+            other => panic!("expected StrandProcessed, got {other:?}"),
+        }
+
+        // Rig-log: empty (the stall recovered — no deadline terminal)
+        let rig = rig_events.lock().unwrap();
+        assert!(
+            rig.is_empty(),
+            "rig-log should be empty when the retry succeeds: {rig:?}"
+        );
+
+        // Tie-off: appended Produced with the retry's final output
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 1, "tie-off should be appended");
+        assert_eq!(appends[0].status, TieOffStatus::Produced);
+        assert!(
+            appends[0].content.contains("final"),
+            "tie-off should contain the final output: {}",
+            appends[0].content
+        );
+    }
+
+    /// Plan 081: when every attempt is an inactivity kill, the retries
+    /// exhaust and a deadline DID fire (`TimeoutSkipped`):
+    /// - **no** tie-off write (the tie-off is agent output; a stalled
+    ///   session produced no final response) — prior content intact
+    /// - rig-log: `TimeoutExceeded` whose error carries the inactivity
+    ///   cause
+    /// - loom-log: 11 × `AgentInactivity` + 10 × `SessionResumed`,
+    ///   `KnotFailed`, `StrandProcessed { error: Some(..) }`
+    #[test]
+    fn process_strand_inactivity_exhausted_preserves_tieoff() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let loom = build_loom("test-loom", vec![build_knot("k1", "fast")]);
+        // 11 inactivity kills: 1 initial + 10 retries (MAX_RETRIES).
+        let responses: Vec<Result<AgentOutput, PortError>> = (0..11)
+            .map(|_| Err(err_inactivity(Some("sess-inact"))))
+            .collect();
+        let runner = Arc::new(MockAgentRunner::new_sequence(responses));
+
+        let (use_case, log_events, tie_off_appends, rig_events,
+            _content, _runner) =
+            build_process_strand(loom, runner);
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        unsafe { std::env::set_var("KNOT_RETRY_DELAY_MS", "0"); }
+        let result = use_case.execute(event);
+        unsafe { std::env::remove_var("KNOT_RETRY_DELAY_MS"); }
+        assert!(result.is_ok());
+
+        // Loom-log: KnotProcessing, 11 × AgentInactivity, 10 ×
+        // SessionResumed, KnotFailed, StrandProcessed
+        let events = log_events.lock().unwrap();
+        let inactivity_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::AgentInactivity { .. }))
+            .count();
+        let resumed_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::SessionResumed { .. }))
+            .count();
+        assert_eq!(
+            inactivity_count, 11,
+            "expected 11 AgentInactivity events: {events:?}"
+        );
+        assert_eq!(
+            resumed_count, 10,
+            "expected 10 SessionResumed events: {events:?}"
+        );
+        let failed = events
+            .iter()
+            .find_map(|e| {
+                if let LoomEvent::KnotFailed { error, .. } = e {
+                    Some(error.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("KnotFailed should be logged on exhaustion");
+        assert!(
+            failed.contains("inactivity"),
+            "KnotFailed should carry the inactivity cause: {failed}"
+        );
+        let processed_error = events
+            .iter()
+            .find_map(|e| {
+                if let LoomEvent::StrandProcessed { error, .. } = e {
+                    Some(error.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("StrandProcessed should be logged");
+        assert!(
+            processed_error.as_ref().is_some_and(|e| e.contains("inactivity")),
+            "StrandProcessed error should carry the inactivity cause: {:?}",
+            processed_error
+        );
+
+        // Rig-log: TimeoutExceeded carrying the inactivity cause
+        let rig = rig_events.lock().unwrap();
+        assert_eq!(rig.len(), 1, "should have 1 rig-log event: {rig:?}");
+        match &rig[0] {
+            RigLogEvent::TimeoutExceeded { error, .. } => {
+                assert!(
+                    error.contains("inactivity"),
+                    "TimeoutExceeded should carry the inactivity cause: {error}"
+                );
+            }
+            other => panic!("expected TimeoutExceeded, got {other:?}"),
+        }
+
+        // Tie-off: NO append (preserved unchanged — TimeoutSkipped)
+        let appends = tie_off_appends.lock().unwrap();
+        assert!(
+            appends.is_empty(),
+            "tie-off should NOT be appended on exhausted inactivity"
+        );
+    }
 }
 
 // ── Execution: deleted event context extraction ───────────────────────

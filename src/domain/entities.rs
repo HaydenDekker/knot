@@ -58,6 +58,9 @@ pub enum TieOffStatus {
 /// error type:
 /// - `Timeout` → skip the tie-off write, log to the rig-log instead
 ///   (genuine deadline breach)
+/// - `AgentInactivity` → skip the tie-off write, log to the rig-log
+///   instead (plan 081 — the inactivity deadline fired; no final
+///   response was produced)
 /// - `AgentNoResponse` → failed tie-off (the agent ended its turn
 ///   without a final response — a failure, not a timeout)
 /// - other errors → failed tie-off
@@ -67,7 +70,8 @@ pub enum TieOffOutcome {
     Produced { content: String },
     /// Agent failed (non-timeout) — write tie-off with error message.
     Failed { error: String },
-    /// Agent timed out — skip tie-off write, log to rig-log instead.
+    /// Agent timed out (total deadline) or went inactive (plan 081)
+    /// — skip tie-off write, log to rig-log instead.
     TimeoutSkipped { error: String },
 }
 
@@ -76,6 +80,7 @@ impl TieOffOutcome {
     ///
     /// - `Ok(AgentOutput)` → `Produced`
     /// - `Err(PortError::Timeout)` → `TimeoutSkipped`
+    /// - `Err(PortError::AgentInactivity)` → `TimeoutSkipped`
     /// - `Err(PortError::AgentNoResponse)` → `Failed`
     /// - `Err(other)` → `Failed`
     pub fn derive(
@@ -87,8 +92,12 @@ impl TieOffOutcome {
         match result {
             Ok(output) => Self::Produced { content: output.stdout },
             Err(err)
-                if matches!(err,
-                    crate::application::ports::PortError::Timeout { .. }) =>
+                if matches!(
+                    err,
+                    crate::application::ports::PortError::Timeout { .. }
+                        | crate::application::ports::PortError::
+                            AgentInactivity { .. }
+                ) =>
             {
                 Self::TimeoutSkipped { error: err.to_string() }
             }
@@ -1577,6 +1586,17 @@ mod tests {
         }
     }
 
+    fn err_agent_inactivity() -> PortError {
+        PortError::AgentInactivity {
+            message:
+                "no output for 300s (inactivity window 300s)".to_string(),
+            silent_secs: 300,
+            window_secs: 300,
+            blocked_call: None,
+            session_id: Some("sess-inact".to_string()),
+        }
+    }
+
     #[test]
     fn tieoff_outcome_derive_success() {
         let outcome = TieOffOutcome::derive(Ok(ok_output("agent result")));
@@ -1607,6 +1627,29 @@ mod tests {
         assert!(matches!(outcome, TieOffOutcome::Failed { .. }));
         if let TieOffOutcome::Failed { error } = outcome {
             assert!(error.contains("crash"));
+        }
+    }
+
+    /// Plan 081: an inactivity kill is a deadline breach — the same
+    /// outcome family as a total timeout: the tie-off is not written
+    /// (a stalled session produced no final response) and the rig-log
+    /// carries the event with the inactivity cause.
+    #[test]
+    fn tieoff_outcome_derive_inactivity() {
+        let outcome = TieOffOutcome::derive(Err(err_agent_inactivity()));
+
+        assert!(matches!(
+            outcome,
+            TieOffOutcome::TimeoutSkipped { .. }
+        ));
+        assert!(!outcome.should_write_tie_off());
+        assert!(outcome.is_timeout());
+        if let TieOffOutcome::TimeoutSkipped { error } = outcome {
+            assert!(
+                error.starts_with("inactivity:"),
+                "error should carry the inactivity cause: {error}"
+            );
+            assert!(error.contains("no output for 300s"));
         }
     }
 
