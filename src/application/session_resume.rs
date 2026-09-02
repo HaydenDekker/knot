@@ -5,8 +5,12 @@
 //! and a session ID was captured, this module retries the invocation using
 //! `--session-id <id>` to continue the same Pi session. The retry prompt is
 //! the original prompt plus the final-response request
-//! ([`FINAL_RESPONSE_REQUEST`]). Retries are limited to 10 attempts or the
-//! profile's overall timeout budget, whichever comes first.
+//! ([`FINAL_RESPONSE_REQUEST`]). An inactivity kill (plan 081) is the one
+//! exception to the session-ID requirement: it restarts even without a
+//! captured session (fresh restart — knots are idempotent), and the retry
+//! prompt carries the blocking-call note ([`INACTIVITY_RESTART_NOTE`])
+//! instead. Retries are limited to 10 attempts or the profile's overall
+//! timeout budget, whichever comes first.
 
 use std::time::{Duration, Instant};
 
@@ -38,6 +42,39 @@ const MIN_REMAINING_SECS: u64 = 5;
 /// greppable.
 const FINAL_RESPONSE_REQUEST: &str =
     "Please produce your final response, or continue if you have not finished.";
+
+/// The inactivity restart note appended to the prompt on the attempt that
+/// follows an inactivity kill (plan 081). Replaces
+/// [`FINAL_RESPONSE_REQUEST`] for that one attempt: it tells the agent
+/// *why* the previous turn was stopped (a call blocked with no output)
+/// and how to keep the session alive on the retry (emit progress within
+/// the window). The helper below substitutes the actual silence duration
+/// (`{silent_secs}`) and the configured window phrasing (`{window}`,
+/// e.g. `5-minute window`). User-facing agent text — keep it greppable.
+const INACTIVITY_RESTART_NOTE: &str = "Your last call blocked for more than \
+    {silent_secs} seconds with no output, so your previous turn was \
+    stopped. If you have a long-running task, ensure it emits a progress \
+    update at least once within the {window} (e.g. run it in the \
+    background and poll its output, or stream the output). Continue from \
+    where you left off and produce your final response when done.";
+
+/// Build the inactivity restart note from the error's silence duration
+/// and configured window (plan 081). The window is phrased in minutes
+/// when it is a whole number of minutes (300s → `5-minute window`),
+/// otherwise in seconds (90s → `90-second window`).
+fn inactivity_restart_note(silent_secs: u64, window_secs: u64) -> String {
+    let window = if window_secs.is_multiple_of(60) {
+        format!("{}-minute window", window_secs / 60)
+    } else {
+        format!("{window_secs}-second window")
+    };
+    // `format!` needs a literal format string, so the template const is
+    // filled by substitution instead — the const stays the single
+    // greppable source of the note text.
+    INACTIVITY_RESTART_NOTE
+        .replace("{silent_secs}", &silent_secs.to_string())
+        .replace("{window}", &window)
+}
 
 /// Timestamp helper for loom-log events.
 fn format_timestamp() -> String {
@@ -210,6 +247,13 @@ fn execute_with_resume_internal(
 ) -> Result<AgentOutput, PortError> {
     let start = Instant::now();
 
+    // Plan 081: the cause-specific note for the next retry prompt — set
+    // when a failure is classified as an inactivity kill, consumed when
+    // the retry prompt is built; `None` → the 078 final-response request.
+    let mut pending_note: Option<String> = None;
+    // Plan 081: count of inactivity kills (terminal exhaustion message).
+    let mut inactivity_kills: u32 = 0;
+
     // --- First attempt (no session ID) ---
     // Delegate to execute_with_config so the adapter layer can
     // inject --name and @{path} into extra_args.
@@ -277,7 +321,12 @@ fn execute_with_resume_internal(
         // the JSON adapter from Pi's first JSONL line before generation
         // starts). If the error carries no session_id, we cannot resume.
         let error_session_id = err.session_id().cloned();
-        if !err.is_resumable() || error_session_id.is_none() {
+        // Plan 081: an inactivity kill is the one deliberate exception to
+        // the session-ID gate — a fresh restart (no `--session-id`) is
+        // safe because knots are idempotent, and the blocking-call note
+        // is what makes the retry different.
+        let inactivity = matches!(&err, PortError::AgentInactivity { .. });
+        if (!err.is_resumable() || error_session_id.is_none()) && !inactivity {
             // Not resumable or no session_id — extract what we can and
             // return
             if let Some(sid) = err.session_id() {
@@ -286,10 +335,37 @@ fn execute_with_resume_internal(
             return Err(err);
         }
 
-        // Capture session_id from error for retry.
-        // At this point we know error_session_id is Some (checked above).
+        // Capture session_id from error for retry (stays None for a
+        // pre-session inactivity stall — the loop's existing
+        // `if let Some(sid)` skips `--session-id`).
         *session_id = error_session_id;
         first_error = err;
+
+        // Plan 081: record the stall (attempt 1 — the initial call outside
+        // the loop, KNotEmptyResponse convention) and queue the
+        // blocking-call note for the retry prompt.
+        if let PortError::AgentInactivity {
+            silent_secs,
+            window_secs,
+            blocked_call,
+            ..
+        } = &first_error
+        {
+            inactivity_kills += 1;
+            pending_note =
+                Some(inactivity_restart_note(*silent_secs, *window_secs));
+            loom_log.append(LoomEvent::AgentInactivity {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                session_id: session_id.clone().unwrap_or_default(),
+                silent_secs: *silent_secs,
+                window_secs: *window_secs,
+                blocked_call: blocked_call.clone(),
+                attempt: 1,
+                timestamp: format_timestamp(),
+            })?;
+        }
     }
 
     // --- Retry loop ---
@@ -340,14 +416,20 @@ fn execute_with_resume_internal(
         }
 
         // Prepare agent_config and prompt for retry
-        // Append --session-id to extra_args and the final-response
-        // request (plan 078) to the prompt.
+        // Append --session-id to extra_args (skipped for a fresh
+        // inactivity restart — no session was captured) and the
+        // cause-specific note to the prompt: the blocking-call note
+        // (plan 081) when the failure was an inactivity kill, the
+        // final-response request (plan 078) otherwise.
         if let Some(sid) = session_id {
             agent_config.extra_args.push("--session-id".to_string());
             agent_config.extra_args.push(sid.clone());
         }
+        let note = pending_note
+            .take()
+            .unwrap_or_else(|| FINAL_RESPONSE_REQUEST.to_string());
         prompt.push_str("\n\n");
-        prompt.push_str(FINAL_RESPONSE_REQUEST);
+        prompt.push_str(&note);
 
         // Log SessionResumed event
         loom_log.append(LoomEvent::SessionResumed {
@@ -442,6 +524,32 @@ fn execute_with_resume_internal(
                 }
 
                 first_error = e;
+
+                // Plan 081: record the stall (attempt + 1 — KNotEmpty-
+                // Response convention) and queue the blocking-call note
+                // for the next retry.
+                if let PortError::AgentInactivity {
+                    silent_secs,
+                    window_secs,
+                    blocked_call,
+                    ..
+                } = &first_error
+                {
+                    inactivity_kills += 1;
+                    pending_note =
+                        Some(inactivity_restart_note(*silent_secs, *window_secs));
+                    let _ = loom_log.append(LoomEvent::AgentInactivity {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        session_id: session_id.clone().unwrap_or_default(),
+                        silent_secs: *silent_secs,
+                        window_secs: *window_secs,
+                        blocked_call: blocked_call.clone(),
+                        attempt: attempt + 1,
+                        timestamp: format_timestamp(),
+                    });
+                }
             }
         }
     }
@@ -458,6 +566,23 @@ fn execute_with_resume_internal(
             message: format!(
                 "session resume exhausted {MAX_RETRIES} retries{budget_suffix}"
             ),
+            session_id: session_id.clone(),
+        }),
+        // The last failure was an inactivity kill (plan 081) — the
+        // watchdog deadline did fire; cause-accurate terminal per 077/078.
+        PortError::AgentInactivity {
+            silent_secs,
+            window_secs,
+            blocked_call,
+            ..
+        } => Err(PortError::AgentInactivity {
+            message: format!(
+                "session resume exhausted {MAX_RETRIES} retries after \
+                 {inactivity_kills} inactivity kills{budget_suffix}"
+            ),
+            silent_secs: *silent_secs,
+            window_secs: *window_secs,
+            blocked_call: blocked_call.clone(),
             session_id: session_id.clone(),
         }),
         // The last failure was not a timeout — typically the empty
