@@ -18,11 +18,47 @@ cargo run
 knot
 ```
 
+To keep the output instead of losing it when the terminal closes, append
+it to the service log and run in the background:
+
+```bash
+mkdir -p tie-offs/rig
+nohup knot >> tie-offs/rig/knot-service.log 2>&1 &
+echo $! > tie-offs/rig/knot-service.pid
+```
+
 Verify by watching the state file:
 
 ```bash
 watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'
 ```
+
+## The Service Keeps Dying
+
+### Symptom
+
+`tie-offs/<rig>/state.json` goes stale, then fresh, then stale again —
+Knot starts and dies repeatedly.
+
+### Why the usual logs are empty
+
+The rig-log and every loom-log are **cleared at startup**, so a
+crash-restart loop wipes its own traces on every boot. The service log is
+the only file that spans runs — if you did not append one, start doing so
+and reproduce the failure:
+
+```bash
+nohup knot >> tie-offs/rig/knot-service.log 2>&1 &
+echo $! > tie-offs/rig/knot-service.pid
+grep -nE 'WARNING|Error|panic' tie-offs/rig/knot-service.log | tail -20
+```
+
+Stop a backgrounded Knot with `kill -INT $(cat tie-offs/rig/knot-service.pid)`.
+Knot handles SIGINT only, so a plain `kill` (SIGTERM) ends it without
+draining the queue — the unfinished event stays in `tie-offs/<rig>/events/`
+and is re-queued on the next start.
+
+Agents: use the `knot-start` skill for all of the above.
 
 ## Loom Not Discovered
 

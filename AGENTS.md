@@ -2,13 +2,16 @@
 
 ## What is Knot?
 
-Knot is a **Rust** application that runs as a **local service** on a developer's machine. It orchestrates AI agent workflows, manages file-based configurations, and exposes an **HTTP control and observability interface** for interaction and monitoring.
+Knot is a **Rust** application that runs as a **local service** on a developer's machine. It orchestrates AI agent workflows, manages file-based configurations, and offers a **file-based control and observability interface** for interaction and monitoring.
 
 ## Architecture
 
 - **Local-first** — Designed to run on a single developer workstation, not as a distributed cloud service.
 - **File system access** — Knot reads and writes project files directly to manage agent profiles, prompt templates, and workflow state.
-- **HTTP interface** — Provides RESTful endpoints for controlling agents, submitting workflows, and observing runtime state.
+- **File interface** — Control and observation are files: strands in a
+  knot's `strand-dir` trigger work, and `tie-offs/<rig>/` holds the
+  event queue, tie-offs, logs, and `state.json`. There is no network
+  listener in the 0.3x service.
 
 ## Building
 
@@ -22,7 +25,13 @@ cargo build
 cargo run
 ```
 
-This starts the Knot HTTP service on `localhost:3000` (or the configured port).
+> Agents should start the service through the `knot-start` skill instead
+> of a foreground `cargo run`: it backgrounds the process and **appends**
+> its output to `tie-offs/<rig>/knot-service.log`, the only Knot log that
+> survives a restart (the rig-log and loom-logs are cleared at startup).
+
+A foreground `cargo run` opens no network port — the filesystem is the
+control and observability interface.
 
 ## Installing
 
@@ -48,7 +57,7 @@ After updating a skill at project level, deploy it:
 
 ```bash
 # Sub-skills -> production library
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   mkdir -p ~/.agents/skills-library/$skill
@@ -67,7 +76,7 @@ cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 **Always verify after copying** — `cp` can silently fail:
 
 ```bash
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \
@@ -114,6 +123,7 @@ production location (see Skill Installation above).
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
+- **knot-start** — Start/stop/restart the service; append and read `tie-offs/<rig>/knot-service.log`
 - **knot-create** — Create, modify, delete looms, knots, and agent profiles
 
 ### Workflow

@@ -1,10 +1,10 @@
 ---
 name: knot-init
-description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, seeds a `default` alias in `rig/models.yml` from ~/.pi/agent/models.json and creates a default profile that uses `model-ref: default`. Verifies setup by reading `tie-offs/rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, start knot, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: creating looms, creating knots, inspecting loom state, modifying existing looms."
+description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, seeds a `default` alias in `rig/models.yml` from ~/.pi/agent/models.json and creates a default profile that uses `model-ref: default`. Verifies setup by reading `tie-offs/rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: starting or stopping the Knot service (use knot-start), creating looms, creating knots, inspecting loom state, modifying existing looms."
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.6.0"
+  version: "4.7.0"
   compatibility: "Knot 0.37.2+"
 ---
 
@@ -68,9 +68,12 @@ When asked to initialise a Knot rig:
      - If it exists but is older than 10 seconds (check `updated_at`),
        Knot may be slow to start. Wait and re-check.
      - If it does not exist, report that Knot is not reachable.
-   - Provide guidance: "Start Knot with `cargo run` from the Knot
-     project directory, or run the Knot binary."
-   - Do NOT proceed further until the user confirms Knot is running.
+   - Start Knot with the `knot-start` skill (it runs the service in the
+     background and appends its output to
+     `tie-offs/<rig>/knot-service.log`, which this skill then reads to
+     confirm a clean boot). Do not launch it with a bare `cargo run`
+     from the agent session — the call blocks and the output is lost.
+   - Do NOT proceed further until the service is confirmed running.
 
 3. **If Knot IS running**, check rig state:
    - Read `tie-offs/<rig>/state.json`.
@@ -90,7 +93,7 @@ When asked to initialise a Knot rig:
       `~/.agents/skills-library/<skill>/` (the trailing `/.` is
       required — copying onto an existing directory would nest it):
       ```bash
-      for skill in knot-init knot-create knot-dispatch knot-inspect
+      for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
                     knot-manage knot-design knot-analyst knot-update
                     knot-abstractions; do
         mkdir -p ~/.agents/skills-library/$skill
@@ -108,7 +111,7 @@ When asked to initialise a Knot rig:
     - **Verify every copy succeeded** — `cp` can silently fail on
       permissions or stale handles. After copying, diff each skill:
       ```bash
-      for skill in knot-init knot-create knot-dispatch knot-inspect
+      for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
                     knot-manage knot-design knot-analyst knot-update
                     knot-abstractions; do
         diff .agents/skills/$skill/SKILL.md \
@@ -173,10 +176,15 @@ When asked to initialise a Knot rig:
 
       ### Running
 
-      Start the Knot service:
+      Start the Knot service with the `knot-start` skill — it runs the
+      service in the background and **appends** its output to the
+      service log (Knot's structured logs are cleared at every startup,
+      so this file is the only record across runs):
 
       ```bash
-      cargo run
+      mkdir -p tie-offs/rig
+      nohup knot >> tie-offs/rig/knot-service.log 2>&1 &
+      echo $! > tie-offs/rig/knot-service.pid
       ```
 
       ### Knot Terminology
@@ -199,6 +207,7 @@ When asked to initialise a Knot rig:
       This project uses the following Knot skills:
 
       - **knot-init** — Initialise the rig
+      - **knot-start** — Start/stop/restart the service, capture the service log
       - **knot-create** — Create, modify, delete looms, knots, and profiles
       - **knot-dispatch** — Trigger knots into action (strand files, events)
       - **knot-inspect** — Inspect rig state (looms, knots, activity)
@@ -424,9 +433,9 @@ Knot may not be writing state).
 
 | Scenario | Action |
 |----------|--------|
-| `tie-offs/<rig>/state.json` does not exist | Knot is not running or rig not initialised. Provide start instructions. |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running or rig not initialised. Start it with the `knot-start` skill. |
 | `tie-offs/<rig>/state.json` is invalid JSON | State file may be corrupt or partially written. Wait a moment and re-read. |
-| `tie-offs/<rig>/state.json` `updated_at` is stale | Knot may have crashed. Provide restart instructions. |
+| `tie-offs/<rig>/state.json` `updated_at` is stale | Knot may have crashed. Read `tie-offs/<rig>/knot-service.log` (see `knot-start`), then restart. |
 | `tie-offs/<rig>/state.json` `rig_path` is empty | Rig config may be missing. Report to user. |
 | `tie-offs/<rig>/state.json` `profiles` is empty | No profiles exist. Create default profile. |
 | `~/.pi/agent/models.json` not found | Seed the `default` alias in `rig/models.yml` with placeholder provider/model. Document in profile body. |
@@ -438,8 +447,8 @@ Knot may not be writing state).
 ## Quick Reference
 
 ```bash
-# Start Knot
-cargo run
+# Start Knot (use the knot-start skill — it backgrounds the service and
+# appends tie-offs/rig/knot-service.log)
 
 # Check if Knot is running (state file exists and is fresh)
 cat tie-offs/rig/state.json | python3 -m json.tool
@@ -496,10 +505,12 @@ skill/application boundary is essential for effective work.
 After initialisation, the workflow continues with:
 
 - **knot-abstractions skill** — foundational architecture overview
-1. **knot-create skill** — create looms, knots, and profiles (file-first)
-3. **knot-dispatch skill** — trigger knots into action
-4. **knot-inspect skill** — inspect rig, loom, and knot state
-5. **knot-manage skill** — review completed rig work
+- **knot-start skill** — start, stop, and restart the service; capture
+  the service log
+- **knot-create skill** — create looms, knots, and profiles (file-first)
+- **knot-dispatch skill** — trigger knots into action
+- **knot-inspect skill** — inspect rig, loom, and knot state
+- **knot-manage skill** — review completed rig work
 
 This skill prepares the rig and installs Knot skills globally. The
 other skills manage the content.
@@ -523,7 +534,7 @@ level):
 
 ```bash
 # Sub-skills -> production library
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   mkdir -p ~/.agents/skills-library/$skill
@@ -542,7 +553,7 @@ cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 Always verify after copying — `cp` can silently fail:
 
 ```bash
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   diff .agents/skills/$skill/SKILL.md \

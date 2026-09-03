@@ -51,7 +51,7 @@ on demand via the master's routing table) and the master router goes
 to `~/.agents/skills/` (the only Knot skill auto-discovered):
 
 ```bash
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   mkdir -p ~/.agents/skills-library/$skill
@@ -72,7 +72,7 @@ cp knot/.agents/skills/knot-init/knot-glossary.md \
 Verify every copy — `cp` can silently fail:
 
 ```bash
-for skill in knot-init knot-create knot-dispatch knot-inspect
+for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
               knot-abstractions; do
   diff knot/.agents/skills/$skill/SKILL.md \
@@ -113,6 +113,21 @@ Run the Knot binary from your project directory:
 ```bash
 knot
 ```
+
+To keep a record of the run, redirect its output to the service log —
+Knot's structured logs (`tie-offs/<rig>/.rig-log` and the loom-logs) are
+**cleared at every startup**, so stderr is the only thing that shows what
+happened across restarts. Append, never overwrite:
+
+```bash
+mkdir -p tie-offs/rig
+nohup knot >> tie-offs/rig/knot-service.log 2>&1 &
+echo $! > tie-offs/rig/knot-service.pid
+```
+
+An agent should use the `knot-start` skill, which does exactly this and
+stops the service with `kill -INT $(cat tie-offs/rig/knot-service.pid)`
+(Knot handles SIGINT only — a plain `kill` skips the queue drain).
 
 Knot will:
 
@@ -199,6 +214,7 @@ Once your rig is running, use the Knot skills to manage it:
 | Skill | What it does | When to use |
 |-------|-------------|-------------|
 | **knot-create** | Create, modify, delete looms and knots | Setting up new workflows |
+| **knot-start** | Start, stop, restart the service; capture the service log | Getting the rig running, reading what happened across restarts |
 | **knot-dispatch** | Trigger knots into action | Starting processing manually |
 | **knot-inspect** | View rig state, looms, knots, profiles | Checking current status |
 | **knot-manage** | Review completed work, interaction chains | Quality review of output |

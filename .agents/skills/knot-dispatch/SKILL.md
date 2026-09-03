@@ -1,10 +1,10 @@
 ---
 name: knot-dispatch
-description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via loom-logs and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch, knot step, step queue, observe one cycle. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst)."
+description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via loom-logs and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch, knot step, step queue, observe one cycle. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst), starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.6.0"
   compatibility: "Knot 0.37.0+"
 ---
 
@@ -118,7 +118,9 @@ opposite — it requires the service to be **stopped** (see [Stepping](#stepping
 
 1. Knot must be running and the rig must be initialised.
    Verify by checking `tie-offs/<rig>/state.json` exists and has fresh
-   `updated_at`. If not, use the `knot-init` skill.
+   `updated_at`. If not, start it with the `knot-start` skill (which
+   appends `tie-offs/<rig>/knot-service.log`); use `knot-init` only when
+   the rig itself does not exist yet.
 2. At least one loom with at least one knot must exist.
    Check `tie-offs/<rig>/state.json` `looms` array. If empty, use
    `knot-create` to create looms and knots first.
@@ -411,18 +413,29 @@ automatically. Two ways to have work queued:
 When asked to step, process one event, or observe a single cycle:
 
 1. **Ensure the service is not running**: `tie-offs/<rig>/state.json`
-   `updated_at` is not fresh. If it is running, stop it (the queue
-   survives the stop).
+   `updated_at` is not fresh. If it is running, stop it with `kill -INT`
+   (see `knot-start` — Knot only handles SIGINT; the queue survives the
+   stop).
 2. **Check what is queued**: `ls tie-offs/<rig>/events/` and/or the
    `strand_queue` array in `state.json`.
 3. **Queue work if needed** (see above — direct queue write is the
    deterministic path).
 4. **Run the step**:
+
    ```bash
    knot step                    # FIFO head
    knot step --rig dev-rig      # named rig
    knot step --event 1750000000000   # unique id prefix
    knot step --event my-feature.md   # strand filename
+   ```
+
+   To keep one cross-run record, append the step's output to the service
+   log instead (the per-run logs are cleared on the next start) —
+   `pipefail` preserves Knot's exit code through `tee`:
+
+   ```bash
+   set -o pipefail
+   knot step 2>&1 | tee -a tie-offs/rig/knot-service.log
    ```
 5. **Observe the cycle**:
    - stdout: `[step] processing event <id> (loom=…, knot=…): <path>`,
@@ -448,7 +461,7 @@ When asked to step, process one event, or observe a single cycle:
 
 | Symptom | Check |
 |---------|-------|
-| No `KnotProcessing` in loom-log | Verify Knot is running (`tie-offs/<rig>/state.json` `updated_at` is fresh). Check `tie-offs/<rig>/.rig-log` for errors. |
+| No `KnotProcessing` in loom-log | Verify Knot is running (`tie-offs/<rig>/state.json` `updated_at` is fresh — otherwise start it with `knot-start`). Check `tie-offs/<rig>/.rig-log` for errors, then `tie-offs/<rig>/knot-service.log` for anything the per-run logs cannot show. |
 | `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check `tie-offs/<rig>/.rig-log` for `TimeoutExceeded`. Increase profile `timeout`. |
 | `KnotFailed` in loom-log | Read the error message in the log entry. Common causes: missing profile, parse errors, agent crash. |
 | File created but no event at all | The strand directory may not be watched. Check `tie-offs/<rig>/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
@@ -491,7 +504,7 @@ If the same strand keeps re-triggering the same knot:
 | Symptom | Check |
 |---------|-------|
 | Producer emitted event but consumer idle | Check `EventsDispatched` in producer's loom-log — does it list the consumer's loom? If not, the consumer's `strand-dir` event URI may not match the producer's knot name. |
-| Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot or check loom-log for `KnotRegistered` for the consumer. |
+| Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot (see `knot-start`) or check loom-log for `KnotRegistered` for the consumer. |
 | `occurred: false` in tie-off but expected event | The producer explicitly acknowledged the event but determined it did not occur. Read the `description` field in the event block — it states **why** the event wasn't triggered. If the reasoning is wrong, re-trigger the producer. |
 | `KnotEventsMissing` in loom-log | The producer completed with **zero** event blocks. The entry lists `expected_events`. Knot already attempted one follow-up re-entry (a second `KnotEventsMissing` means the follow-up also produced nothing). Re-trigger the knot if the events are still missing. |
 | Multiple consumers, only some fired | Each consumer matches independently. Check each consumer's `strand-dir` event URI against the producer's knot ID. |

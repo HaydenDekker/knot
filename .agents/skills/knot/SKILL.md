@@ -1,6 +1,6 @@
 ---
 name: knot
-description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, understanding Knot abstractions, and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, rig state, rig review, rig productivity, blockers, rig design, knot migration. DO NOT USE FOR: project document lifecycle (use the project master)."
+description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, understanding Knot abstractions, and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, knot migration. DO NOT USE FOR: project document lifecycle (use the project master)."
 ---
 
 # Knot (master)
@@ -14,6 +14,7 @@ guess a sub-skill's workflow from this index.
 | Task | Read |
 |------|------|
 | Initialise a rig in the current directory | `/home/hayden/.agents/skills-library/knot-init/SKILL.md` |
+| Start / stop / restart the service, read the service log | `/home/hayden/.agents/skills-library/knot-start/SKILL.md` |
 | Create / modify / delete looms, knots, profiles | `/home/hayden/.agents/skills-library/knot-create/SKILL.md` |
 | Trigger knots: strand files, events, `knot step` | `/home/hayden/.agents/skills-library/knot-dispatch/SKILL.md` |
 | Inspect rig state, looms, activity, profiles | `/home/hayden/.agents/skills-library/knot-inspect/SKILL.md` |
@@ -25,9 +26,9 @@ guess a sub-skill's workflow from this index.
 
 ## Typical flows
 
-- **New rig**: init → design → create → dispatch first strand
-- **Day-to-day**: dispatch → inspect → manage (review output)
-- **Troubleshooting**: inspect → analyst → manage
+- **New rig**: init → design → create → start → dispatch first strand
+- **Day-to-day**: start → dispatch → inspect → manage (review output)
+- **Troubleshooting**: inspect → analyst → manage (service log via start)
 - **Rig changes**: design → create → dispatch
 
 ## Rules

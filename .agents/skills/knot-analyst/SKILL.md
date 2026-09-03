@@ -1,10 +1,10 @@
 ---
 name: knot-analyst
-description: "Analyse rig productivity and project progress at runtime. Tail the rig-log and loom-logs, inspect git history, assess project completion against plan documents, and identify blockers. USE FOR: analyse rig, rig analysis, rig productivity, project progress, how far along, rig health, rig performance, blocker detection, stalled rig, rig diagnosis, activity analysis, progress report, rig review, project health check, rig assessment, knot productivity. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting raw state (use knot-inspect), designing knots (use knot-design)."
+description: "Analyse rig productivity and project progress at runtime. Tail the rig-log and loom-logs, inspect git history, assess project completion against plan documents, and identify blockers. USE FOR: analyse rig, rig analysis, rig productivity, project progress, how far along, rig health, rig performance, blocker detection, stalled rig, rig diagnosis, activity analysis, progress report, rig review, project health check, rig assessment, knot productivity, service log. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting raw state (use knot-inspect), designing knots (use knot-design), starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.6.0"
   compatibility: "Knot 0.34.0+"
 ---
 
@@ -20,6 +20,8 @@ and whether the project is making progress.
 events, **cleared at knot startup** — per-run scope)
 **Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL —
 per-loom activity, **cleared at knot startup** — per-run scope)
+**Service log:** `tie-offs/<rig>/knot-service.log` (raw stderr, appended
+across runs by `knot-start` — the only cross-run operational record)
 **State file:** `tie-offs/<rig>/state.json` (current rig snapshot)
 
 ---
@@ -59,7 +61,10 @@ acceptance specifications, completion criteria.
 
 1. Knot must be running and `tie-offs/<rig>/state.json` must exist.
    If the file does not exist, report: "Knot is not running or rig is
-   not initialised. Use `knot-init` skill."
+   not initialised. Use `knot-start` (start) or `knot-init` (first-time
+   rig setup)." Analysis can still **proceed on the durable record** —
+   the service log, tie-off files, and git history survive a stop; state
+   which parts are stale.
 
 ---
 
@@ -106,6 +111,21 @@ Tail the last 30 lines per loom. Look for:
 | `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
 | `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
 | `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `tie-offs/<rig>/events/*.json` and removed from the queue at the point of failure — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
+
+**Read the service log** at `tie-offs/<rig>/knot-service.log`:
+
+The rig-log and loom-logs cover the **current run only**. The service log
+is the one file that spans every run (appended at start by `knot-start`,
+never truncated), so it is where cross-run operational failure shows up:
+
+| Signal | Interpretation |
+|--------|----------------|
+| Repeated startup output within a short window | The service is **crash-looping** — the structured logs are wiped on each boot, so this file is the only evidence |
+| `WARNING: startup discovery failed` | Loom discovery failed — the rig looks idle but has no watches registered |
+| `[startup] loaded N persisted event(s)` with N growing across boots | Events are re-queued every restart: they keep failing, or the service dies mid-run |
+| `[queue] repaired …` | A knot definition's queue identity was repaired — check for a malformed knot file |
+| `panic`, `[state-writer] write failed` | Process-level faults that never reach the JSONL logs |
+| No service log at all | The service was started outside `knot-start` — note it; cross-run analysis is unavailable |
 
 **Produce a summary:**
 
@@ -419,7 +439,8 @@ For lightweight, targeted queries:
 | Scenario | Action |
 |----------|--------|
 | `tie-offs/<rig>/.rig-log` does not exist | Rig-log may not have been written yet (no serious events). Report "No rig-log found — no timeout or idle events recorded." |
-| `tie-offs/<rig>/state.json` does not exist | Knot is not running. Report and suggest `knot-init`. |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running. Report and suggest `knot-start`; continue from the service log, tie-offs, and git. |
+| `tie-offs/<rig>/knot-service.log` does not exist | The service was started without `knot-start`. Cross-run analysis is unavailable — analyse the current run only and say so. |
 | Git is not initialised | Project may not be in a git repo. Skip git analysis, note in report. |
 | No `project/` directory | Cannot assess project document progress. Report "No project documents found." |
 | Loom-log missing for a loom | Loom has no recorded activity. Report "No activity for `{loom-id}`." |
@@ -432,6 +453,9 @@ For lightweight, targeted queries:
 ```bash
 # Tail rig-log for recent issues
 tail -50 tie-offs/rig/.rig-log
+
+# Cross-run operational view (survives restarts)
+grep -nE 'WARNING|Error|panic|persisted event' tie-offs/rig/knot-service.log | tail -20
 
 # Count timeouts in last 24h
 grep "TimeoutExceeded" tie-offs/rig/.rig-log | tail -20

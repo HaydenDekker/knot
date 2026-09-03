@@ -1,10 +1,10 @@
 ---
 name: knot-inspect
-description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity logs, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` and activity from `tie-offs/<rig>/{loom-id}/.loom-log`. USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing."
+description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity logs, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` and activity from `tie-offs/<rig>/{loom-id}/.loom-log`. USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing, starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.6.0"
+  version: "3.7.0"
   compatibility: "Knot 0.36.0+"
 ---
 
@@ -19,6 +19,8 @@ processing status, and agent profiles by reading
 Knot; default rig: `tie-offs/rig/state.json`)
 **Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only
 JSONL, **cleared at knot startup** — per-run scope)
+**Service log:** `tie-offs/<rig>/knot-service.log` (raw stderr, appended
+across runs — see `knot-start`)
 
 ---
 
@@ -120,7 +122,9 @@ When asked to show rig status:
 
 1. **Read state file**: Read `tie-offs/<rig>/state.json`.
    If the file does not exist, report: "Knot is not running or rig is
-   not initialised. Use `knot-init` skill."
+   not initialised. Use `knot-start` (start) or `knot-init` (first-time
+   rig setup)." Loom and knot *configuration* is still inspectable from
+   the `rig/` files.
 
 2. **Show rig configuration**: Extract `rig_path` from the state file.
    Report the rig path.
@@ -288,7 +292,7 @@ history in the log — the tie-off files are the durable audit record.
 
 | Scenario | Action |
 |----------|--------|
-| `tie-offs/<rig>/state.json` does not exist | Knot is not running or rig not initialised. Suggest `knot-init` skill. |
+| `tie-offs/<rig>/state.json` does not exist | Knot is not running or rig not initialised. Suggest `knot-start` (or `knot-init` for first-time setup). |
 | `tie-offs/<rig>/state.json` is invalid JSON | State file may be corrupt. Report to user. |
 | Loom `{id}` not in state | Loom not found. May not have been discovered yet. Check `rig/` for directories ending in `-loom`. |
 | Knot `{name}` not in loom | Knot not found. Check loom directory for `{name}.md`. |

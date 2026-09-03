@@ -22,6 +22,7 @@ Runtime tree (project output — committed with project git)
 tie-offs/<rig>/
  ├── state.json (live observability, written every 5s)
  ├── .rig-log (operational events)
+ ├── knot-service.log (raw service stderr, appended by the launcher)
  ├── events/ (disk-backed event queue)
  └── {loom-id}/ (.loom-log, tie-off files, event dispatch dirs)
 ```
@@ -254,13 +255,16 @@ Knot maintains several log files for observability:
 |-----|----------|---------|
 | **Loom-log** | `tie-offs/<rig>/{loom-id}/.loom-log` | Per-loom activity: knot registration, processing events, errors |
 | **Rig-log** | `tie-offs/<rig>/.rig-log` | JSONL of serious events: timeouts (`TimeoutExceeded`) and idle periods (`QueueIdle`) |
+| **Service log** | `tie-offs/<rig>/knot-service.log` | Raw stderr/stdout of the service. Knot does not open this file — the launcher appends it (`knot-start`), which is why it is the only log that survives a restart |
 
 Logs are **per-run**: at every startup, Knot truncates the rig-log and
 every loom-log *before* loom discovery, so each log always contains
 only the events of the current run (it starts with the fresh
 `KnotRegistered`/`LoomStarted` events and ends with `LoomStopped` at
 shutdown). Cross-run history is not kept in the logs — the tie-off
-files are the durable audit record (plain text, git-versioned).
+files are the durable audit record (plain text, git-versioned), and the
+appended service log is the durable *operational* record (start Knot
+with the `knot-start` skill to get one).
 
 The logs support multiple consumers (append-only within a run,
 single-line JSON entries); knots and operators react to events of the
@@ -312,6 +316,7 @@ the rig. Each skill is a `.md` file discovered by the agent framework
 |-------|---------|
 | **knot** | Master router — the only Knot skill auto-discovered by pi in other projects; reads the sub-skills below on demand |
 | **knot-init** | Initialise a rig, create profiles, install skills globally |
+| **knot-start** | Start, stop, and restart the service; append and read `tie-offs/<rig>/knot-service.log` |
 | **knot-create** | Create, modify, delete looms, knots, and profiles |
 | **knot-dispatch** | Trigger knots into action by creating or touching strands |
 | **knot-inspect** | View rig state, looms, knots, profiles, and activity logs |
