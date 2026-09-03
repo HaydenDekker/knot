@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.7.0"
+  version: "4.8.0"
   compatibility: "Knot 0.37.2+"
 ---
 
@@ -236,23 +236,36 @@ When asked to initialise a Knot rig:
       ```
 
 5. **Agent adapter configuration** (`rig/.workspace-agent-config.yaml`):
-   - Knot auto-creates this file on first startup if it doesn't exist.
+   - Knot auto-creates this file on first startup if it doesn't exist
+     (default `agent-adapter: pi-json` since 0.40.0).
    - It controls how Knot invokes the Pi agent. Default content:
      ```yaml
      # Rig-level agent configuration.
      #
      # agent-adapter: which adapter to use for Pi invocations.
-     #   pi-stdio — plain text stdout (default, current behaviour)
+     #   pi-stdio — plain text stdout
      #   pi-json  — JSON-L stream with session ID + token usage capture
+     #              (default; also enables inactivity restart with
+     #              blocked-call identification)
      #
-     agent-adapter: pi-stdio
+     # inactivity-timeout-seconds: kill a session that produces no
+     # output for this window and restart it with a blocking-call
+     # note. Default 300; 0 disables the watchdog. (Knot 0.40.0+)
+     #
+     agent-adapter: pi-json
      ```
-   - `pi-stdio` — plain text output, current behaviour. No metadata
-     capture (session ID, token usage).
-   - `pi-json` — JSON-L output, captures session ID and token usage.
-     Required for session resume and invocation visibility features.
+   - `pi-json` — **default** (Knot 0.40.0+). JSON-L output, captures
+     session ID and token usage. Required for session-resume restarts
+     and invocation visibility; with the inactivity watchdog (0.40.0+)
+     it also names the blocked call in the restart note.
+   - `pi-stdio` — plain text output. No metadata capture (no session
+     ID, no token usage); inactivity detection still works, but
+     restarts after a stall are fresh sessions (no `--session-id`).
+   - `inactivity-timeout-seconds` (Knot 0.40.0+) — default 300; set
+     to `0` to disable the watchdog. Loaded at startup — restart Knot
+     after editing.
    - To switch: edit `rig/.workspace-agent-config.yaml`, change
-     `agent-adapter` to `pi-json`, restart Knot.
+     `agent-adapter` to the other value, restart Knot.
 
 5a. **Enable pi compaction for rig sessions** (`.pi/settings.json`;
    idempotent, create-if-absent only):

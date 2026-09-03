@@ -152,6 +152,9 @@ safely.
 - `KnotProcessing` / `KnotCompleted` / `KnotFailed`
 - `KnotUpdated` — knot file modified and reloaded
 - `SessionResumed` — agent session resumed after failure
+- `AgentInactivity` — agent session produced no output for the
+  inactivity window and was killed; being restarted with the
+  blocking-call note (Knot 0.40.0+)
 - `StrandProcessed` / `StrandSkipped` / `StrandIgnored`
 - `KnotParseWarning` (unknown YAML properties)
 - `DirectoryCreated` — strand directory auto-created
@@ -160,21 +163,30 @@ safely.
 
 Knot reads its agent configuration from `.workspace-agent-config.yaml` in
 the rig directory. This file specifies which adapter to use for agent
-invocations:
+invocations and the inactivity watchdog window:
 
 ```yaml
-agent-adapter: pi-stdio
+agent-adapter: pi-json
+inactivity-timeout-seconds: 300   # default when absent; 0 disables
 ```
 
 Supported adapters:
 
 | Adapter | Description |
 |---------|-------------|
-| `pi-stdio` | Default. Reads agent output from stdout. |
-| `pi-json` | Parses JSON-L output for session IDs and token usage. |
+| `pi-json` | **Default** (Knot 0.40.0+). Parses JSON-L output for session IDs and token usage; enables session-resume restarts and inactivity restart with blocked-call identification. |
+| `pi-stdio` | Reads agent output from plain text stdout. Inactivity detection still works, but restarts after a stall are fresh sessions (no `--session-id`) and the blocked call cannot be named. |
+
+`inactivity-timeout-seconds` (Knot 0.40.0+): when the session produces
+no output for this window, Knot kills it and restarts it with a
+blocking-call note (see [concepts — Session
+Resume](../concepts.md#session-resume)). Defaults to **300** when
+absent; `0` disables the watchdog. Both settings are loaded at
+startup — restart Knot after editing the file.
 
 If the file does not exist, Knot creates it with sensible defaults
-(`agent-adapter: pi-stdio`) on first boot.
+(`agent-adapter: pi-json` since 0.40.0) on first boot. Existing rigs
+with an explicit `agent-adapter` keep their setting.
 
 ## Rig Switching and Sharing
 

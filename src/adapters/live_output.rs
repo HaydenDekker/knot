@@ -139,6 +139,7 @@ fn record_kill(kill_reason: &Arc<Mutex<Option<KillReason>>>, reason: KillReason)
 /// fully silent session with equal windows) — it is the more specific
 /// diagnosis and carries the restart note. The total-budget warning
 /// line is the legacy text, unchanged.
+#[allow(clippy::too_many_arguments)] // flat parameter list keeps the two adapter call sites readable
 pub fn spawn_watchdog(
     thread_name: &str,
     pgid: i32,

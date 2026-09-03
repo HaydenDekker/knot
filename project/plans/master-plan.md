@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-02 (plan 081 phases 0–5 complete — inactivity watchdog, error, outcome, loom event, restart with blocking-call note, composition wiring; phase 6 pending)
+> **Last Updated:** 2026-09-03 (plan 081 complete — inactivity timeout with restart note, default adapter flip for fresh rigs; released in v0.40.0)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | 🟡 In Progress (phases 0–5 done) | 2026-09-02 |
+| 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | ✅ Complete (2026-09-03) — released in v0.40.0 | 2026-09-02 |
 | 80 | [Context Overflow Without Compaction — Fail Fast, Warn at Startup](080-overflow-error-fail-fast/overflow-error-fail-fast-plan.md) | ✅ Complete (2026-08-27) — released in v0.38.1 | 2026-08-27 |
 | 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
 | 78 | [Final-Response Request — Re-enter on Abrupt Turn-End](078-final-response-request/final-response-request-plan.md) | ✅ Complete | 2026-08-26 |
@@ -69,6 +69,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 81. Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note
+
+**Status:** ✅ Complete (2026-09-03) — released in v0.40.0
+**Created:** 2026-09-02
+**Goal:** Add a rig-global inactivity watchdog (`inactivity-timeout-seconds`, default 300, `0` disables) that detects a silent pi session at byte level (no thinking, no response, no streamed tool output), kills it at the window, and restarts it with a cause-specific blocking-call note — so a hung command stops the session within the window and the agent is told how to keep the session alive (background + poll, or stream output), instead of the rig sitting silent until the total budget expires; make `pi-json` the default adapter for **fresh** rigs (existing rigs keep their explicit setting).
+
+Completed in Knot 0.40.0: reader + watchdog threads in both pi adapters (inactivity checked first; the total-budget timer is unchanged — the two timers are orthogonal: silence bounded by inactivity, work by the budget); `PortError::AgentInactivity` (resumable — the one error that may retry without a session ID, since knots are idempotent); blocked-call identification from the stream under `pi-json` (last unmatched `tool_execution_start`, e.g. `bash("npm run build")`); `AgentInactivity` loom-log event per stall (attempt, silent/window seconds, session ID, blocked call); restart with the `INACTIVITY_RESTART_NOTE` prompt note (replacing the generic final-response request for that attempt); exhaustion → cause-accurate terminal `AgentInactivity` → `TimeoutSkipped` outcome (no tie-off write) + `TimeoutExceeded` rig-log entry; `knot-init` 4.8.0 seeds `agent-adapter: pi-json` for fresh rigs. Empirically verified end-to-end against a real `pi` binary (kill with named blocked call → note-driven restart → completed tie-off). No rig-document migration (additive config key).
+
+Full details in [081-inactivity-timeout/inactivity-timeout-plan.md](081-inactivity-timeout/inactivity-timeout-plan.md).
 
 ### 79. Context Overflow — Compact and Continue, with Loom-Log Visibility
 

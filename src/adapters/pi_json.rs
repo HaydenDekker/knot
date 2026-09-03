@@ -1751,8 +1751,7 @@ sleep 300
 
         let result = runner.execute(ctx);
         let err = result
-            .err()
-            .expect("should error (total timeout, not inactivity)");
+            .expect_err("should error (total timeout, not inactivity)");
         assert!(
             matches!(err, PortError::Timeout { .. }),
             "with inactivity disabled the total timeout should fire, got: {err:?}"
@@ -1891,7 +1890,7 @@ sleep 300
         let ctx = make_context(&[]);
 
         let result = runner.execute(ctx);
-        let err = result.err().expect("should error (total timeout)");
+        let err = result.expect_err("should error (total timeout)");
         assert!(
             matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got: {err:?}"

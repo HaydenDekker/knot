@@ -210,6 +210,42 @@ model error). Knot retries up to 10 times with 10-second delays.
 - Verify the agent CLI (`pi`) is working independently:
   `pi --help`
 
+## Knot Stalls — Rig Silent for Minutes (Knot 0.40.0+)
+
+### Symptom
+
+A knot sits in `processing` with no visible work: the session is alive
+but silent (a hung bash command, a stalled provider call, a deadlocked
+subprocess). The loom-log shows an `AgentInactivity` entry —
+`silent_secs`, `window_secs`, the session ID, and the blocked call
+when it could be named (e.g. `bash("npm run build")`) — followed by a
+`SessionResumed` entry for the restart.
+
+### What Knot Does
+
+The inactivity watchdog (default window **300s**;
+`inactivity-timeout-seconds` in `rig/.workspace-agent-config.yaml`,
+`0` disables) kills a session that produces no output for the window
+and restarts it with a blocking-call note telling the agent to keep
+emitting progress (run long tasks in the background and poll, or
+stream the output). A healthy outputting command never trips it —
+streamed tool output keeps resetting the timer.
+
+### Fix
+
+- If a stall is legitimate (a genuinely quiet long step), raise
+  `inactivity-timeout-seconds` and restart Knot.
+- If it recurs for the same command, the command is hanging: check it
+  independently, or rework the knot so the agent polls a backgrounded
+  task instead.
+- Use `agent-adapter: pi-json` for blocked-call identification and
+  session-resume restarts (`--session-id`); with `pi-stdio` the
+  restart is a fresh session and the blocked call is not named.
+- Repeated `AgentInactivity` entries ending in `KnotFailed` with a
+  `TimeoutExceeded` rig-log entry mean every restart re-hung — the
+  note is being ignored or the hang is deterministic; fix the command
+  rather than the window.
+
 ## Strand Not Being Processed (Binary File)
 
 ### Symptom

@@ -278,6 +278,16 @@ present, else the first 80 chars of the args JSON). Best-effort —
 
 ## Phases
 
+**All phases complete 2026-09-03 — released in Knot v0.40.0.**
+Phases 0–5 landed as committed; phase 6 (verify + docs + version)
+closed the plan: full `cargo test` green (948 lib + integration,
+0 failures), no new clippy warnings from this plan, empirical pi
+verification (see Implementation Status), docs
+(`rig-structure`, `concepts`, `troubleshooting`, release notes),
+`knot-init` 4.8.0 (seeds `pi-json` for fresh rigs), `Cargo.toml`
+0.39.0 → 0.40.0. `knot-update` gains **no migration entry**
+(additive config key — decision in the Phases section below).
+
 ### Phase 0: Failing tests
 
 1. `src/adapters/pi_json.rs` (mock CLI scripts via `KNOT_TEST_CLI_PATH`,
@@ -527,3 +537,47 @@ already loaded at startup. (The default-adapter flip lives in Phase 1
   granularity adds at most ~250ms to the window; and a child that exits
   on its own always wins over a simultaneous kill (status-first
   classification).
+
+## Implementation Status: ✅ Complete (2026-09-03)
+
+- **Verification (phase 6):** `cargo test --workspace` full suite
+  green (948 lib + integration tests, 0 failures); `cargo clippy
+  --all-targets` — the three warnings this plan's code introduced
+  (`spawn_watchdog` arg count, two `.err().expect()` in tests) were
+  fixed; the repo's pre-existing warnings are unchanged.
+- **Empirical pi check (real binary, local model, `pi --mode json`):**
+  - Direct stream — a `bash(sleep 120)` call emits
+    `tool_execution_start` + one empty `tool_execution_update`, then
+    silence (pi's own tool timeout is 150s, so the silence is the
+    call, not pi) — the watchdog's input condition. A 12s outputting
+    command streamed **121** `tool_execution_update` lines (the 100ms
+    throttle reaches stdout in json mode) — the reset condition.
+  - Full rig run (dev rig, inactivity 20s, `pi-json`, real model):
+    `KnotProcessing → KnotEmptyResponse → SessionResumed(1) →
+    AgentInactivity(2, silent=20s, window=20s, blocked=bash(sleep
+    120)) → SessionResumed(2) → AgentInactivity(3, blocked=bash(<poll
+    loop with no per-iteration echo>)) → SessionResumed(3) →
+    KnotCompleted → StrandProcessed(error: null)` — tie-off produced
+    with the session ID; rig-log held only `QueueIdle` (no
+    exhaustion). The restart note changed behaviour on retry 3 (the
+    model switched from a bare `sleep 120` to background + poll);
+    the imperfect poll (silent loop) was killed once more, and the
+    next re-entry completed. Both the kill-with-blocked-call and the
+    success-after-restart stories are confirmed end-to-end.
+- **Docs:** `docs/configuration/rig-structure.md` (config key, adapter
+  table for the default flip, `AgentInactivity` loom event),
+  `docs/concepts.md` (session-resume paragraph: the two timers, the
+  restart note), `docs/troubleshooting.md` ("Knot Stalls — Rig Silent
+  for Minutes"), `docs/release-notes.md` (v0.40.0 entry).
+- **Skills:** `knot-init` 4.8.0 — step 5 documents the new default
+  (`agent-adapter: pi-json`) and `inactivity-timeout-seconds`; fresh
+  rigs get the full inactivity experience, existing rigs keep their
+  explicit setting. `knot-update`: **no migration entry** (additive
+  config key — old files parse with the 300 default).
+- **Version:** `Cargo.toml` 0.39.0 → 0.40.0; installed with `cargo
+  install --path .`.
+- **Repo rule added (AGENTS.md):** agents must not test-run the Knot
+  service in this repository — live rig runs are performed elsewhere
+  (added after the empirical run above was started; the run had
+  already completed and was captured as the evidence for this
+  section).

@@ -159,6 +159,31 @@ untouched (`TimeoutExceeded` records genuine deadline breaches only).
 Without a session ID (stdio adapter, unparseable output) there is no
 re-entry — the terminal failure stands after the first attempt.
 
+A third re-entry cause is **inactivity** (Knot 0.40.0+): a watchdog
+kills the session when it produces *no output at all* — no thinking,
+no response, no streamed tool output — for
+`inactivity-timeout-seconds` (rig-global, default **300**, `0`
+disables; loaded at startup, restart Knot after editing). It is a
+second timer, orthogonal to the profile's overall timeout budget:
+**silence is bounded by inactivity, work is bounded by the budget**.
+A healthy long-running command keeps streaming output (pi relays
+tool output as a throttled stream) and keeps resetting the timer, so
+an active session may run past the inactivity window until the
+budget; a hung command or stalled provider goes silent and is killed
+at the window. Each kill is recorded as an `AgentInactivity` loom-log
+entry — attempt, silent seconds, window, captured session ID, and the
+**blocked call** named from the stream when derivable (e.g.
+`bash("npm run build")`) — and the retry re-enters the same session
+(fresh, when no session ID was captured) with a cause-specific note
+appended to the prompt: *“Your last call blocked for more than N
+seconds with no output…”* — telling the agent how to keep the session
+alive (run the task in the background and poll its output, or stream
+the output) instead of re-hanging. When the inactivity attempts are
+exhausted the knot terminates with
+`inactivity: session resume exhausted 10 retries after N inactivity
+kills` — a `TimeoutExceeded` rig-log entry (a deadline did fire) and
+no tie-off write, the same shape as a total timeout.
+
 ### Context Compaction (Compact-and-Continue)
 
 A session whose context approaches the model's context window is not a

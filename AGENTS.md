@@ -30,6 +30,12 @@ cargo run
 > its output to `tie-offs/<rig>/knot-service.log`, the only Knot log that
 > survives a restart (the rig-log and loom-logs are cleared at startup).
 
+> **Do not test-run Knot in this repository.** Agents must not start
+> the service or trigger live rig runs (strand dispatch, knot
+> executions, empirical checks) here — live rig runs are performed
+> elsewhere. Verify changes with `cargo test` / `cargo clippy` and the
+> mock-CLI test harness instead.
+
 A foreground `cargo run` opens no network port — the filesystem is the
 control and observability interface.
 

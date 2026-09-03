@@ -1,5 +1,75 @@
 # Release Notes
 
+## v0.40.0 — 2026-09-03
+
+### Feature — Inactivity Timeout: Kill Blocked Sessions, Restart with a Blocking-Call Note (Plan 081)
+
+Knot's only timeout before this was a **total wall-clock budget** — it
+measures *total work*, not *stall*. A session hung on an external call
+(deadlocked process, command waiting on stdin, stalled provider) stays
+alive but silent, and the rig sat until the budget ran out — potentially
+tens of minutes on a profile with a large timeout — before the restart
+it triggered carried a nudge that never told the agent *why* it was
+stopped. The inverse also bit: a healthy session doing many quick tool
+calls could be killed by the budget even though nothing was stuck.
+
+- **Inactivity watchdog** — a rig-global `inactivity-timeout-seconds`
+  (`rig/.workspace-agent-config.yaml`, default **300**, `0` disables;
+  loaded at startup — restart Knot after editing). Detection is
+  byte-level: any byte on the child's stdout/stderr resets the timer.
+  A healthy long-running command keeps emitting (pi streams tool
+  output, throttled at 100 ms), so it never trips the watchdog; a
+  hung command or a stalled provider goes quiet and is killed at the
+  window. The two timers are orthogonal: inactivity bounds *silence*,
+  the profile's total budget bounds *work*.
+- **Cause-accurate error + restart note** — the kill produces
+  `PortError::AgentInactivity` (resumable; the one error that may
+  retry *without* a session ID — a fresh restart is safe because knots
+  are idempotent). The session-resume loop re-enters the same session
+  (`--session-id` when one was captured, fresh otherwise) and appends
+  a cause-specific note instead of the generic final-response request:
+  *“Your last call blocked for more than {N} seconds with no output,
+  so your previous turn was stopped. If you have a long-running task,
+  ensure it emits a progress update at least once within the
+  {window}-second window (e.g. run it in the background and poll its
+  output, or stream the output). Continue from where you left off and
+  produce your final response when done.”*
+- **Blocked-call identification** — under `pi-json`, the accumulated
+  stream is scanned after a kill and the last `tool_execution_start`
+  with no matching end is named in the error and the loom-log entry
+  (e.g. `bash("npm run build")`). Best-effort — the note works
+  without it.
+- **Loom-log observability** — each stall is recorded as an
+  `AgentInactivity` loom entry: attempt, silent seconds, window,
+  session ID (empty when none was captured), blocked call. Story on
+  success: `KnotProcessing → AgentInactivity → SessionResumed →
+  KnotCompleted → StrandProcessed`; on exhaustion:
+  `… → AgentInactivity → KnotFailed → StrandProcessed(error)` with a
+  `TimeoutExceeded` rig-log entry and **no tie-off write** — the same
+  outcome family as a total timeout (a deadline did fire, and the
+  tie-off is agent output, which a stalled session never produced).
+- **Default adapter for new rigs is now `pi-json`** — the compiled
+  default flips from `pi-stdio` to `pi-json`, so fresh rigs get
+  session IDs, token usage, and inactivity restart with blocked-call
+  identification. **Existing rigs are unaffected**: an explicit
+  `agent-adapter` in `.workspace-agent-config.yaml` wins over the
+  default. Under `pi-stdio`, inactivity detection still works, but
+  restarts after a stall are fresh sessions (no `--session-id`) and
+  the blocked call is not named.
+- **Total-timeout semantics unchanged** — the profile `timeout`
+  budget, the per-attempt deadline, the retry bounds (10 retries,
+  10-second delay, 5-second minimum remaining), and the
+  `TimeoutExceeded` rig-log behaviour are all as before. When both
+  deadlines elapse, inactivity wins — it is the more specific
+  diagnosis.
+
+No change to profile, knot, loom, tie-off, or event formats. The new
+loom-log event variant degrades gracefully: older binaries skip an
+`AgentInactivity` line with a warning, and 0.40.0 reads old logs
+unchanged. **No rig-document migration required** —
+`inactivity-timeout-seconds` is an additive config key; old files
+parse with the 300 default.
+
 ## v0.38.0 — 2026-08-26
 
 ### Feature — Context Overflow: Compact and Continue, with Loom-Log Visibility (Plan 079)
