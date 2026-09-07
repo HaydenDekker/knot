@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-07 (plan 085 in progress — event-parse log flags + anchored rig `.gitignore` entry; plan 082 status corrected to complete — system event subscriptions, released in v0.41.0)
+> **Last Updated:** 2026-09-07 (plan 085 complete — event-parse log flags + anchored rig `.gitignore`, released in v0.41.1; plan 082 status corrected to complete — system event subscriptions, released in v0.41.0)
 
 ## How to Add a Plan
 
@@ -46,7 +46,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | 🟡 In Progress | 2026-09-07 |
+| 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
 | 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ⬜ Planned | 2026-09-07 |
 | 83 | [Consolidated Service Log + Change-Driven State Writes](083-consolidated-service-log/consolidated-service-log-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
 | 82 | [System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers](082-system-event-subscriptions/system-event-subscriptions-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
@@ -76,9 +76,11 @@ _Overview sections for active and recently completed plans go here._
 
 ### 85. Event-Parse Log Flags and Anchored Rig `.gitignore` Entry
 
-**Status:** 🟡 In Progress
+**Status:** ✅ Complete (2026-09-07) — released in v0.41.1
 **Created:** 2026-09-07
 **Goal:** Show the `occurred` boolean next to each event id on the `event parse …` console line (so active events and `occurred: false` acknowledgements are distinguishable), and anchor the auto-appended rig `.gitignore` entry with a leading slash (`/{basename}/`) — force-migrating any existing bare `{basename}/` line in place — so it ignores only the top-level rig dir and no longer over-matches nested directories such as `tie-offs/rig/`.
+
+Completed in Knot 0.41.1: the event-parse diagnostic renders `PlanCreated=true, SpecReviewed=false` (pure stderr change — the `occurred` dispatch filter in `process_strand.rs` is untouched); `ensure_rig_repo()` in `git_versioner.rs` now appends `/{basename}/` and force-migrates a pre-existing bare line in place (anchored line, or marker-without-entry, short-circuit to no-ops; the tracked-by-parent guard is unchanged, and its logged untrack command now reads `git rm -r --cached /rig/`). Tests: the three existing entry tests assert the anchored form; new `ensure_rig_repo_migrates_unanchored_entry` (old shape converges with marker + user lines preserved, no duplicate, second run a no-op) and `ensure_rig_repo_leaves_anchored_entry` (byte-identical). Docs: release notes v0.41.1, knot-update 0.41.1 changelog, knot-init 4.10.0. No rig-document migration.
 
 Full details in [085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md).
 
