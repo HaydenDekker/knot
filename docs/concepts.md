@@ -215,6 +215,35 @@ default).
   retries, no clock-up, and no timeout operational event (no deadline was
   exceeded).
 
+### Graceful Completion (Wrap-Up Steering)
+
+Compaction (above) is **reactive** — it salvages the session but does
+not ask the agent to stop and hand off. **Wrap-up steering** is the
+**proactive** complement: with the opt-in `pi-rpc` adapter and a
+per-alias `ctx-wrap-up-limit` in `rig/models.yml`, Knot watches the
+session's live context usage and, once the sampled tokens cross the
+limit, sends a one-shot `steer` at the next turn boundary telling the
+agent to stop starting new work, commit all complete work, update its
+progress, note what is incomplete and where it left off, and produce its
+final tie-off. So context exhaustion ends in a clean handoff instead of
+an uncommitted working tree.
+
+- **Fire-once** — at most one steer per run. It is gated on the
+  `ctx-wrap-up-limit` (a `0`/absent value disables the whole feature) and
+  fires regardless of whether pi's own auto-compaction is enabled (the
+  steer is the remedy either way). It is meaningful only on `pi-rpc`
+  runs; under another adapter the limit is ignored with a one-shot
+  warning.
+- **Placement** — set `ctx-wrap-up-limit` a few thousand tokens below
+  the model's effective compaction point (`contextWindow −
+  reserveTokens`) so the steer lands before pi would auto-compact.
+- **Loom-log visibility** — each steer is recorded as a
+  `ContextWrapUpSteered` loom entry: `session_id`, `context_tokens`,
+  `limit`, and `attempt`. The steer prompt itself is not persisted — it
+  is an in-flight instruction; the run's own tie-off and git commit are
+  the reconstructed result (the filesystem, not a transcript, is the
+  source of truth).
+
 ## Event Queue
 
 Strand events wait in a **disk-backed queue** at `tie-offs/<rig>/events/`

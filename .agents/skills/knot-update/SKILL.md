@@ -59,6 +59,61 @@ date, and migration instructions for affected document types.
 
 ---
 
+### `pi-rpc` Runner + Context Wrap-Up Steering (Knot 0.42.0, 2026-09-07)
+
+**What changed:** a new optional agent runner, `agent-adapter: pi-rpc`,
+speaks pi's `--mode rpc` JSONL protocol over stdin/stdout. It watches
+the session's live context usage and, when it crosses a per-alias
+`ctx-wrap-up-limit` (tokens), sends a one-shot `steer` (the wrap-up
+prompt) at the next turn boundary so the agent commits, records progress,
+and ties off before the context runs out. The `pi-json` runner is
+unchanged and remains the default.
+
+**New config keys / values (additive):**
+
+- **`agent-adapter: pi-rpc`** — a new value for the **rig-level**
+  `agent-adapter` key in `rig/.workspace-agent-config.yaml` (one adapter
+  per rig, shared by all its knots). Selects the RPC runner. `pi-json`
+  and `pi-stdio` are unchanged.
+- **`ctx-wrap-up-limit: <tokens>`** — a new **per-model-alias** key in
+  `rig/models.yml` (v1 is alias-level only; a direct-spec profile with no
+  `model-ref` has no limit, feature off). When set (> 0) *and*
+  `agent-adapter: pi-rpc`, the runner steers the session to wrap up once
+  the sampled context tokens cross the limit. A value of `0` disables
+  steering (filters to `None`). Steering is one steer per run and fires
+  regardless of whether pi's own auto-compaction is enabled. Under a
+  non-rpc adapter the limit is ignored (the runner logs a one-shot
+  warning that the adapter cannot steer mid-run).
+- **`ContextWrapUpSteered`** — a new one-shot loom event (loom-log) and
+  new `wrap_up` field on `AgentInvocationMetadata` recording the steer
+  (`context_tokens`, `limit`). A `[KNOT][EVENT]` line is rendered in the
+  service log when it fires.
+
+**Affected documents:** none require migration — the change is additive.
+
+**Migration: none required.**
+
+- Existing `rig/.workspace-agent-config.yaml` and `rig/models.yml`
+  files are unchanged and continue to work. Both new keys are opt-in.
+- To **opt in**, set `agent-adapter: pi-rpc` in
+  `rig/.workspace-agent-config.yaml` (rig-level — it applies to every
+  knot in the rig) **and** add `ctx-wrap-up-limit: <tokens>` to the
+  model alias in `rig/models.yml` (below the model's effective
+  compaction point, e.g. a few thousand tokens under the
+  reserve-aware limit). Both are required for steering.
+- To **subscribe** to the steer, set a knot's `strand-dir` to
+  `event:<producer>:ContextWrapUpSteered` (system-event subscription,
+  Knot 0.41.0+).
+- **Recommended placement:** the adapter is a **per-rig** choice, so put
+  `pi-rpc` on rigs whose work is long authoring / building (where context
+  exhaustion is the real risk). The steer prompt is wasted overhead on a
+  short consumer/review-only rig — keep those on `pi-json`.
+
+**Deferred next change:** removal of the `pi-json` runner, once
+`pi-rpc` has proven itself in rig service.
+
+---
+
 ### Root-Anchored Rig `.gitignore` Entry (Knot 0.41.1, 2026-09-07)
 
 **What changed:** the rig exclusion Knot appends to the parent repo's

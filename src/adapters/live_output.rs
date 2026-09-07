@@ -24,7 +24,7 @@
 use std::io::{Read, Result as IoResult};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -118,6 +118,68 @@ pub fn spawn_reader(
                     Err(_) => break,
                 }
             }
+        })
+}
+
+/// Spawn a reader thread that drains `src` into `buf` (stamping
+/// `last_activity` on every non-empty read, exactly like
+/// [`spawn_reader`]) **and** splits complete LF-terminated lines, sending
+/// each to `line_tx` (plan 084).
+///
+/// The byte buffer is the source of truth for the watchdog and for the
+/// post-hoc `parse_stdout`; the line channel feeds the incremental session
+/// driver. A trailing partial line (no closing newline) is held back, not
+/// emitted — pi's JSONL stream always terminates each line with LF, so in
+/// practice the held remainder is empty at EOF. A trailing `\r` is trimmed
+/// (CRLF tolerance). Malformed lines pass through unchanged; the driver
+/// ignores anything that is not a valid JSON event line.
+pub fn spawn_line_reader(
+    thread_name: &str,
+    src: impl Read + Send + 'static,
+    buf: &Arc<Mutex<Vec<u8>>>,
+    last_activity: &Arc<AtomicU64>,
+    line_tx: mpsc::Sender<String>,
+) -> IoResult<JoinHandle<()>> {
+    let buf = Arc::clone(buf);
+    let last_activity = Arc::clone(last_activity);
+    std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || {
+            let mut src = src;
+            let mut chunk = [0u8; 8192];
+            let mut partial: Vec<u8> = Vec::new();
+            loop {
+                match src.read(&mut chunk) {
+                    Ok(0) => break, // EOF — all write ends closed
+                    Ok(n) => {
+                        last_activity.store(now_unix_nanos(), Ordering::Relaxed);
+                        buf.lock()
+                            .expect("output buffer mutex poisoned")
+                            .extend_from_slice(&chunk[..n]);
+                        partial.extend_from_slice(&chunk[..n]);
+                        // Emit every complete line; hold the tail.
+                        while let Some(pos) =
+                            partial.iter().position(|&b| b == b'\n')
+                        {
+                            let line_bytes: Vec<u8> = partial.drain(..=pos).collect();
+                            let mut line =
+                                String::from_utf8_lossy(&line_bytes).into_owned();
+                            if line.ends_with('\r') {
+                                line.pop();
+                            }
+                            // Ignore a send failure — the receiver (driver)
+                            // has already exited, and there is nothing left
+                            // to do with the line.
+                            let _ = line_tx.send(line);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            // A held partial (no closing newline) is intentionally not
+            // emitted — see the doc comment.
+            let _ = partial;
         })
 }
 

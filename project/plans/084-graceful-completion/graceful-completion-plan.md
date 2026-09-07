@@ -558,4 +558,4 @@ default; rigs opt in with `agent-adapter: pi-rpc`.
   graceful-completion tie-off flows through the entire pipeline like
   any other run, and the loom event records that it was steered.
 
-## Implementation Status: ⬜ Planned
+## Implementation Status: ✅ Complete (2026-09-07) — released in v0.42.0

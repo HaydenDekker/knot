@@ -253,6 +253,9 @@ When asked to initialise a Knot rig:
      #   pi-json  — JSON-L stream with session ID + token usage capture
      #              (default; also enables inactivity restart with
      #              blocked-call identification)
+     #   pi-rpc   — JSON-over-stdin/stdout RPC (`pi --mode rpc`);
+     #              keeps stdin open so Knot can steer the session
+     #              mid-run (context wrap-up; 0.42.0+)
      #
      # inactivity-timeout-seconds: kill a session that produces no
      # output for this window and restart it with a blocking-call
@@ -267,11 +270,21 @@ When asked to initialise a Knot rig:
    - `pi-stdio` — plain text output. No metadata capture (no session
      ID, no token usage); inactivity detection still works, but
      restarts after a stall are fresh sessions (no `--session-id`).
+   - `pi-rpc` (Knot 0.42.0+) — pi's `--mode rpc` JSONL protocol over
+     stdin/stdout. Like `pi-json` it captures session ID and token
+     usage, but it **keeps stdin open** across the run so Knot can
+     steer the session mid-run. Combined with a per-alias
+     `ctx-wrap-up-limit` in `rig/models.yml`, it sends a one-shot
+     wrap-up steer when the context crosses the limit (see
+     `ContextWrapUpSteered`). `pi-json` remains the default; `pi-rpc`
+     is opt-in.
    - `inactivity-timeout-seconds` (Knot 0.40.0+) — default 300; set
      to `0` to disable the watchdog. Loaded at startup — restart Knot
      after editing.
    - To switch: edit `rig/.workspace-agent-config.yaml`, change
-     `agent-adapter` to the other value, restart Knot.
+     `agent-adapter` to the other value, restart Knot. (`pi-rpc` also
+     needs a `ctx-wrap-up-limit` on the model alias to steer — see
+     `knot-create`.)
 
 5a. **Enable pi compaction for rig sessions** (`.pi/settings.json`;
    idempotent, create-if-absent only):

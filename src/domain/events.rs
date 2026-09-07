@@ -468,6 +468,29 @@ pub enum LoomEvent {
         attempt: u32,
         timestamp: String,
     },
+    /// The `pi-rpc` adapter steered the agent to wrap up gracefully before
+    /// its session context exhausted the model window. Plan 084 "Graceful
+    /// Completion": the RPC runner samples `get_session_stats` on each
+    /// `turn_end`; when `data.contextUsage.tokens` first crosses
+    /// `ctx-wrap-up-limit` it sends a `steer` command with a wrap-up
+    /// instruction. The adapter records at most one wrap-up per
+    /// invocation (a `WrapUpRecord` on the invocation metadata), so this
+    /// event fires at most once per successful invocation.
+    ContextWrapUpSteered {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// The `data.contextUsage.tokens` value from the stats sample that
+        /// tripped the steer.
+        context_tokens: u64,
+        /// The configured `ctx-wrap-up-limit` that was crossed.
+        limit: u64,
+        /// Attempt the steer was sent on
+        /// (1 = first attempt, 2 = first retry, …).
+        attempt: u32,
+        timestamp: String,
+    },
     /// One or more agent events were dispatched to consumer knots.
     ///
     /// Recorded after a knot completes successfully and structured agent
@@ -1623,6 +1646,25 @@ mod tests {
         let json = serde_json::to_string(&strand_processed).unwrap();
         let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, strand_processed);
+    }
+
+    #[test]
+    fn loom_event_context_wrap_up_steered_roundtrip() {
+        let event = LoomEvent::ContextWrapUpSteered {
+            loom_id: LoomId("prds".to_string()),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("project/prds/my-prd.md")),
+            session_id: "sess-42".to_string(),
+            context_tokens: 150_000,
+            limit: 140_000,
+            attempt: 1,
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+        // Externally tagged with the variant name.
+        assert!(json.contains("ContextWrapUpSteered"));
     }
 
     #[test]

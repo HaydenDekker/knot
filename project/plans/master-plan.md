@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-07 (plan 085 complete — event-parse log flags + anchored rig `.gitignore`, released in v0.41.1; plan 082 status corrected to complete — system event subscriptions, released in v0.41.0)
+> **Last Updated:** 2026-09-07 (plan 084 complete — `pi-rpc` runner + context wrap-up steering, released in v0.42.0; plan 085 complete — event-parse log flags + anchored rig `.gitignore`, released in v0.41.1)
 
 ## How to Add a Plan
 
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 | # | Plan | Status | Created |
 |---|------|--------|---------|
 | 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
-| 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ⬜ Planned | 2026-09-07 |
+| 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ✅ Complete (2026-09-07) — released in v0.42.0 | 2026-09-07 |
 | 83 | [Consolidated Service Log + Change-Driven State Writes](083-consolidated-service-log/consolidated-service-log-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
 | 82 | [System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers](082-system-event-subscriptions/system-event-subscriptions-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
 | 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | ✅ Complete (2026-09-03) — released in v0.40.0 | 2026-09-02 |
@@ -86,11 +86,11 @@ Full details in [085-event-log-flags-and-anchored-gitignore/085-event-log-flags-
 
 ### 84. Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete (2026-09-07) — released in v0.42.0
 **Created:** 2026-09-07
 **Goal:** Add an opt-in `pi-rpc` agent runner (pi's JSONL command protocol over stdin, side-by-side with `pi-json`) that watches the session's live context usage and, when it crosses a per-alias `ctx-wrap-up-limit` (tokens, set in `rig/models.yml`, below the model's effective compaction point), **steers** the running agent — via pi's RPC `steer` command, delivered at the next turn boundary — to stop starting new work, commit all complete work, update its progress, note what is incomplete and where it left off, and produce its final tie-off; one steer per run, recorded as a `ContextWrapUpSteered` loom-log entry, so context exhaustion ends in a clean handoff instead of an uncommitted working tree. `pi-json` removal is the explicitly deferred next change.
 
-Full details in [084-graceful-completion/graceful-completion-plan.md](084-graceful-completion/graceful-completion-plan.md).
+Completed in Knot 0.42.0: the `pi-rpc` adapter (`src/adapters/pi_rpc.rs`) speaks pi's `--mode rpc` JSONL protocol over stdin/stdout — a reader thread forwards each stdout line to a driver thread, which sends the initial `prompt` and then samples `get_session_stats` on every `turn_end` (usage always captured for observability, parity with `pi-json`); when a `ctx-wrap-up-limit` is set and the sampled context tokens cross it, the driver sends one `steer` (the wrap-up prompt) and records the result. The config key `ctx-wrap-up-limit` (tokens, per model alias in `rig/models.yml`) resolves through `AgentConfig`/`ModelRef` (a zero filters to `None`, disabling steering), and `agent-adapter: pi-rpc` is the new rig-level value in `rig/.workspace-agent-config.yaml` (`AgentAdapter::PiRpc`). A one-shot `ContextWrapUpSteered` loom event (rendered in the service log, round-tripped in serde) is emitted from the session-resume Ok path via `WrapUpRecord` in `AgentInvocationMetadata`. `pi-json` is unchanged and remains the default; its removal is the deferred next change. Test strategy: the unit tests drive the real adapter end-to-end against a mock `pi` binary (`with_cli_path`), covering success (response/session-id/usage captured), steer-fires-once, no-steer-below-limit, and steer-despite-disabled-compaction.
 
 ### 83. Consolidated Service Log + Change-Driven State Writes
 

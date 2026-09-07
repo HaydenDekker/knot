@@ -177,6 +177,7 @@ Supported adapters:
 | Adapter | Description |
 |---------|-------------|
 | `pi-json` | **Default** (Knot 0.40.0+). Parses JSON-L output for session IDs and token usage; enables session-resume restarts and inactivity restart with blocked-call identification. |
+| `pi-rpc` | (Knot 0.42.0+, opt-in). pi's `--mode rpc` JSONL protocol over stdin/stdout. Like `pi-json` it captures session IDs and token usage, but it keeps stdin open so Knot can **steer the session mid-run** — with a `ctx-wrap-up-limit` (see below) it sends a one-shot wrap-up steer before the context runs out. |
 | `pi-stdio` | Reads agent output from plain text stdout. Inactivity detection still works, but restarts after a stall are fresh sessions (no `--session-id`) and the blocked call cannot be named. |
 
 `inactivity-timeout-seconds` (Knot 0.40.0+): when the session produces
@@ -185,6 +186,17 @@ blocking-call note (see [concepts — Session
 Resume](../concepts.md#session-resume)). Defaults to **300** when
 absent; `0` disables the watchdog. Both settings are loaded at
 startup — restart Knot after editing the file.
+
+**`ctx-wrap-up-limit`** (Knot 0.42.0+) is a per-model-alias token count
+set in `rig/models.yml` (not in this file). It is meaningful only on
+`pi-rpc` runs: when the session's context tokens cross the limit, the
+runner sends a one-shot wrap-up `steer` (recorded as a
+`ContextWrapUpSteered` event) telling the agent to commit, note the
+incomplete, and tie off. Set it below the model's effective compaction
+point — `contextWindow − reserveTokens` (a few thousand tokens under the
+reserve-aware limit) — so the steer lands before pi would auto-compact.
+`0` or absent disables it. Under a non-rpc adapter it is ignored (the
+runner logs a one-shot warning).
 
 If the file does not exist, Knot creates it with sensible defaults
 (`agent-adapter: pi-json` since 0.40.0) on first boot. Existing rigs

@@ -146,7 +146,7 @@ impl PiJsonAgentRunner {
 
     /// Build the prompt with profile prompt, trigger line, and knot
     /// instructions.
-    fn build_prompt_with_context(
+    pub(crate) fn build_prompt_with_context(
         ctx: &ExecutionContext,
         profile_prompt: &str,
     ) -> String {
@@ -318,7 +318,7 @@ impl PiJsonAgentRunner {
     /// Parse JSON-L from raw stdout, extracting session_id, response,
     /// token usage, compaction events, and the failed turn's provider
     /// error message. Returns `true` if all lines parsed as valid JSON.
-    fn parse_stdout(
+    pub(crate) fn parse_stdout(
         raw_stdout: &str,
     ) -> (
         bool,
@@ -369,7 +369,7 @@ impl PiJsonAgentRunner {
     ///
     /// Best-effort: malformed lines are ignored and `None` is fine —
     /// the restart note works without the call name.
-    fn parse_blocked_call(raw_stdout: &str) -> Option<String> {
+    pub(crate) fn parse_blocked_call(raw_stdout: &str) -> Option<String> {
         #[derive(Debug)]
         struct OpenCall {
             id: String,
@@ -433,7 +433,7 @@ impl PiJsonAgentRunner {
     /// an overflow compaction with `will_retry: false` that follows an
     /// overflow compaction with `will_retry: true` (recovery ran, the
     /// context still does not fit).
-    fn terminal_overflow(
+    pub(crate) fn terminal_overflow(
         records: &[CompactionRecord],
     ) -> Option<&CompactionRecord> {
         let failing_idx = records
@@ -844,6 +844,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 session_id,
                 token_usage,
                 compactions,
+            wrap_up: None,
             }),
         })
     }
@@ -1014,6 +1015,7 @@ sleep 300
                 tools: vec![],
                 extra_args: args.iter().map(|s| s.to_string()).collect(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             prompt: "test prompt".to_string(),
             profile_prompt: "You are a test agent.".to_string(),

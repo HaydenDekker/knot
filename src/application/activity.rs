@@ -90,6 +90,7 @@ fn loom_id_of(event: &LoomEvent) -> &LoomId {
         | LoomEvent::SessionResumed { loom_id, .. }
         | LoomEvent::KnotEmptyResponse { loom_id, .. }
         | LoomEvent::ContextCompacted { loom_id, .. }
+        | LoomEvent::ContextWrapUpSteered { loom_id, .. }
         | LoomEvent::EventsDispatched { loom_id, .. }
         | LoomEvent::KnotEventsMissing { loom_id, .. }
         | LoomEvent::KnotParseWarning { loom_id, .. }

@@ -9,6 +9,7 @@ pub use server::AppContext;
 
 // Re-export agent runners
 pub use adapters::pi_json::PiJsonAgentRunner;
+pub use adapters::pi_rpc::PiRpcAgentRunner;
 pub use adapters::pi_stdio::PiStdioAgentRunner;
 pub use domain::entities::Loom;
 pub use domain::value_objects::{AgentAdapter, RigAgentConfig};

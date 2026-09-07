@@ -361,6 +361,20 @@ pub struct CompactionRecord {
     pub error: Option<String>,
 }
 
+/// One context wrap-up steer observed in an invocation (plan 084).
+///
+/// Recorded by the `pi-rpc` runner when the session context crosses the
+/// alias's `ctx-wrap-up-limit` and Knot steers the agent to wrap up
+/// gracefully (commit, update progress, note the incomplete, final
+/// tie-off). At most one per invocation (fire-once).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrapUpRecord {
+    /// `contextUsage.tokens` at the moment the steer was queued.
+    pub context_tokens: u64,
+    /// The configured `ctx-wrap-up-limit`.
+    pub limit: u64,
+}
+
 /// Metadata captured from an agent invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInvocationMetadata {
@@ -373,6 +387,13 @@ pub struct AgentInvocationMetadata {
     /// the adapter does not report them (e.g. the stdio adapter).
     #[serde(default)]
     pub compactions: Vec<CompactionRecord>,
+    /// The context wrap-up steer observed in this invocation (plan 084).
+    ///
+    /// `None` when the `pi-rpc` runner did not steer (no limit set, the
+    /// limit was never crossed, or a non-rpc adapter — the others cannot
+    /// steer mid-run). At most one record per invocation (fire-once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_up: Option<WrapUpRecord>,
 }
 
 /// Output captured from agent execution.
@@ -1093,6 +1114,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             prompt: "Review this document".to_string(),
             profile_prompt: "You are a reviewer.".to_string(),
@@ -1350,6 +1372,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             prompt: "Process this file".to_string(),
             profile_prompt: "You are an agent.".to_string(),
@@ -1592,6 +1615,7 @@ mod tests {
                 total: 165,
             }),
             compactions: vec![],
+            wrap_up: None,
         };
         let output = AgentOutput {
             stdout: "response".to_string(),
@@ -1608,6 +1632,41 @@ mod tests {
         let restored: AgentOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.stdout, output.stdout);
         assert_eq!(restored.metadata, output.metadata);
+    }
+
+    #[test]
+    fn agent_invocation_metadata_wrap_up_roundtrip() {
+        // Present: serialized and restored.
+        let metadata = AgentInvocationMetadata {
+            session_id: Some("sess-1".to_string()),
+            token_usage: None,
+            compactions: vec![],
+            wrap_up: Some(WrapUpRecord {
+                context_tokens: 150_000,
+                limit: 140_000,
+            }),
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("wrap_up"));
+        assert!(json.contains("150000"));
+        let restored: AgentInvocationMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, metadata);
+
+        // Absent: omitted from the serialized form; legacy metadata without
+        // the key still deserializes to `None` (additive field).
+        let metadata = AgentInvocationMetadata {
+            session_id: Some("sess-1".to_string()),
+            token_usage: None,
+            compactions: vec![],
+            wrap_up: None,
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(!json.contains("wrap_up"));
+        let legacy: AgentInvocationMetadata = serde_json::from_str(
+            r#"{"session_id":"sess-1","token_usage":null,"compactions":[]}"#,
+        )
+        .unwrap();
+        assert!(legacy.wrap_up.is_none());
     }
 
     #[test]

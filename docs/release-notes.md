@@ -1,5 +1,52 @@
 # Release Notes
 
+## v0.42.0 — 2026-09-07
+
+### New Capability — `pi-rpc` Runner + Context Wrap-Up Steering (Plan 084)
+
+A long agent run that exhausts its context window today dies mid-task,
+leaving an uncommitted working tree and a session that cannot be
+resumed. This release adds an opt-in `pi-rpc` agent runner that watches
+the live context usage and **steers** the session to wrap up before it
+runs out, so context exhaustion ends in a clean handoff.
+
+- **`pi-rpc` adapter** — a new `adapter: pi-rpc` value (the
+  `pi-json` runner is unchanged and remains the default). The adapter
+  launches `pi --mode rpc` (JSONL command protocol over stdin/stdout),
+  sends the initial `prompt`, and reads pi's stdout line-by-line. On
+  every `turn_end` it samples `get_session_stats` — always capturing
+  usage for observability (parity with `pi-json`) and, when a
+  `ctx-wrap-up-limit` is set, using the sample as the steer decision
+  point.
+- **Context wrap-up steering** — a new per-model-alias config key
+  `ctx-wrap-up-limit` (tokens) in `rig/models.yml`. When the sampled
+  context tokens cross the limit, the adapter sends **one** `steer`
+  (the wrap-up prompt) at the next turn boundary — telling the agent to
+  stop starting new work, commit all complete work, update its
+  progress, note what is incomplete and where it left off, and produce
+  its final tie-off. The steer fires once per run, regardless of
+  whether pi's own auto-compaction is enabled (the steer is the remedy
+  either way). A single-run warning is emitted (stderr) when the limit
+  sits within pi's default reserve of the context window, where pi may
+  compact before the limit is reached.
+- **`ContextWrapUpSteered` event** — a one-shot loom event
+  (loom-log) recording the steer: `loom_id`, `knot_id`, `strand_path`,
+  `session_id`, `context_tokens`, `limit`, `attempt`. Rendered in the
+  service log, serde round-tripped, and logged from the session-resume
+  Ok path via the new `WrapUpRecord` in `AgentInvocationMetadata`.
+- **Config resolution** — `ctx-wrap-up-limit` resolves through
+  `ModelRef`/`AgentConfig`; a value of `0` filters to `None`
+  (disables steering), so the default is off. Direct model specs
+  (no alias) have no `ctx-wrap-up-limit`.
+- **Tests** — the unit tests drive the real adapter end-to-end against
+  a mock `pi` binary (`with_cli_path`), covering success (response,
+  session-id, and usage captured from the `agent_end` frame),
+  steer-fires-once-when-crossed, no-steer-below-limit, and
+  steer-despite-disabled-compaction. All 1332 tests pass.
+
+**Deferred next change:** `pi-json` removal (the plan's final
+migration, done after `pi-rpc` has proven itself in rig service).
+
 ## v0.41.1 — 2026-09-07
 
 ### Quality of Life — Event-Parse Log Flags + Root-Anchored Rig `.gitignore` (Plan 085)

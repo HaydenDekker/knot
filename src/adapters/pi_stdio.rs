@@ -551,6 +551,7 @@ sleep 300
                 tools: vec![],
                 extra_args: args.iter().map(|s| s.to_string()).collect(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             prompt: "test prompt".to_string(),
             profile_prompt: "You are a test agent.".to_string(),

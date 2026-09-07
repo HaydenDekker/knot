@@ -88,6 +88,7 @@ fn ok_output_with_sid(stdout: &str, sid: &str) -> AgentOutput {
             session_id: Some(sid.to_string()),
             token_usage: None,
             compactions: vec![],
+        wrap_up: None,
         }),
     }
 }
@@ -674,6 +675,7 @@ exit 1
             tools: vec![],
             extra_args: vec![],
             thinking_level: None,
+            ctx_wrap_up_limit: None,
         },
         prompt: "test prompt".to_string(),
         profile_prompt: String::new(),

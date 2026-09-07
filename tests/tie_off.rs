@@ -359,6 +359,7 @@ fn success_runner_with_session(output: &str, sid: &str) -> Arc<MockAgentRunner> 
             session_id: Some(sid.to_string()),
             token_usage: None,
             compactions: vec![],
+        wrap_up: None,
         }),
     })))
 }

@@ -105,6 +105,17 @@ pub struct AgentConfig {
     /// Optional list of tool identifiers to enable.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Plan 084: the context wrap-up limit (tokens) for this model, carried
+    /// from the resolved alias (`rig/models.yml`). `None` (key absent) or
+    /// `0` disables the feature. Meaningful only on `pi-rpc` runs: the
+    /// runner logs a one-shot warning when it is set under a non-rpc
+    /// adapter. Omitted from serialization when `None`.
+    #[serde(
+        default,
+        rename = "ctx-wrap-up-limit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ctx_wrap_up_limit: Option<u64>,
     /// Extra CLI arguments appended after the standard args.
     ///
     /// Used by the retry loop to inject `--session-id <id>` on retry
@@ -139,6 +150,7 @@ impl AgentConfig {
             model,
             thinking_level: None,
             tools: Vec::new(),
+            ctx_wrap_up_limit: None,
             extra_args: Vec::new(),
         })
     }
@@ -164,11 +176,19 @@ impl AgentConfig {
     /// **Adapter use only** — this constructs CLI plumbing from domain
     /// data. The application layer should not call this directly.
     pub fn build_cli_args(&self) -> Vec<String> {
-        let mut args: Vec<String> = vec![
-            "-p".to_string(),
-            "--model".to_string(),
-            self.model.clone(),
-        ];
+        let mut args: Vec<String> = vec!["-p".to_string()];
+        args.extend(self.build_cli_args_core());
+        args
+    }
+
+    /// The shared CLI args **without** the `-p` print-mode prefix.
+    ///
+    /// Plan 084: the `pi-rpc` runner builds its args from this core plus
+    /// `--mode rpc` (RPC mode takes its prompt over the stdin command
+    /// protocol, so `-p` would be wrong there). The json/stdio runners
+    /// keep the `-p` prefix via [`Self::build_cli_args`].
+    pub fn build_cli_args_core(&self) -> Vec<String> {
+        let mut args: Vec<String> = vec!["--model".to_string(), self.model.clone()];
         if let Some(level) = self.thinking_level {
             args.push("--thinking".to_string());
             args.push(level.to_string());
@@ -215,6 +235,11 @@ pub enum AgentAdapter {
     /// JSON-L stream with metadata extraction.
     #[serde(rename = "pi-json")]
     PiJson,
+    /// Plan 084: JSON-over-stdin/stdout RPC protocol (`pi --mode rpc`).
+    /// Keeps stdin open across the run so Knot can steer the session
+    /// mid-run (context wrap-up). Opt-in — `pi-json` remains the default.
+    #[serde(rename = "pi-rpc")]
+    PiRpc,
 }
 
 /// Default inactivity watchdog window in seconds.
@@ -357,6 +382,8 @@ pub enum ModelRegistryError {
     EmptyModel { alias: String },
     /// An alias entry's `thinking-level` is not one of the allowed tokens.
     InvalidThinkingLevel { alias: String, value: String },
+    /// An alias entry's `ctx-wrap-up-limit` is not a non-negative integer.
+    InvalidWrapUpLimit { alias: String, value: String },
 }
 
 impl std::fmt::Display for ModelRegistryError {
@@ -383,6 +410,12 @@ impl std::fmt::Display for ModelRegistryError {
                     "model registry alias '{alias}' has an invalid thinking-level '{value}'"
                 )
             }
+            ModelRegistryError::InvalidWrapUpLimit { alias, value } => {
+                write!(
+                    f,
+                    "model registry alias '{alias}' has an invalid ctx-wrap-up-limit '{value}'"
+                )
+            }
         }
     }
 }
@@ -406,6 +439,19 @@ pub struct ModelRef {
         skip_serializing_if = "Option::is_none"
     )]
     pub thinking_level: Option<ThinkingLevel>,
+    /// Plan 084: the context wrap-up limit for this model, in tokens.
+    ///
+    /// `None` (key absent) or `0` disables the feature. When set, a
+    /// `pi-rpc` run steers the agent to wrap up gracefully once the
+    /// session context crosses this value (see the `pi-rpc` runner).
+    /// Alias-level only (v1); a direct-spec profile (no `model-ref`) has
+    /// no alias, therefore no limit.
+    #[serde(
+        default,
+        rename = "ctx-wrap-up-limit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ctx_wrap_up_limit: Option<u64>,
 }
 
 /// Internal YAML structure for parsing a `rig/models.yml` document.
@@ -428,6 +474,10 @@ struct RawModelEntry {
     /// `provider`/`model`).
     #[serde(default, rename = "thinking-level")]
     thinking_level: Option<String>,
+    /// Optional `ctx-wrap-up-limit` (plan 084), kept as a raw string so a
+    /// non-numeric value produces a precise error naming the alias.
+    #[serde(default, rename = "ctx-wrap-up-limit")]
+    ctx_wrap_up_limit: Option<String>,
 }
 
 /// Rig-level registry mapping **model aliases** to concrete
@@ -516,12 +566,29 @@ impl ModelRegistry {
                     }
                 },
             };
+            // Plan 084: the wrap-up limit is a raw-string token (precise
+            // alias-naming error on a non-numeric value). Parsed as a
+            // non-negative integer; `0` is stored and later mapped to
+            // `None` by `resolve_for_knot` (the disabled convention).
+            let ctx_wrap_up_limit = match entry.ctx_wrap_up_limit {
+                None => None,
+                Some(raw) => match raw.trim().parse::<u64>() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return Err(ModelRegistryError::InvalidWrapUpLimit {
+                            alias,
+                            value: raw,
+                        })
+                    }
+                },
+            };
             entries.insert(
                 alias,
                 ModelRef {
                     provider,
                     model,
                     thinking_level,
+                    ctx_wrap_up_limit,
                 },
             );
         }
@@ -778,52 +845,67 @@ impl AgentProfile {
     ///   alias default from `rig/models.yml`.
     /// - Direct-spec profile: `self.thinking_level` only — the registry
     ///   is not consulted, mirroring how `provider`/`model` are sourced.
+    ///
+    /// Context wrap-up limit (plan 084): alias-level only. A `model-ref`
+    /// profile inherits the alias's `ctx-wrap-up-limit` (with `0` mapped to
+    /// `None` — the disabled convention); a direct-spec profile has no
+    /// alias, therefore no limit (`None`).
     pub fn resolve_for_knot(
         &self,
         knot: &crate::domain::entities::Knot,
         registry: &ModelRegistry,
     ) -> Result<AgentConfig, AgentProfileError> {
-        let (provider, model, thinking_level) = match self.model_ref.as_deref() {
-            Some(alias) => match registry.resolve(alias) {
-                Some(resolved) => (
-                    resolved.provider.clone(),
-                    resolved.model.clone(),
-                    // Profile-level override wins over the alias default.
-                    self.thinking_level.or(resolved.thinking_level),
-                ),
-                None => {
-                    return Err(AgentProfileError::ModelRefNotFound(alias.to_string()));
-                }
-            },
-            None => {
-                let provider = self
-                    .provider
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty());
-                let model = self
-                    .model
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|m| !m.is_empty());
-                match (provider, model) {
-                    // Direct-spec profiles use their own level only — the
-                    // registry is not consulted.
-                    (Some(provider), Some(model)) => (
-                        provider.to_string(),
-                        model.to_string(),
-                        self.thinking_level,
+        let (provider, model, thinking_level, ctx_wrap_up_limit) =
+            match self.model_ref.as_deref() {
+                Some(alias) => match registry.resolve(alias) {
+                    Some(resolved) => (
+                        resolved.provider.clone(),
+                        resolved.model.clone(),
+                        // Profile-level override wins over the alias
+                        // default.
+                        self.thinking_level.or(resolved.thinking_level),
+                        // `0` means disabled — mirror the
+                        // inactivity-timeout convention.
+                        resolved
+                            .ctx_wrap_up_limit
+                            .filter(|v| *v > 0),
                     ),
-                    _ => return Err(AgentProfileError::MissingModelSpec),
+                    None => {
+                        return Err(AgentProfileError::ModelRefNotFound(alias.to_string()));
+                    }
+                },
+                None => {
+                    let provider = self
+                        .provider
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty());
+                    let model = self
+                        .model
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty());
+                    match (provider, model) {
+                        // Direct-spec profiles use their own level only —
+                        // the registry is not consulted, and there is no
+                        // alias to carry a wrap-up limit.
+                        (Some(provider), Some(model)) => (
+                            provider.to_string(),
+                            model.to_string(),
+                            self.thinking_level,
+                            None,
+                        ),
+                        _ => return Err(AgentProfileError::MissingModelSpec),
+                    }
                 }
-            }
-        };
+            };
 
         Ok(AgentConfig {
             goal: knot.prompt_template.instructions.clone(),
             provider,
             model,
             thinking_level,
+            ctx_wrap_up_limit,
             tools: self.tools.clone(),
             extra_args: Vec::new(),
         })
@@ -1392,6 +1474,35 @@ mod tests {
         let deserialized: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
         assert!(json.contains("\"thinking-level\":\"medium\""));
+    }
+
+    #[test]
+    fn agent_config_serialization_ctx_wrap_up_limit() {
+        let mut config = AgentConfig::new(
+            "test goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        config.ctx_wrap_up_limit = Some(150_000);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"ctx-wrap-up-limit\":150000"));
+        let deserialized: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, config);
+        // Omitted from the serialized form when `None`.
+        let plain = AgentConfig::new(
+            "test goal".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("ctx-wrap-up-limit"));
+        // Legacy JSON without the key deserializes to `None`.
+        let legacy: AgentConfig =
+            serde_json::from_str(r#"{"goal":"g","provider":"openai","model":"gpt-4o"}"#)
+                .unwrap();
+        assert_eq!(legacy.ctx_wrap_up_limit, None);
     }
 
     #[test]
@@ -2407,6 +2518,7 @@ mod tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
         );
 
@@ -2417,6 +2529,82 @@ mod tests {
         let config = profile.resolve_for_knot(&knot, &registry).unwrap();
         assert_eq!(config.provider, "anthropic");
         assert_eq!(config.model, "claude-sonnet");
+    }
+
+    #[test]
+    fn resolve_for_knot_alias_ctx_wrap_up_limit_from_registry() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: None,
+                ctx_wrap_up_limit: Some(150_000),
+            },
+        );
+        let knot = KnotBuilder::new("k1")
+            .with_instructions("Check the code.")
+            .build();
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.ctx_wrap_up_limit, Some(150_000));
+    }
+
+    #[test]
+    fn resolve_for_knot_alias_ctx_wrap_up_limit_zero_filters_to_none() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let profile = AgentProfile::with_model_ref(
+            "fast".to_string(),
+            "fast".to_string(),
+            "You are fast.".to_string(),
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.entries.insert(
+            "fast".to_string(),
+            ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                thinking_level: None,
+                // `0` = disabled — the `resolve_for_knot` filter drops it
+                // to `None` (the inactivity-timeout convention).
+                ctx_wrap_up_limit: Some(0),
+            },
+        );
+        let knot = KnotBuilder::new("k1")
+            .with_instructions("Check the code.")
+            .build();
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        assert_eq!(config.ctx_wrap_up_limit, None);
+    }
+
+    #[test]
+    fn resolve_for_knot_direct_spec_has_no_ctx_wrap_up_limit() {
+        use crate::application::usecases::test_fixtures::KnotBuilder;
+
+        let json = r#"{
+            "name": "direct",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "profile-prompt": "You are direct."
+        }"#;
+        let profile: AgentProfile = serde_json::from_str(json).unwrap();
+        let registry = ModelRegistry::new();
+        let knot = KnotBuilder::new("k1")
+            .with_instructions("Check the code.")
+            .build();
+        let config = profile.resolve_for_knot(&knot, &registry).unwrap();
+        // A direct-spec profile has no alias, therefore no wrap-up limit.
+        assert_eq!(config.ctx_wrap_up_limit, None);
     }
 
     #[test]
@@ -2445,6 +2633,7 @@ mod tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
         );
 
@@ -2524,6 +2713,7 @@ mod tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: alias_level,
+                ctx_wrap_up_limit: None,
             },
         );
         registry
@@ -2605,6 +2795,7 @@ mod tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: Some(ThinkingLevel::XHigh),
+                ctx_wrap_up_limit: None,
             },
         );
 
@@ -2633,6 +2824,7 @@ mod tests {
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 thinking_level: Some(ThinkingLevel::High),
+                ctx_wrap_up_limit: None,
             },
         );
 

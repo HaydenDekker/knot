@@ -5,6 +5,7 @@
 
 use crate::adapters::outbound::{DiskBackedEventQueue, FileSystemStateWriter};
 use crate::adapters::pi_json::PiJsonAgentRunner;
+use crate::adapters::pi_rpc::PiRpcAgentRunner;
 use crate::adapters::pi_stdio::PiStdioAgentRunner;
 use crate::application;
 use crate::application::ports::{GitVersioningPort, StateWriterPort, StrandEventQueue};
@@ -243,6 +244,20 @@ pub fn build_app_context(
                     ))
                 } else {
                     Arc::new(PiStdioAgentRunner::with_timeouts(
+                        config.agent_timeout,
+                        inactivity_timeout,
+                    ))
+                }
+            }
+            AgentAdapter::PiRpc => {
+                if let Some(ref cli_path) = config.cli_path {
+                    Arc::new(PiRpcAgentRunner::with_cli_path_and_timeouts(
+                        cli_path.to_string_lossy().to_string(),
+                        config.agent_timeout,
+                        inactivity_timeout,
+                    ))
+                } else {
+                    Arc::new(PiRpcAgentRunner::with_timeouts(
                         config.agent_timeout,
                         inactivity_timeout,
                     ))
@@ -801,6 +816,9 @@ pub fn run_startup(
 # agent-adapter: which adapter to use for Pi invocations.
 #   pi-json  — JSON-L stream with session ID + token usage capture (default)
 #   pi-stdio — plain text stdout
+#   pi-rpc   — JSON command/response (RPC); the only adapter that samples
+#              session context and can steer mid-session (required for the
+#              per-model `ctx-wrap-up-limit` wrap-up feature)
 #
 agent-adapter: pi-json
 "#;
@@ -827,13 +845,18 @@ agent-adapter: pi-json
 # resolves the alias. A profile's own `thinking-level` (in its
 # frontmatter) overrides the alias default. Allowed values:
 # `off | minimal | low | medium | high | xhigh`. Omitting it lets pi's
-# own settings default apply (omission is NOT the same as `off`). e.g.:
+# own settings default apply (omission is NOT the same as `off`).
+# `ctx-wrap-up-limit` is optional (tokens): with the `pi-rpc` adapter,
+# when a run's session context crosses this value the agent is steered
+# to wrap up gracefully instead of running into the hard window limit.
+# Set it to `0` (or omit) to disable. e.g.:
 #
 # models:
 #   default:
 #     provider: openai
 #     model: gpt-4o
 #     thinking-level: low
+#     ctx-wrap-up-limit: 150000
 #
 # While `models:` is absent (or empty), the registry is empty: profiles
 # with `model-ref` fail to resolve (ModelRefNotFound); profiles with a
@@ -1584,6 +1607,7 @@ mod composition_tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             prompt: "do nothing".to_string(),
             profile_prompt: String::new(),

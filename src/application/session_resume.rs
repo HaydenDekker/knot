@@ -168,6 +168,58 @@ fn log_compactions(
     }
 }
 
+/// Plan 084 "Graceful Completion": record the adapter's wrap-up steer as a
+/// `ContextWrapUpSteered` event (and system event). The `pi-rpc` adapter
+/// records at most one `WrapUpRecord` per invocation on the metadata, so
+/// this fires at most once per successful invocation. No-op when the
+/// invocation carried no wrap-up record (every adapter, or an rpc run that
+/// never crossed the limit).
+fn log_wrap_up(
+    loom_log: &dyn LoomLogPort,
+    emitter: Option<&SystemEventEmitter>,
+    loom_id: &LoomId,
+    knot_id: &KnotId,
+    strand_path: &StrandPath,
+    attempt: u32,
+    output: &AgentOutput,
+) {
+    let Some(metadata) = output.metadata.as_ref() else {
+        return;
+    };
+    let Some(record) = metadata.wrap_up.as_ref() else {
+        return;
+    };
+    let session_id = metadata.session_id.clone().unwrap_or_default();
+    let _ = loom_log.append(LoomEvent::ContextWrapUpSteered {
+        loom_id: loom_id.clone(),
+        knot_id: knot_id.clone(),
+        strand_path: strand_path.clone(),
+        session_id: session_id.clone(),
+        context_tokens: record.context_tokens,
+        limit: record.limit,
+        attempt,
+        timestamp: format_timestamp(),
+    });
+    emit_system(
+        emitter,
+        loom_id,
+        knot_id,
+        strand_path,
+        "ContextWrapUpSteered",
+        &[
+            ("session-id", Some(session_id)),
+            ("attempt", Some(attempt.to_string())),
+            ("context-tokens", Some(record.context_tokens.to_string())),
+            ("limit", Some(record.limit.to_string())),
+        ],
+        Some(format!(
+            "Context approaching the limit; steer sent to wrap up gracefully (tokens={tokens}, limit={limit}, attempt {attempt})",
+            tokens = record.context_tokens,
+            limit = record.limit
+        )),
+    );
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /// Attempt to re-enter the session to request missing events.
@@ -385,6 +437,8 @@ fn execute_with_resume_internal(
             // Plan 079: record successful compactions observed on the
             // first attempt (best-effort).
             log_compactions(loom_log, emitter, loom_id, knot_id, strand_path, 1, &output);
+            // Plan 084: record a wrap-up steer observed on the first attempt.
+            log_wrap_up(loom_log, emitter, loom_id, knot_id, strand_path, 1, &output);
             return Ok(output);
         }
     } else {
@@ -622,6 +676,16 @@ fn execute_with_resume_internal(
                 // Plan 079: record successful compactions observed on
                 // this retry (KnotEmptyResponse convention: attempt + 1).
                 log_compactions(
+                    loom_log,
+                    emitter,
+                    loom_id,
+                    knot_id,
+                    strand_path,
+                    attempt + 1,
+                    &output,
+                );
+                // Plan 084: record a wrap-up steer observed on this retry.
+                log_wrap_up(
                     loom_log,
                     emitter,
                     loom_id,
@@ -875,6 +939,7 @@ mod tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         }
     }
@@ -927,6 +992,30 @@ mod tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions,
+            wrap_up: None,
+            }),
+        }
+    }
+
+    /// Plan 084: successful output carrying a wrap-up steer record.
+    fn ok_output_with_wrap_up(
+        stdout: &str,
+        sid: &str,
+        context_tokens: u64,
+        limit: u64,
+    ) -> AgentOutput {
+        AgentOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions: vec![],
+                wrap_up: Some(crate::application::ports::WrapUpRecord {
+                    context_tokens,
+                    limit,
+                }),
             }),
         }
     }
@@ -959,6 +1048,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -991,6 +1081,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -1091,6 +1182,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -1145,6 +1237,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -1288,6 +1381,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -1332,6 +1426,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
             Some(make_strand_path()),
@@ -1734,6 +1829,65 @@ mod tests {
         );
     }
 
+    /// Plan 084: a wrap-up steer recorded in the metadata on the **first
+    /// attempt** is logged as `ContextWrapUpSteered { attempt: 1 }`.
+    #[test]
+    fn wrap_up_logged_on_first_attempt() {
+        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_wrap_up(
+            "done",
+            "sess-abc",
+            150_000,
+            140_000,
+        ))]);
+        let log = TestLoomLog::default();
+
+        let result = execute(&runner, &log, 120);
+        assert!(
+            result.is_ok(),
+            "first-attempt success: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().stdout, "done");
+
+        let events = log.events();
+        assert_eq!(events.len(), 1, "exactly one loom-log event");
+        match &events[0] {
+            LoomEvent::ContextWrapUpSteered {
+                context_tokens,
+                limit,
+                attempt,
+                ..
+            } => {
+                assert_eq!(*context_tokens, 150_000);
+                assert_eq!(*limit, 140_000);
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected ContextWrapUpSteered, got {other:?}"),
+        }
+    }
+
+    /// Plan 084: an invocation with **no** wrap-up record (the common case —
+    /// non-rpc adapters, or an rpc run that never crossed the limit) logs
+    /// nothing.
+    #[test]
+    fn no_wrap_up_logged_without_record() {
+        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_compactions(
+            "done",
+            "sess-abc",
+            vec![],
+        ))]);
+        let log = TestLoomLog::default();
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok());
+        let events = log.events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::ContextWrapUpSteered { .. })),
+            "no ContextWrapUpSteered when the invocation has no wrap-up"
+        );
+    }
+
     /// Plan 079: a successful compaction observed on a **retry** is logged
     /// after the `SessionResumed` that started the retry, with the
     /// `KnotEmptyResponse` attempt convention (attempt 2 = first retry).
@@ -1899,6 +2053,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "## Agent Events\n\nYou may emit: PlanCreated".to_string(),
             "Created".to_string(),
@@ -1930,6 +2085,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
             "Created".to_string(),
@@ -1959,6 +2115,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
             "Created".to_string(),
@@ -1997,6 +2154,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             listener,
             "Modified".to_string(),
@@ -2044,6 +2202,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
             "Modified".to_string(),
@@ -2079,6 +2238,7 @@ mod tests {
                 tools: vec![],
                 extra_args: vec![],
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
             "Created".to_string(),

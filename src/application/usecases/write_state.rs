@@ -582,6 +582,7 @@ mod write_state_tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
         );
         registry.set_registry(reg);
@@ -734,6 +735,7 @@ mod write_state_tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: Some(ThinkingLevel::High),
+                ctx_wrap_up_limit: None,
             },
         );
         let uc = build_uc_with_profile_and_registry(profile, registry);
@@ -765,6 +767,7 @@ mod write_state_tests {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet".to_string(),
                 thinking_level: Some(ThinkingLevel::High),
+                ctx_wrap_up_limit: None,
             },
         );
         let uc = build_uc_with_profile_and_registry(profile, registry);
@@ -797,6 +800,7 @@ mod write_state_tests {
                 provider: "openai".to_string(),
                 model: "gpt-4o".to_string(),
                 thinking_level: None,
+                ctx_wrap_up_limit: None,
             },
         );
         let uc = build_uc_with_profile_and_registry(profile, registry);

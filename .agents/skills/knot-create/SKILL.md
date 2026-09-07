@@ -612,6 +612,7 @@ several times. Consumers must be idempotent.
 | `KnotEmptyResponse` | The agent returned an empty response | `session-id`, `attempt` |
 | `AgentInactivity` | The agent was killed for inactivity | `session-id`, `attempt`, `silent-secs`, `window-secs`, `blocked-call` |
 | `ContextCompacted` | The context was compacted mid-run | `reason`, `attempt` |
+| `ContextWrapUpSteered` | The `pi-rpc` runner steered the session to wrap up as the context crossed `ctx-wrap-up-limit` (Knot 0.42.0+; one-shot per run) | `session-id`, `context-tokens`, `limit`, `attempt` |
 
 **Loom lifecycle — loom-scoped** (producer = loom ID):
 
@@ -758,6 +759,7 @@ models:
     provider: anthropic
     model: claude-sonnet-4-20250514
     thinking-level: high
+    ctx-wrap-up-limit: 80000   # optional; tokens; absent or 0 = off
 ```
 
 - Top-level `models` map; both `provider` and `model` are required,
@@ -766,6 +768,16 @@ models:
   profile's own `thinking-level` overrides it. Allowed values:
   `off | minimal | low | medium | high | xhigh` (any other value is a
   parse error). Omitting it lets pi's own settings default apply.
+- `ctx-wrap-up-limit` (Knot 0.42.0+) is an optional per-alias token
+  count. It is meaningful **only** on `pi-rpc` runs (`agent-adapter:
+  pi-rpc`): when the session's sampled context tokens cross the limit,
+  the runner sends a one-shot wrap-up `steer` (recorded as a
+  `ContextWrapUpSteered` event). `0` or absent disables it. Set it
+  below the model's effective compaction point (a few thousand tokens
+  under the reserve-aware limit) so the steer lands before pi would
+  auto-compact. Under a non-rpc adapter it is ignored (the runner logs
+  a one-shot warning). The registry is alias-scoped, not adapter-scoped,
+  so the key is harmless on a `pi-json` rig.
 - Alias names: any non-empty string (no slug enforcement). Two aliases
   may target the same model (A/B swapping is a feature).
 - File missing, empty, or comments-only → empty registry. Malformed

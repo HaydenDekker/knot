@@ -198,6 +198,22 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             line.push_str(&format!(" attempt={attempt}"));
             line
         }
+        LoomEvent::ContextWrapUpSteered {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            context_tokens,
+            limit,
+            attempt,
+            ..
+        } => format!(
+            "ContextWrapUpSteered loom={} knot={} strand={} session={} context-tokens={context_tokens} limit={limit} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
         LoomEvent::EventsDispatched {
             loom_id,
             knot_id,
@@ -616,6 +632,15 @@ mod tests {
         assert_eq!(
             render_loom_event_line(&e),
             "ContextCompacted loom=review-loom knot=review strand=strands/prd.md session=sess-1 reason=overflow tokens-before=180000 attempt=2"
+        );
+    }
+
+    #[test]
+    fn context_wrap_up_steered_line() {
+        let e = LoomEvent::ContextWrapUpSteered { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), context_tokens: 150_000, limit: 140_000, attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "ContextWrapUpSteered loom=review-loom knot=review strand=strands/prd.md session=sess-1 context-tokens=150000 limit=140000 attempt=1"
         );
     }
 

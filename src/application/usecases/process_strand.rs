@@ -1271,6 +1271,7 @@ mod execution_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions,
+            wrap_up: None,
             }),
         }
     }
@@ -1600,6 +1601,7 @@ mod execution_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         });
         let final_output = Ok(AgentOutput {
@@ -1610,6 +1612,7 @@ mod execution_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         });
         let runner = Arc::new(MockAgentRunner::new_sequence(vec![
@@ -1876,6 +1879,7 @@ mod execution_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         }
     }
@@ -6166,6 +6170,7 @@ mod event_enforcement_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         }
     }
@@ -6379,6 +6384,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         });
         let runner = Arc::new(MockAgentRunner::new(output.clone()));
@@ -6451,6 +6457,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         };
         let followup_output = AgentOutput {
@@ -6461,6 +6468,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         };
         let runner = Arc::new(MockAgentRunner::new_sequence(vec![
@@ -6536,6 +6544,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         };
         let runner = Arc::new(MockAgentRunner::new(Ok(output)));
@@ -7174,6 +7183,7 @@ mod model_registry_resolution_tests {
                             provider: (*provider).to_string(),
                             model: (*model).to_string(),
                             thinking_level: None,
+                            ctx_wrap_up_limit: None,
                         },
                     )
                 })
@@ -7456,6 +7466,7 @@ mod tieoff_session_id_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         }
     }
@@ -7580,6 +7591,7 @@ mod tieoff_session_id_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+            wrap_up: None,
             }),
         });
         let final_output =

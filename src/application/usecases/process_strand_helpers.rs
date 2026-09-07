@@ -152,6 +152,30 @@ pub fn handle_failure(
     result
 }
 
+/// Plan 084: warn (once per process) that a `ctx-wrap-up-limit` is set but
+/// the active adapter cannot steer mid-session (only `pi-rpc` samples
+/// `get_session_stats` and sends a `steer`). Emitted via the config log so
+/// it lands in the service log greppable as `[KNOT][CONFIG]`;
+/// `STEER_UNSUPPORTED_WARNED` keeps it to a single line per service
+/// lifetime regardless of how many strands trip it.
+static STEER_UNSUPPORTED_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn warn_once_steer_unsupported(runner_type: &str) {
+    use std::sync::atomic::Ordering;
+    if STEER_UNSUPPORTED_WARNED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        crate::adapters::logging::log_config_event(
+            "warn-adapter-cannot-steer",
+            &format!(
+                "ctx-wrap-up-limit is set but the active agent adapter '{runner_type}' cannot steer mid-session (only `pi-rpc` samples context and steers); the limit will not be enforced for this strand",
+            ),
+        );
+    }
+}
+
 /// Resolve agent config, build prompt, execute agent, derive outcome.
 ///
 /// Covers: profile resolution, deleted-event history, prompt building,
@@ -171,6 +195,15 @@ pub fn resolve_config_and_build(
     // Resolve effective agent config (profile).
     let (agent_config, profile_timeout, profile) =
         ps.resolve_agent_config(knot)?;
+
+    // Plan 084: a wrap-up limit is only meaningful under `pi-rpc` (the sole
+    // adapter that samples context and can steer). Surface a one-shot warning
+    // if the profile set the limit but the active adapter cannot act on it.
+    if agent_config.ctx_wrap_up_limit.is_some()
+        && ps.agent_runner.runner_type() != "pi-rpc"
+    {
+        warn_once_steer_unsupported(ps.agent_runner.runner_type());
+    }
 
     // For Deleted events: read existing tie-off content and extract
     // scoped strand history (last 5 entries for this strand).
