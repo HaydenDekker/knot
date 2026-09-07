@@ -1,6 +1,6 @@
 # Plan: Event-Parse Log Flags and Anchored Rig `.gitignore` Entry
 
-## Implementation Status: 📋 Planned
+## Implementation Status: ✅ Complete (2026-09-07) — released in v0.41.1
 
 ## Problem
 

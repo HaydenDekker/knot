@@ -340,24 +340,27 @@ impl GitVersioningPort for FileSystemGitVersioner {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "rig".to_string());
-        let entry = format!("{basename}/");
+        let bare_entry = format!("{basename}/");
+        let entry = format!("/{basename}/");
         let gitignore = project_root.join(".gitignore");
 
-        // Already excluded (our marker or a pre-existing entry) — no-op.
-        if let Ok(content) = std::fs::read_to_string(&gitignore) {
-            let excluded = content.lines().any(|line| {
-                let line = line.trim();
-                line == entry || line == GITIGNORE_MARKER
-            });
-            if excluded {
-                return Ok(());
-            }
+        // Classify the existing content. An anchored entry means the file
+        // is already in the correct form — idempotent no-op. A bare entry
+        // is the pre-0.41.1 form (unanchored patterns match at any depth,
+        // so `rig/` also ignored `tie-offs/rig/`) and gets force-migrated
+        // in place below.
+        let mut content = std::fs::read_to_string(&gitignore).unwrap_or_default();
+        let lines: Vec<&str> = content.lines().collect();
+        let has_anchored = lines.iter().any(|l| l.trim() == entry);
+        let has_bare = lines.iter().any(|l| l.trim() == bare_entry);
+        if has_anchored {
+            return Ok(());
         }
 
         // Tracked by the parent? Do not edit — log the manual untrack
         // command. Untracking rewrites the project's index, so it stays
-        // a user decision; the exclusion is applied on a later startup
-        // once the rig is untracked.
+        // a user decision; the exclusion (or migration) is applied on a
+        // later startup once the rig is untracked.
         if let Some(ls) =
             self.run_git(project_root, &["ls-files", "--", basename.as_str()])
         {
@@ -375,8 +378,46 @@ impl GitVersioningPort for FileSystemGitVersioner {
             }
         }
 
+        // Force-migrate a pre-existing bare entry in place: rewrite only
+        // that line to the anchored form — the marker and every other
+        // line are preserved verbatim. Convergence is one-time: the
+        // anchored line short-circuits on every later startup.
+        if has_bare {
+            let migrated = lines
+                .iter()
+                .map(|l| {
+                    if l.trim() == bare_entry {
+                        entry.as_str()
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Err(e) = std::fs::write(&gitignore, format!("{migrated}\n")) {
+                crate::adapters::logging::log_config_event(
+                    "git_versioner",
+                    &format!("failed to write {}: {e}", gitignore.display()),
+                );
+                return Ok(());
+            }
+            crate::adapters::logging::log_config_event(
+                "git_versioner",
+                &format!(
+                    "migrated unanchored rig exclusion to '{entry}' in {}",
+                    gitignore.display()
+                ),
+            );
+            return Ok(());
+        }
+
+        // A marker without an entry line means the user removed the
+        // entry — leave the file alone.
+        if lines.iter().any(|l| l.trim() == GITIGNORE_MARKER) {
+            return Ok(());
+        }
+
         // Append the marked entry (create the file if missing).
-        let mut content = std::fs::read_to_string(&gitignore).unwrap_or_default();
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }
@@ -754,7 +795,7 @@ mod tests {
         assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
 
         let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        let entry_count = content.lines().filter(|l| l.trim() == "rig/").count();
+        let entry_count = content.lines().filter(|l| l.trim() == "/rig/").count();
         let marker_count = content
             .lines()
             .filter(|l| l.trim().starts_with("# knot:"))
@@ -766,6 +807,84 @@ mod tests {
         assert_eq!(
             marker_count, 1,
             "marker should be appended exactly once: {content}"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_migrates_unanchored_entry() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
+
+        // Pre-existing .gitignore in the pre-0.41.1 shape: the marker +
+        // the unanchored entry as older binaries wrote it, plus a
+        // user-authored sentinel line.
+        let gitignore = dir.path().join(".gitignore");
+        fs::write(
+            &gitignore,
+            format!("target/\n{GITIGNORE_MARKER}\nrig/\n"),
+        )
+        .unwrap();
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        let content = fs::read_to_string(&gitignore).unwrap();
+        assert!(
+            content.lines().any(|l| l.trim() == "/rig/"),
+            "bare entry migrated in place to the anchored form: {content}"
+        );
+        assert!(
+            !content.lines().any(|l| l.trim() == "rig/"),
+            "no bare entry remains: {content}"
+        );
+        assert!(
+            content.lines().any(|l| l.trim() == "target/"),
+            "user-authored lines preserved verbatim: {content}"
+        );
+        assert_eq!(
+            content.lines().filter(|l| l.trim() == "/rig/").count(),
+            1,
+            "migration rewrites the line in place, no duplicate appended: {content}"
+        );
+        assert_eq!(
+            content
+                .lines()
+                .filter(|l| l.trim() == GITIGNORE_MARKER)
+                .count(),
+            1,
+            "marker preserved exactly once: {content}"
+        );
+
+        // Idempotent after migration: a second run changes nothing.
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+        assert_eq!(
+            fs::read_to_string(&gitignore).unwrap(),
+            content,
+            "second run is a no-op once anchored"
+        );
+    }
+
+    #[test]
+    fn ensure_rig_repo_leaves_anchored_entry() {
+        let (dir, rig_dir) = setup_project_with_rig("rig");
+        let versioner = FileSystemGitVersioner::new(
+            dir.path().to_path_buf(),
+            rig_dir.clone(),
+        );
+
+        // Already in the current shape (marker + anchored entry).
+        let gitignore = dir.path().join(".gitignore");
+        let original = format!("target/\n{GITIGNORE_MARKER}\n/rig/\n");
+        fs::write(&gitignore, &original).unwrap();
+
+        assert!(versioner.ensure_rig_repo(&rig_dir).is_ok());
+
+        assert_eq!(
+            fs::read_to_string(&gitignore).unwrap(),
+            original,
+            "anchored entry left untouched (idempotent)"
         );
     }
 
@@ -784,7 +903,7 @@ mod tests {
 
         let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(content.contains("target/"), "existing entries preserved");
-        assert!(content.lines().any(|l| l.trim() == "rig/"), "rig entry appended");
+        assert!(content.lines().any(|l| l.trim() == "/rig/"), "rig entry appended");
         assert!(
             content.contains(GITIGNORE_MARKER),
             "entry is marked: {content}"
@@ -803,8 +922,8 @@ mod tests {
 
         let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(
-            content.lines().any(|l| l.trim() == "dev-rig/"),
-            "named rig should be excluded by basename: {content}"
+            content.lines().any(|l| l.trim() == "/dev-rig/"),
+            "named rig should be excluded by anchored basename: {content}"
         );
     }
 

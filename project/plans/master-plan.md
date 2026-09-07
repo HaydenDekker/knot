@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-07 (plan 083 complete — consolidated service log + change-driven state writes, released in v0.41.0; plan indexes made unique: graceful-completion renumbered 082→084, event-log-flags renumbered 084→085, system-event-subscriptions listed as 082)
+> **Last Updated:** 2026-09-07 (plan 085 in progress — event-parse log flags + anchored rig `.gitignore` entry; plan 082 status corrected to complete — system event subscriptions, released in v0.41.0)
 
 ## How to Add a Plan
 
@@ -46,10 +46,10 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ⬜ Planned | 2026-09-07 |
+| 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | 🟡 In Progress | 2026-09-07 |
 | 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ⬜ Planned | 2026-09-07 |
 | 83 | [Consolidated Service Log + Change-Driven State Writes](083-consolidated-service-log/consolidated-service-log-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
-| 82 | [System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers](082-system-event-subscriptions/system-event-subscriptions-plan.md) | ⬜ Planned | 2026-09-07 |
+| 82 | [System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers](082-system-event-subscriptions/system-event-subscriptions-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
 | 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | ✅ Complete (2026-09-03) — released in v0.40.0 | 2026-09-02 |
 | 80 | [Context Overflow Without Compaction — Fail Fast, Warn at Startup](080-overflow-error-fail-fast/overflow-error-fail-fast-plan.md) | ✅ Complete (2026-08-27) — released in v0.38.1 | 2026-08-27 |
 | 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
@@ -76,7 +76,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 85. Event-Parse Log Flags and Anchored Rig `.gitignore` Entry
 
-**Status:** ⬜ Planned
+**Status:** 🟡 In Progress
 **Created:** 2026-09-07
 **Goal:** Show the `occurred` boolean next to each event id on the `event parse …` console line (so active events and `occurred: false` acknowledgements are distinguishable), and anchor the auto-appended rig `.gitignore` entry with a leading slash (`/{basename}/`) — force-migrating any existing bare `{basename}/` line in place — so it ignores only the top-level rig dir and no longer over-matches nested directories such as `tie-offs/rig/`.
 
@@ -102,9 +102,11 @@ Full details in [083-consolidated-service-log/consolidated-service-log-plan.md](
 
 ### 82. System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers
 
-**Status:** ⬜ Planned
+**Status:** ✅ Complete (2026-09-07) — released in v0.41.0
 **Created:** 2026-09-07
 **Goal:** Make every system event the rig writes (`LoomEvent`/`RigLogEvent` variant names) subscribable through `strand-dir: event:<producer>:<VariantId>` — with `*` accepted as a wildcard producer (any knot, loom, or the rig) — by dispatching system-produced events through the existing dispatch machinery, so recovery, reporting, and janitor knots can react to knot outcomes and exceptions (failure, timeout, inactivity, context overflow, empty response); `EventsDispatched` is the single non-dispatchable exception (it is the dispatch record itself).
+
+Completed in Knot 0.41.0: `EventSubscription` gains `Wildcard` + `RigLevel` producer positions with new `resolve_loom_event` / `resolve_rig_event` resolvers; a new `SystemEventEmitter` (`EventScope` Knot/Loom/Rig) dispatches all 25 system events through the shared `dispatch_grouped` machinery across run outcome, retry/session, and loom/knot/rig lifecycle, with self-exclusion (a knot is never re-triggered by its own terminal event); acceptance via the mock-CLI harness (failure/success/self-exclusion/timeout). Docs updated: knot-create (System Events catalog), knot-design (loop discipline), knot-update (0.41.0 changelog), concepts.md.
 
 Full details in [082-system-event-subscriptions/system-event-subscriptions-plan.md](082-system-event-subscriptions/system-event-subscriptions-plan.md).
 

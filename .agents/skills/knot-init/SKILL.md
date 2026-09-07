@@ -4,8 +4,8 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.9.0"
-  compatibility: "Knot 0.41.0+"
+  version: "4.10.0"
+  compatibility: "Knot 0.41.1+"
 ---
 
 # Knot Init Skill
@@ -142,8 +142,12 @@ When asked to initialise a Knot rig:
      its **own git repository** and is committed **manually by the user**
      — Knot never commits the rig git.
    - When the project root is inside a git repo, Knot appends a marked
-     `rig/` line to the project's `.gitignore` so the rig can never be
-     swept into project commits (gitlink or tracked leftovers).
+     root-anchored `/rig/` line to the project's `.gitignore` so the rig can
+     never be swept into project commits (gitlink or tracked leftovers).
+     The leading slash anchors the pattern to the repo root, so nested
+     directories such as `tie-offs/rig/` stay versioned (Knot 0.41.1+;
+     a bare `rig/` line from an older binary is rewritten in place on
+     the next startup).
    - **Pre-existing projects** (where `rig/` files were already tracked
      by the parent repo before the 0.31.0 migration): Knot logs a
      warning. The user must run the one-time untrack step once:
@@ -497,9 +501,12 @@ Since Knot 0.31.0, the rig is versioned in **its own git repository**
 - **The user commits the rig git manually** (`git -C rig add -A && git
   -C rig commit -m ...`). Knot never commits the rig.
 - **Parent exclusion:** when the project root is inside a git repo,
-  Knot appends a marked `rig/` line to the project's `.gitignore` so
-  `git add -A` at the project level can never stage the rig (as a
-  gitlink or as tracked leftovers).
+  Knot appends a marked root-anchored `/rig/` line to the project's
+  `.gitignore` so `git add -A` at the project level can never stage the
+  rig (as a gitlink or as tracked leftovers). The anchor (leading slash)
+  keeps the pattern from over-matching nested directories such as
+  `tie-offs/rig/`, which stay versioned (Knot 0.41.1+; older binaries'
+  bare `rig/` line is migrated in place on startup).
 - **Pre-existing projects:** if `rig/` files were already tracked by the
   project git before the 0.31.0 layout migration, the `.gitignore` entry
   alone is not enough — the user must run the one-time

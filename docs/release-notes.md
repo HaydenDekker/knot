@@ -1,5 +1,43 @@
 # Release Notes
 
+## v0.41.1 — 2026-09-07
+
+### Quality of Life — Event-Parse Log Flags + Root-Anchored Rig `.gitignore` (Plan 085)
+
+Two small operational defects surfaced during rig runs. Both are fixed
+in this patch — no rig-document changes, no behavioural change to
+dispatch or processing.
+
+- **Event-parse line shows the `occurred` flag.** When Knot extracts
+  structured agent events from a completed tie-off, the console
+  diagnostic now renders each event with its status —
+  `event parse (knot=author): 2 event(s) found — PlanCreated=true,
+  SpecReviewed=false` — instead of a bare id list that hid which events
+  actually fired (`true`, dispatched to consumers) versus
+  acknowledgements (`false`, counted for enforcement, never
+  dispatched). Stderr diagnostics only; the dispatch filter on
+  `occurred` is unchanged.
+- **Rig exclusion is root-anchored.** The `.gitignore` entry Knot
+  appends to the parent repo is now `/{basename}/` (e.g. `/rig/`)
+  instead of the unanchored `rig/`. Git matches a slash-less pattern at
+  **any depth**, so the old entry silently also ignored `tie-offs/rig/`
+  — the project-versioned runtime data (tie-offs, service log, event
+  queue, `state.json`). The anchored entry matches only the top-level
+  rig directory.
+- **Force-migration of existing entries.** On the first 0.41.1+ start,
+  `ensure_rig_repo()` rewrites any pre-existing bare `{basename}/` line
+  to `/{basename}/` in place — the marker and every other line
+  (including user-authored entries) are preserved verbatim. An already
+  anchored line short-circuits to a no-op, so the migration is
+  one-time and idempotent. The tracked-by-parent guard is unchanged
+  (untracking remains a user decision); the logged untrack command now
+  reads `git rm -r --cached /rig/`.
+- **Tests** — the three existing `ensure_rig_repo` entry tests now
+  assert the anchored form, and two new tests pin the migration: a
+  pre-0.41.1 file (marker + bare `rig/` + user line) converges to the
+  anchored form with no duplicate and a no-op second run, and an
+  already-anchored file is left byte-identical.
+
 ## v0.41.0 — 2026-09-07
 
 ### Feature — Consolidated Service Log + Change-Driven State Writes (Plan 083)

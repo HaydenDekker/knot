@@ -808,10 +808,13 @@ impl ProcessStrand {
             crate::domain::tieoff_parser::extract_agent_events(tie_off_content);
 
         let total_count = all_events.len();
-        let all_event_ids: Vec<&str> = all_events.iter().map(|e| e.event_id.as_str()).collect();
+        let summary: Vec<String> = all_events
+            .iter()
+            .map(|e| format!("{}={}", e.event_id, e.occurred))
+            .collect();
         eprintln!(
-            "event parse (knot={}): {} event(s) found — {:?}",
-            knot.id.0, total_count, all_event_ids,
+            "event parse (knot={}): {} event(s) found — {}",
+            knot.id.0, total_count, summary.join(", "),
         );
 
         // Only dispatch events that actually occurred.

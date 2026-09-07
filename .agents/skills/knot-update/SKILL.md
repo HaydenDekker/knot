@@ -59,6 +59,27 @@ date, and migration instructions for affected document types.
 
 ---
 
+### Root-Anchored Rig `.gitignore` Entry (Knot 0.41.1, 2026-09-07)
+
+**What changed:** the rig exclusion Knot appends to the parent repo's
+`.gitignore` is now root-anchored — `/{basename}/` (e.g. `/rig/`) instead
+of the unanchored `rig/`. Git treats a slash-less pattern as matching at
+**any depth**, so the old `rig/` line also ignored nested directories such
+as `tie-offs/rig/` — the project-versioned runtime data. The anchored
+pattern matches only the top-level rig directory.
+
+**Migration (automatic, no agent action):** on the first startup with
+0.41.1+, `ensure_rig_repo()` rewrites any existing bare `{basename}/`
+line to `/{basename}/` in place — the marker and every other line are
+preserved. An already-anchored line is left untouched (idempotent).
+Rig documents (looms, knots, profiles) are unaffected.
+
+**Operational note:** the logged untrack command for pre-existing
+tracked rigs now reads `git rm -r --cached /rig/` (root-anchored
+pathspec); both the old and new forms work.
+
+---
+
 ### System Event Subscriptions — Every Log Event Is Dispatchable (Knot 0.41.0, 2026-09-07)
 
 **What changed:** every system event Knot writes to the loom-log /
