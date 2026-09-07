@@ -41,6 +41,10 @@ pub struct ConfigEventHandler {
     project_root: PathBuf,
     /// Rig directory, used to resolve event dispatch paths.
     rig_dir: PathBuf,
+    /// System event emitter (plan 082) — `None` in unit tests; set in
+    /// production so config lifecycle events (KnotRegistered,
+    /// KnotDeregistered, LoomStarted, KnotParseWarning) are dispatched.
+    system_emitter: Option<Arc<super::system_event_emitter::SystemEventEmitter>>,
 }
 
 impl ConfigEventHandler {
@@ -65,7 +69,59 @@ impl ConfigEventHandler {
             event_source,
             project_root,
             rig_dir: rig_path,
+            system_emitter: None,
         }
+    }
+
+    /// Attach a system event emitter (plan 082). Returns `self` for
+    /// chaining.
+    pub fn with_system_emitter(
+        mut self,
+        emitter: Arc<super::system_event_emitter::SystemEventEmitter>,
+    ) -> Self {
+        self.system_emitter = Some(emitter);
+        self
+    }
+
+    /// Emit a system event (plan 082), best-effort. No-op without an
+    /// emitter; dispatch failures never affect config handling.
+    fn emit_system(
+        &self,
+        scope: super::system_event_emitter::EventScope,
+        event_id: &str,
+        body: Option<String>,
+    ) {
+        if let Some(emitter) = &self.system_emitter
+            && let Err(e) =
+                emitter.emit(&scope, event_id, Default::default(), body)
+        {
+            eprintln!(
+                "[system-event] config '{event_id}' dispatch failed: {e}"
+            );
+        }
+    }
+
+    /// Emit a knot-scoped lifecycle system event (no strand path).
+    fn emit_knot_event(&self, loom_id: &LoomId, knot_id: &KnotId, event_id: &str, body: Option<String>) {
+        self.emit_system(
+            super::system_event_emitter::EventScope::knot_no_strand(
+                loom_id.clone(),
+                knot_id.clone(),
+            ),
+            event_id,
+            body,
+        );
+    }
+
+    /// Emit a loom-scoped lifecycle system event.
+    fn emit_loom_event(&self, loom_id: &LoomId, event_id: &str, body: Option<String>) {
+        self.emit_system(
+            super::system_event_emitter::EventScope::Loom {
+                loom_id: loom_id.clone(),
+            },
+            event_id,
+            body,
+        );
     }
 
     /// Handle a single configuration event.
@@ -193,6 +249,15 @@ impl ConfigEventHandler {
             knot_id: knot_id.clone(),
             timestamp: format_timestamp(),
         })?;
+        self.emit_knot_event(
+            loom_id,
+            &knot_id,
+            "KnotRegistered",
+            Some(format!(
+                "Knot '{}' registered in '{}'",
+                knot_id.0, loom_id.0
+            )),
+        );
 
         // Start watcher for the knot's strand source (filesystem path
         // or event URI dispatch directory)
@@ -203,6 +268,7 @@ impl ConfigEventHandler {
             &knot_for_watches.strand_source,
             &*self.log_port,
             &*self.event_source,
+            self.system_emitter.as_deref(),
         )?;
 
         logging::log_knot_event(
@@ -288,6 +354,7 @@ impl ConfigEventHandler {
                     &knot_for_watches.strand_source,
                     &*self.log_port,
                     &*self.event_source,
+                    self.system_emitter.as_deref(),
                 )?;
             }
             None => {
@@ -312,6 +379,15 @@ impl ConfigEventHandler {
                     knot_id: knot_id.clone(),
                     timestamp: format_timestamp(),
                 })?;
+                self.emit_knot_event(
+                    loom_id,
+                    &knot_id,
+                    "KnotRegistered",
+                    Some(format!(
+                        "Knot '{}' registered in '{}'",
+                        knot_id.0, loom_id.0
+                    )),
+                );
 
                 // Start watcher for the recovered knot's strand source
                 // (filesystem path or event URI dispatch directory)
@@ -322,6 +398,7 @@ impl ConfigEventHandler {
                     &knot_for_watches.strand_source,
                     &*self.log_port,
                     &*self.event_source,
+                    self.system_emitter.as_deref(),
                 )?;
 
                 logging::log_knot_event(
@@ -385,6 +462,15 @@ impl ConfigEventHandler {
             knot_id: knot_id.clone(),
             timestamp: format_timestamp(),
         })?;
+        self.emit_knot_event(
+            loom_id,
+            knot_id,
+            "KnotDeregistered",
+            Some(format!(
+                "Knot '{}' deregistered from '{}'",
+                knot_id.0, loom_id.0
+            )),
+        );
 
         logging::log_knot_event(
             "deleted",
@@ -411,6 +497,15 @@ impl ConfigEventHandler {
                 knot_id: knot.id.clone(),
                 timestamp: format_timestamp(),
             })?;
+            self.emit_knot_event(
+                &loom.id,
+                &knot.id,
+                "KnotRegistered",
+                Some(format!(
+                    "Knot '{}' registered in '{}'",
+                    knot.id.0, loom.id.0
+                )),
+            );
         }
 
         // Append KnotParseWarning for each unknown property warning
@@ -421,6 +516,14 @@ impl ConfigEventHandler {
                 message: warning.clone(),
                 timestamp: format_timestamp(),
             })?;
+            self.emit_loom_event(
+                &loom.id,
+                "KnotParseWarning",
+                Some(format!(
+                    "Knot parse warning in '{}': {}",
+                    loom.id.0, warning
+                )),
+            );
         }
 
         // Append LoomStarted event
@@ -428,6 +531,11 @@ impl ConfigEventHandler {
             loom_id: loom.id.clone(),
             timestamp: format_timestamp(),
         })?;
+        self.emit_loom_event(
+            &loom.id,
+            "LoomStarted",
+            Some(format!("Loom '{}' started", loom.id.0)),
+        );
 
         // Store the loom
         self.store.register(loom.clone());
@@ -442,6 +550,7 @@ impl ConfigEventHandler {
                 &knot.strand_source,
                 &*self.log_port,
                 &*self.event_source,
+                self.system_emitter.as_deref(),
             )?;
         }
 

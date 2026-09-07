@@ -495,6 +495,46 @@ Plan change → plan-architect updates ADR
 This is **correct and expected**. The loop converges when both sides
 agree — no more changes are needed on either side.
 
+### System-Event Subscribers: Loop Discipline (0.41.0)
+
+System events (0.41.0+) are *terminal or lifecycle facts* about a run —
+`KnotFailed`, `KnotCompleted`, `TimeoutExceeded`, `QueueIdle`, and the
+retry events. Subscribing to them adds **reaction edges** to the event
+graph. Unlike agent-emitted events (the agent's own deliberate choice),
+a system event fires whether or not the agent intends it. Design
+subscriber knots accordingly.
+
+**Rule: keep the system-event fan-out acyclic or convergent.**
+
+- **Self-exclusion is automatic.** A knot's own terminal outcome is
+  *never* dispatched back to it: a knot that subscribes to its own
+  `KnotFailed` / `KnotCompleted` will not re-trigger on itself. The only
+  sane "self" consumer of one's own terminal failure would be an
+  infinite loop, so the engine forbids it outright. You cannot build a
+  self-retry on a knot's own failure.
+
+- **Cross-knot failure→retry loops must be bounded.** A `retry-runner`
+  that subscribes to `event:*:KnotFailed` and re-triggers the failing
+  knot creates a retry loop. Without a bound, a persistently failing
+  knot retries forever. Apply the existing break patterns (status-gating,
+  max-iteration count, one-way authority) — or simply make the subscriber
+  *observe* (record/alert on failure) rather than *retry*. Prefer
+  idempotent reaction over automatic re-trigger.
+
+- **Per-attempt events fan out once per attempt, not per run.**
+  `SessionResumed`, `KnotEmptyResponse`, `AgentInactivity`, and
+  `ContextCompacted` fire once *per retry attempt*. A run that retries 3
+  times fires a subscriber 3× for that event. This is accepted by design
+  (the vocabulary is open and mirrors the log); the mitigation is the
+  standard **idempotency** discipline — a subscriber keyed on the same
+  `(knot, strand)` must behave identically whether it sees the event 1×
+  or 4×. If a consumer cannot be made idempotent under re-delivery, do
+  not subscribe to a per-attempt event.
+
+- **`QueueIdle` is rig-scoped and burst-bound.** It fires once after the
+  strand queue drains following a burst — a natural "batch finished"
+  hook. It is the only system event whose producer token is the rig ID.
+
 ### How Loops Converge
 
 Each knot is idempotent and goal-focused. The loop terminates when:

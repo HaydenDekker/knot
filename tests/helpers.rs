@@ -106,6 +106,10 @@ pub struct ProcessStrandBuilder {
     /// Strand event queue for late-removal tests — when set, wired into
     /// `ProcessStrand` so `execute_with_pending` removes event files.
     strand_queue: Option<Arc<dyn knot::domain::events::StrandQueueAccessor>>,
+    /// Attach a real system-event emitter (plan 082) — dispatches system
+    /// events through a real `FileSystemEventDispatcher` to the runtime
+    /// root. Requires `with_real_event_dispatcher` for a rig dir.
+    use_system_emitter: bool,
 }
 
 impl ProcessStrandBuilder {
@@ -122,6 +126,7 @@ impl ProcessStrandBuilder {
             real_event_dispatcher: None,
             real_tie_off_sink: None,
             strand_queue: None,
+            use_system_emitter: false,
         }
     }
 
@@ -215,6 +220,14 @@ impl ProcessStrandBuilder {
         queue: Arc<dyn knot::domain::events::StrandQueueAccessor>,
     ) -> Self {
         self.strand_queue = Some(queue);
+        self
+    }
+
+    /// Attach a real system-event emitter (plan 082). Requires
+    /// `with_real_event_dispatcher(rig_dir)` — the emitter dispatches
+    /// system events through a real dispatcher to the same runtime root.
+    pub fn with_system_emitter(mut self) -> Self {
+        self.use_system_emitter = true;
         self
     }
 
@@ -320,6 +333,27 @@ impl ProcessStrandBuilder {
             event_dispatcher,
             self.strand_queue.clone(),
         );
+
+        // Optional real system-event emitter (plan 082): same store, a
+        // fresh real dispatcher, the same rig dir — so system events land
+        // as real event files at the runtime root.
+        let strand = if self.use_system_emitter {
+            let rig_dir = effective_rig_dir
+                .clone()
+                .expect("with_system_emitter requires with_real_event_dispatcher");
+            let emitter = Arc::new(
+                knot::application::usecases::SystemEventEmitter::new(
+                    store.clone(),
+                    Arc::new(
+                        knot::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+                    ),
+                    rig_dir,
+                ),
+            );
+            strand.with_system_emitter(emitter)
+        } else {
+            strand
+        };
 
         ProcessStrandResult {
             strand,

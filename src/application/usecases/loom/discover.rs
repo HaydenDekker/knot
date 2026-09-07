@@ -31,6 +31,10 @@ pub struct DiscoverLooms {
     log_port: Arc<dyn LoomLogPort>,
     store: LoomStore,
     event_source: Arc<dyn EventSource>,
+    /// System event emitter (plan 082) — `None` in unit tests; set at
+    /// startup so discovery-time lifecycle events are dispatched.
+    system_emitter:
+        Option<Arc<super::super::system_event_emitter::SystemEventEmitter>>,
 }
 
 impl DiscoverLooms {
@@ -46,6 +50,33 @@ impl DiscoverLooms {
             log_port,
             store,
             event_source,
+            system_emitter: None,
+        }
+    }
+
+    /// Attach a system event emitter (plan 082). Returns `self`.
+    pub fn with_system_emitter(
+        mut self,
+        emitter: Arc<super::super::system_event_emitter::SystemEventEmitter>,
+    ) -> Self {
+        self.system_emitter = Some(emitter);
+        self
+    }
+
+    /// Emit a system event (plan 082), best-effort.
+    fn emit_system(
+        &self,
+        scope: super::super::system_event_emitter::EventScope,
+        event_id: &str,
+        body: Option<String>,
+    ) {
+        if let Some(emitter) = &self.system_emitter
+            && let Err(e) =
+                emitter.emit(&scope, event_id, Default::default(), body)
+        {
+            eprintln!(
+                "[system-event] discover '{event_id}' dispatch failed: {e}"
+            );
         }
     }
 
@@ -92,6 +123,17 @@ impl DiscoverLooms {
                 knot_id: knot.id.clone(),
                 timestamp: format_timestamp(),
             })?;
+            self.emit_system(
+                super::super::system_event_emitter::EventScope::knot_no_strand(
+                    loom.id.clone(),
+                    knot.id.clone(),
+                ),
+                "KnotRegistered",
+                Some(format!(
+                    "Knot '{}' registered in '{}'",
+                    knot.id.0, loom.id.0
+                )),
+            );
         }
 
         // Append KnotParseWarning for each unknown property warning
@@ -102,6 +144,16 @@ impl DiscoverLooms {
                 message: warning.clone(),
                 timestamp: format_timestamp(),
             })?;
+            self.emit_system(
+                super::super::system_event_emitter::EventScope::Loom {
+                    loom_id: loom.id.clone(),
+                },
+                "KnotParseWarning",
+                Some(format!(
+                    "Knot parse warning in '{}': {}",
+                    loom.id.0, warning
+                )),
+            );
         }
 
         // Append LoomStarted event
@@ -113,6 +165,16 @@ impl DiscoverLooms {
         // Store the loom
         self.store.register(loom.clone());
 
+        // System event (plan 082) — loom-scoped, after the store holds
+        // the loom so same-loom consumers resolve.
+        self.emit_system(
+            super::super::system_event_emitter::EventScope::Loom {
+                loom_id: loom.id.clone(),
+            },
+            "LoomStarted",
+            Some(format!("Loom '{}' started", loom.id.0)),
+        );
+
         // Start file watchers for each knot's strand source
         // (filesystem path or event URI dispatch directory)
         for knot in &loom.knots {
@@ -123,6 +185,7 @@ impl DiscoverLooms {
                 &knot.strand_source,
                 &*self.log_port,
                 &*self.event_source,
+                self.system_emitter.as_deref(),
             )?;
         }
 

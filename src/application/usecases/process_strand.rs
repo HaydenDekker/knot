@@ -21,7 +21,11 @@ use crate::domain::events::{AgentEvent, LoomEvent, StrandEvent, StrandQueueAcces
 use crate::domain::pending_event::{PendingEvent, PendingEventId};
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
-    AgentConfig, AgentProfile, AgentProfileError, EventSubscription, RigAgentConfig,
+    AgentConfig, AgentProfile, AgentProfileError, RigAgentConfig,
+};
+
+use super::system_event_emitter::{
+    dispatch_grouped, DispatchRequest, EventScope, SystemEventEmitter,
 };
 
 // Re-export shared types from types module
@@ -63,6 +67,11 @@ pub struct ProcessStrand {
     event_dispatcher: Arc<dyn EventDispatcherPort>,
     /// Strand event queue — source of truth for pending events.
     pub(crate) strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
+    /// System event emitter (plan 082). `None` in unit tests that only
+    /// assert loom-log entries; set in production via
+    /// [`ProcessStrand::with_system_emitter`] so run outcomes and failure
+    /// classes are also dispatched to subscribers.
+    pub(crate) system_emitter: Option<Arc<SystemEventEmitter>>,
 }
 
 impl ProcessStrand {
@@ -96,7 +105,58 @@ impl ProcessStrand {
             file_checker,
             event_dispatcher,
             strand_queue,
+            system_emitter: None,
         }
+    }
+
+    /// Attach a system event emitter (plan 082). Returns `self` for
+    /// chaining. When unset, all system-event emissions are skipped (the
+    /// loom/rig-log records still happen).
+    pub fn with_system_emitter(
+        mut self,
+        emitter: Arc<SystemEventEmitter>,
+    ) -> Self {
+        self.system_emitter = Some(emitter);
+        self
+    }
+
+    /// Emit a system event (plan 082), best-effort. A no-op when no emitter
+    /// is wired; a dispatch failure is logged to the console and never
+    /// affects the run outcome (parity with agent-event dispatch).
+    pub(crate) fn emit_system(
+        &self,
+        scope: &EventScope,
+        event_id: &str,
+        payload: std::collections::HashMap<String, String>,
+        body: Option<String>,
+    ) {
+        if let Some(emitter) = &self.system_emitter
+            && let Err(e) = emitter.emit(scope, event_id, payload, body)
+        {
+            eprintln!(
+                "[system-event] dispatch of '{event_id}' failed: {e}"
+            );
+        }
+    }
+
+    /// Build a knot-scoped system-event payload carrying the always-present
+    /// `strand-path` key plus any present optional keys (a `None` value is
+    /// omitted). Plan 082 payload table.
+    pub(crate) fn run_payload(
+        strand_path: &StrandPath,
+        extra: &[(&str, Option<String>)],
+    ) -> std::collections::HashMap<String, String> {
+        let mut payload = std::collections::HashMap::new();
+        payload.insert(
+            "strand-path".to_string(),
+            strand_path.0.display().to_string(),
+        );
+        for (key, value) in extra {
+            if let Some(v) = value {
+                payload.insert((*key).to_string(), v.clone());
+            }
+        }
+        payload
     }
 
     /// Resolve the effective `AgentConfig` for a knot, the profile's
@@ -332,6 +392,17 @@ impl ProcessStrand {
         }) {
             return self.abort_with(event_id, err);
         }
+        // System event (plan 082) — knot-scoped.
+        self.emit_system(
+            &EventScope::knot(loom_id.clone(), knot_id.clone(), &strand_path),
+            "KnotProcessing",
+            Self::run_payload(&strand_path, &[]),
+            Some(format!(
+                "Knot '{}' processing {}",
+                knot_id.0,
+                strand_path.0.display()
+            )),
+        );
 
         // 2. Resolve config, build prompt, execute agent, derive outcome.
         let resolved = match super::process_strand_helpers::resolve_config_and_build(
@@ -378,6 +449,37 @@ impl ProcessStrand {
                     error: Some(error_msg.clone()),
                     timestamp: format_timestamp(),
                 });
+                // System events (plan 082) — config/profile resolution
+                // failure (ProfileNotFound / ModelRefNotFound). KnotFailed
+                // carries the error; StrandProcessed mirrors it. Self-
+                // exclusion keeps the failing knot from re-triggering.
+                let fail_scope = EventScope::knot(
+                    loom_id.clone(),
+                    knot_id.clone(),
+                    &strand_path,
+                );
+                self.emit_system(
+                    &fail_scope,
+                    "KnotFailed",
+                    Self::run_payload(&strand_path, &[
+                        ("error", Some(error_msg.clone())),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' failed: {}",
+                        knot_id.0, error_msg
+                    )),
+                );
+                self.emit_system(
+                    &fail_scope,
+                    "StrandProcessed",
+                    Self::run_payload(&strand_path, &[
+                        ("error", Some(error_msg.clone())),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' processed (failed)",
+                        knot_id.0
+                    )),
+                );
                 logging::log_strand_event(
                     &format!("{} failed (knot={}): {}", strand_kind, knot_id.0, error_msg),
                     &strand_path.0,
@@ -400,17 +502,37 @@ impl ProcessStrand {
 
         // Record the timeout operational event (plan 083: `[EVENT]` line).
         if outcome.is_timeout() {
+            let timeout_error = outcome
+                .error_message()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             let _ = self.rig_log.append(
                 crate::domain::events::RigLogEvent::TimeoutExceeded {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
                     strand_path: strand_path.clone(),
-                    error: outcome
-                        .error_message()
-                        .map(|s| s.to_string())
-                        .unwrap_or_default(),
+                    error: timeout_error.clone(),
                     timestamp: format_timestamp(),
                 },
+            );
+            // System event (plan 082) — TimeoutExceeded is knot-scoped
+            // (carries loom/knot/strand), not rig-scoped, despite living
+            // in the rig-log.
+            self.emit_system(
+                &EventScope::knot(
+                    loom_id.clone(),
+                    knot_id.clone(),
+                    &strand_path,
+                ),
+                "TimeoutExceeded",
+                Self::run_payload(&strand_path, &[
+                    ("error", Some(timeout_error.clone())),
+                    ("session-id", resolved.session_id.clone()),
+                ]),
+                Some(format!(
+                    "Knot '{}' exceeded its timeout: {}",
+                    knot_id.0, timeout_error
+                )),
             );
         }
 
@@ -499,6 +621,18 @@ impl ProcessStrand {
                     reason: "binary file".to_string(),
                     timestamp: format_timestamp(),
                 })?;
+                self.emit_system(
+                    &EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path),
+                    "StrandIgnored",
+                    Self::run_payload(strand_path, &[
+                        ("reason", Some("binary file".to_string())),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' ignored strand {} (binary file)",
+                        knot_id.0,
+                        strand_path.0.display()
+                    )),
+                );
                 Ok(false)
             }
             StrandCheckResult::SkipTemp => {
@@ -518,6 +652,18 @@ impl ProcessStrand {
                     reason: "filtered temp file".to_string(),
                     timestamp: format_timestamp(),
                 })?;
+                self.emit_system(
+                    &EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path),
+                    "StrandSkipped",
+                    Self::run_payload(strand_path, &[
+                        ("reason", Some("filtered temp file".to_string())),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' skipped strand {} (filtered temp file)",
+                        knot_id.0,
+                        strand_path.0.display()
+                    )),
+                );
                 Ok(false)
             }
             StrandCheckResult::SkipMissing => {
@@ -535,6 +681,18 @@ impl ProcessStrand {
                         .to_string(),
                     timestamp: format_timestamp(),
                 })?;
+                self.emit_system(
+                    &EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path),
+                    "StrandSkipped",
+                    Self::run_payload(strand_path, &[
+                        ("reason", Some("missing file (unknown pattern)".to_string())),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' skipped strand {} (missing file)",
+                        knot_id.0,
+                        strand_path.0.display()
+                    )),
+                );
                 Ok(false)
             }
         }
@@ -576,50 +734,31 @@ impl ProcessStrand {
         let events: Vec<&AgentEvent> =
             events.iter().filter(|e| e.occurred).collect();
 
-        /// A single (event, consumer loom, consumer knot) match found in
-        /// the subscription scan.
-        struct Match<'a> {
-            event: &'a AgentEvent,
-            loom: &'a Loom,
-            consumer_knot: &'a Knot,
-        }
-
-        impl<'a> Match<'a> {
-            /// The target directory key: `(consumer_loom_id, event_id)`.
-            fn group_key(&self) -> (&'a str, &'a str) {
-                (self.loom.id.0.as_str(), self.event.event_id.as_str())
-            }
-        }
-
         // Pass 1 — collect all matches in scan order (events in tie-off
-        // block order; consumers in loom-store order).
-        let mut matches: Vec<Match<'_>> = Vec::new();
+        // block order; consumers in loom-store order) as dispatch requests
+        // for the shared grouping helper. The producer token is always the
+        // producing knot's id for agent events.
+        let producer_token = producer_knot.id.0.as_str();
+        let mut requests: Vec<DispatchRequest<'_>> = Vec::new();
         for &event in &events {
             for loom in &all_looms {
                 for consumer_knot in &loom.knots {
-                    let resolved = consumer_knot
+                    if let Some(sub) = consumer_knot
                         .strand_source
                         .resolve_for_producer(
-                            &producer_knot.id.0,
+                            producer_token,
                             &loom_id.0,
                             all_knot_ids,
-                        );
-                    if let Some(sub) = resolved {
-                        let matches_event = match &sub {
-                            EventSubscription::KnotLevel {
-                                event_id: sub_event_id,
-                                ..
-                            } => sub_event_id == &event.event_id,
-                            EventSubscription::LoomLevel {
-                                event_id: sub_event_id,
-                                ..
-                            } => sub_event_id == &event.event_id,
-                        };
-                        if matches_event {
-                            matches.push(Match {
+                        )
+                    {
+                        // Event-ID matching is exact across every variant
+                        // (knot, loom, wildcard, rig).
+                        if sub.event_id() == event.event_id {
+                            requests.push(DispatchRequest {
                                 event,
-                                loom,
                                 consumer_knot,
+                                consumer_loom: &loom.id,
+                                producer: producer_token,
                             });
                         }
                     }
@@ -627,43 +766,13 @@ impl ProcessStrand {
             }
         }
 
-        // Pass 2 — count group sizes. Group key = the target directory:
-        // `(consumer_loom_id, event_id)`.
-        let mut group_sizes: std::collections::HashMap<(&str, &str), u32> =
-            std::collections::HashMap::new();
-        for m in &matches {
-            *group_sizes.entry(m.group_key()).or_insert(0) += 1;
-        }
-
-        // Pass 3 — dispatch in match order with per-group sequences:
-        // singleton group → seq 0 (plain name); group of N > 1 → seq 1..N.
-        let mut dispatches: Vec<(String, String, String, String)> = Vec::new();
-        let mut group_counts: std::collections::HashMap<(&str, &str), u32> =
-            std::collections::HashMap::new();
-        for m in &matches {
-            let key = m.group_key();
-            let group_size = group_sizes[&key];
-            let count = group_counts.entry(key).or_insert(0);
-            *count += 1;
-            let seq = if group_size == 1 { 0 } else { *count };
-
-            let path = self.event_dispatcher.dispatch(
-                m.event,
-                m.consumer_knot,
-                &producer_knot.id.0,
-                &m.loom.id,
-                &self.rig_dir,
-                seq,
-            )?;
-            dispatches.push((
-                m.event.event_id.clone(),
-                m.consumer_knot.id.0.clone(),
-                m.loom.id.0.clone(),
-                path.display().to_string(),
-            ));
-        }
-
-        Ok(dispatches)
+        // Pass 2/3 — group by target directory and dispatch with per-group
+        // sequences (shared with system-event dispatch, plan 082).
+        dispatch_grouped(
+            &*self.event_dispatcher,
+            &self.rig_dir,
+            &requests,
+        )
     }
 
     /// Collect all knots from all registered looms in the store.

@@ -20,9 +20,39 @@ use crate::application::ports::{
 };
 #[cfg(test)]
 use crate::application::ports::ExecutionContext;
+use crate::application::usecases::system_event_emitter::{
+    EventScope, SystemEventEmitter,
+};
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::events::LoomEvent;
 use crate::domain::value_objects::AgentConfig;
+
+/// Emit a knot-scoped system event (plan 082), best-effort. A no-op when no
+/// emitter is wired; dispatch failures never affect the retry loop.
+fn emit_system(
+    emitter: Option<&SystemEventEmitter>,
+    loom_id: &LoomId,
+    knot_id: &KnotId,
+    strand_path: &StrandPath,
+    event_id: &str,
+    extra: &[(&str, Option<String>)],
+    body: Option<String>,
+) {
+    let Some(emitter) = emitter else { return };
+    let mut payload = std::collections::HashMap::new();
+    payload.insert(
+        "strand-path".to_string(),
+        strand_path.0.display().to_string(),
+    );
+    for (key, value) in extra {
+        if let Some(v) = value {
+            payload.insert((*key).to_string(), v.clone());
+        }
+    }
+    let scope =
+        EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path);
+    let _ = emitter.emit(&scope, event_id, payload, body);
+}
 
 /// Maximum number of retry attempts (not counting the initial attempt).
 const MAX_RETRIES: u32 = 10;
@@ -88,6 +118,7 @@ fn format_timestamp() -> String {
 /// never fail a strand.
 fn log_compactions(
     loom_log: &dyn LoomLogPort,
+    emitter: Option<&SystemEventEmitter>,
     loom_id: &LoomId,
     knot_id: &KnotId,
     strand_path: &StrandPath,
@@ -102,16 +133,38 @@ fn log_compactions(
         .iter()
         .filter(|r| r.error.is_none())
     {
+        let session_id = metadata.session_id.clone().unwrap_or_default();
         let _ = loom_log.append(LoomEvent::ContextCompacted {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
-            session_id: metadata.session_id.clone().unwrap_or_default(),
+            session_id: session_id.clone(),
             reason: record.reason.clone(),
             tokens_before: record.tokens_before,
             attempt,
             timestamp: format_timestamp(),
         });
+        // System event (plan 082) — one per compaction observed.
+        emit_system(
+            emitter,
+            loom_id,
+            knot_id,
+            strand_path,
+            "ContextCompacted",
+            &[
+                ("session-id", Some(session_id.clone())),
+                ("attempt", Some(attempt.to_string())),
+                ("reason", Some(record.reason.clone())),
+                (
+                    "tokens-before",
+                    record.tokens_before.map(|t| t.to_string()),
+                ),
+            ],
+            Some(format!(
+                "Context compacted (reason={}, attempt {})",
+                record.reason, attempt
+            )),
+        );
     }
 }
 
@@ -202,6 +255,7 @@ pub fn execute_with_resume(
     event_type: String,
     knot_name: Option<String>,
     profile_timeout: Option<Duration>,
+    emitter: Option<&SystemEventEmitter>,
 ) -> Result<AgentOutput, PortError> {
     // Allow test code to override the delay via env var.
     let retry_delay = std::env::var("KNOT_RETRY_DELAY_MS")
@@ -225,6 +279,7 @@ pub fn execute_with_resume(
         knot_name,
         profile_timeout,
         retry_delay,
+        emitter,
     )
 }
 
@@ -246,6 +301,7 @@ fn execute_with_resume_internal(
     knot_name: Option<String>,
     profile_timeout: Option<Duration>,
     retry_delay: Duration,
+    emitter: Option<&SystemEventEmitter>,
 ) -> Result<AgentOutput, PortError> {
     let start = Instant::now();
 
@@ -286,6 +342,22 @@ fn execute_with_resume_internal(
                 attempt: 1,
                 timestamp: format_timestamp(),
             })?;
+            // System event (plan 082) — empty response on attempt 1.
+            emit_system(
+                emitter,
+                loom_id,
+                knot_id,
+                strand_path,
+                "KnotEmptyResponse",
+                &[
+                    ("session-id", sid.clone()),
+                    ("attempt", Some(1.to_string())),
+                ],
+                Some(format!(
+                    "Knot '{}' produced an empty response (attempt 1)",
+                    knot_id.0
+                )),
+            );
             if sid.is_none() {
                 // No session ID (stdio adapter / unparseable output) —
                 // cannot re-enter; the 077 terminal failure stands.
@@ -312,7 +384,7 @@ fn execute_with_resume_internal(
             }
             // Plan 079: record successful compactions observed on the
             // first attempt (best-effort).
-            log_compactions(loom_log, loom_id, knot_id, strand_path, 1, &output);
+            log_compactions(loom_log, emitter, loom_id, knot_id, strand_path, 1, &output);
             return Ok(output);
         }
     } else {
@@ -367,6 +439,28 @@ fn execute_with_resume_internal(
                 attempt: 1,
                 timestamp: format_timestamp(),
             })?;
+            // System event (plan 082) — inactivity stall on attempt 1.
+            emit_system(
+                emitter,
+                loom_id,
+                knot_id,
+                strand_path,
+                "AgentInactivity",
+                &[
+                    (
+                        "session-id",
+                        session_id.clone().filter(|s| !s.is_empty()),
+                    ),
+                    ("attempt", Some(1.to_string())),
+                    ("silent-secs", Some(silent_secs.to_string())),
+                    ("window-secs", Some(window_secs.to_string())),
+                    ("blocked-call", blocked_call.clone()),
+                ],
+                Some(format!(
+                    "Knot '{}' stalled ({}s silent, attempt 1)",
+                    knot_id.0, silent_secs
+                )),
+            );
         }
     }
 
@@ -442,6 +536,25 @@ fn execute_with_resume_internal(
             attempt,
             timestamp: format_timestamp(),
         })?;
+        // System event (plan 082) — session resumed for retry `attempt`.
+        emit_system(
+            emitter,
+            loom_id,
+            knot_id,
+            strand_path,
+            "SessionResumed",
+            &[
+                (
+                    "session-id",
+                    session_id.clone().filter(|s| !s.is_empty()),
+                ),
+                ("attempt", Some(attempt.to_string())),
+            ],
+            Some(format!(
+                "Knot '{}' resumed session (attempt {})",
+                knot_id.0, attempt
+            )),
+        );
 
         // Build context with remaining time and execute.
         // Delegate to execute_with_config so the adapter layer
@@ -468,6 +581,26 @@ fn execute_with_resume_internal(
                         attempt: attempt + 1,
                         timestamp: format_timestamp(),
                     });
+                    // System event (plan 082) — empty response in loop.
+                    emit_system(
+                        emitter,
+                        loom_id,
+                        knot_id,
+                        strand_path,
+                        "KnotEmptyResponse",
+                        &[
+                            (
+                                "session-id",
+                                session_id.clone().filter(|s| !s.is_empty()),
+                            ),
+                            ("attempt", Some((attempt + 1).to_string())),
+                        ],
+                        Some(format!(
+                            "Knot '{}' produced an empty response (attempt {})",
+                            knot_id.0,
+                            attempt + 1
+                        )),
+                    );
                     // Resumable error (not a timeout — no deadline was
                     // exceeded) — continue retry loop
                     let error = PortError::AgentNoResponse {
@@ -490,6 +623,7 @@ fn execute_with_resume_internal(
                 // this retry (KnotEmptyResponse convention: attempt + 1).
                 log_compactions(
                     loom_log,
+                    emitter,
                     loom_id,
                     knot_id,
                     strand_path,
@@ -551,6 +685,30 @@ fn execute_with_resume_internal(
                         attempt: attempt + 1,
                         timestamp: format_timestamp(),
                     });
+                    // System event (plan 082) — inactivity stall in loop.
+                    emit_system(
+                        emitter,
+                        loom_id,
+                        knot_id,
+                        strand_path,
+                        "AgentInactivity",
+                        &[
+                            (
+                                "session-id",
+                                session_id.clone().filter(|s| !s.is_empty()),
+                            ),
+                            ("attempt", Some((attempt + 1).to_string())),
+                            ("silent-secs", Some(silent_secs.to_string())),
+                            ("window-secs", Some(window_secs.to_string())),
+                            ("blocked-call", blocked_call.clone()),
+                        ],
+                        Some(format!(
+                            "Knot '{}' stalled ({}s silent, attempt {})",
+                            knot_id.0,
+                            silent_secs,
+                            attempt + 1
+                        )),
+                    );
                 }
             }
         }
@@ -809,6 +967,7 @@ mod tests {
             Some("k1".to_string()),
             Some(Duration::from_secs(timeout_secs)),
             Duration::from_millis(0),
+            None,
         )
     }
 
@@ -840,6 +999,7 @@ mod tests {
             Some("k1".to_string()),
             None, // no profile timeout budget
             Duration::from_millis(0),
+            None,
         )
     }
 
@@ -939,6 +1099,7 @@ mod tests {
             Some("k1".to_string()),
             Some(Duration::from_secs(4)), // budget < MIN_REMAINING_SECS (5)
             Duration::from_millis(0),
+            None,
         );
 
         assert!(result.is_err());
@@ -992,6 +1153,7 @@ mod tests {
             Some("k1".to_string()),
             Some(Duration::from_secs(3)),
             Duration::from_millis(0),
+            None,
         );
 
         assert!(result.is_err());
@@ -1134,6 +1296,7 @@ mod tests {
             Some("k1".to_string()),
             Some(Duration::from_secs(120)),
             Duration::from_millis(100),
+            None,
         );
 
         assert!(result.is_ok());
@@ -1177,6 +1340,7 @@ mod tests {
             Some("k1".to_string()),
             Some(Duration::from_secs(120)),
             Duration::from_millis(0),
+            None,
         );
 
         assert!(result.is_ok());

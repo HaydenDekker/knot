@@ -59,6 +59,68 @@ date, and migration instructions for affected document types.
 
 ---
 
+### System Event Subscriptions — Every Log Event Is Dispatchable (Knot 0.41.0, 2026-09-07)
+
+**What changed:** every system event Knot writes to the loom-log /
+rig-log is now also **dispatchable to subscriber knots** via the
+existing `event:` `strand-dir` URI. Two new producer-token positions
+join the existing knot- and loom-level positions:
+
+- **Wildcard** `*` — `event:*:<EventId>` — match any knot in the rig.
+- **Rig-level** `<rig-id>` — `event:<rig-id>:<EventId>` — a rig-scoped
+  event (currently `QueueIdle`), using the rig's ID as the producer
+  token.
+
+The subscribable system events (by scope):
+
+- **Run outcome — knot-scoped:** `KnotProcessing`, `KnotFailed`,
+  `KnotCompleted`, `KnotEventsMissing`, `TimeoutExceeded` (knot-scoped
+  despite living in the rig-log — it carries loom/knot/strand).
+- **Run outcome — loom-scoped:** `StrandIgnored`, `StrandSkipped`,
+  `StrandProcessed`.
+- **Retry / session — knot-scoped, per attempt:** `SessionResumed`,
+  `KnotEmptyResponse`, `AgentInactivity`, `ContextCompacted`.
+- **Loom lifecycle — loom-scoped:** `LoomStarted`, `LoomStopped`,
+  `KnotParseWarning`.
+- **Knot lifecycle — knot-scoped:** `KnotRegistered`,
+  `KnotDeregistered`, `DirectoryCreated`.
+- **Rig lifecycle — rig-scoped:** `QueueIdle`.
+
+Two behavioural rules:
+
+- **Self-exclusion:** a system event is **never** dispatched back to
+  the knot that produced it. A knot's own `KnotFailed` / `KnotCompleted`
+  does not re-trigger it (the only sane "self" consumer of a terminal
+  failure would be an infinite loop). Agent-emitted events are
+  unaffected — a knot may still deliberately subscribe to its own agent
+  events.
+- **Per-attempt events fan out once per attempt, not per run.** A
+  run that retries 3× fires a `SessionResumed` / `AgentInactivity` /
+  `KnotEmptyResponse` / `ContextCompacted` subscriber 3×. Subscribers
+  must be **idempotent** under re-delivery.
+
+`EventsDispatched` is intentionally **not** dispatchable (dispatching
+it would require recording its own dispatch).
+
+**Affected documents:** none — no profile, knot, loom, or tie-off
+format change. The change is additive; existing looms are unaffected.
+
+**Migration: none required.**
+
+- Existing `event:<knot>:<EventId>` and `event:<loom>:<EventId>`
+  agent-event subscriptions are unchanged.
+- To subscribe to a system event, set a knot's `strand-dir` to
+  `event:<producer>:<SystemEventId>` where `<producer>` is a knot ID,
+  a loom ID, `*`, or the rig ID (for `QueueIdle`). See the
+  `knot-create` skill's **System Events** catalog for scopes and
+  payload keys.
+- Failure / retry subscribers must be idempotent (per-attempt
+  re-delivery) and cross-knot failure→retry loops must be bounded
+  (see the `knot-design` skill's **System-Event Subscribers: Loop
+  Discipline**).
+
+---
+
 ### Consolidated Service Log + Change-Driven `state.json` (Knot 0.41.0, 2026-09-07)
 
 **What changed:** two observability changes — no project document

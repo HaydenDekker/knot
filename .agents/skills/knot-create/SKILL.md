@@ -380,7 +380,7 @@ Review the goals section of this PRD. Check that:
 |-------|----------|-------------|
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
-| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`) and loom-level (`"event:planning-loom:PlanCreated"`) subscriptions. Paths are resolved relative to the project root. |
+| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`), loom-level (`"event:planning-loom:PlanCreated"`), wildcard (`"event:*:KnotFailed"`), and rig-level (`"event:<rig-id>:QueueIdle"`, 0.41.0+) subscriptions. Paths are resolved relative to the project root. See **System Events** for the subscribable system-event catalog. |
 | `event-description` | No | Semantic description of the event, injected into the producer's prompt. Only meaningful when `strand-dir` is an `event:` URI. |
 | `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
 
@@ -418,7 +418,7 @@ Three colon-separated parts. No escaping needed — targets are
 kebab-case slugs (knot IDs or loom IDs), event IDs are PascalCase
 identifiers.
 
-**Two subscription levels:**
+**Four subscription positions:**
 
 - **Knot-level** (existing): `event:<knot-name>:<EventId>` — subscribe
 to events from a *specific knot*. Example:
@@ -427,11 +427,20 @@ to events from a *specific knot*. Example:
   subscribe to events from *any knot* within a loom. The target must
   end in `-loom`. Example:
   `event:planning-loom:PlanCreated`
+- **Wildcard** (new in 0.41.0): `event:*:<EventId>` — subscribe to the
+  event from *any knot in the rig*. The `*` target matches every
+  producer. Example: `event:*:KnotFailed`.
+- **Rig-level** (new in 0.41.0, system events only): `event:<rig-id>:<EventId>`
+  — subscribe to a rig-scoped system event (e.g. `QueueIdle`) using the
+  rig's ID as the producer token. Example: `event:<rig>:QueueIdle`.
 
 Loom-level subscriptions are useful when multiple knots in a loom can
 emit the same event type — the consumer subscribes once instead of
 once-per-knot. Every knot in the subscribed-to loom receives event
 injection instructions in its prompt.
+
+The `*` wildcard is the rig-wide catch-all: it is how you build
+"react to any knot that fails" consumers (see **System events** below).
 
 **Consumer knot — knot-level (declares subscription via `strand-dir`):**
 
@@ -530,6 +539,9 @@ consumer's dispatch directory (`tie-offs/<rig>/{loom-id}/{event-id}/`).
    - **Loom-level**: `target == producer_loom_id` (target ends in
      `-loom`) → match. If the target matches both a knot name and
      a loom name, loom-level takes precedence.
+   - **Wildcard**: `target == *` → match any producer.
+   - **Rig-level** (system events): `target == rig_id` → match a
+     rig-scoped event such as `QueueIdle`.
 7. Matching events create files in each consumer's dispatch directory.
 
 **Layout:**
@@ -557,6 +569,101 @@ difference is *which producers match*:
 When a consumer has both a knot-level and a loom-level subscription
 for the same `EventId`, Knot deduplicates by event ID — the consumer
 receives the event once regardless of how many subscriptions matched.
+
+### System Events (subscribable, 0.41.0+)
+
+Every system event Knot writes to the loom-log / rig-log is also
+dispatched to subscriber knots — not just the agent-emitted events
+above. A system event is a terminal or lifecycle fact about a run
+(recorded whether or not the agent chose to emit it). Subscribe to one
+with the same `event:` URI grammar; the producer token is the emitting
+knot, the emitting loom, `*` (any knot), or the rig ID (rig-scoped
+only).
+
+Run outcome and retry events carry `strand-path` (plus, where
+noted, a `session-id`). Config/lifecycle events carry no `strand-path`
+(they are not tied to a strand).
+
+**Run outcome — knot-scoped** (producer = knot ID):
+
+| Event ID | When | Extra payload |
+|---|---|---|
+| `KnotProcessing` | A knot starts processing a strand | — |
+| `KnotFailed` | The run failed (config error, agent failure, non-timeout) | `error` |
+| `KnotCompleted` | The run succeeded | — |
+| `KnotEventsMissing` | The run produced no expected events | `expected-events` |
+| `TimeoutExceeded` | The run exceeded its timeout (knot-scoped despite living in the rig-log) | `error`, `session-id` |
+
+**Run outcome — loom-scoped** (producer = loom ID):
+
+| Event ID | When | Extra payload |
+|---|---|---|
+| `StrandIgnored` | A strand was ignored for the loom | `reason` |
+| `StrandSkipped` | A strand was skipped | `reason` |
+| `StrandProcessed` | A strand reached a terminal point (success or failure) | `error` (on failure) |
+
+**Retry / session — knot-scoped** (producer = knot ID). These fan out
+**once per attempt**, not per run — a retried run can fire a consumer
+several times. Consumers must be idempotent.
+
+| Event ID | When | Extra payload |
+|---|---|---|
+| `SessionResumed` | The session was resumed for retry | `session-id`, `attempt` |
+| `KnotEmptyResponse` | The agent returned an empty response | `session-id`, `attempt` |
+| `AgentInactivity` | The agent was killed for inactivity | `session-id`, `attempt`, `silent-secs`, `window-secs`, `blocked-call` |
+| `ContextCompacted` | The context was compacted mid-run | `reason`, `attempt` |
+
+**Loom lifecycle — loom-scoped** (producer = loom ID):
+
+| Event ID | When |
+|---|---|
+| `LoomStarted` | A loom is started (startup / discovery) |
+| `LoomStopped` | A loom is stopped (shutdown) |
+| `KnotParseWarning` | A knot file failed to parse |
+
+**Knot lifecycle — knot-scoped** (producer = knot ID):
+
+| Event ID | When |
+|---|---|
+| `KnotRegistered` | A knot is registered in a loom |
+| `KnotDeregistered` | A knot is deregistered from a loom |
+| `DirectoryCreated` | A knot's strand-source directory is created |
+
+**Rig lifecycle — rig-scoped** (producer = **rig ID**):
+
+| Event ID | When |
+|---|---|
+| `QueueIdle` | The strand queue drained (all pending events processed) after a burst |
+
+Only `QueueIdle` is genuinely rig-scoped — subscribe with the rig's ID
+as the producer token (or `*`): `event:<rig-id>:QueueIdle`.
+
+**Self-exclusion.** A system event is *never* dispatched back to the
+knot that produced it. If a knot subscribes to its own `KnotFailed` /
+`KnotCompleted`, its own terminal outcome will not re-trigger it — the
+only sane "self" consumer of one's own terminal failure would be an
+infinite loop. (Agent-emitted events are unaffected: a knot may
+deliberately subscribe to its own agent events.)
+
+**Example — react to any knot that fails (wildcard consumer):**
+
+```markdown
+---
+name: failure-monitor
+agent-profile-ref: fast
+strand-dir: "event:*:KnotFailed"
+event-description: >
+  Triggered whenever any knot in the rig fails. React to the failure
+  and record it. Must be idempotent.
+---
+
+Investigate and record a knot failure.
+```
+
+`EventsDispatched` is **not** dispatchable — it records the act of
+dispatching, and dispatching it to subscribers would require recording
+its own dispatch. Subscribers who need "a dispatch happened" can watch
+the loom-log instead.
 
 ### Example Project Layout
 

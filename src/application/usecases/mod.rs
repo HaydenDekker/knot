@@ -12,6 +12,7 @@ mod process_strand_helpers;
 pub mod query;
 pub mod test_fixtures;
 mod strand_event_metadata;
+pub mod system_event_emitter;
 pub mod types;
 mod write_state;
 
@@ -25,6 +26,9 @@ pub use loom::RegisterLoom;
 pub use loom::UnregisterLoom;
 pub use manage_knot::{KnotAction, ManageKnot};
 pub use process_strand::ProcessStrand;
+pub use system_event_emitter::{
+    dispatch_grouped, DispatchRequest, EventScope, SystemEventEmitter,
+};
 pub use query::GetKnotStatus;
 pub use strand_event_metadata::{extract_event_metadata, extract_expected_event_ids};
 pub use query::GetLoom;

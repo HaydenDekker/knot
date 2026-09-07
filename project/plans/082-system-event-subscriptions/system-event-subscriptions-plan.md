@@ -377,4 +377,54 @@ mock-CLI harness end-to-end per Phase 0 list.
   dispatch); failures surface on the console, per the existing error-
   surface contract.
 
-## Implementation Status: ⬜ Not started
+## Implementation Status: ✅ Complete (2026-09-07) — released in v0.41.0
+
+### Implementation Log
+
+- **Phase 1 (domain)** — `EventSubscription` extended with `Wildcard` and
+  `RigLevel` variants; `event_id()` accessor added; `resolve_for_producer`
+  gains the wildcard branch; new `resolve_loom_event()` and
+  `resolve_rig_event()` resolvers; self-exclusion is enforced at emission
+  (the emitter skips the producing `(loom, knot)` for system events).
+- **Phase 2 (emitter + shared grouping)** — new
+  `application/usecases/system_event_emitter.rs`: `SystemEventEmitter`
+  (`EventScope` = Knot / Loom / Rig; `dispatch_grouped` shares the
+  singleton-vs-batch seq/filename logic extracted from agent-event
+  dispatch). `ProcessStrand` gains an optional `system_emitter` (builder
+  pattern) and a `run_payload` helper.
+- **Phase 3 (runtime sites)** — emissions for `KnotProcessing`,
+  `StrandIgnored`, `StrandSkipped`, `KnotFailed`, `StrandProcessed`,
+  `KnotCompleted`, `KnotEventsMissing`, `TimeoutExceeded` in
+  `process_strand` + helpers; `SessionResumed`, `KnotEmptyResponse`,
+  `AgentInactivity`, `ContextCompacted` threaded through
+  `session_resume::execute_with_resume_internal` via an
+  `Option<&SystemEventEmitter>` parameter.
+- **Phase 4 (lifecycle + rig)** — `system_emitter` on `AppContext`, built
+  in the composition root; `QueueIdle` (rig-scoped) in the pipeline loop;
+  `LoomStopped` at shutdown; `LoomStarted` / `KnotRegistered` /
+  `KnotDeregistered` / `KnotParseWarning` in `ConfigEventHandler`;
+  startup `LoomStarted` / `KnotRegistered` / `KnotParseWarning` in
+  `DiscoverLooms`; `DirectoryCreated` in `ensure_strand_source_watch`.
+- **Phase 5 (tests)** — unit: resolvers (pure) + emitter against a mock
+  dispatcher + in-memory store (all scopes, producer tokens, wildcard /
+  rig-level, self-exclusion, singleton-vs-batch seq). Integration
+  (`tests/system_event_subscriptions.rs`, mock-CLI harness): failure →
+  wildcard `KnotFailed` consumer runs; success → specific-producer
+  `KnotCompleted` consumer runs; self-exclusion; timeout →
+  `TimeoutExceeded` consumer + rig-log entry (077/081 no-failed-tie-off
+  contract alongside). `ProcessStrandBuilder` gains `with_system_emitter()`.
+- **Phase 6 (docs + version)** — `knot-create` skill (four subscription
+  positions + **System Events** catalog), `knot-design` skill (**System-Event
+  Subscribers: Loop Discipline**), `knot-update` skill (0.41.0 changelog),
+  `docs/concepts.md` (**Reacting to Knot Outcomes**), `docs/release-notes.md`
+  (v0.41.0 Plan 082 feature). Version 0.41.0.
+
+### Verification
+
+- `cargo test`: 988 lib + all integration suites green (056/058/059/070
+  agent-event suites untouched), incl. the new
+  `system_event_subscriptions` suite (4 acceptance tests).
+- `cargo clippy --all-targets`: exit 0; clippy `collapsible_if` count
+  unchanged from baseline (31) — no new warnings introduced.
+- No live rig runs in this repository (AGENTS.md) — verification is
+  `cargo test` / `cargo clippy` + the mock-CLI harness.

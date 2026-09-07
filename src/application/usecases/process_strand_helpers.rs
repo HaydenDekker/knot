@@ -88,6 +88,7 @@ pub fn handle_failure(
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::domain::events::LoomEvent;
+    use crate::application::usecases::system_event_emitter::EventScope;
     use crate::application::usecases::types::format_timestamp;
 
     let error_msg = outcome
@@ -113,6 +114,29 @@ pub fn handle_failure(
 
         Ok(())
     })();
+
+    // System events (plan 082) — the run's terminal failure. Emitted
+    // regardless of whether the log appends above succeeded, mirroring the
+    // loom-log records. Self-exclusion prevents the failing knot from
+    // re-triggering on its own failure.
+    let fail_scope =
+        EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path);
+    ps.emit_system(
+        &fail_scope,
+        "KnotFailed",
+        ProcessStrand::run_payload(strand_path, &[
+            ("error", Some(error_msg.clone())),
+        ]),
+        Some(format!("Knot '{}' failed: {}", knot_id.0, error_msg)),
+    );
+    ps.emit_system(
+        &fail_scope,
+        "StrandProcessed",
+        ProcessStrand::run_payload(strand_path, &[
+            ("error", Some(error_msg.clone())),
+        ]),
+        Some(format!("Knot '{}' processed (failed)", knot_id.0)),
+    );
 
     // Consume the event at the point of failure — exactly once, even
     // when a log append failed above.
@@ -233,6 +257,7 @@ pub fn resolve_config_and_build(
         event_label,
         Some(knot.id.0.clone()),
         profile_timeout.clone(),
+        ps.system_emitter.as_deref(),
     );
 
     // Derive outcome from execution result — domain rule.
@@ -272,9 +297,9 @@ pub fn handle_success(
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::application::session_resume;
+    use crate::application::usecases::system_event_emitter::EventScope;
     use crate::application::usecases::types::format_timestamp;
     use crate::domain::events::LoomEvent;
-    use crate::domain::entities::Knot;
 
     // Dispatch agent events to matching consumer knots
     // (best-effort — dispatch failures are non-fatal).
@@ -303,6 +328,23 @@ pub fn handle_success(
         return Err(err);
     }
 
+    // System events (plan 082) — successful run outcome. KnotCompleted
+    // carries the tie-off path; StrandProcessed mirrors the success.
+    let done_scope =
+        EventScope::knot(loom_id.clone(), knot_id.clone(), strand_path);
+    ps.emit_system(
+        &done_scope,
+        "KnotCompleted",
+        ProcessStrand::run_payload(strand_path, &[
+            ("tie-off-path", Some(tie_off_path.0.display().to_string())),
+        ]),
+        Some(format!(
+            "Knot '{}' completed ({})",
+            knot_id.0,
+            tie_off_path.0.display()
+        )),
+    );
+
     // Append StrandProcessed to loom-log.
     if let Err(err) = ps.log_port.append(LoomEvent::StrandProcessed {
         loom_id: loom_id.clone(),
@@ -313,6 +355,12 @@ pub fn handle_success(
         ps.remove_pending_event(event_id);
         return Err(err);
     }
+    ps.emit_system(
+        &done_scope,
+        "StrandProcessed",
+        ProcessStrand::run_payload(strand_path, &[]),
+        Some(format!("Knot '{}' processed", knot_id.0)),
+    );
 
     // ── Event Enforcement ──────────────────────────────────────────
     // If the agent was instructed to emit events but produced
@@ -341,6 +389,25 @@ pub fn handle_success(
                         expected_events: expected_events.clone(),
                         timestamp: format_timestamp(),
                     },
+                );
+                ps.emit_system(
+                    &EventScope::knot(
+                        loom_id.clone(),
+                        knot_id.clone(),
+                        strand_path,
+                    ),
+                    "KnotEventsMissing",
+                    ProcessStrand::run_payload(strand_path, &[
+                        (
+                            "expected-events",
+                            Some(expected_events.join(", ")),
+                        ),
+                    ]),
+                    Some(format!(
+                        "Knot '{}' completed but emitted no expected events ({})",
+                        knot_id.0,
+                        expected_events.join(", ")
+                    )),
                 );
 
                 // Attempt follow-up re-entry (best-effort).
@@ -394,6 +461,28 @@ pub fn handle_success(
                                         .clone(),
                                     timestamp: format_timestamp(),
                                 },
+                            );
+                            ps.emit_system(
+                                &EventScope::knot(
+                                    loom_id.clone(),
+                                    knot_id.clone(),
+                                    strand_path,
+                                ),
+                                "KnotEventsMissing",
+                                ProcessStrand::run_payload(
+                                    strand_path,
+                                    &[
+                                        (
+                                            "expected-events",
+                                            Some(expected_events.join(", ")),
+                                        ),
+                                    ],
+                                ),
+                                Some(format!(
+                                    "Knot '{}' still emitted no events ({})",
+                                    knot_id.0,
+                                    expected_events.join(", ")
+                                )),
                             );
                         }
                     }

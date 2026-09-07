@@ -259,6 +259,38 @@ without executing them, and shuts down gracefully. Use it to observe
 one cycle at a time between events; see the `knot-dispatch` skill for
 the full workflow.
 
+## Reacting to Knot Outcomes
+
+Every **system event** Knot writes to the loom-log / rig-log is also
+dispatchable to subscriber knots — not just the events an agent chooses
+to emit. A system event is a terminal or lifecycle *fact* about a run:
+
+- **Run outcome** — `KnotProcessing`, `KnotFailed`, `KnotCompleted`,
+  `KnotEventsMissing`, `TimeoutExceeded` (knot-scoped); `StrandIgnored`,
+  `StrandSkipped`, `StrandProcessed` (loom-scoped).
+- **Retry / session** — `SessionResumed`, `KnotEmptyResponse`,
+  `AgentInactivity`, `ContextCompacted` (knot-scoped, **per attempt**).
+- **Loom / knot lifecycle** — `LoomStarted`, `LoomStopped`,
+  `KnotRegistered`, `KnotDeregistered`, `KnotParseWarning`,
+  `DirectoryCreated`.
+- **Rig lifecycle** — `QueueIdle` (rig-scoped).
+
+Subscribe with the same `event:` `strand-dir` URI, adding two new
+producer-token positions on top of knot-level and loom-level:
+
+- **Wildcard** `event:*:<EventId>` — any knot in the rig (e.g. a
+  `event:*:KnotFailed` monitor that reacts to any failure).
+- **Rig-level** `event:<rig-id>:<EventId>` — a rig-scoped event
+  (e.g. `event:<rig>:QueueIdle` when the queue drains after a burst).
+
+Two rules to keep reactions safe: a system event is **never** dispatched
+back to the knot that produced it (so a knot's own failure does not
+re-trigger it), and per-attempt events fire once *per retry attempt* —
+so any failure/retry subscriber must be **idempotent**. `EventsDispatched`
+is intentionally not dispatchable. See the `knot-create` skill's
+**System Events** catalog and the `knot-design` skill's loop-discipline
+notes for the full reference.
+
 ## Git Versioning
 
 By default, Knot creates a git commit in the **project** repository

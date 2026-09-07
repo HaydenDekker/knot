@@ -68,6 +68,10 @@ pub struct AppContext {
     pub git_versioning: Arc<dyn GitVersioningPort>,
     /// Strand event queue — shared with WriteState for queue visibility.
     pub strand_queue: Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>,
+    /// System event emitter (plan 082) — dispatches every system event to
+    /// subscribed consumers. Shared by `ProcessStrand`, the config pipeline,
+    /// the loom use cases, and the pipeline loop (`QueueIdle`).
+    pub system_emitter: Arc<application::usecases::SystemEventEmitter>,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -313,8 +317,22 @@ pub fn build_app_context(
             ),
         );
 
+    // System event emitter (plan 082) — dispatches every system event to
+    // subscribed consumers through the same filesystem dispatcher used for
+    // agent events (identical event-file shape and placement).
+    let system_emitter = Arc::new(
+        application::usecases::SystemEventEmitter::new(
+            store.clone(),
+            Arc::new(
+                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+            ),
+            config.rig_dir.clone(),
+        ),
+    );
+
     (
         AppContext {
+            system_emitter,
             store,
             loom_repo,
             loom_log_port,
@@ -426,23 +444,26 @@ pub fn build_process_strand(
     ctx: &AppContext,
     debounce_queue: &Arc<DiskBackedEventQueue>,
 ) -> Arc<application::usecases::ProcessStrand> {
-    Arc::new(application::usecases::ProcessStrand::new(
-        ctx.store.clone(),
-        Arc::clone(&ctx.loom_log_port),
-        Arc::clone(&ctx.agent_runner),
-        Arc::clone(&ctx.tie_off_sink),
-        ctx.rig_config.clone(),
-        ctx.rig_dir.clone(),
-        Arc::clone(&ctx.profile_repo),
-        Arc::clone(&ctx.model_registry),
-        Arc::clone(&ctx.rig_log_port),
-        Arc::clone(&ctx.git_versioning),
-        Arc::new(crate::adapters::outbound::ContentInspectorChecker),
-        Arc::new(
-            crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
-        ),
-        Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
-    ))
+    Arc::new(
+        application::usecases::ProcessStrand::new(
+            ctx.store.clone(),
+            Arc::clone(&ctx.loom_log_port),
+            Arc::clone(&ctx.agent_runner),
+            Arc::clone(&ctx.tie_off_sink),
+            ctx.rig_config.clone(),
+            ctx.rig_dir.clone(),
+            Arc::clone(&ctx.profile_repo),
+            Arc::clone(&ctx.model_registry),
+            Arc::clone(&ctx.rig_log_port),
+            Arc::clone(&ctx.git_versioning),
+            Arc::new(crate::adapters::outbound::ContentInspectorChecker),
+            Arc::new(
+                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+            ),
+            Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
+        )
+        .with_system_emitter(Arc::clone(&ctx.system_emitter)),
+    )
 }
 
 pub fn spawn_process_strand_loop(
@@ -454,6 +475,7 @@ pub fn spawn_process_strand_loop(
     // the closure.
     let debounce_queue_inner = Arc::clone(&debounce_queue);
     let rig_log_port = Arc::clone(&ctx.rig_log_port);
+    let system_emitter = Arc::clone(&ctx.system_emitter);
     let use_case = build_process_strand(ctx, &debounce_queue_inner);
     join_set.spawn(async move {
         // Process strand events with queue idle detection.
@@ -530,6 +552,21 @@ pub fn spawn_process_strand_loop(
                             },
                         ) {
                             eprintln!("[pipeline] QueueIdle WRITE FAILED: {e}");
+                        }
+                        // System event (plan 082) — rig-scoped QueueIdle.
+                        // No loom-log EventsDispatched record (rig scope
+                        // has no loom); dispatch is best-effort.
+                        if let Err(e) = system_emitter.emit(
+                            &application::usecases::EventScope::Rig,
+                            "QueueIdle",
+                            std::collections::HashMap::new(),
+                            Some(
+                                "Strand queue is idle — all pending events \
+                                 processed"
+                                    .to_string(),
+                            ),
+                        ) {
+                            eprintln!("[pipeline] QueueIdle dispatch failed: {e}");
                         }
                         is_burst_active = false;
                         continue;
@@ -833,7 +870,8 @@ agent-adapter: pi-json
         Arc::clone(&ctx.loom_log_port),
         ctx.store.clone(),
         Arc::clone(&ctx.event_source),
-    );
+    )
+    .with_system_emitter(Arc::clone(&ctx.system_emitter));
 
     let looms = discover
         .execute(rig_dir)
@@ -881,6 +919,7 @@ pub fn start_config_pipeline(
     let store = ctx.store.clone();
     let event_source = Arc::clone(&ctx.event_source);
     let rig_path = ctx.rig_dir.clone();
+    let system_emitter = Arc::clone(&ctx.system_emitter);
 
     join_set.spawn(async move {
         let use_case = application::usecases::ConfigEventHandler::new(
@@ -889,7 +928,8 @@ pub fn start_config_pipeline(
             store,
             event_source,
             rig_path,
-        );
+        )
+        .with_system_emitter(system_emitter);
         while let Some(event) = config_rx.recv().await {
             if let Err(e) = use_case.execute(event) {
                 eprintln!("ConfigEventHandler error: {e}");
@@ -1024,6 +1064,7 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // Preserve references needed after AppContext is consumed.
     let shutdown_log_port: Arc<dyn application::ports::LoomLogPort> =
         Arc::clone(&ctx.loom_log_port);
+    let shutdown_emitter = Arc::clone(&ctx.system_emitter);
     let shutdown_loom_ids: Vec<_> = looms.iter().map(|l| l.id.clone()).collect();
 
     // Wait for Ctrl+C
@@ -1078,6 +1119,15 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
                 loom_id: loom_id.clone(),
                 timestamp: application::usecases::format_timestamp(),
             },
+        );
+        // System event (plan 082) — loom-scoped LoomStopped.
+        let _ = shutdown_emitter.emit(
+            &application::usecases::EventScope::Loom {
+                loom_id: loom_id.clone(),
+            },
+            "LoomStopped",
+            std::collections::HashMap::new(),
+            Some(format!("Loom '{}' stopped", loom_id.0)),
         );
     }
 

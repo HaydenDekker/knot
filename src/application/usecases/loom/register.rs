@@ -93,6 +93,10 @@ impl RegisterLoom {
                 &knot.strand_source,
                 &*self.log_port,
                 &*self.event_source,
+                // RegisterLoom is not on the live service path (the
+                // service discovers via `DiscoverLooms`), so no system
+                // event emitter is wired here.
+                None,
             )?;
         }
 

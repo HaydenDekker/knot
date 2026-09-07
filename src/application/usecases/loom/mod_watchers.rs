@@ -12,7 +12,34 @@ use crate::domain::events::LoomEvent;
 use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::value_objects::StrandSource;
 
+use super::super::system_event_emitter::{
+    EventScope, SystemEventEmitter,
+};
 use super::super::types::format_timestamp;
+
+/// Emit a knot-scoped `DirectoryCreated` system event (plan 082),
+/// best-effort — no-op without an emitter.
+fn emit_directory_created(
+    emitter: Option<&SystemEventEmitter>,
+    loom_id: &LoomId,
+    knot_id: &KnotId,
+    directory: &str,
+) {
+    let Some(emitter) = emitter else { return };
+    let mut payload = std::collections::HashMap::new();
+    payload.insert("directory".to_string(), directory.to_string());
+    let scope =
+        EventScope::knot_no_strand(loom_id.clone(), knot_id.clone());
+    let _ = emitter.emit(
+        &scope,
+        "DirectoryCreated",
+        payload,
+        Some(format!(
+            "Strand directory '{}' auto-created (knot '{}')",
+            directory, knot_id.0
+        )),
+    );
+}
 
 /// Ensure a knot's strand source directory exists on disk, then start
 /// the file watcher.
@@ -36,6 +63,7 @@ pub(crate) fn ensure_strand_source_watch(
     strand_source: &StrandSource,
     log_port: &dyn LoomLogPort,
     event_source: &dyn EventSource,
+    emitter: Option<&SystemEventEmitter>,
 ) -> Result<(), PortError> {
     match strand_source {
         StrandSource::Filesystem(path) => {
@@ -45,6 +73,7 @@ pub(crate) fn ensure_strand_source_watch(
                 path,
                 log_port,
                 event_source,
+                emitter,
             )
         }
         StrandSource::EventUri { event_id, .. } => {
@@ -55,6 +84,7 @@ pub(crate) fn ensure_strand_source_watch(
                 event_id,
                 log_port,
                 event_source,
+                emitter,
             )
         }
     }
@@ -72,6 +102,7 @@ fn ensure_filesystem_watch(
     strand_dir: &Path,
     log_port: &dyn LoomLogPort,
     event_source: &dyn EventSource,
+    emitter: Option<&SystemEventEmitter>,
 ) -> Result<(), PortError> {
     let dir_created = if !strand_dir.exists() {
         std::fs::create_dir_all(strand_dir).map_err(|e| {
@@ -87,6 +118,12 @@ fn ensure_filesystem_watch(
             directory: strand_dir.display().to_string(),
             timestamp: format_timestamp(),
         })?;
+        emit_directory_created(
+            emitter,
+            loom_id,
+            knot_id,
+            &strand_dir.display().to_string(),
+        );
         logging::log_knot_event(
             "dir-created",
             &loom_id.0,
@@ -132,6 +169,7 @@ fn ensure_event_uri_watch(
     event_id: &str,
     log_port: &dyn LoomLogPort,
     event_source: &dyn EventSource,
+    emitter: Option<&SystemEventEmitter>,
 ) -> Result<(), PortError> {
     let event_dir = derive_runtime_root(rig_dir)
         .join(&loom_id.0)
@@ -151,6 +189,12 @@ fn ensure_event_uri_watch(
             directory: event_dir.display().to_string(),
             timestamp: format_timestamp(),
         })?;
+        emit_directory_created(
+            emitter,
+            loom_id,
+            knot_id,
+            &event_dir.display().to_string(),
+        );
         logging::log_knot_event(
             "dir-created",
             &loom_id.0,
@@ -227,6 +271,7 @@ mod mod_watchers_tests {
             &StrandSource::Filesystem(non_existent.clone()),
             &log_port,
             &event_source,
+            None,
         );
 
         // Should succeed
@@ -277,6 +322,7 @@ mod mod_watchers_tests {
             &StrandSource::Filesystem(existing.clone()),
             &log_port,
             &event_source,
+            None,
         );
 
         assert!(result.is_ok());
@@ -327,6 +373,7 @@ mod mod_watchers_tests {
             &event_uri,
             &log_port,
             &event_source,
+            None,
         );
 
         // Should succeed
@@ -409,6 +456,7 @@ mod mod_watchers_tests {
             &event_uri,
             &log_port,
             &event_source,
+            None,
         )
         .unwrap();
 
@@ -458,6 +506,7 @@ mod mod_watchers_tests {
             &event_uri,
             &log_port,
             &event_source,
+            None,
         );
 
         assert!(result.is_ok());
@@ -504,6 +553,7 @@ mod mod_watchers_tests {
             &event_uri,
             &log_port,
             &event_source,
+            None,
         )
         .unwrap();
 

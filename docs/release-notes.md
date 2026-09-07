@@ -55,6 +55,60 @@ had — its **stderr** — and stops the no-op `state.json` writes.
   retired files; the legacy-layout migration test now proves the
   migrated logs survive byte-identical and inert.
 
+### Feature — System Event Subscriptions: Every Log Event Is Dispatchable (Plan 082)
+
+A knot could only react to the events its *peer agents* chose to emit —
+the system events Knot itself records (a run failed, timed out, went
+idle, a loom stopped) were invisible to other knots. Plan 082 makes
+**every system event Knot writes to the loom-log / rig-log also
+dispatchable** to subscriber knots, through the existing `event:`
+`strand-dir` URI — so you can react to knot outcomes, not just to
+agent-emitted events.
+
+- **Open, not curated.** Instead of a fixed 8-event allow-list, the
+  vocabulary is the existing `LoomEvent` / `RigLogEvent` variant names —
+  a new log-event variant is subscribable the day it lands. Run outcome
+  (`KnotProcessing`, `KnotFailed`, `KnotCompleted`, `KnotEventsMissing`,
+  `TimeoutExceeded`, `StrandIgnored`, `StrandSkipped`,
+  `StrandProcessed`), retry/session (`SessionResumed`,
+  `KnotEmptyResponse`, `AgentInactivity`, `ContextCompacted`), loom/knot
+  lifecycle (`LoomStarted`, `LoomStopped`, `KnotRegistered`,
+  `KnotDeregistered`, `KnotParseWarning`, `DirectoryCreated`), and rig
+  lifecycle (`QueueIdle`). `EventsDispatched` is intentionally excluded.
+- **Two new producer-token positions.** On top of the existing
+  knot-level (`event:<knot>:<EventId>`) and loom-level
+  (`event:<loom>:<EventId>`) subscriptions:
+  - **Wildcard** `event:*:<EventId>` — match *any* knot in the rig (the
+    "react to any knot that fails" monitor: `event:*:KnotFailed`).
+  - **Rig-level** `event:<rig-id>:<EventId>` — a rig-scoped event
+    (currently `QueueIdle`), using the rig's ID as the producer token.
+- **Self-exclusion.** A system event is never dispatched back to the
+  knot that produced it — a knot's own `KnotFailed` / `KnotCompleted`
+  does not re-trigger itself. This is automatic and applies to system
+  events only (a knot may still deliberately subscribe to its own
+  agent-emitted events).
+- **Per-attempt fan-out.** Retry events (`SessionResumed`,
+  `KnotEmptyResponse`, `AgentInactivity`, `ContextCompacted`) fire once
+  *per attempt*, not per run — a retried run fires a per-attempt
+  consumer multiple times. Subscribers must be **idempotent** under
+  re-delivery (standard knot discipline).
+- **Emission is best-effort and non-fatal.** A failed dispatch never
+  changes a run's outcome or blocks the pipeline (parity with
+  agent-event dispatch); it surfaces on the console.
+- **Additive — no migration.** Existing looms and agent-event
+  subscriptions are untouched. New subscribers simply set `strand-dir`
+  to `event:<producer>:<SystemEventId>` (producer = knot ID, loom ID,
+  `*`, or the rig ID for `QueueIdle`).
+- **Tests** — domain resolvers (pure), the emitter against a mock
+  dispatcher + in-memory store (all scopes, producer tokens,
+  wildcard/rig-level, self-exclusion, singleton-vs-batch seq), and
+  mock-CLI harness end-to-end acceptance (`tests/system_event_subscriptions.rs`):
+  failure → wildcard `KnotFailed` consumer runs, success →
+  specific-producer `KnotCompleted` consumer runs, self-exclusion, and
+  timeout → `TimeoutExceeded` consumer + rig-log entry (077/081
+  no-failed-tie-off contract asserted alongside). The 056/058/059/070
+  agent-event suites are untouched and green.
+
 ## v0.40.0 — 2026-09-03
 
 ### Feature — Inactivity Timeout: Kill Blocked Sessions, Restart with a Blocking-Call Note (Plan 081)

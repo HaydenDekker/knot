@@ -881,13 +881,38 @@ pub struct StrandSourceError {
 ///
 /// Used during matching — not persisted or serialised.
 /// Captures whether a `StrandSource::EventUri` target resolved
-/// as a knot-level or loom-level subscription.
+/// as a knot-level, loom-level, wildcard, or rig-level subscription.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventSubscription {
     /// Subscribe to events from a specific knot.
     KnotLevel { producer_knot: String, event_id: String },
     /// Subscribe to events from any knot in a specific loom.
     LoomLevel { producer_loom: String, event_id: String },
+    /// Subscribe to events from **any** producer (`event:*:<EventId>`).
+    ///
+    /// Matches knot-scoped, loom-scoped, and rig-scoped dispatches
+    /// whose event ID is equal (plan 082).
+    Wildcard { event_id: String },
+    /// Subscribe to rig-scoped dispatches from a specific rig
+    /// (`event:<rig-id>:<EventId>`, e.g. `QueueIdle`) (plan 082).
+    RigLevel { producer_rig: String, event_id: String },
+}
+
+impl EventSubscription {
+    /// The exact event ID this subscription matches, across all variants.
+    ///
+    /// Event-ID matching is always exact (there is no event-ID wildcard in
+    /// plan 082); this accessor lets the dispatch pass compare the
+    /// subscribed event against a produced event without matching on every
+    /// variant.
+    pub fn event_id(&self) -> &str {
+        match self {
+            EventSubscription::KnotLevel { event_id, .. }
+            | EventSubscription::LoomLevel { event_id, .. }
+            | EventSubscription::Wildcard { event_id }
+            | EventSubscription::RigLevel { event_id, .. } => event_id,
+        }
+    }
 }
 
 impl std::fmt::Display for StrandSourceError {
@@ -1037,9 +1062,13 @@ impl StrandSource {
         }
     }
 
-    /// Resolve this event URI against a known producer.
+    /// Resolve this event URI against a known producer (knot-scoped
+    /// dispatches).
     ///
     /// Returns:
+    /// - `Some(EventSubscription::Wildcard)` if the target is `*` — the
+    ///   wildcard matches **any** producer (plan 082). Checked **first**,
+    ///   before the loom-suffix and knot branches.
     /// - `Some(EventSubscription::KnotLevel)` if the target matches
     ///   `producer_knot_id` directly, or matches any known knot name
     ///   in `all_knot_ids` (and the target does not end with `-loom`).
@@ -1064,6 +1093,14 @@ impl StrandSource {
             StrandSource::Filesystem(_) => return None,
         };
 
+        // Wildcard producer — matches any knot/loom/rig producer.
+        // Checked before the loom-suffix and knot branches (plan 082).
+        if target == "*" {
+            return Some(EventSubscription::Wildcard {
+                event_id: event_id.to_string(),
+            });
+        }
+
         if self.is_loom_target() {
             // Target ends with `-loom` — loom-level takes precedence.
             if target == producer_loom_id {
@@ -1084,6 +1121,82 @@ impl StrandSource {
             });
         }
 
+        None
+    }
+
+    /// Resolve this event URI for a **loom-scoped** dispatch (producer is
+    /// the loom itself, no knot — e.g. `LoomStarted`, `LoomStopped`,
+    /// `KnotParseWarning`) (plan 082).
+    ///
+    /// Returns:
+    /// - `Some(EventSubscription::Wildcard)` if the target is `*`.
+    /// - `Some(EventSubscription::LoomLevel)` if the target equals
+    ///   `loom_id` (a loom id always ends `-loom` by convention).
+    /// - `None` otherwise (a knot id, a rig id, or a different loom).
+    ///
+    /// Returns `None` for [`Filesystem`] sources.
+    pub fn resolve_loom_event(
+        &self,
+        loom_id: &str,
+    ) -> Option<EventSubscription> {
+        let (target, event_id) = match self {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => (producer_knot.as_str(), event_id.as_str()),
+            StrandSource::Filesystem(_) => return None,
+        };
+
+        if target == "*" {
+            return Some(EventSubscription::Wildcard {
+                event_id: event_id.to_string(),
+            });
+        }
+        if target == loom_id {
+            return Some(EventSubscription::LoomLevel {
+                producer_loom: target.to_string(),
+                event_id: event_id.to_string(),
+            });
+        }
+        None
+    }
+
+    /// Resolve this event URI for a **rig-scoped** dispatch (producer is
+    /// the rig — e.g. `QueueIdle`) (plan 082).
+    ///
+    /// Returns:
+    /// - `Some(EventSubscription::Wildcard)` if the target is `*`.
+    /// - `Some(EventSubscription::RigLevel)` if the target equals
+    ///   `rig_id` (the rig directory basename).
+    /// - `None` otherwise.
+    ///
+    /// Rig-scoped dispatches never consult knot ids, so a knot named after
+    /// the rig is harmless (documented, not guarded).
+    ///
+    /// Returns `None` for [`Filesystem`] sources.
+    pub fn resolve_rig_event(
+        &self,
+        rig_id: &str,
+    ) -> Option<EventSubscription> {
+        let (target, event_id) = match self {
+            StrandSource::EventUri {
+                producer_knot,
+                event_id,
+            } => (producer_knot.as_str(), event_id.as_str()),
+            StrandSource::Filesystem(_) => return None,
+        };
+
+        if target == "*" {
+            return Some(EventSubscription::Wildcard {
+                event_id: event_id.to_string(),
+            });
+        }
+        if target == rig_id {
+            return Some(EventSubscription::RigLevel {
+                producer_rig: target.to_string(),
+                event_id: event_id.to_string(),
+            });
+        }
         None
     }
 }
@@ -2848,8 +2961,8 @@ mod tests {
                 assert_eq!(producer_knot, "plan-creator");
                 assert_eq!(event_id, "PlanCreated");
             }
-            EventSubscription::LoomLevel { .. } => {
-                panic!("expected KnotLevel, got LoomLevel");
+            other => {
+                panic!("expected KnotLevel, got {other:?}");
             }
         }
     }
@@ -2870,8 +2983,8 @@ mod tests {
                 assert_eq!(producer_loom, "planning-loom");
                 assert_eq!(event_id, "PlanCreated");
             }
-            EventSubscription::KnotLevel { .. } => {
-                panic!("expected LoomLevel, got KnotLevel");
+            other => {
+                panic!("expected LoomLevel, got {other:?}");
             }
         }
     }
@@ -2922,8 +3035,8 @@ mod tests {
                 assert_eq!(producer_loom, "planning-loom");
                 assert_eq!(event_id, "PlanCreated");
             }
-            EventSubscription::KnotLevel { .. } => {
-                panic!("expected LoomLevel (loom suffix takes precedence), got KnotLevel");
+            other => {
+                panic!("expected LoomLevel (loom suffix takes precedence), got {other:?}");
             }
         }
     }
@@ -2937,5 +3050,153 @@ mod tests {
             &["plan-creator"],
         );
         assert!(result.is_none());
+    }
+
+    // ── System event subscriptions (plan 082) ──────────────────────────
+
+    #[test]
+    fn strand_source_from_str_wildcard_producer_parses() {
+        // `event:*:X` parses — the wildcard is any non-empty producer token.
+        let source =
+            StrandSource::from_str("event:*:KnotFailed").unwrap();
+        assert_eq!(
+            source,
+            StrandSource::EventUri {
+                producer_knot: "*".to_string(),
+                event_id: "KnotFailed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn strand_source_from_str_wildcard_empty_event_id_rejected() {
+        // `*` with an empty event id is still rejected (same rule as any
+        // empty part).
+        assert!(StrandSource::from_str("event:*:").is_err());
+    }
+
+    #[test]
+    fn resolve_for_producer_wildcard_matches_any_knot_producer() {
+        let source =
+            StrandSource::from_str("event:*:KnotFailed").unwrap();
+        let result = source.resolve_for_producer(
+            "some-knot",
+            "some-loom",
+            &["some-knot", "other"],
+        );
+        assert_eq!(
+            result,
+            Some(EventSubscription::Wildcard {
+                event_id: "KnotFailed".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_for_producer_wildcard_checked_before_loom_suffix() {
+        // A producer token of `*` resolves as wildcard even though a
+        // `-loom` producer context is supplied — wildcard is checked first.
+        let source =
+            StrandSource::from_str("event:*:KnotFailed").unwrap();
+        let result = source.resolve_for_producer(
+            "any-knot",
+            "planning-loom",
+            &["planning-loom"],
+        );
+        assert!(matches!(result, Some(EventSubscription::Wildcard { .. })));
+    }
+
+    #[test]
+    fn resolve_loom_event_wildcard_and_exact() {
+        let wildcard = StrandSource::from_str("event:*:LoomStarted").unwrap();
+        assert_eq!(
+            wildcard.resolve_loom_event("planning-loom"),
+            Some(EventSubscription::Wildcard {
+                event_id: "LoomStarted".to_string()
+            })
+        );
+
+        let exact = StrandSource::from_str("event:planning-loom:LoomStarted").unwrap();
+        assert_eq!(
+            exact.resolve_loom_event("planning-loom"),
+            Some(EventSubscription::LoomLevel {
+                producer_loom: "planning-loom".to_string(),
+                event_id: "LoomStarted".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_loom_event_rejects_other_tokens() {
+        let knot = StrandSource::from_str("event:some-knot:LoomStarted").unwrap();
+        assert!(knot.resolve_loom_event("planning-loom").is_none());
+        let other_loom = StrandSource::from_str("event:other-loom:LoomStarted").unwrap();
+        assert!(other_loom.resolve_loom_event("planning-loom").is_none());
+        let rig = StrandSource::from_str("event:dev-rig:LoomStarted").unwrap();
+        assert!(rig.resolve_loom_event("planning-loom").is_none());
+        let fs = StrandSource::Filesystem(PathBuf::from("x"));
+        assert!(fs.resolve_loom_event("planning-loom").is_none());
+    }
+
+    #[test]
+    fn resolve_rig_event_wildcard_and_exact() {
+        let wildcard = StrandSource::from_str("event:*:QueueIdle").unwrap();
+        assert_eq!(
+            wildcard.resolve_rig_event("dev-rig"),
+            Some(EventSubscription::Wildcard {
+                event_id: "QueueIdle".to_string()
+            })
+        );
+
+        let exact = StrandSource::from_str("event:dev-rig:QueueIdle").unwrap();
+        assert_eq!(
+            exact.resolve_rig_event("dev-rig"),
+            Some(EventSubscription::RigLevel {
+                producer_rig: "dev-rig".to_string(),
+                event_id: "QueueIdle".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_rig_event_rejects_other_tokens() {
+        let knot = StrandSource::from_str("event:some-knot:QueueIdle").unwrap();
+        assert!(knot.resolve_rig_event("dev-rig").is_none());
+        let loom = StrandSource::from_str("event:dev-loom:QueueIdle").unwrap();
+        assert!(loom.resolve_rig_event("dev-rig").is_none());
+        let fs = StrandSource::Filesystem(PathBuf::from("x"));
+        assert!(fs.resolve_rig_event("dev-rig").is_none());
+    }
+
+    #[test]
+    fn event_subscription_event_id_accessor_all_variants() {
+        assert_eq!(
+            EventSubscription::KnotLevel {
+                producer_knot: "k".into(),
+                event_id: "A".into()
+            }
+            .event_id(),
+            "A"
+        );
+        assert_eq!(
+            EventSubscription::LoomLevel {
+                producer_loom: "l-loom".into(),
+                event_id: "B".into()
+            }
+            .event_id(),
+            "B"
+        );
+        assert_eq!(
+            EventSubscription::Wildcard { event_id: "C".into() }.event_id(),
+            "C"
+        );
+        assert_eq!(
+            EventSubscription::RigLevel {
+                producer_rig: "r".into(),
+                event_id: "D".into()
+            }
+            .event_id(),
+            "D"
+        );
     }
 }
