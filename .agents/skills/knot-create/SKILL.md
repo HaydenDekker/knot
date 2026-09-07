@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.7.0"
-  compatibility: "Knot 0.36.0+"
+  version: "5.8.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Create Skill
@@ -21,7 +21,9 @@ definition files inside them. Each **knot** references a shared
 **agent profile** that provides the LLM provider, model, tools, and
 system prompt.
 
-**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by Knot)
+**State file:** `tie-offs/<rig>/state.json` (written when the state
+changes — the writer ticks every 5 seconds but skips no-op writes,
+so an unchanged mtime means the rig is idle)
 
 ---
 
@@ -72,8 +74,8 @@ Project root
  │           └── ...
  └── Runtime tree (`./tie-offs/<rig>/`) — project output, committed with project git
        ├── state.json              ← runtime state snapshot (auto-generated)
+       ├── knot-service.log        ← service log (appended by the launcher)
        └── {loom-id}/
-             ├── .loom-log         ← activity log
              ├── tie-off-{knot-name}.md  ← append-only log
              └── {event-id}/               ← dispatch subdirectory
                    └── {event}.md          ← dispatched event strand
@@ -572,10 +574,8 @@ project_root/              ← strand-dir resolves from here
 └── tie-offs/rig/          ← runtime tree (committed with project git)
     ├── state.json
     ├── prd-review-loom/
-    │   ├── .loom-log
     │   └── tie-off-prd-goals-review.md
     └── planning-loom/
-        ├── .loom-log
         ├── tie-off-refactor-planner.md
         └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
             └── event-2026-07-10T12-00-00.md
@@ -631,7 +631,7 @@ You are a deep analyst. Reason thoroughly before answering.
 | `model` | **Yes, unless `model-ref`** | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`). Ignored (with a parse warning) when `model-ref` is also set. |
 | `thinking-level` | No | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh`. A profile-level **override** that takes precedence over the alias's `thinking-level` default in `rig/models.yml`. For a direct-spec profile only this value applies (the registry is not consulted). When set it is emitted as `--thinking <level>` on the pi invocation; **omitting** it lets pi's own settings default apply (omission is **not** the same as `off`). Any other value is a parse error. |
 | `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
-| `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` event is recorded in the rig-log and the tie-off file is preserved unchanged. |
+| `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` operational event is recorded on the service log and the tie-off file is preserved unchanged. |
 
 A profile with **neither** `model-ref` **nor** `provider` + `model`
 fails to parse (`MissingModelSpec`).
@@ -679,7 +679,7 @@ Profile precedence:
 | absent | absent | Parse error (no model defined) |
 
 An unknown alias fails the knot run with `ModelRefNotFound` (error in
-the loom-log and in state `last_error`, message pointing at
+the service log and in state `last_error`, message pointing at
 `rig/models.yml`).
 
 **Swap a model behind an alias** (no profile edits, no restart):
@@ -734,7 +734,8 @@ no restart needed.
 ## State File Schema
 
 `tie-offs/<rig>/state.json` is the source of truth for current rig state. It is
-written atomically every 5 seconds.
+written atomically **when the state actually changes** (the writer ticks every
+5 seconds, but identical snapshots are never rewritten).
 
 ```json
 {
@@ -801,10 +802,10 @@ written atomically every 5 seconds.
 |----------|--------|
 | Loom `{id}` not in `tie-offs/<rig>/state.json` | Directory may not end in `-loom`, or file watcher hasn't picked it up yet. Wait up to 5 seconds and re-check. |
 | Profile `{name}` not in `tie-offs/<rig>/state.json` | Profile file not found or has invalid frontmatter. Check `rig/profiles/{name}.md`. |
-| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check activity log at `tie-offs/<rig>/{loom-id}/.loom-log`. |
-| `model-ref` not in `rig/models.yml` | Knot will fail with `ModelRefNotFound` (`model-ref 'X' not found in rig/models.yml`). Add the alias to `rig/models.yml` or fix the profile. The error appears in the loom-log and in state `last_error`. |
+| Profile not found at processing time | Knot will fail with `ProfileNotFound` error. Check the service log (`grep 'knot=<knot>' tie-offs/<rig>/knot-service.log`). |
+| `model-ref` not in `rig/models.yml` | Knot will fail with `ModelRefNotFound` (`model-ref 'X' not found in rig/models.yml`). Add the alias to `rig/models.yml` or fix the profile. The error appears in the service log and in state `last_error`. |
 | Profile shows `null` provider/model in state | The profile's alias is unresolvable — `rig/models.yml` is missing, empty, or malformed, or the alias is undefined. Check `rig/models.yml`. |
-| Knot file parse errors | Knot is skipped. Check `tie-offs/<rig>/{loom-id}/.loom-log` for `KnotParseWarning` events. |
+| Knot file parse errors | Knot is skipped. Check `tie-offs/<rig>/knot-service.log` for `KnotParseWarning` events. |
 | `tie-offs/<rig>/state.json` does not exist | Knot is not running. Suggest `knot-init` skill. |
 
 ---

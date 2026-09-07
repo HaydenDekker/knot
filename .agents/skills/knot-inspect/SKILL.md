@@ -1,11 +1,11 @@
 ---
 name: knot-inspect
-description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity logs, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` and activity from `tie-offs/<rig>/{loom-id}/.loom-log`. USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing, starting or stopping the service (use knot-start)."
+description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` (written on state change) and activity from the service log `tie-offs/<rig>/knot-service.log` (`[KNOT][EVENT]` lines, filter with `grep 'loom=<id>'`). USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing, starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.7.0"
-  compatibility: "Knot 0.36.0+"
+  version: "3.8.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Inspect Skill
@@ -15,12 +15,17 @@ access to rig configuration, loom details, activity logs, knot
 processing status, and agent profiles by reading
 `tie-offs/<rig>/state.json` and loom activity log files.
 
-**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
-Knot; default rig: `tie-offs/rig/state.json`)
-**Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only
-JSONL, **cleared at knot startup** — per-run scope)
-**Service log:** `tie-offs/<rig>/knot-service.log` (raw stderr, appended
-across runs — see `knot-start`)
+**State file:** `tie-offs/<rig>/state.json` (written when the state
+actually changes — a background writer ticks every 5 seconds, but idle
+ticks never rewrite it; default rig: `tie-offs/rig/state.json`)
+**Service log:** `tie-offs/<rig>/knot-service.log` (the service's
+single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records, appended across
+runs by the `knot-start` skill — the only log that survives a restart)
+
+Since Knot 0.41.0 there are **no per-run log files** (the retired
+`.loom-log` / `.rig-log` JSONL files are gone): run activity is
+in-memory per process and emitted on the service's stderr, so the
+appended service log is where you read activity.
 
 ---
 
@@ -35,7 +40,8 @@ resources. Use `knot-init` or `knot-create` for write operations.
 
 All state is in files. Read `tie-offs/<rig>/state.json` for current rig
 state.
-Read `.loom-log` files for historical activity. No HTTP calls needed.
+Read the service log (`tie-offs/<rig>/knot-service.log`) for activity.
+No HTTP calls needed.
 
 ### Progressive Disclosure
 
@@ -95,8 +101,11 @@ knot) based on user requests.
 }
 ```
 
-The state file is written atomically every 5 seconds. Staleness is at
-most 5 seconds behind reality.
+The state file is written atomically **when the state actually changes**
+(a background writer ticks every 5 seconds; identical snapshots — the
+only thing that would differ is `updated_at` — are never rewritten).
+Staleness is at most 5 seconds behind reality; an unchanged mtime means
+the rig is idle.
 
 Profile entries carry `model-ref` (the alias, `null` for direct-spec
 profiles) plus the **resolved** `provider`/`model`. For `model-ref`
@@ -167,10 +176,11 @@ When asked about a specific loom (by ID):
    - Loom ID
    - List of knots with their status and last processed strand
 
-3. **Get activity log**: Read `tie-offs/<rig>/{loom-id}/.loom-log`.
-   - If the file does not exist: Report "No activity log found for this
-     loom."
-   - Present the activity entries in chronological order:
+3. **Get activity**: Read the service log and filter for the loom:
+   `grep 'loom={loom-id}' tie-offs/<rig>/knot-service.log`.
+   - If the service log does not exist: Report "No service log found —
+     start Knot with the `knot-start` skill to record one."
+   - Present the `[KNOT][EVENT]` entries in chronological order:
      - `LoomStarted` events
      - `KnotRegistered` events
      - `KnotProcessing` events (with strand path)
@@ -243,17 +253,33 @@ When asked to list or view agent profiles:
 
 ---
 
-## Activity Log Format
+## Service Log Format
 
-Each loom has an append-only JSONL activity log at
-`tie-offs/<rig>/{loom-id}/.loom-log` (append-only within a run —
-**cleared at knot startup**, per-run scope). Each line is a JSON
-object representing one event.
+The service log (`tie-offs/<rig>/knot-service.log`) holds one line per
+record — the service's stderr, appended by the `knot-start` skill. Each
+line is timestamped and tagged:
 
-The log always contains only the events of the **current** knot
-process run: it starts with the fresh `KnotRegistered`/`LoomStarted`
-events and ends with `LoomStopped` at shutdown. There is no cross-run
-history in the log — the tie-off files are the durable audit record.
+```
+[2026-06-10T12:00:01+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/prd-review-loom/tie-off-goals-review.md
+[2026-06-10T12:00:03+10:00] [KNOT][STATE] change knot prd-review-loom/goals-review: status idle→completed strand=project/prds/goals.md
+```
+
+- **`[KNOT][EVENT] <Event> key=value …`** — one line per domain event.
+  The field names mirror the event's fields (`loom=`, `knot=`,
+  `strand=`, `tie-off=`, `error=`, `attempt=`, `silent=`, `window=`,
+  `blocked-call=`, `reason=`, `directory=`, `file=`, `message=`,
+  `expected=`, and one `dispatch=` per dispatched event). Optional
+  fields are omitted when absent. There is no separate `timestamp=`
+  field — the line's leading timestamp is the emit time.
+- **`[KNOT][STATE] initial snapshot …` / `change …`** — one line per
+  actual `state.json` write: the startup baseline, then deltas naming
+  exactly what moved (loom/knot/profile add/remove, field changes,
+  queue add/drain).
+
+Run activity is **in-memory per process** — the log holds whatever the
+service has emitted since it started (plus whatever earlier runs
+appended, since the skill appends, never overwrites). The tie-off files
+remain the durable audit record of completed work.
 
 ### Event Types
 
@@ -268,12 +294,20 @@ history in the log — the tie-off files are the durable audit record.
 | `KnotCompleted` | A knot finished successfully |
 | `KnotFailed` | A knot failed with an error |
 | `StrandProcessed` | A strand was processed (success or failure) |
+| `SessionResumed` | Agent session resumed after a failed invocation |
+| `TimeoutExceeded` | An agent session exceeded its deadline (operational event) |
+| `AgentInactivity` | Session was silent for the inactivity window and was killed (Knot 0.40.0+) |
+| `QueueIdle` | All pending events processed; the queue drained (operational event) |
 
-### Example Activity Entry
+### Example Lines
 
-```json
-{"KnotCompleted":{"loom_id":"prd-review-loom","knot_id":"goals-review","strand_path":"project/prds/goals.md","tie_off_path":"tie-offs/rig/prd-review-loom/tie-off-goals-review.md","timestamp":"2026-06-10T12:00:03Z"}}
 ```
+[2026-06-10T12:00:03+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/prd-review-loom/tie-off-goals-review.md
+[2026-06-10T12:00:04+10:00] [KNOT][EVENT] TimeoutExceeded loom=prd-review-loom knot=goals-review strand=project/prds/goals.md error=agent execution timed out after 600s
+```
+
+Filtering: `grep 'loom=<id>'` for one loom, `grep 'knot=<id>'` within a
+loom, `grep '\[KNOT\]\[STATE\]'` for the state-write history.
 
 ---
 
@@ -296,7 +330,7 @@ history in the log — the tie-off files are the durable audit record.
 | `tie-offs/<rig>/state.json` is invalid JSON | State file may be corrupt. Report to user. |
 | Loom `{id}` not in state | Loom not found. May not have been discovered yet. Check `rig/` for directories ending in `-loom`. |
 | Knot `{name}` not in loom | Knot not found. Check loom directory for `{name}.md`. |
-| Activity log file missing | Loom may have no events yet. No error. |
+| Service log file missing | Knot was started without the `knot-start` skill (no stderr append). Nothing is wrong — but the only durable activity record is missing; restart via `knot-start`. |
 
 ---
 
@@ -308,13 +342,17 @@ cat tie-offs/rig/state.json
 # or with pretty printing:
 python3 -m json.tool tie-offs/rig/state.json
 
-# View loom activity log
-cat tie-offs/rig/prd-review-loom/.loom-log
+# View loom activity (service log, filtered)
+grep 'loom=prd-review-loom' tie-offs/rig/knot-service.log
+
+# View state-write history
+grep '\[KNOT\]\[STATE\]' tie-offs/rig/knot-service.log
 
 # View a specific profile (rig source — still under rig/)
 cat rig/profiles/fast.md
 
-# Watch state file for updates (wait for loom discovery)
+# Watch state file for updates (wait for loom discovery; note the file
+# is only rewritten when state changes — an unchanged mtime means idle)
 watch -n 5 'cat tie-offs/rig/state.json | python3 -m json.tool'
 ```
 

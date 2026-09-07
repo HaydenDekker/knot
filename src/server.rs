@@ -195,10 +195,17 @@ pub fn build_app_context(
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
         Arc::new(crate::adapters::outbound::FileSystemLoomRepository::new());
-    let loom_log_port: Arc<dyn application::ports::LoomLogPort> =
-        Arc::new(crate::adapters::outbound::FileSystemLoomLog::new(
-            config.rig_dir.clone(),
-        ));
+
+    // Plan 083: the current run's activity lives in memory — one shared
+    // RunActivity behind the loom-log and rig-log ports. Append logs the
+    // consolidated `[KNOT][EVENT]` stderr line (captured into
+    // knot-service.log); nothing is written to `.loom-log` / `.rig-log`.
+    let activity = std::sync::Arc::new(application::activity::RunActivity::new());
+    let loom_log_port: Arc<dyn application::ports::LoomLogPort> = Arc::new(
+        application::activity::InMemoryLoomLog::new(std::sync::Arc::clone(
+            &activity,
+        )),
+    );
     let tie_off_sink: Arc<dyn application::ports::TieOffSink> =
         Arc::new(crate::adapters::outbound::FileSystemTieOffSink::new(
             config.rig_dir.clone(),
@@ -260,7 +267,9 @@ pub fn build_app_context(
     let runtime_root = derive_runtime_root(&config.rig_dir);
 
     let rig_log_port: Arc<dyn application::ports::RigLogPort> = Arc::new(
-        crate::adapters::outbound::FileSystemRigLog::new(runtime_root.clone()),
+        application::activity::InMemoryRigLog::new(std::sync::Arc::clone(
+            &activity,
+        )),
     );
 
     // State writer: writes state.json at the runtime root on a poll cycle.
@@ -511,20 +520,16 @@ pub fn spawn_process_strand_loop(
                 ).await {
                     Ok(item) => item,
                     Err(_) => {
-                        // Timeout: burst has ended — queue is idle.
+                        // Timeout: burst has ended — queue is idle. The
+                        // `[EVENT] QueueIdle` line is emitted by the rig-log
+                        // adapter on append (plan 083).
                         let ts = application::usecases::format_timestamp();
-                        let result = rig_log_port.append(
+                        if let Err(e) = rig_log_port.append(
                             domain::events::RigLogEvent::QueueIdle {
-                                timestamp: ts.clone(),
+                                timestamp: ts,
                             },
-                        );
-                        match result {
-                            Ok(()) => {
-                                eprintln!("[pipeline] QueueIdle written to rig-log (ts={})", ts);
-                            }
-                            Err(e) => {
-                                eprintln!("[pipeline] QueueIdle WRITE FAILED: {e}");
-                            }
+                        ) {
+                            eprintln!("[pipeline] QueueIdle WRITE FAILED: {e}");
                         }
                         is_burst_active = false;
                         continue;
@@ -731,60 +736,18 @@ fn migrate_legacy_rig_layout(rig_dir: &StdPath) {
 ///
 /// After building the AppContext, this:
 /// 1. Migrates the legacy layout (runtime artifacts out of the rig)
-/// 2. Clears the operational logs (rig-log + every loom-log) — per-run
-///    scope: tie-offs hold the durable audit history
-/// 3. Ensures the rig has its own git repository
-/// 4. Runs DiscoverLooms to scan rig and register looms
-/// 5. DiscoverLooms handles log events, storage, and watchers internally
-/// 6. Returns list of discovered looms
+/// 2. Ensures the rig has its own git repository
+/// 3. Runs DiscoverLooms to scan rig and register looms
+/// 4. DiscoverLooms handles log events, storage, and watchers internally
+/// 5. Returns list of discovered looms
 ///
-/// Migration precedes the clear so moved legacy logs are cleared at
-/// their new paths, and the clear precedes discovery so the fresh
-/// `KnotRegistered`/`LoomStarted` events are the first log lines of the
-/// run. Clearing is non-fatal: a failure logs a `WARNING:` and startup
-/// proceeds.
+/// Migration precedes discovery so fresh `KnotRegistered`/
+/// `LoomStarted` events are the first recorded activity of the run.
 ///
 /// Returns the list of discovered looms.
-/// Startup behaviour switches.
-///
-/// The service runs with [`StartupOptions::service`] (unchanged
-/// behaviour). `step` mode runs with `clear_logs: false` — a
-/// multi-step session accumulates in the logs (tie-offs remain the
-/// durable record) — but keeps `register_watchers: true` so in-cycle
-/// writes (dispatched events, tie-offs) are captured into the queue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StartupOptions {
-    /// Clear loom-logs and rig-log after migration, before discovery
-    /// (per-run scope). `false` in step mode so sequential steps
-    /// accumulate.
-    pub clear_logs: bool,
-    /// Register the rig-directory watch after discovery. Kept `true`
-    /// in step mode so in-cycle file writes trigger queued events.
-    pub register_watchers: bool,
-}
-
-impl StartupOptions {
-    /// Service-mode options (the historical behaviour).
-    pub const fn service() -> Self {
-        Self {
-            clear_logs: true,
-            register_watchers: true,
-        }
-    }
-
-    /// Step-mode options: no log clear, watchers registered.
-    pub const fn step() -> Self {
-        Self {
-            clear_logs: false,
-            register_watchers: true,
-        }
-    }
-}
-
 pub fn run_startup(
     ctx: &AppContext,
     rig_dir: &StdPath,
-    options: &StartupOptions,
 ) -> std::io::Result<Vec<Loom>> {
     // Auto-create the rig directory if it doesn't exist.
     std::fs::create_dir_all(rig_dir).map_err(|e| {
@@ -858,22 +821,6 @@ agent-adapter: pi-json
     // runs after rig-dir creation and before any watcher registration.
     migrate_legacy_rig_layout(rig_dir);
 
-    // Clear operational logs: per-run scope — the tie-offs (git-
-    // versioned) hold the durable audit history, so prior-run log
-    // content is residue. Runs after migration (moved legacy logs are
-    // cleared at their new paths) and before discovery (no fresh event
-    // is ever discarded). Non-fatal — a failure must not block startup.
-    // Skipped in step mode (clear_logs: false) so a multi-step session
-    // accumulates in the logs.
-    if options.clear_logs {
-        if let Err(e) = ctx.loom_log_port.clear_all() {
-            eprintln!("WARNING: failed to clear loom-logs: {e}");
-        }
-        if let Err(e) = ctx.rig_log_port.clear() {
-            eprintln!("WARNING: failed to clear rig-log: {e}");
-        }
-    }
-
     // Ensure the rig has its own git repository and the parent project
     // repo (if any) excludes it. Idempotent and non-fatal — runs after
     // rig-dir creation and before any watcher registration.
@@ -895,15 +842,13 @@ agent-adapter: pi-json
         })?;
 
     // Register rig directory watch — auto-discover new `*-loom` directories
-    // and knot changes within existing looms. Kept in step mode so
-    // in-cycle writes (dispatched events, tie-offs) are captured into
+    // and knot changes within existing looms. Also present in step mode
+    // so in-cycle writes (dispatched events, tie-offs) are captured into
     // the queue.
-    if options.register_watchers {
-        ctx.event_source
-            .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
-        if let Err(e) = ctx.event_source.watch(rig_dir) {
-            eprintln!("WARNING: failed to watch rig dir: {e}");
-        }
+    ctx.event_source
+        .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
+    if let Err(e) = ctx.event_source.watch(rig_dir) {
+        eprintln!("WARNING: failed to watch rig dir: {e}");
     }
 
     Ok(looms)
@@ -978,7 +923,7 @@ pub fn start_state_writer(
     let strand_queue = Arc::clone(&ctx.strand_queue);
 
     join_set.spawn(async move {
-        let use_case = application::usecases::WriteState::new(
+        let mut use_case = application::usecases::WriteState::new(
             store,
             log_port,
             profile_repo,
@@ -993,7 +938,12 @@ pub fn start_state_writer(
             eprintln!("[state-writer] initial write failed: {e}");
         }
 
-        let poll_interval = Duration::from_secs(5);
+        let poll_interval =
+            std::env::var("KNOT_STATE_WRITE_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(Duration::from_millis)
+                .unwrap_or(Duration::from_secs(5));
         let mut interval = tokio::time::interval(poll_interval);
 
         loop {
@@ -1040,7 +990,7 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
     // create the runtime root before the migration runs, turning
     // legacy `rig/tie-offs/` and `rig/events/` into false conflicts
     // that are never moved.
-    let looms = run_startup(&ctx, &config.rig_dir, &StartupOptions::service())
+    let looms = run_startup(&ctx, &config.rig_dir)
         .unwrap_or_else(|e| {
             eprintln!("WARNING: startup discovery failed: {e}");
             Vec::new()
@@ -1144,8 +1094,6 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
 /// debounce engine, the config pipeline, and the 5-second state writer
 /// all run. Differences from the service:
 ///
-/// - logs are **not** cleared ([`StartupOptions::step`] — a multi-step
-///   session accumulates; tie-offs remain the durable record),
 /// - the process-strand loop is **not** spawned — exactly one
 ///   `execute_with_pending` runs.
 ///
@@ -1177,10 +1125,9 @@ pub async fn step_knot(
     let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
     let mut join_set = tokio::task::JoinSet::new();
 
-    // Full startup, but no log clear (a multi-step session
-    // accumulates) and watchers registered (in-cycle writes are
-    // captured).
-    let looms = run_startup(&ctx, &config.rig_dir, &StartupOptions::step())
+    // Full startup: same discovery + watcher registration as the
+    // service (in-cycle writes are captured into the queue).
+    let looms = run_startup(&ctx, &config.rig_dir)
         .unwrap_or_else(|e| {
             eprintln!("WARNING: startup discovery failed: {e}");
             Vec::new()
@@ -1622,7 +1569,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
 
         // Rig directory created
         assert!(rig_dir.is_dir());
@@ -1654,7 +1601,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
 
         // Config file should still be pi-json, not overwritten
         let content = fs::read_to_string(&config_path).unwrap();
@@ -1674,7 +1621,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
 
         assert!(
             rig_dir.join(".git").exists(),
@@ -1686,7 +1633,7 @@ mod composition_tests {
         );
 
         // Idempotent — a second startup does not fail or re-write.
-        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let _looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
         assert!(rig_dir.join(".git").exists());
     }
 
@@ -1937,15 +1884,14 @@ mod composition_tests {
         assert!(!rig_dir.join("events").exists());
     }
 
-    /// `run_startup()` clears the operational logs AFTER migration and
-    /// BEFORE discovery: the rig-log is truncated (prior-run events and
-    /// unparseable lines gone), every loom-log — including orphaned
-    /// loom dirs — is truncated, the fresh run's `KnotRegistered` is the
-    /// first loom-log line, and only log files are touched (tie-off
-    /// files and dispatch-dir files survive byte-identical). Knot state
-    /// derivation from the cleared log still works.
+    /// Plan 083: startup no longer clears (or creates) the log files.
+    /// Prior-run `.loom-log` / `.rig-log` content is untouched and
+    /// inert — nothing is appended to it in the current run — the only
+    /// persistent observability artifact is `state.json`. Durable
+    /// artifacts (tie-offs, dispatch files) survive byte-identical and
+    /// knot-state derivation still works (now from in-memory events).
     #[test]
-    fn test_startup_clears_logs_before_discovery() {
+    fn test_startup_does_not_touch_log_files() {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         // Valid loom with one knot so discovery registers it
@@ -1958,26 +1904,21 @@ mod composition_tests {
         .unwrap();
 
         // Pre-populate the runtime root (current layout — no migration)
+        // with prior-run residue: the files must survive byte-identical
+        // and stay inert (nothing appended).
         let runtime_root = dir.path().join("tie-offs").join("rig");
         let review_rt = runtime_root.join("review-loom");
         fs::create_dir_all(review_rt.join("KnotCompleted")).unwrap();
-        // Prior-run rig-log, including one unparseable line (the
-        // repeated-WARN noise source this plan removes)
-        fs::write(
-            runtime_root.join(".rig-log"),
-            concat!(
-                "{\"QueueIdle\":{\"timestamp\":\"2026-08-01T10:00:00Z\"}}\n",
-                "corrupt prior-run line\n",
-            ),
-        )
-        .unwrap();
-        // Prior-run loom-log (last run's LoomStopped bracket)
-        fs::write(
-            review_rt.join(".loom-log"),
-            "{\"LoomStopped\":{\"loom_id\":\"review-loom\",\"timestamp\":\"2026-08-01T10:30:00Z\"}}\n",
-        )
-        .unwrap();
-        // Durable files that must survive the clear byte-identical
+        let prior_rig_log = concat!(
+            "{\"QueueIdle\":{\"timestamp\":\"2026-08-01T10:00:00Z\"}}\n",
+            "corrupt prior-run line\n",
+        );
+        fs::write(runtime_root.join(".rig-log"), prior_rig_log).unwrap();
+        let prior_loom_log =
+            "{\"LoomStopped\":{\"loom_id\":\"review-loom\",\"timestamp\":\"2026-08-01T10:30:00Z\"}}\n";
+        fs::write(review_rt.join(".loom-log"), prior_loom_log)
+            .unwrap();
+        // Durable files that must survive byte-identical
         let tie_off = review_rt.join("tie-off-k.md");
         fs::write(&tie_off, "durable tie-off\n").unwrap();
         let dispatch_file = review_rt.join("KnotCompleted").join("event-1.md");
@@ -1990,55 +1931,28 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
         assert_eq!(looms.len(), 1, "the loom should be discovered");
 
-        // Rig-log: exists and is empty — prior-run events (and the
-        // corrupt line) are gone
-        let rig_log = runtime_root.join(".rig-log");
-        assert!(rig_log.exists(), "rig-log should exist after startup");
+        // Prior-run log files survive byte-identical and inert — no
+        // current-run events appended to them.
         assert_eq!(
-            fs::read_to_string(&rig_log).unwrap(),
-            "",
-            "rig-log must be cleared at startup"
+            fs::read_to_string(runtime_root.join(".rig-log")).unwrap(),
+            prior_rig_log,
+            "prior-run rig-log must be untouched by startup"
         );
-
-        // Loom-log: exists, non-empty, first event is the fresh
-        // KnotRegistered, no prior-run events present
-        let loom_log = review_rt.join(".loom-log");
-        let content =
-            fs::read_to_string(&loom_log).expect("loom-log at runtime root");
-        assert!(!content.is_empty(), "fresh run's events must be logged");
-        assert!(
-            !content.contains("LoomStopped"),
-            "prior-run events must be cleared: {content}"
+        assert_eq!(
+            fs::read_to_string(review_rt.join(".loom-log")).unwrap(),
+            prior_loom_log,
+            "prior-run loom-log must be untouched by startup"
         );
-        let first: crate::domain::events::LoomEvent = serde_json::from_str(
-            content.lines().next().unwrap(),
-        )
-        .unwrap();
-        match first {
-            crate::domain::events::LoomEvent::KnotRegistered { knot_id, .. } => {
-                assert_eq!(knot_id.0, "k");
-            }
-            other => panic!(
-                "first loom-log event must be the fresh KnotRegistered, \
-                 got {other:?}"
-            ),
-        }
-        assert!(
-            content.contains("LoomStarted"),
-            "current run's LoomStarted must be logged: {content}"
-        );
-
-        // Orphaned loom dir's log is cleared too
         assert_eq!(
             fs::read_to_string(orphan.join(".loom-log")).unwrap(),
-            "",
-            "orphaned loom-log must be cleared"
+            "orphan prior-run line\n",
+            "orphaned loom-log must be untouched"
         );
 
-        // Only log files touched — durable artifacts byte-identical
+        // Only log files aside — durable artifacts byte-identical
         assert_eq!(
             fs::read_to_string(&tie_off).unwrap(),
             "durable tie-off\n"
@@ -2048,10 +1962,10 @@ mod composition_tests {
             "pending dispatch\n"
         );
 
-        // State derivation is not regressed: a state write after the
-        // clear derives the knot as idle with last_event_at set from
-        // the fresh KnotRegistered.
-        let use_case = application::usecases::WriteState::new(
+        // State derivation is not regressed: a state write derives the
+        // knot as idle with last_event_at set from the fresh
+        // in-memory KnotRegistered.
+        let mut use_case = application::usecases::WriteState::new(
             ctx.store.clone(),
             std::sync::Arc::clone(&ctx.loom_log_port),
             std::sync::Arc::clone(&ctx.profile_repo),
@@ -2080,18 +1994,12 @@ mod composition_tests {
         );
     }
 
-    /// `run_startup()` migrates the legacy layout BEFORE the log clear
-    /// and discovery: the legacy loom-log moves to the runtime root,
-    /// is cleared (per-run scope — its prior content is residue), and
-    /// discovery appends the fresh run's `LoomStarted` to it at the NEW
-    /// path (loom-log paths are derived at append time, so an append at
-    /// the new path proves migration ran first). The rig is left
-    /// source-only.
-    ///
-    /// Migration-order intent preserved: the file at the new path
-    /// exists and carries only the current run's events (the moved
-    /// legacy line is gone because the clear runs after the move, not
-    /// because the move failed).
+    /// `run_startup()` still migrates the legacy layout (runtime
+    /// artifacts out of the rig dir), but the moved log files are now
+    /// inert: the moved loom-log keeps its legacy content (no clear,
+    /// no appends — current-run activity is in memory) and no new
+    /// `.rig-log` is created. The rig is left source-only and
+    /// `state.json` still lands at the runtime root.
     #[test]
     fn test_startup_migrates_legacy_layout() {
         let dir = TempDir::new().unwrap();
@@ -2117,7 +2025,7 @@ mod composition_tests {
 
         let config = AppConfig::with_rig_dir(rig_dir.clone());
         let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref(), &StartupOptions::service()).unwrap();
+        let looms = run_startup(&ctx, rig_dir.to_path_buf().as_ref()).unwrap();
 
         // Loom discovered
         assert_eq!(looms.len(), 1, "the loom should be discovered");
@@ -2128,21 +2036,42 @@ mod composition_tests {
         assert!(!rig_dir.join("state.json").exists());
         assert!(!rig_dir.join("tie-offs").exists(), "rig left source-only");
 
-        // Discovery appended to the moved loom-log at the new path —
-        // migration preceded log appends and watcher registration.
-        // The startup clear (post-migration, pre-discovery) removed the
-        // moved legacy line: the file holds the current run's events
-        // only.
-        let loom_log = runtime_root.join("review-loom").join(".loom-log");
-        let content =
-            fs::read_to_string(&loom_log).expect("loom-log at runtime root");
-        assert!(
-            !content.contains("legacy-line"),
-            "moved loom-log must be cleared at its new path: {content}"
+        // The moved loom-log is inert: its legacy content survives and
+        // no current-run events are appended to it (activity is
+        // in-memory + the service log now). No .rig-log is created.
+        let moved_loom_log = runtime_root.join("review-loom").join(".loom-log");
+        assert_eq!(
+            fs::read_to_string(&moved_loom_log).unwrap(),
+            "legacy-line\n",
+            "moved legacy loom-log must be untouched (inert)"
         );
         assert!(
-            content.contains("LoomStarted"),
-            "discovery appended to the new-path loom-log: {content}"
+            !runtime_root.join(".rig-log").exists(),
+            "no rig-log file is created anymore"
+        );
+
+        // The state writer (change-driven, plan 083) writes a real
+        // state snapshot at the runtime root — replacing the moved
+        // legacy `{}` on the first write. Run one write here the way
+        // the background state-writer task would.
+        let mut write_state = application::usecases::WriteState::new(
+            ctx.store.clone(),
+            std::sync::Arc::clone(&ctx.loom_log_port),
+            std::sync::Arc::clone(&ctx.profile_repo),
+            std::sync::Arc::clone(&ctx.model_registry),
+            std::sync::Arc::clone(&ctx.state_writer),
+            rig_dir.clone(),
+            std::sync::Arc::clone(&ctx.strand_queue),
+        );
+        write_state.execute().unwrap();
+
+        let state: crate::domain::entities::RigState = serde_json::from_str(
+            &fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            state.looms.iter().any(|l| l.id == "review-loom"),
+            "state.json reflects the discovered loom"
         );
     }
 }

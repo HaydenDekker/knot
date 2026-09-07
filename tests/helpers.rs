@@ -775,64 +775,6 @@ pub fn create_strand(
     path
 }
 
-// ── Loom Log Helpers ──────────────────────────────────────────────────────
-
-/// Read all events from a loom's activity log.
-///
-/// Reads `tie-offs/<rig-basename>/{loom_id}/.loom-log` (the rig's runtime
-/// root under the project root) as JSONL and returns each line as a
-/// parsed JSON value.
-///
-/// The loom-log lives under the project runtime tree `tie-offs/` (not in
-/// the rig directory itself).
-/// The `loom_id` parameter should include the `-loom` suffix
-/// (e.g. `"review-loom"`), matching the loom ID stored in state.json.
-///
-/// # Arguments
-///
-/// * `rig_dir` - Path to the rig directory
-/// * `loom_id` - The loom's ID (including `-loom` suffix, e.g. "review-loom")
-///
-/// # Returns
-///
-/// Vector of parsed JSON values, one per log entry.
-pub fn read_loom_log(
-    rig_dir: &Path,
-    loom_id: &str,
-) -> Vec<Value> {
-    let log_path = knot::domain::knot_file::derive_runtime_root(rig_dir)
-        .join(loom_id)
-        .join(".loom-log");
-    let content = match fs::read_to_string(&log_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    content
-        .lines()
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
-}
-
-/// Extract the event type from a loom-log JSON entry.
-///
-/// Loom-log entries are stored as JSON objects with a single key
-/// that is the event variant name (e.g. `{"KnotCompleted":{...}}`).
-/// This function extracts that variant key.
-///
-/// # Arguments
-///
-/// * `event` - Parsed JSON value from a loom-log line
-///
-/// # Returns
-///
-/// `Some("KnotCompleted")` etc., or `None` if not an object.
-pub fn loom_log_event_type(event: &Value) -> Option<&str> {
-    event.as_object().and_then(|obj| {
-        obj.keys().next().map(|k| k.as_str())
-    })
-}
 
 #[cfg(test)]
 mod tests {
@@ -936,42 +878,6 @@ mod tests {
         assert_eq!(
             state.get("rig_path").and_then(|v| v.as_str()),
             Some("/test")
-        );
-    }
-
-    #[test]
-    fn read_loom_log_returns_empty_when_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rig_dir = tmp.path();
-
-        let events = read_loom_log(rig_dir, "test");
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn read_loom_log_parses_jsonl() {
-        let tmp = tempfile::tempdir().unwrap();
-        // loom-log lives at tie-offs/<rig-basename>/{loom_id}/.loom-log
-        // (the runtime root under the project root)
-        let rig_dir = tmp.path().join("rig");
-        let log_dir = knot::domain::knot_file::derive_runtime_root(&rig_dir)
-            .join("test-loom");
-        fs::create_dir_all(&log_dir).unwrap();
-
-        // Events are stored as JSON with variant name as top-level key
-        fs::write(
-            log_dir.join(".loom-log"),
-            r#"{"LoomStarted":{"loom_id":"test-loom","timestamp":"2026-01-01T00:00:00Z"}}
-{"KnotRegistered":{"loom_id":"test-loom","knot_id":"k1","timestamp":"2026-01-01T00:00:01Z"}}
-"#,
-        )
-        .unwrap();
-
-        let events = read_loom_log(&rig_dir, "test-loom");
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            loom_log_event_type(&events[0]),
-            Some("LoomStarted")
         );
     }
 }

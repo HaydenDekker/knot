@@ -35,12 +35,6 @@ pub struct StrandPath(pub PathBuf);
 )]
 pub struct TieOffPath(pub PathBuf);
 
-/// Path to the rig-log (append-only JSONL operational log at `rig/.rig-log`).
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
-pub struct RigLogPath(pub PathBuf);
-
 /// Status of a TieOff output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,14 +46,14 @@ pub enum TieOffStatus {
 }
 
 /// Result of strand processing, capturing the three possible outcomes
-/// and what should be written (tie-off, rig-log, etc.).
+/// and what should be written (tie-off, operational event, etc.).
 ///
 /// Derived from `Result<AgentOutput, PortError>` by classifying the
 /// error type:
-/// - `Timeout` → skip the tie-off write, log to the rig-log instead
-///   (genuine deadline breach)
-/// - `AgentInactivity` → skip the tie-off write, log to the rig-log
-///   instead (plan 081 — the inactivity deadline fired; no final
+/// - `Timeout` → skip the tie-off write, record the operational event
+///   instead (genuine deadline breach)
+/// - `AgentInactivity` → skip the tie-off write, record the operational
+///   event instead (plan 081 — the inactivity deadline fired; no final
 ///   response was produced)
 /// - `AgentNoResponse` → failed tie-off (the agent ended its turn
 ///   without a final response — a failure, not a timeout)
@@ -71,7 +65,7 @@ pub enum TieOffOutcome {
     /// Agent failed (non-timeout) — write tie-off with error message.
     Failed { error: String },
     /// Agent timed out (total deadline) or went inactive (plan 081)
-    /// — skip tie-off write, log to rig-log instead.
+    /// — skip tie-off write, record the operational event instead.
     TimeoutSkipped { error: String },
 }
 
@@ -150,7 +144,8 @@ impl TieOffOutcome {
         }
     }
 
-    /// Return `true` if this is a timeout that should be logged to rig-log.
+    /// Return `true` if this is a timeout that should be recorded as an
+    /// operational event (plan 083: the `[KNOT][EVENT]` stderr line).
     pub fn is_timeout(&self) -> bool {
         matches!(self, Self::TimeoutSkipped { .. })
     }
@@ -216,7 +211,8 @@ pub struct Strand {
 ///
 /// When a consumer knot is triggered by an event file (dispatched by
 /// intent-based routing), this captures the event origin so the tie-off
-/// can be inspected for a2a message tracing without needing the loom-log.
+/// can be inspected for a2a message tracing without needing the run
+/// activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EventMetadata {
     /// The event identifier (e.g. `"PlanCreated"`).
@@ -414,7 +410,8 @@ pub enum StrandCheckResult {
     ProceedWithWarning,
     /// File is binary — skip, log `StrandIgnored`.
     SkipBinary,
-    /// File is a known temp file (e.g. sedXXXXXXX) — skip with loom-log entry.
+    /// File is a known temp file (e.g. sedXXXXXXX) — skip, recorded as
+    /// a `StrandSkipped` event.
     SkipTemp,
     /// File is missing and not a known temp pattern — skip, log `StrandSkipped`.
     SkipMissing,
@@ -691,12 +688,6 @@ mod tests {
     fn tieoff_path_newtype() {
         let p = TieOffPath(PathBuf::from("out.md"));
         assert_eq!(p.0, PathBuf::from("out.md"));
-    }
-
-    #[test]
-    fn riglog_path_newtype() {
-        let p = RigLogPath(PathBuf::from("tie-offs/rig/.rig-log"));
-        assert_eq!(p.0, PathBuf::from("tie-offs/rig/.rig-log"));
     }
 
     #[test]
@@ -1632,8 +1623,8 @@ mod tests {
 
     /// Plan 081: an inactivity kill is a deadline breach — the same
     /// outcome family as a total timeout: the tie-off is not written
-    /// (a stalled session produced no final response) and the rig-log
-    /// carries the event with the inactivity cause.
+    /// (a stalled session produced no final response) and the
+    /// operational event carries the inactivity cause.
     #[test]
     fn tieoff_outcome_derive_inactivity() {
         let outcome = TieOffOutcome::derive(Err(err_agent_inactivity()));
@@ -1654,7 +1645,7 @@ mod tests {
     }
 
     /// Plan 077: an agent that ends its turn without a final response is a
-    /// failure (tie-off written), not a timeout (rig-log).
+    /// failure (tie-off written), not a timeout (operational event).
     #[test]
     fn derive_agent_no_response_is_failed() {
         let outcome = TieOffOutcome::derive(Err(err_agent_no_response()));
@@ -1673,8 +1664,8 @@ mod tests {
     }
 
     /// Plan 079: a terminal context overflow is a **failure** (tie-off
-    /// written), not a timeout (rig-log) — no deadline was exceeded;
-    /// the context simply cannot fit the model window.
+    /// written), not a timeout (operational event) — no deadline was
+    /// exceeded; the context simply cannot fit the model window.
     #[test]
     fn derive_context_limit_reached_is_failed() {
         let outcome = TieOffOutcome::derive(Err(PortError::ContextLimitReached {

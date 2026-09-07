@@ -24,11 +24,10 @@ project-root/
 │       ├── prd-planner.md
 │       └── adr-planner.md
 └── tie-offs/rig/                      ← Runtime tree — committed with project git
-    ├── .rig-log                       ← Operational event log (JSONL)
-    ├── state.json                     ← Live rig state (written every 5s)
+    ├── knot-service.log               ← Consolidated service log (appended by the launcher)
+    ├── state.json                     ← Live rig state (written on state change)
     ├── events/                        ← Disk-backed event queue (FIFO .json files)
     └── {loom-id}/
-        ├── .loom-log                  ← Per-loom activity log
         └── tie-off-{knot-name}.md     ← Knot output (appended per event)
 ```
 
@@ -75,7 +74,9 @@ with event metadata identifying which strand was processed.
 
 `tie-offs/<rig>/state.json` (default rig: `tie-offs/rig/state.json`) is
 the primary observability interface. It is written
-atomically every 5 seconds and contains:
+atomically **when the state actually changes** (the writer ticks every 5
+seconds but skips no-op writes — an unchanged mtime means the rig is
+idle) and contains:
 
 - **Looms** — all registered looms with their knots, each showing
   processing status (`idle`, `processing`, `completed`, `failed`)
@@ -130,34 +131,35 @@ Or use the `knot-inspect` skill — ask your agent *"show me the rig
 state"* and it reads `tie-offs/<rig>/state.json` and reports looms,
 knots, profiles, and processing status in plain language.
 
-## Log Locations
+## The Service Log (Plan 083)
 
-### Rig-Log
+Knot has a single consolidated **service log**: one line per record on
+the service's stderr, timestamped and tagged `[KNOT][EVENT]` or
+`[KNOT][STATE]`.
 
-`tie-offs/<rig>/.rig-log` — an append-only JSONL file that records serious
-operational events:
+- **`[KNOT][EVENT]`** — one line per domain event, with the event's
+  fields as `key=value` pairs (`loom=`, `knot=`, `strand=`, `tie-off=`,
+  `error=`, …). Events cover loom lifecycle (`LoomStarted`,
+  `LoomStopped`, `KnotRegistered`, `KnotDeregistered`), strand
+  processing (`KnotProcessing`, `KnotCompleted`, `KnotFailed`,
+  `StrandProcessed`, `StrandSkipped`, `StrandIgnored`), reloads
+  (`KnotUpdated`), session recovery (`SessionResumed`), deadline
+  breaches (`TimeoutExceeded`, `AgentInactivity` — the agent produced
+  no output for the inactivity window and was killed; restarted with
+  the blocking-call note, Knot 0.40.0+), queue idle (`QueueIdle`), parse
+  warnings (`KnotParseWarning`), and `DirectoryCreated` (strand
+  directory auto-created).
+- **`[KNOT][STATE]`** — one line per actual `state.json` write: an
+  `initial snapshot looms=N knots=N profiles=N queue=N` baseline at
+  startup, then `change` deltas (loom/knot/profile additions,
+  removals, and field changes; queue additions and drain).
 
-- `TimeoutExceeded` — an agent session exceeded its deadline
-- `QueueIdle` — all pending events processed, no new events arrived
-
-The rig-log survives server restarts. Multiple consumers can watch it
-safely.
-
-### Loom-Log
-
-`tie-offs/<rig>/{loom-id}/.loom-log` — per-loom activity log recording:
-
-- `LoomStarted` / `LoomStopped`
-- `KnotRegistered` / `KnotDeregistered`
-- `KnotProcessing` / `KnotCompleted` / `KnotFailed`
-- `KnotUpdated` — knot file modified and reloaded
-- `SessionResumed` — agent session resumed after failure
-- `AgentInactivity` — agent session produced no output for the
-  inactivity window and was killed; being restarted with the
-  blocking-call note (Knot 0.40.0+)
-- `StrandProcessed` / `StrandSkipped` / `StrandIgnored`
-- `KnotParseWarning` (unknown YAML properties)
-- `DirectoryCreated` — strand directory auto-created
+Run activity is **in-memory per process** — the retired `.loom-log` /
+`.rig-log` JSONL files are gone and nothing is cleared at startup. Start
+Knot with the `knot-start` skill and the service stderr is **appended**
+to `tie-offs/<rig>/knot-service.log`, making it the durable operational
+record across restarts (the only Knot log that survives). Tie-off files
+remain the durable audit record of completed work.
 
 ## Rig Agent Configuration
 
@@ -226,7 +228,7 @@ Since 0.31.0 the rig and its runtime data are versioned separately:
   **user commits it manually** (`git -C rig add -A && git -C rig
   commit -m "…"`); Knot never commits the rig.
 - **Runtime tree** — `tie-offs/<rig>/` holds all runtime data (tie-offs,
-  loom-logs, event queue, rig-log, state snapshots). It is project
+  the appended service log, event queue, state snapshots). It is project
   output and is committed with the **project's** git history; Knot's
   per-knot-run commits fold a state snapshot into each audit entry.
 - **Parent exclusion** — when the project root is inside a git repo,
@@ -241,4 +243,8 @@ Since 0.31.0 the rig and its runtime data are versioned separately:
 
 The legacy `tie-offs/<rig>/state.json`, `tie-offs/<rig>/.rig-log`, `tie-offs/<rig>/events/`, and
 `tie-offs/<rig>/` locations are **auto-migrated** to the runtime tree on
-first 0.31.0 startup (`[startup] migrated …` notice).
+first 0.31.0 startup (`[startup] migrated …` notice). Since plan 083,
+migrated legacy log files (`.rig-log`, `.loom-log`) are **inert**: the
+service never reads or writes them (they are not cleared at startup and
+not appended to) — only the service's stderr (the `[KNOT][EVENT]` /
+`[KNOT][STATE]` lines) is the log surface.

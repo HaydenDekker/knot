@@ -90,12 +90,12 @@ fn multi_loom_independent_processing() {
     handle.abort();
 }
 
-/// Loom-log files are isolated per loom.
+/// Loom activity is isolated per loom.
 ///
-/// Each loom writes to its own `tie-offs/<rig-basename>/{loom-id}/.loom-log`
-/// (the rig's runtime root under the project root).
-/// Review-loom's log should NOT contain planning-loom's knot events
-/// and vice versa.
+/// Plan 083: per-loom activity lives in the in-memory run store (keyed
+/// by loom), so file-level isolation is now observable through each
+/// loom's own tie-off file: review-loom's tie-off must not contain
+/// planning-loom's knot sections and vice versa.
 #[test]
 fn multi_loom_log_isolation() {
     let tmp = tempfile::tempdir().unwrap();
@@ -129,40 +129,31 @@ fn multi_loom_log_isolation() {
     wait_for_knot_status_in_state(&rig_dir, "review-loom", "review", "completed");
     wait_for_knot_status_in_state(&rig_dir, "planning-loom", "plan", "completed");
 
-    // Verify each loom has its own log file with the right events
-    let log1 = read_loom_log(&rig_dir, "review-loom");
-    let log2 = read_loom_log(&rig_dir, "planning-loom");
-
-    // Each loom log should have KnotCompleted
-    let log1_has_completed = log1.iter().any(|e| {
-        loom_log_event_type(e) == Some("KnotCompleted")
-    });
-    let log2_has_completed = log2.iter().any(|e| {
-        loom_log_event_type(e) == Some("KnotCompleted")
-    });
+    // Each loom produced its own tie-off with its own knot's section
+    let runtime_root = knot::domain::knot_file::derive_runtime_root(&rig_dir);
+    let review_tie_off = runtime_root.join("review-loom").join("tie-off-review.md");
+    let plan_tie_off = runtime_root.join("planning-loom").join("tie-off-plan.md");
+    let review_content = fs::read_to_string(&review_tie_off)
+        .expect("review-loom tie-off should exist");
+    let plan_content = fs::read_to_string(&plan_tie_off)
+        .expect("planning-loom tie-off should exist");
     assert!(
-        log1_has_completed,
-        "review-loom log should have KnotCompleted"
+        review_content.contains("## review triggered by"),
+        "review-loom tie-off should carry the review knot's section"
     );
     assert!(
-        log2_has_completed,
-        "planning-loom log should have KnotCompleted"
+        plan_content.contains("## plan triggered by"),
+        "planning-loom tie-off should carry the plan knot's section"
     );
 
-    // review-loom's log should NOT contain planning-loom's knot events
-    let log1_has_plan = log1.iter().any(|e| {
-        e.get("knot_id").and_then(|v| v.as_str()) == Some("plan")
-    });
-    let log2_has_review = log2.iter().any(|e| {
-        e.get("knot_id").and_then(|v| v.as_str()) == Some("review")
-    });
+    // review-loom's record must NOT contain planning-loom's knot work
     assert!(
-        !log1_has_plan,
-        "review-loom log should not have plan knot events"
+        !review_content.contains("## plan "),
+        "review-loom record should not have plan knot events"
     );
     assert!(
-        !log2_has_review,
-        "planning-loom log should not have review knot events"
+        !plan_content.contains("## review "),
+        "planning-loom record should not have review knot events"
     );
 
     handle.abort();

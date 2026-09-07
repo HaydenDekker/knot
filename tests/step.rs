@@ -234,26 +234,38 @@ fn run_step(
     (result, started.elapsed())
 }
 
-/// Loom-log event type names for a loom (e.g. "KnotCompleted").
-fn loom_log_types(fixture: &StepFixture, loom_id: &str) -> Vec<String> {
-    helpers::read_loom_log(&fixture.rig_dir, loom_id)
-        .iter()
-        .filter_map(|e| helpers::loom_log_event_type(e).map(|t| t.to_string()))
-        .collect()
-}
-
-/// The `strand_path` values of `KnotCompleted` events in a loom-log.
+/// The `strand_path` values of the tie-off completion sections for a
+/// loom's knots (plan 083 replacement for the retired loom-log
+/// `KnotCompleted` events). Tie-offs persist and accumulate across
+/// `knot step` runs, so the sections are the durable per-run record
+/// for in-process tests.
 fn completed_strands(fixture: &StepFixture, loom_id: &str) -> Vec<String> {
-    helpers::read_loom_log(&fixture.rig_dir, loom_id)
-        .iter()
-        .filter(|e| helpers::loom_log_event_type(e) == Some("KnotCompleted"))
-        .filter_map(|e| {
-            e.get("KnotCompleted")?
-                .get("strand_path")?
-                .as_str()
-                .map(|s| s.to_string())
-        })
-        .collect()
+    let dir = runtime_root(fixture).join(loom_id);
+    let mut strands: Vec<String> = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return strands;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("tie-off-") || !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        // Section header: `## {knot} triggered by {event} {strand}`.
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("## ") {
+                if let Some(after) = rest.split(" triggered by ").nth(1) {
+                    if let Some(strand) = after.rsplit_once(' ') {
+                        strands.push(strand.1.to_string());
+                    }
+                }
+            }
+        }
+    }
+    strands
 }
 
 // ── Lib-level tests ────────────────────────────────────────────────────────
@@ -441,19 +453,15 @@ fn step_captures_dispatched_events_without_executing() {
     );
 
     // The consumer was captured, NOT executed: no tie-off, no
-    // completion.
+    // completion (the consumer's tie-off absence is the plan-083
+    // observable of "no KnotProcessing / KnotCompleted" — the in-run
+    // event lines are process-private).
     let consumer_tie_off = runtime_root(&f)
         .join("validation-loom")
         .join("tie-off-gap-assessor.md");
     assert!(
         !consumer_tie_off.exists(),
         "consumer tie-off must NOT be written (captured, not executed)"
-    );
-    let types = loom_log_types(&f, "validation-loom");
-    assert!(
-        !types.contains(&"KnotProcessing".to_string())
-            && !types.contains(&"KnotCompleted".to_string()),
-        "consumer must not have been processed: {types:?}"
     );
 
     // The producer completed and its tie-off carries the event block.
@@ -576,18 +584,11 @@ fn step_does_not_clear_logs() {
     );
 
     // Each step is a self-contained run: the per-step brackets
-    // (LoomStarted / LoomStopped) accumulate as well.
-    let types = loom_log_types(&f, "review-loom");
-    assert_eq!(
-        types.iter().filter(|t| **t == "LoomStarted").count(),
-        2,
-        "one LoomStarted per step: {types:?}"
-    );
-    assert_eq!(
-        types.iter().filter(|t| **t == "LoomStopped").count(),
-        2,
-        "one LoomStopped per step: {types:?}"
-    );
+    // (LoomStarted / LoomStopped) are in-memory per process now
+    // (plan 083) — the durable per-run evidence is the accumulated
+    // tie-off sections asserted above (one section per step's
+    // completion; the binary-level test in tests/consolidated_log.rs
+    // pins the per-run `[EVENT]` bracket on captured stderr).
 }
 
 // ── Binary-level tests ─────────────────────────────────────────────────────
@@ -708,6 +709,9 @@ fn step_event_unknown_lists_queue_and_fails() {
 
 /// Empty queue: "queue empty" on stdout, exit 0, no agent run, and a
 /// prompt exit (the step does not enter the service loop).
+///
+/// Plan 083: the run's events are asserted on the captured stderr
+/// (`[KNOT][EVENT]` lines) — no loom-log file exists any more.
 #[test]
 fn step_empty_queue_noop() {
     let tmp = tempfile::tempdir().unwrap();
@@ -725,24 +729,32 @@ fn step_empty_queue_noop() {
         stdout.contains("queue empty"),
         "stdout should announce the empty queue: {stdout}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // No agent run.
-    let pi = rig.join("bin").join("pi");
-    let _ = &pi; // the mock records nothing; verify via tie-offs instead
-    let loom_log =
-        knot::domain::knot_file::derive_runtime_root(&rig)
-            .join("review-loom")
-            .join(".loom-log");
-    let content = fs::read_to_string(&loom_log).unwrap_or_default();
+    // No agent run — the event lines show discovery + shutdown only.
     assert!(
-        !content.contains("KnotCompleted") && !content.contains("KnotProcessing"),
-        "no processing must have happened: {content}"
+        !stderr.contains("KnotProcessing") && !stderr.contains("KnotCompleted"),
+        "no processing must have happened; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("[KNOT][EVENT] LoomStopped loom=review-loom"),
+        "LoomStopped must be written on the graceful shutdown; stderr: {stderr}"
+    );
+    // Baseline state write: `initial snapshot` line, no deltas.
+    assert!(
+        stderr.contains("[KNOT][STATE] initial snapshot"),
+        "the baseline state write must be logged; stderr: {stderr}"
     );
 
-    // Graceful shutdown bracket: LoomStopped was written.
+    // Plan 083: no log files under the runtime root.
+    let runtime_root = knot::domain::knot_file::derive_runtime_root(&rig);
     assert!(
-        content.contains("LoomStopped"),
-        "LoomStopped must be written on the graceful shutdown: {content}"
+        !runtime_root.join("review-loom").join(".loom-log").exists(),
+        ".loom-log must not be created"
+    );
+    assert!(
+        !runtime_root.join(".rig-log").exists(),
+        ".rig-log must not be created"
     );
 
     // Prompt exit — the step returns once the shutdown cascade is done

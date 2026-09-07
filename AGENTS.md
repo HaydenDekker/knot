@@ -27,8 +27,10 @@ cargo run
 
 > Agents should start the service through the `knot-start` skill instead
 > of a foreground `cargo run`: it backgrounds the process and **appends**
-> its output to `tie-offs/<rig>/knot-service.log`, the only Knot log that
-> survives a restart (the rig-log and loom-logs are cleared at startup).
+> its output to `tie-offs/<rig>/knot-service.log`, the durable service
+> log (single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records; since
+> Knot 0.41.0 there are no per-run log files, and nothing is cleared
+> at startup).
 
 > **Do not test-run Knot in this repository.** Agents must not start
 > the service or trigger live rig runs (strand dispatch, knot

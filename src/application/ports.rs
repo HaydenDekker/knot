@@ -26,7 +26,7 @@ pub enum PortError {
     LoomSaveFailed(String),
     /// Failed to list registered looms.
     LoomListFailed(String),
-    /// Failed to derive knot status from loom-log.
+    /// Failed to derive knot status from the loom's run activity.
     KnotStatusDeriveFailed(String),
     /// Failed to open the loom activity log.
     LoomLogOpenFailed(String),
@@ -75,7 +75,7 @@ pub enum PortError {
     /// resumable **without** a session ID (a fresh restart with the
     /// blocking-call note is meaningful — knots are idempotent).
     AgentInactivity {
-        /// Human-readable description (Display / loom-log / rig-log text).
+        /// Human-readable description (Display / activity-log line text).
         message: String,
         /// How long the session was silent (seconds).
         silent_secs: u64,
@@ -94,9 +94,9 @@ pub enum PortError {
     ModelRefNotFound(String),
     /// Failed to scan the profiles directory.
     ProfileScanFailed(String),
-    /// Failed to write to the rig-log.
+    /// Failed to record a rig-level event (run activity).
     RigLogWriteFailed(String),
-    /// Failed to read from the rig-log.
+    /// Failed to read rig-level events (run activity).
     RigLogReadFailed(String),
     /// Failed to create a git commit.
     GitCommitFailed(String),
@@ -433,22 +433,14 @@ pub trait LoomLogPort: Send + Sync {
     /// Open or create the activity log for a loom.
     fn open(&self, loom_id: &LoomId) -> Result<(), PortError>;
 
-    /// Append an event to the loom activity log.
+    /// Append an event to the loom's current-run activity.
+    ///
+    /// Events are kept in memory for the life of the run (plan 083)
+    /// and logged as `[KNOT][EVENT]` lines; nothing is persisted.
     fn append(&self, event: LoomEvent) -> Result<(), PortError>;
 
-    /// Read all events for a loom.
+    /// Read all events for a loom (current run, in memory).
     fn read_all(&self, loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError>;
-
-    /// Truncate every loom-log under the runtime root in place.
-    ///
-    /// Called at startup so each run's loom-logs contain only
-    /// current-run events — the durable audit history lives in the
-    /// tie-offs, not the logs. Only files named `.loom-log` directly
-    /// inside runtime-root subdirectories are touched: tie-off files,
-    /// dispatch dirs, `state.json`, and `events/` are never modified,
-    /// and orphaned loom dirs (no matching loom in the rig) are still
-    /// cleared. No-op when no loom-logs exist (fresh rig).
-    fn clear_all(&self) -> Result<(), PortError>;
 }
 
 /// Port for watching directories for file system events.
@@ -580,24 +572,17 @@ pub trait TieOffSink: Send + Sync {
     fn read_content(&self, path: &TieOffPath) -> Result<String, PortError>;
 }
 
-/// Port for appending and querying the rig-log.
+/// Port for appending and querying rig-level operational events.
 ///
-/// The rig-log is an append-only JSONL file at `rig/.rig-log` that records
-/// serious operational events (timeouts, queue idle) so the user or an
-/// external watcher can monitor and react.
+/// Events are in-memory run activity (plan 083 — the retired
+/// `.rig-log` JSONL file is gone): each append is rendered as a
+/// single-line `[KNOT][EVENT]` record on stderr (the service log).
 pub trait RigLogPort: Send + Sync {
-    /// Append a rig-log event.
+    /// Append a rig-level event (current run, in memory — plan 083).
     fn append(&self, event: RigLogEvent) -> Result<(), PortError>;
 
-    /// Read all rig-log events.
+    /// Read all rig-level events (current run, in memory).
     fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError>;
-
-    /// Truncate the rig-log in place.
-    ///
-    /// Called at startup so the rig-log contains only current-run
-    /// events — the durable audit history lives in the tie-offs, not
-    /// the log. No-op when the file does not exist (fresh rig).
-    fn clear(&self) -> Result<(), PortError>;
 }
 
 /// Port for discovering and persisting agent profiles.
@@ -863,11 +848,6 @@ mod tests {
         fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
             Ok(self.events.lock().unwrap().clone())
         }
-
-        fn clear_all(&self) -> Result<(), PortError> {
-            self.events.lock().unwrap().clear();
-            Ok(())
-        }
     }
 
     /// Mock of `EventSource` that never errors.
@@ -942,11 +922,6 @@ mod tests {
 
         fn read_all(&self) -> Result<Vec<RigLogEvent>, PortError> {
             Ok(self.events.lock().unwrap().clone())
-        }
-
-        fn clear(&self) -> Result<(), PortError> {
-            self.events.lock().unwrap().clear();
-            Ok(())
         }
     }
 

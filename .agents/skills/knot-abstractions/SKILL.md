@@ -4,8 +4,8 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
-  compatibility: "Knot 0.31.0+"
+  version: "1.3.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Abstractions Skill
@@ -67,7 +67,7 @@ Located at `borrow-my-stuff-rig/`, the rig is the "dumb" plumbing that:
   one event at a time, ensuring consistency
 - Routes **events** between knots without the agents knowing it exists
 - Maintains the runtime tree `tie-offs/<rig>/`: **state.json**,
-  tie-offs, loom-logs, rig-log, and the event queue
+  tie-offs, the appended service log, and the event queue
 
 The rig directory is generic and **source-only** — it contains no
 project-specific logic and no runtime data. It is versioned in its own

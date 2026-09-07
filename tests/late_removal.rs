@@ -352,10 +352,6 @@ impl LoomLogPort for OrderingLoomLog {
     fn read_all(&self, _loom_id: &LoomId) -> Result<Vec<LoomEvent>, PortError> {
         Ok(Vec::new())
     }
-
-    fn clear_all(&self) -> Result<(), PortError> {
-        Ok(())
-    }
 }
 
 /// Records the git commit into the shared ordering log.
@@ -604,43 +600,48 @@ fn count_event_files(rig_dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-fn loom_log_completed(rig_dir: &Path, loom_id: &str) -> usize {
-    helpers::read_loom_log(rig_dir, loom_id)
-        .iter()
-        .filter(|e| helpers::loom_log_event_type(e) == Some("KnotCompleted"))
-        .count()
+/// Count a knot's runs from its tie-off file: each run appends exactly
+/// one `## {knot} triggered by …` section. Plan 083: loom-logs no
+/// longer exist as files — tie-offs and `state.json` are the
+/// observable run record for in-process (no-stderr-capture) tests.
+fn tie_off_sections(rig_dir: &Path, loom_id: &str, knot: &str) -> usize {
+    let path = knot::domain::knot_file::derive_tieoff_path(loom_id, knot, rig_dir)
+        .join(format!("tie-off-{knot}.md"));
+    fs::read_to_string(&path)
+        .map(|c| c.matches("## ").count())
+        .unwrap_or(0)
 }
 
-fn loom_log_failed(rig_dir: &Path, loom_id: &str) -> usize {
-    helpers::read_loom_log(rig_dir, loom_id)
-        .iter()
-        .filter(|e| helpers::loom_log_event_type(e) == Some("KnotFailed"))
-        .count()
+/// Count a knot's failed runs (tie-off sections carrying the failure
+/// marker `Processing failed:`).
+fn tie_off_failed_sections(rig_dir: &Path, loom_id: &str, knot: &str) -> usize {
+    let path = knot::domain::knot_file::derive_tieoff_path(loom_id, knot, rig_dir)
+        .join(format!("tie-off-{knot}.md"));
+    fs::read_to_string(&path)
+        .map(|c| c.matches("Processing failed:").count())
+        .unwrap_or(0)
 }
 
-fn read_rig_log(rig_dir: &Path) -> Vec<serde_json::Value> {
-    let log_path =
-        knot::domain::knot_file::derive_runtime_root(rig_dir).join(".rig-log");
-    let content = match fs::read_to_string(&log_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    content
-        .lines()
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
-}
-
-fn rig_log_has_queue_idle(rig_dir: &Path) -> bool {
-    read_rig_log(rig_dir)
-        .iter()
-        .any(|e| e.get("QueueIdle").is_some())
+/// The queue is drained: no event files on disk and an empty
+/// `strand_queue` in `state.json` — the observable form of the
+/// `QueueIdle` rig event (now in-memory only; the `[EVENT]` line is
+/// asserted at the binary level in `tests/consolidated_log.rs`).
+fn queue_drained(rig_dir: &Path) -> bool {
+    if count_event_files(rig_dir) != 0 {
+        return false;
+    }
+    match helpers::read_state_file(rig_dir) {
+        Ok(state) => state["strand_queue"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 /// The front-based service loop drains a 2-event queue (both events
-/// processed, both event files removed by late removal) and then writes
-/// `QueueIdle` to the rig-log.
+/// processed, both event files removed by late removal) and then goes
+/// idle (queue drained).
 #[test]
 fn front_loop_drains_queue_then_idles() {
     let f = setup_rig(PI_ECHO, &[("review-loom", "review", "./strands")]);
@@ -659,7 +660,7 @@ fn front_loop_drains_queue_then_idles() {
 
     // Both processed (2 × KnotCompleted) and both event files removed.
     wait_until(
-        || loom_log_completed(&f.rig_dir, "review-loom") >= 2
+        || tie_off_sections(&f.rig_dir, "review-loom", "review") >= 2
             && count_event_files(&f.rig_dir) == 0,
         30_000,
         "front loop to drain 2 events with late removal",
@@ -667,9 +668,9 @@ fn front_loop_drains_queue_then_idles() {
 
     // Then the loop idles: QueueIdle in the rig-log.
     wait_until(
-        || rig_log_has_queue_idle(&f.rig_dir),
+        || queue_drained(&f.rig_dir),
         10_000,
-        "QueueIdle after drain",
+        "queue drained after front loop",
     );
 
     // Both tie-offs recorded for the same knot (appended entries).
@@ -705,7 +706,7 @@ fn event_file_present_during_processing_gone_after() {
 
     // Wait for processing to finish and the queue to be empty.
     wait_until(
-        || loom_log_completed(&f.rig_dir, "review-loom") >= 1
+        || tie_off_sections(&f.rig_dir, "review-loom", "review") >= 1
             && count_event_files(&f.rig_dir) == 0,
         30_000,
         "processing to complete with late removal",
@@ -766,8 +767,8 @@ fn failing_event_consumed_once_then_loop_proceeds() {
     // Both events processed: fail → KnotFailed, ok → KnotCompleted,
     // and the queue is drained (both event files removed).
     wait_until(
-        || loom_log_failed(&f.rig_dir, "fail-loom") >= 1
-            && loom_log_completed(&f.rig_dir, "ok-loom") >= 1
+        || tie_off_failed_sections(&f.rig_dir, "fail-loom", "fail") >= 1
+            && tie_off_sections(&f.rig_dir, "ok-loom", "ok") >= 1
             && count_event_files(&f.rig_dir) == 0,
         30_000,
         "fail event consumed and ok event processed",
@@ -776,7 +777,7 @@ fn failing_event_consumed_once_then_loop_proceeds() {
     // The failing event was consumed exactly once — if it had survived
     // at the queue head, the front loop would re-fail it in a tight
     // loop and many more KnotFailed entries would accumulate.
-    let failed_count = loom_log_failed(&f.rig_dir, "fail-loom");
+    let failed_count = tie_off_failed_sections(&f.rig_dir, "fail-loom", "fail");
     assert_eq!(
         failed_count, 1,
         "failing event must be consumed exactly once (no poison-pill loop), \
@@ -785,13 +786,13 @@ fn failing_event_consumed_once_then_loop_proceeds() {
 
     // The ok knot completed and the loop idled afterwards.
     assert!(
-        loom_log_completed(&f.rig_dir, "ok-loom") >= 1,
+        tie_off_sections(&f.rig_dir, "ok-loom", "ok") >= 1,
         "loop must proceed to the next event after a failure"
     );
     wait_until(
-        || rig_log_has_queue_idle(&f.rig_dir),
+        || queue_drained(&f.rig_dir),
         10_000,
-        "QueueIdle after poison-pill drain",
+        "queue drained after poison-pill",
     );
 
     handle.abort();
@@ -829,14 +830,13 @@ fn push_while_idle_wakes_loop() {
         "queue must be empty while the loop idles"
     );
     assert_eq!(
-        loom_log_completed(&f.rig_dir, "review-loom"),
+        tie_off_sections(&f.rig_dir, "review-loom", "review"),
         0,
         "no event may have been processed before the push"
     );
-    assert!(
-        !rig_log_has_queue_idle(&f.rig_dir),
-        "no QueueIdle before any event: the loop is in the blocking wait"
-    );
+    // No QueueIdle / drained-state yet observable in-process beyond the
+    // empty queue (counted above): the `[EVENT] QueueIdle` line is only
+    // visible at the binary level (tests/consolidated_log.rs).
 
     // One push while idle: watcher → debounce → queue.
     let strands = project_root.join("strands");
@@ -846,13 +846,13 @@ fn push_while_idle_wakes_loop() {
     // The single push wakes the blocking loop: processed and the event
     // file removed by late removal — no second push, no restart.
     wait_until(
-        || loom_log_completed(&f.rig_dir, "review-loom") >= 1
+        || tie_off_sections(&f.rig_dir, "review-loom", "review") >= 1
             && count_event_files(&f.rig_dir) == 0,
         30_000,
         "push while idle to wake the blocking loop",
     );
     assert_eq!(
-        loom_log_completed(&f.rig_dir, "review-loom"),
+        tie_off_sections(&f.rig_dir, "review-loom", "review"),
         1,
         "the single push must be processed exactly once"
     );

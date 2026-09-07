@@ -3,6 +3,7 @@ pub mod events;
 pub mod knot_file;
 pub mod pending_event;
 pub mod rig_discovery;
+pub mod state_change;
 pub mod temp_file;
 pub mod tieoff_parser;
 pub mod value_objects;

@@ -19,8 +19,9 @@ stderr/stdout of the service, **never cleared by Knot** (this skill
 creates it; Knot itself writes only to stderr).
 **PID file:** `tie-offs/<rig>/knot-service.pid` — written by *this*
 skill; Knot writes no pidfile of its own.
-**State file:** `tie-offs/<rig>/state.json` — rewritten every 5 seconds
-while the service is alive (freshness is the liveness probe).
+**State file:** `tie-offs/<rig>/state.json` — written when the state
+changes (the state writer ticks every 5 seconds; identical snapshots
+are never rewritten, so an unchanged mtime means the rig is idle).
 
 ---
 
@@ -28,23 +29,22 @@ while the service is alive (freshness is the liveness probe).
 
 ### The Service Log Is the Only Cross-Run Record
 
-Knot's structured logs are **per-run**:
-
-- `tie-offs/<rig>/.rig-log` — operational events, **cleared at startup**
-- `tie-offs/<rig>/{loom-id}/.loom-log` — per-loom activity, **cleared at
-  startup**
-
-Everything Knot prints to stderr — startup warnings, `[startup] loaded N
-persisted event(s)`, `[queue] repaired …` notices, panics — disappears
-when the terminal closes. Since the structured logs are wiped on every
-boot, a crash-restart loop leaves **no trace at all** unless stderr was
-captured. `knot-service.log` is that capture, and it is the reason to
-start Knot through this skill instead of a bare `cargo run`.
+Knot's run activity is **in-memory per process** (Knot 0.41.0+ — the
+retired `.rig-log` / `.loom-log` JSONL files are gone, and nothing is
+cleared at startup). The structured activity — every domain event as a
+`[KNOT][EVENT]` line and every `state.json` write as a `[KNOT][STATE]`
+line — goes to **stderr only**, and so does everything else Knot prints
+— startup warnings, `[startup] loaded N persisted event(s)`, `[queue]
+repaired …` notices, panics. None of it survives the terminal closing
+unless stderr was captured. `knot-service.log` is that capture, and it
+is the reason to start Knot through this skill instead of a bare
+`cargo run`.
 
 ### The `[KNOT][…]` Trace Exists Nowhere Else
 
-Knot's activity trace goes to **stderr only** — it is not written to the
-rig-log or any loom-log:
+Knot's activity trace goes to **stderr only** — it is not written to any
+file (the retired `.rig-log` / `.loom-log` are gone, and nothing is
+cleared or appended to them at startup):
 
 ```
 [2026-09-02T22:12:47+10:00] [KNOT][WATCH] register /path/to/rig (type=Rig)
@@ -56,6 +56,8 @@ they sort correctly against `state.json`'s `updated_at`.)
 
 | Tag | Covers |
 |-----|--------|
+| `[KNOT][EVENT]` | **one line per domain event** (Knot 0.41.0+): loom lifecycle (`LoomStarted`, `KnotRegistered`, …), strand processing (`KnotProcessing`, `KnotCompleted`, `KnotFailed`, `StrandProcessed`, …), `SessionResumed`, `TimeoutExceeded`, `AgentInactivity`, `QueueIdle` — fields as `key=value` pairs (`loom=`, `knot=`, `strand=`, `tie-off=`, `error=`, …) |
+| `[KNOT][STATE]` | **one line per actual `state.json` write** (Knot 0.41.0+): `initial snapshot …` at startup, then `change` deltas (loom/knot/profile add/remove, field changes, queue add/drain) |
 | `[KNOT][NOTIFY]` | raw filesystem event → mapped strand/config event (did the watcher see the file at all?) |
 | `[KNOT][STRAND]` | strand events being processed |
 | `[KNOT][KNOT]` | knot register / unregister / watcher changes for a knot |
@@ -63,9 +65,10 @@ they sort correctly against `state.json`'s `updated_at`.)
 | `[KNOT][CONFIG]` | config-pipeline activity — in practice `git_versioner — …`: rig git init, project `.gitignore` exclusion, and the commit / skip / failure for each agent turn |
 | `[KNOT][WATCH]` | watch / unwatch per path (`type=Rig`, `Strand`, …) |
 
-So "the knot did not fire" is usually answered by `[KNOT][NOTIFY]` and
-`[KNOT][WATCH]` lines — and those are recoverable only if the run was
-redirected. This is the strongest reason to always append.
+So "the knot did not fire" is usually answered by `[KNOT][EVENT]`,
+`[KNOT][NOTIFY]` and `[KNOT][WATCH]` lines — and those are recoverable
+only if the run was redirected. This is the strongest reason to always
+append.
 
 ### Always Append, Never Truncate
 
@@ -76,11 +79,10 @@ the only evidence of the previous failure. Shrink it by **renaming**
 
 ### One Service Per Rig, One Log Per Rig
 
-Starting a second Knot on the same rig is not harmless: startup clears
-the loom-logs and rig-log the first instance is still writing, both
-instances watch the same strand directories, and both rewrite
-`state.json` on their own 5-second cycles. Always check for a live
-instance before starting (step 2).
+Starting a second Knot on the same rig is not harmless: both instances
+watch the same strand directories, and both rewrite `state.json` when
+their own state changes (their `[STATE]` lines interleave in any shared
+capture). Always check for a live instance before starting (step 2).
 
 Rig switching (`knot dev-rig`) means several services can run at once in
 one project — so the log lives **inside the rig's runtime tree**, not at
@@ -96,7 +98,7 @@ returns; the skill records the PID so it can be stopped later.
 handler:
 
 - `kill -INT <pid>` → graceful cascade: queue drains, `LoomStopped` is
-  written to each loom-log, the process exits.
+  recorded on the service log, the process exits.
 - `kill -TERM <pid>` / `kill -9 <pid>` → immediate death: no drain, no
   `LoomStopped`, an in-flight strand left mid-run.
 
@@ -119,12 +121,16 @@ the wrong place (or create a stray `rig/`).
 
 | Path | Written by | Content | Lifetime |
 |------|-----------|---------|----------|
-| `tie-offs/<rig>/knot-service.log` | the launcher (**this skill**) | raw stderr/stdout | **append across runs** |
+| `tie-offs/<rig>/knot-service.log` | the launcher (**this skill**) | the service's stderr/stdout — single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records plus startup/shutdown traces | **append across runs** |
 | `tie-offs/<rig>/knot-service.pid` | this skill | background PID | until stopped |
-| `tie-offs/<rig>/state.json` | Knot (every 5s) | rig snapshot (looms, knots, profiles) | rewritten in place |
-| `tie-offs/<rig>/.rig-log` | Knot | operational events (timeouts, idle) JSONL | **cleared at startup** |
-| `tie-offs/<rig>/{loom-id}/.loom-log` | Knot | per-loom activity JSONL | **cleared at startup** |
+| `tie-offs/<rig>/state.json` | Knot (on state change) | rig snapshot (looms, knots, profiles) | rewritten only when the state actually changes |
 | `tie-offs/<rig>/events/*.json` | Knot | pending event queue | survives restarts |
+
+(Pre-0.41.0 Knots also wrote `tie-offs/<rig>/.rig-log` and
+`tie-offs/<rig>/{loom-id}/.loom-log` JSONL files; since plan 083 those
+are gone — run activity is in-memory per process and the service's
+stderr is the log. Any legacy files left by a 0.31.0 migration are
+inert and may be deleted.)
 
 ---
 
@@ -249,8 +255,9 @@ redirect is what makes the run debuggable after the fact.
 
 ### 5. Verify it came up
 
-Wait for a fresh state file (Knot writes it within ~1 second of boot,
-then every 5 seconds):
+Wait for a fresh state file (Knot writes the baseline immediately at
+boot, then only when the state changes — so a fresh `updated_at` is
+proof of a recent start, not of liveness in steady state):
 
 ```bash
 for i in $(seq 1 15); do
@@ -307,13 +314,13 @@ Expect **5–6 seconds**, not instant: the drain has a 5-second timeout
 safety net, and an idle service normally prints
 `WARNING: pipeline tasks did not drain within 5s, aborting` on the way
 out. That warning at shutdown is routine — nothing is lost (the queue is
-on disk); at worst the `LoomStopped` loom-log entries are skipped.
+on disk); at worst the `LoomStopped` event line is skipped.
 
-Verify the graceful finish in the per-run logs (they are **not** cleared
-until the next start, so they still hold the shutdown entries):
+Verify the graceful finish in the service log (the shutdown entries are
+the last lines of the captured stderr):
 
 ```bash
-grep -h LoomStopped "$RUNTIME"/*/.loom-log 2>/dev/null | tail
+grep -h LoomStopped "$RUNTIME/knot-service.log" 2>/dev/null | tail
 tail -5 "$RUNTIME/knot-service.log"
 ```
 
@@ -355,7 +362,7 @@ Then re-verify registration (step 5) and confirm the change landed —
 `KnotRegistered` / `LoomStarted` entries for the affected loom:
 
 ```bash
-tail -20 "$RUNTIME/{loom-id}/.loom-log"
+grep "loom={loom-id}" "$RUNTIME/knot-service.log" | tail -20
 ```
 
 **Restart is not always needed:**
@@ -443,9 +450,9 @@ and must be controlled, restart it through this skill.
 | `knot: command not found` | Build/install (`cargo build` in the Knot tree, or `cargo install --path .`) and use `./target/debug/knot` |
 | pidfile exists, pid dead | Service died — read the log tail, then restart (keep the log; do not truncate) |
 | pidfile pid alive but `comm` is not `knot` | `$!` was captured after a `&&` chain, so it recorded the wrapper shell. Find the real service (`pgrep -x knot` + `ls -l /proc/<pid>/cwd`), SIGINT the wrapper's children as needed, and relaunch with `echo $!` on its own line |
-| state file stale but pid alive | Likely mid long run or wedged; check the service log and the knot's loom-log before assuming a crash |
+| state file stale but pid alive | Likely mid long run or the rig is idle (the state file is now change-driven) — check the service log before assuming a crash |
 | Log is empty after a start | Wrong runtime root (wrong CWD or rig name), or the service was started in the foreground |
-| Two Knots running on one rig | Stop both with `kill -INT`, then start one; note the logs were cleared by the second startup |
+| Two Knots running on one rig | Stop both with `kill -INT`, then start one; the two services were interleaving state writes and event lines |
 | Port/HTTP questions | Knot has no HTTP interface in 0.3x — control and observation are files; see `knot-inspect` |
 
 ---
@@ -459,8 +466,10 @@ nohup knot >> "$RUNTIME/knot-service.log" 2>&1 &
 echo $! > "$RUNTIME/knot-service.pid"
 ps -o pid=,comm= -p "$(cat "$RUNTIME/knot-service.pid")"   # must print `knot`
 
-# Is it running? (fresh state = alive)
+# Was it started recently? (baseline write at boot; the pidfile — not
+# state.json freshness — is the liveness probe in steady state)
 cat tie-offs/rig/state.json | python3 -c "import sys,json;print(json.load(sys.stdin)['updated_at'])"
+kill -0 "$(cat tie-offs/rig/knot-service.pid)" && echo "process alive"
 
 # Follow the service log
 tail -f tie-offs/rig/knot-service.log

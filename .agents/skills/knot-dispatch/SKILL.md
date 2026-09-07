@@ -1,6 +1,6 @@
 ---
 name: knot-dispatch
-description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via loom-logs and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch, knot step, step queue, observe one cycle. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst), starting or stopping the service (use knot-start)."
+description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via the service log and state, and the full dispatch pipeline from strand creation to tie-off completion. USE FOR: trigger knot, dispatch knot, fire knot, add strand, touch strand, trigger event, dispatch event, manual trigger, strand trigger, start processing, fire agent, activate knot, knot trigger, event trigger, strand creation, event file, trigger dispatch, knot step, step queue, observe one cycle. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design), analysing rig productivity (use knot-analyst), starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
@@ -18,9 +18,13 @@ Knots are event-driven — they react to filesystem changes in their
 `strand-dir`. This skill covers how to trigger them, verify they fired,
 and troubleshoot when they don't.
 
-**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
-Knot; default rig: `tie-offs/rig/state.json`)
-**Activity logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL)
+**State file:** `tie-offs/<rig>/state.json` (written when the state
+changes — a background writer ticks every 5 seconds, but idle ticks
+never rewrite it; default rig: `tie-offs/rig/state.json`)
+**Service log:** `tie-offs/<rig>/knot-service.log` (single-line
+`[KNOT][EVENT]` / `[KNOT][STATE]` records, appended across runs by
+`knot-start`; filter with `grep 'loom=<id>'`) — since Knot 0.41.0 there
+are no per-run log files
 **Tie-off output:** `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
 
 ---
@@ -97,7 +101,7 @@ These are two separate mechanisms:
 - Each `.json` file is a queue entry — removed after its work is done
   (late removal: just-before-commit on success, point of failure on
   failure/skip)
-- `StrandSkipped` entries in the loom-log relate to this queue: the file
+- `StrandSkipped` entries in the service log relate to this queue: the file
   referenced by a queued event was missing when processing reached it
 
 **Dispatch directories** (`tie-offs/<rig>/{loom-id}/{EventId}/`):
@@ -195,9 +199,9 @@ filesystem directory:
    typically completes within seconds to minutes depending on the
    agent's work.
 
-5. **Verify the knot fired**: Read `tie-offs/<rig>/{loom-id}/.loom-log`
-   and look for `KnotProcessing`, then `KnotCompleted` (or
-   `KnotFailed`) for the target knot.
+5. **Verify the knot fired**: Check the service log for `KnotProcessing`,
+   then `KnotCompleted` (or `KnotFailed`) for the target knot:
+   `grep 'knot={knot-name}' tie-offs/<rig>/knot-service.log | tail`.
 
 6. **Check the tie-off output**: Read
    `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` and verify the
@@ -242,8 +246,9 @@ The consumer knot watches a dispatch directory at
 3. **Wait for processing** — the consumer knot should pick up the new
    event file as a strand event.
 
-4. **Verify via loom-log**: Read `tie-offs/<rig>/{consumer-loom-id}/.loom-log`
-   for `KnotProcessing` and `KnotCompleted` entries.
+4. **Verify via the service log**: Check
+   `tie-offs/<rig>/knot-service.log` for `KnotProcessing` and
+   `KnotCompleted` entries with `loom={consumer-loom-id}`.
 
 5. **Clean up** (optional): Remove the manual event file after
    processing if it was a one-off test:
@@ -260,11 +265,12 @@ full producer→consumer chain:
 1. **Trigger the producer** using the normal filesystem trigger above
    (create/touch a file in the producer's `strand-dir`).
 
-2. **Wait for the producer to complete**: Monitor its loom-log for
-   `KnotCompleted`.
+2. **Wait for the producer to complete**: Monitor the service log for
+   `KnotCompleted` with `loom={producer-loom-id}`.
 
 3. **Check for event dispatch**: Look for `EventsDispatched` entries
-   in the producer's loom-log. These show which events were emitted
+   in the service log (filter with `grep 'loom={producer-loom-id}'`).
+   These show which events were emitted
    and which consumer looms received them. If the producer
    acknowledged every subscriber event with `occurred: false`, there
    will be no `EventsDispatched` entry — that is expected, not a
@@ -288,11 +294,11 @@ After triggering any knot:
    The `last_event_at` field should have a recent timestamp.
    The `last_strand_path` should point to the file you created/touched.
 
-2. **Check the loom-log**: Tail
-   `tie-offs/<rig>/{loom-id}/.loom-log` and look for:
-   ```json
-   {"KnotProcessing": {"knot_id": "...", "strand_path": "...", ...}}
-   {"KnotCompleted": {"knot_id": "...", "strand_path": "...", "tie_off_path": "...", ...}}
+2. **Check the service log**: Tail `tie-offs/<rig>/knot-service.log`
+   and look for:
+   ```
+   [KNOT][EVENT] KnotProcessing loom=... knot=... strand=...
+   [KNOT][EVENT] KnotCompleted loom=... knot=... strand=... tie-off=...
    ```
 
 3. **Check the tie-off**: Read
@@ -353,16 +359,18 @@ config seeding, rig git init, loom discovery, watcher registration,
 debounce engine, config pipeline, and the 5-second state writer — then
 executes exactly one event and shuts down with the same graceful
 cascade as the service (in-cycle debounce buffer flushed to disk,
-pipelines drained, `LoomStopped` written to each loom-log):
+pipelines drained, `LoomStopped` recorded on the service log):
 
 - Events that occur **during** the step (a dispatched agent event,
   the agent modifying its own strand) are captured into
   `tie-offs/<rig>/events/` but **not executed** — the next step (or a
   service run) processes them.
-- **Logs are not cleared** in step mode (service startups *do* clear
-  them): sequential steps accumulate in the loom-logs/rig-log, so a
-  multi-step session reads as one continuous session. Each step is a
-  self-contained run, so the loom-logs also carry a fresh
+- **Run activity is in-memory per process** (Knot 0.41.0+ — no log
+  files are cleared, because there are none to clear): when you run the
+  step in the foreground, its `[KNOT][EVENT]` lines on stderr show the
+  whole run; when the service is started with `knot-start`, each step's
+  lines append to `tie-offs/<rig>/knot-service.log`. Each step is a
+  self-contained run, so the event lines carry a fresh
   `KnotRegistered`/`LoomStarted` … `LoomStopped` bracket per step.
 - `tie-offs/<rig>/state.json` is written during the step, so it
   reflects the **post-step** queue (processed event removed, the rest
@@ -371,7 +379,7 @@ pipelines drained, `LoomStopped` written to each loom-log):
   5-second timeout) — expect roughly one service startup per event.
 - On an early error (e.g. unknown `--event`) the step exits before the
   shutdown cascade, so the `LoomStopped` bracket is missing from that
-  run's loom-logs — expected on error exits.
+  run's event lines — expected on error exits.
 
 ### Getting an Event Queued for a Step
 
@@ -440,9 +448,9 @@ When asked to step, process one event, or observe a single cycle:
 5. **Observe the cycle**:
    - stdout: `[step] processing event <id> (loom=…, knot=…): <path>`,
      then `[step] event <id> processed` (or `failed: …` on stderr).
-   - loom-log: `KnotProcessing` → `KnotCompleted` (or `KnotFailed`),
-     `StrandProcessed`, and `EventsDispatched` if the knot emitted
-     events.
+   - service log (stderr): `KnotProcessing` → `KnotCompleted` (or
+     `KnotFailed`), `StrandProcessed`, and `EventsDispatched` if the
+     knot emitted events.
    - tie-off: the new section at the end of
      `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`.
    - queue: the processed event's file is gone from
@@ -461,16 +469,16 @@ When asked to step, process one event, or observe a single cycle:
 
 | Symptom | Check |
 |---------|-------|
-| No `KnotProcessing` in loom-log | Verify Knot is running (`tie-offs/<rig>/state.json` `updated_at` is fresh — otherwise start it with `knot-start`). Check `tie-offs/<rig>/.rig-log` for errors, then `tie-offs/<rig>/knot-service.log` for anything the per-run logs cannot show. |
-| `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check `tie-offs/<rig>/.rig-log` for `TimeoutExceeded`. Increase profile `timeout`. |
-| `KnotFailed` in loom-log | Read the error message in the log entry. Common causes: missing profile, parse errors, agent crash. |
+| No `KnotProcessing` in the service log | Verify Knot is running (start it with `knot-start` if `tie-offs/<rig>/state.json`'s mtime is old and no run is in flight). Check `tie-offs/<rig>/knot-service.log` for `[KNOT][EVENT]` errors around the trigger time. |
+| `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check the service log for `TimeoutExceeded`. Increase profile `timeout`. |
+| `KnotFailed` in the service log | Read the `error=` field of the line. Common causes: missing profile, parse errors, agent crash. |
 | File created but no event at all | The strand directory may not be watched. Check `tie-offs/<rig>/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
-| `StrandSkipped` in loom-log | See the table below. The strand event was queued but the file was not available when processing reached it. |
+| `StrandSkipped` in the service log | See the table below. The strand event was queued but the file was not available when processing reached it. |
 | Event file created but consumer did not fire | Verify the event file has valid YAML frontmatter with `event-id`. Check the dispatch directory path matches the consumer's `strand-dir` event URI. |
 
 ### StrandSkipped — File Vanished Before Processing
 
-`StrandSkipped` appears in the loom-log when a strand event was queued
+`StrandSkipped` appears in the service log when a strand event was queued
 but the file could not be processed. Two variants exist:
 
 | Reason | Cause | Action |
@@ -503,10 +511,10 @@ If the same strand keeps re-triggering the same knot:
 
 | Symptom | Check |
 |---------|-------|
-| Producer emitted event but consumer idle | Check `EventsDispatched` in producer's loom-log — does it list the consumer's loom? If not, the consumer's `strand-dir` event URI may not match the producer's knot name. |
-| Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot (see `knot-start`) or check loom-log for `KnotRegistered` for the consumer. |
+| Producer emitted event but consumer idle | Check `EventsDispatched` in the producer's service-log lines — does it list the consumer's loom? If not, the consumer's `strand-dir` event URI may not match the producer's knot name. |
+| Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot (see `knot-start`) or check the service log for `KnotRegistered` for the consumer. |
 | `occurred: false` in tie-off but expected event | The producer explicitly acknowledged the event but determined it did not occur. Read the `description` field in the event block — it states **why** the event wasn't triggered. If the reasoning is wrong, re-trigger the producer. |
-| `KnotEventsMissing` in loom-log | The producer completed with **zero** event blocks. The entry lists `expected_events`. Knot already attempted one follow-up re-entry (a second `KnotEventsMissing` means the follow-up also produced nothing). Re-trigger the knot if the events are still missing. |
+| `KnotEventsMissing` in the service log | The producer completed with **zero** event blocks. The entry lists `expected_events`. Knot already attempted one follow-up re-entry (a second `KnotEventsMissing` means the follow-up also produced nothing). Re-trigger the knot if the events are still missing. |
 | Multiple consumers, only some fired | Each consumer matches independently. Check each consumer's `strand-dir` event URI against the producer's knot ID. |
 
 ---
@@ -652,7 +660,7 @@ description, file name). Two dedup rules apply:
 If the producer completes with **zero** event blocks despite having
 subscribers, Knot does not silently accept the tie-off:
 
-1. Logs `KnotEventsMissing` to the loom-log, listing the
+1. Records `KnotEventsMissing` as a service-log event, listing the
    `expected_events`.
 2. Attempts one follow-up re-entry into the agent session (when a
    session ID is available), re-injecting the event request.
@@ -705,8 +713,8 @@ timestamp: 2026-07-24T12:00:00Z
 Manual review trigger.
 EOF
 
-# Verify trigger worked — check loom-log
-tail -5 tie-offs/rig/planning-loom/.loom-log
+# Verify trigger worked — check the service log
+grep 'loom=planning-loom' tie-offs/rig/knot-service.log | tail -5
 
 # Verify trigger worked — check state
 cat tie-offs/rig/state.json | python3 -c "
@@ -719,8 +727,8 @@ for loom in state['looms']:
 # Check tie-off output
 cat tie-offs/rig/planning-loom/tie-off-refactor-planner.md | tail -20
 
-# Check event dispatch in producer's loom-log
-grep EventsDispatched tie-offs/rig/review-loom/.loom-log
+# Check event dispatch in the producer's service-log lines
+grep EventsDispatched tie-offs/rig/knot-service.log
 
 # Step one queued event (service must NOT be running)
 knot step

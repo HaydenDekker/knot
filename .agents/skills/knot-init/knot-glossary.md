@@ -73,7 +73,7 @@ Only available when the rig config sets `agent-adapter: pi-json`. With `pi-stdio
 
 ### Overall Timeout Budget
 
-The profile's timeout value governs the total wall-clock time across all retry attempts, not per-attempt. When session resume is active, the timeout countdown does not reset on each retry — instead, Knot calculates remaining time before each attempt. If the budget is exhausted during the retry loop, the strand is marked failed and normal failure handling (loom-log, rig-log) takes over.
+The profile's timeout value governs the total wall-clock time across all retry attempts, not per-attempt. When session resume is active, the timeout countdown does not reset on each retry — instead, Knot calculates remaining time before each attempt. If the budget is exhausted during the retry loop, the strand is marked failed and normal failure handling (service-log events, tie-offs) takes over.
 
 ---
 
@@ -85,7 +85,7 @@ Automatic retry mechanism activated when an agent invocation fails with a resuma
 
 ### SessionResumed
 
-A loom-log event recorded for each session resume attempt. Contains the retry number, session ID, and remaining timeout budget at the time of the attempt. Allows tracing how many retries occurred and whether the overall timeout budget was the limiting factor.
+A service-log event recorded for each session resume attempt. Contains the retry number, session ID, and remaining timeout budget at the time of the attempt. Allows tracing how many retries occurred and whether the overall timeout budget was the limiting factor.
 
 ---
 
@@ -182,9 +182,11 @@ tie-offs/<rig>/<loom-id>/
 
 ---
 
-### Loom-log
+### Service Log
 
-A file that holds a loom's activity log. Lives at `tie-offs/<rig>/<loom-id>/.loom-log` (in the runtime tree) — outside the loom directory itself, keeping the rig clean of non-loom directories. Records which knots are detected and registered, and all loom and knot events for that loom. Users check this to confirm a loom is configured correctly and to trace processing history.
+The service's single consolidated log (Knot 0.41.0+): one line per record on the service's stderr — `[KNOT][EVENT]` lines (one per domain event: loom lifecycle, strand processing, timeouts, queue idle) and `[KNOT][STATE]` lines (one per actual `state.json` write). The `knot-start` skill appends the service stderr to `tie-offs/<rig>/knot-service.log` in the runtime tree, making it the durable operational record across restarts. Run activity is in-memory per process — the pre-0.41.0 per-run JSONL files (`.loom-log` per loom, `.rig-log` at the rig level, both cleared at startup) are gone; nothing is cleared at startup anymore, and legacy files left by a 0.31.0 migration are inert.
+
+The tie-off files remain the durable audit record of completed work; the service log is the durable record of *operations*.
 
 ---
 
@@ -200,32 +202,32 @@ During a session an agent may write files to any directories it has privilege to
 
 ---
 
-### Rig-log
+### Operational Events
 
-An append-only JSONL file at `tie-offs/<rig>/.rig-log` (in the runtime tree) that records serious operational events so the user or an external watcher (human or LLM agent) can monitor and react. Two event types are recorded:
+The serious events the service records so the user or an external watcher (human or LLM agent) can monitor and react. Since Knot 0.41.0 they are `[KNOT][EVENT]` service-log lines (see *Service Log*). Two event types are recorded:
 
-- `TimeoutExceeded` — an agent session exceeded its deadline (from profile `timeout` or runner default). Contains loom ID, knot ID, strand path, error message, and timestamp. The tie-off file is **preserved unchanged** on timeout.
+- `TimeoutExceeded` — an agent session exceeded its deadline (from profile `timeout` or runner default). The line carries the loom ID, knot ID, strand path, and error message. The tie-off file is **preserved unchanged** on timeout.
 - `QueueIdle` — all pending events have been processed and no new events arrived within the poll window (500ms). Indicates the system is quiet.
 
-The rig-log persists across restarts. Multiple consumers can watch it safely (append-only, single-line JSON entries).
+These lines survive across restarts only in the appended service log (`knot-service.log`) — run activity itself is in-memory.
 
 ---
 
 ### Rig State
 
-A JSON file at `tie-offs/<rig>/state.json` (in the runtime tree) that contains a complete snapshot of the rig's current state: the rig path, all discovered looms with their knots and strand counts, all available agent profiles, and a timestamp of when the state was last updated. Written atomically by the State Writer task on a 5-second poll cycle. This is the single source of truth for external consumers (skills, scripts, other tools) that need to read rig state — no HTTP client required.
+A JSON file at `tie-offs/<rig>/state.json` (in the runtime tree) that contains a complete snapshot of the rig's current state: the rig path, all discovered looms with their knots and strand counts, all available agent profiles, and a timestamp of when the state was last **actually** changed. Written atomically by the State Writer task when the state changes (identical snapshots are never rewritten). This is the single source of truth for external consumers (skills, scripts, other tools) that need to read rig state — no HTTP client required.
 
 ---
 
 ### State Writer
 
-A background task that periodically polls the rig's in-memory state and writes it to `tie-offs/<rig>/state.json`. Runs on a 5-second interval. Uses atomic write (write to temp file, then rename) to prevent readers from seeing partial state. If the write fails (e.g., disk full), the error is logged but the task continues on the next cycle.
+A background task that periodically derives the rig's state and writes it to `tie-offs/<rig>/state.json` **only when the state actually changes** (Knot 0.41.0+): it polls on a 5-second interval, diffs the freshly derived state against the last written state (ignoring `updated_at`, the only field that would differ), and skips the write entirely when the content is identical and the file exists. An unchanged mtime therefore means the rig is idle. Uses atomic write (write to temp file, then rename) to prevent readers from seeing partial state. If the write fails (e.g., disk full), the error is logged but the task continues on the next cycle.
 
 ---
 
 ### Runtime Tree
 
-The rig's project-side runtime tree at `tie-offs/<rig-basename>/` in the project root (default rig: `tie-offs/rig/`). Holds **all runtime data** the rig produces or consumes: tie-off directories per loom, `.loom-log` files, the disk-backed event queue (`events/`), the rig-log (`.rig-log`), and the state snapshot (`state.json`). The runtime root is derived as `<project-root>/tie-offs/<rig-basename>/`, so multiple named rigs in one project are namespaced and collision-free.
+The rig's project-side runtime tree at `tie-offs/<rig-basename>/` in the project root (default rig: `tie-offs/rig/`). Holds **all runtime data** the rig produces or consumes: tie-off directories per loom, the appended service log (`knot-service.log`), the disk-backed event queue (`events/`), and the state snapshot (`state.json`). The runtime root is derived as `<project-root>/tie-offs/<rig-basename>/`, so multiple named rigs in one project are namespaced and collision-free.
 
 The runtime tree is **project output and audit data** — it is committed with the project's git history (Knot folds it into its per-knot-run commits). It is deliberately **not** inside the rig directory: the rig holds only reusable source (looms, knots, profiles, config) and is versioned in its own git repository.
 
@@ -286,11 +288,10 @@ Project root
  │     └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
  │           └── Knot definition files (first-level `.md` files)
  └── Runtime tree (`./tie-offs/<rig>/`) — project output, committed with project git
-       ├── state.json (complete state snapshot — written by State Writer every 5s)
-       ├── .rig-log (operational event log — TimeoutExceeded, QueueIdle)
+       ├── state.json (complete state snapshot — written on state change)
+       ├── knot-service.log (consolidated service log — `[KNOT][EVENT]` / `[KNOT][STATE]`, appended across runs by knot-start)
        ├── events/ (disk-backed event queue — `{timestamp-ms}-{hex}.json` files)
        └── <loom-id>/
-             ├── .loom-log (activity log)
              ├── tie-off-<knot-name>.md (tie-off output, appended per event)
              └── <event-id>/ (event dispatch subdirectory — dynamic a2a comms)
                    └── <event-file>.md (dispatched event strand for consumers)

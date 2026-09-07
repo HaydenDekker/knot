@@ -115,9 +115,10 @@ knot
 ```
 
 To keep a record of the run, redirect its output to the service log —
-Knot's structured logs (`tie-offs/<rig>/.rig-log` and the loom-logs) are
-**cleared at every startup**, so stderr is the only thing that shows what
-happened across restarts. Append, never overwrite:
+Knot's run activity is **in-memory per process** and emitted as
+single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records on stderr, so
+stderr is the only thing that shows what happened across restarts.
+Append, never overwrite:
 
 ```bash
 mkdir -p tie-offs/rig
@@ -135,10 +136,9 @@ Knot will:
 2. Scan for looms (any `*-loom/` subdirectory inside `rig/`)
 3. Parse knot definition files and agent profiles
 4. Start watching strand directories for file changes
-5. Begin writing `tie-offs/<rig>/state.json` every 5 seconds
+5. Write `tie-offs/<rig>/state.json` whenever the state changes
 
-To verify Knot is running, check that `tie-offs/<rig>/state.json` exists and
-is being updated:
+To verify Knot is running, check that `tie-offs/<rig>/state.json` exists:
 
 ```bash
 watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'

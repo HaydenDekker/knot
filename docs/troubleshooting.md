@@ -40,12 +40,13 @@ watch -n 2 'cat tie-offs/rig/state.json | python3 -m json.tool'
 `tie-offs/<rig>/state.json` goes stale, then fresh, then stale again —
 Knot starts and dies repeatedly.
 
-### Why the usual logs are empty
+### Why there is no other record
 
-The rig-log and every loom-log are **cleared at startup**, so a
-crash-restart loop wipes its own traces on every boot. The service log is
-the only file that spans runs — if you did not append one, start doing so
-and reproduce the failure:
+Run activity is **in-memory per process** (plan 083) — a crashed process
+keeps no files of its own, so the appended service log (the
+`[KNOT][EVENT]` / `[KNOT][STATE]` stderr lines) is the only record that
+spans runs. If you did not append one, start doing so and reproduce the
+failure:
 
 ```bash
 nohup knot >> tie-offs/rig/knot-service.log 2>&1 &
@@ -91,7 +92,7 @@ re-scans the rig directory.
 
 ### Symptom
 
-Knot processing fails with `ProfileNotFound` error. The loom-log
+Knot processing fails with `ProfileNotFound` error. The service log
 shows a failure for the affected knot.
 
 ### Common Causes
@@ -123,10 +124,10 @@ value in the knot file.
 
 ### Diagnostics
 
-1. Check the loom-log for details:
+1. Check the service log for details:
 
    ```bash
-   cat tie-offs/<rig>/{loom-id}/.loom-log
+   grep '[KNOT][EVENT]' tie-offs/<rig>/knot-service.log | grep "knot={knot-name}"
    ```
 
 2. Check the tie-off file — it may contain partial output:
@@ -135,10 +136,10 @@ value in the knot file.
    cat tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
    ```
 
-3. Check the rig-log for timeout events:
+3. Check the service log for timeout events:
 
    ```bash
-   cat tie-offs/rig/.rig-log | grep TimeoutExceeded
+   grep 'TimeoutExceeded' tie-offs/<rig>/knot-service.log
    ```
 
 ### Common Fixes
@@ -147,7 +148,7 @@ value in the knot file.
 |-------|-------|-----|
 | TimeoutExceeded | Agent session exceeded the profile timeout | Increase `timeout` in the profile's frontmatter |
 | no final response: … | Agent ended its turn without a final response (abrupt turn-end — a failure, not a timeout). Knot re-enters the session up to 10 times (or the profile timeout budget) asking for the final response; a successful nudge completes the strand transparently | If it still fails, check provider/model health and consider a larger profile `timeout` so the nudge attempts fit the budget. A failed tie-off section was written with the attempt count (`after N attempts`) |
-| context limit reached | The session's context exceeded the model window and pi's own compact-and-retry could not recover it — the kept context still does not fit. No retries (re-entry cannot help); a `Failed` tie-off is written and the rig-log is untouched | Narrow the prompt/strand scope: smaller strand files, tighter knot instructions, `@file` references instead of inlined content — or use a profile with a larger-window model. Check `ContextCompacted` entries in the loom-log for frequency (`reason: "overflow"` = limit hit) |
+| context limit reached | The session's context exceeded the model window and pi's own compact-and-retry could not recover it — the kept context still does not fit. No retries (re-entry cannot help); a `Failed` tie-off is written and no operational event is recorded (no deadline was breached) | Narrow the prompt/strand scope: smaller strand files, tighter knot instructions, `@file` references instead of inlined content — or use a profile with a larger-window model. Check `ContextCompacted` entries in the service log for frequency (`reason: "overflow"` = limit hit) |
 | ProfileNotFound | Profile referenced by knot does not exist | Create the profile file |
 | KnotParseWarning | Invalid YAML in knot file | Fix frontmatter syntax |
 | Strand dir not found | `strand-dir` points to non-existent directory | Create the directory or fix the path |
@@ -194,7 +195,7 @@ Apply loop-breaking patterns from the [Design Guide](design-guide.md):
 
 ### Symptom
 
-The loom-log shows multiple `SessionResumed` entries for the same
+The service log shows multiple `SessionResumed` entries for the same
 strand, eventually followed by a failure.
 
 ### Cause
@@ -204,7 +205,7 @@ model error). Knot retries up to 10 times with 10-second delays.
 
 ### Fix
 
-- Check the rig-log for `TimeoutExceeded` — if the session is too
+- Check the service log for `TimeoutExceeded` — if the session is too
   slow, increase the profile's `timeout` value.
 - Check your LLM provider's status page for outages.
 - Verify the agent CLI (`pi`) is working independently:
@@ -216,7 +217,7 @@ model error). Knot retries up to 10 times with 10-second delays.
 
 A knot sits in `processing` with no visible work: the session is alive
 but silent (a hung bash command, a stalled provider call, a deadlocked
-subprocess). The loom-log shows an `AgentInactivity` entry —
+subprocess). The service log shows an `AgentInactivity` event —
 `silent_secs`, `window_secs`, the session ID, and the blocked call
 when it could be named (e.g. `bash("npm run build")`) — followed by a
 `SessionResumed` entry for the restart.
@@ -242,7 +243,7 @@ streamed tool output keeps resetting the timer.
   session-resume restarts (`--session-id`); with `pi-stdio` the
   restart is a fresh session and the blocked call is not named.
 - Repeated `AgentInactivity` entries ending in `KnotFailed` with a
-  `TimeoutExceeded` rig-log entry mean every restart re-hung — the
+  `TimeoutExceeded` operational event mean every restart re-hung — the
   note is being ignored or the hang is deterministic; fix the command
   rather than the window.
 
@@ -251,7 +252,7 @@ streamed tool output keeps resetting the timer.
 ### Symptom
 
 A file change in the strand directory is not triggering the knot. The
-loom-log shows `StrandIgnored`.
+service log shows `StrandIgnored`.
 
 ### Cause
 
@@ -267,7 +268,7 @@ watch a directory containing only text files.
 
 ### Symptom
 
-The loom-log shows `StrandSkipped` for a file that should exist.
+The service log shows `StrandSkipped` for a file that should exist.
 
 ### Cause
 
@@ -281,19 +282,24 @@ silently — unknown missing files produce `StrandSkipped` events.
 Usually resolves on the next file modification. If persistent, check
 that no other process is competing for the file.
 
-## Rig-Log or Loom-Log Is Missing
+## Service Log Is Missing
 
 ### Symptom
 
-`tie-offs/<rig>/.rig-log` or `tie-offs/<rig>/{loom-id}/.loom-log` does not exist.
+`tie-offs/<rig>/knot-service.log` does not exist.
 
 ### Explanation
 
-These files are created when events occur. An empty rig with no
-processing activity will not have log files yet. This is normal.
+Knot never opens that file — it is **appended by the launcher** (the
+`knot-start` skill or a `nohup knot >> … &` redirect). If Knot was
+started without redirecting its stderr to the service log, no file is
+created and the `[KNOT][EVENT]` / `[KNOT][STATE]` lines are lost. This
+is normal — but it is also the only record that spans restarts, so
+start Knot with the `knot-start` skill.
 
-The rig-log is created on the first `TimeoutExceeded` or `QueueIdle`
-event. The loom-log is created when the loom starts processing.
+(Pre-0.41.0 projects may also have legacy `.rig-log` / `.loom-log`
+files left in the runtime tree; since plan 083 they are inert — never
+read, written, or cleared — and can be deleted.)
 
 ## State File Shows Stale Data
 
@@ -303,13 +309,15 @@ event. The loom-log is created when the loom starts processing.
 
 ### Explanation
 
-The state file is written every 5 seconds. There is up to a 5-second
-delay between an event and its reflection in the state file.
+The state file is written when the state actually changes (a background
+writer ticks every 5 seconds, but idle ticks never rewrite it). There is
+up to a 5-second delay between an event and its reflection in the state
+file.
 
 ### Fix
 
-Wait a few seconds and check again, or read the loom-log directly for
-real-time events.
+Wait a few seconds and check again, or read the service log (the
+`[KNOT][EVENT]` / `[KNOT][STATE]` stderr lines) for real-time events.
 
 ---
 

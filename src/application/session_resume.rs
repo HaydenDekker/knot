@@ -15,9 +15,11 @@
 use std::time::{Duration, Instant};
 
 use crate::application::ports::{
-    AgentOutput, AgentRunner, ExecutionContext,
+    AgentOutput, AgentRunner,
     LoomLogPort, PortError,
 };
+#[cfg(test)]
+use crate::application::ports::ExecutionContext;
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::events::LoomEvent;
 use crate::domain::value_objects::AgentConfig;
@@ -660,21 +662,15 @@ mod tests {
         }
     }
 
-    /// In-memory loom log that records all appended events (and any
-    /// `clear_all` calls, for assertions).
+    /// In-memory loom log that records all appended events.
     #[derive(Default)]
     struct TestLoomLog {
         events: Arc<Mutex<Vec<LoomEvent>>>,
-        clear_all_calls: Arc<Mutex<usize>>,
     }
 
     impl TestLoomLog {
         fn events(&self) -> Vec<LoomEvent> {
             self.events.lock().unwrap().clone()
-        }
-
-        fn clear_all_calls(&self) -> usize {
-            *self.clear_all_calls.lock().unwrap()
         }
     }
 
@@ -693,12 +689,6 @@ mod tests {
             _loom_id: &LoomId,
         ) -> Result<Vec<LoomEvent>, PortError> {
             Ok(self.events.lock().unwrap().clone())
-        }
-
-        fn clear_all(&self) -> Result<(), PortError> {
-            *self.clear_all_calls.lock().unwrap() += 1;
-            self.events.lock().unwrap().clear();
-            Ok(())
         }
     }
 

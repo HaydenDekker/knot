@@ -8,38 +8,37 @@ use crate::application::ports::{
     AgentProfileRepository, AgentRunner, EventDispatcherPort, GitVersioningPort,
     KnotEventType, LoomLogPort, ModelRegistryPort, PortError, RigLogPort, TieOffSink,
 };
-use crate::application::session_resume;
 use crate::application::store::LoomStore;
 use crate::domain::entities::{
-    EventMetadata, Knot, KnotId, Loom, LoomId, StrandCheckResult,
-    StrandFileChecker, StrandPath, TieOff, TieOffOutcome, TieOffPath,
+    Knot, KnotId, Loom, LoomId, StrandCheckResult,
+    StrandFileChecker, StrandPath, TieOff, TieOffPath,
 };
-use crate::domain::events::{AgentEvent, BuildContext, ContextProvider, LoomEvent, StrandEvent, StrandQueueAccessor};
+#[cfg(test)]
+use crate::domain::entities::EventMetadata;
+#[cfg(test)]
+use crate::domain::value_objects::StrandSource;
+use crate::domain::events::{AgentEvent, LoomEvent, StrandEvent, StrandQueueAccessor};
 use crate::domain::pending_event::{PendingEvent, PendingEventId};
-use crate::application::usecases::context_providers::AgentEventsContextProvider;
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
     AgentConfig, AgentProfile, AgentProfileError, EventSubscription, RigAgentConfig,
-    StrandSource,
 };
 
 // Re-export shared types from types module
 use super::types::format_timestamp;
-use super::strand_event_metadata::{extract_expected_event_ids, extract_event_metadata};
-use super::process_strand_helpers::ResolvedExecution;
 
 // ── ProcessStrand ─────────────────────────────────────────────────────────
 
 /// Use case: process a single strand event through the agent pipeline.
 ///
 /// 1. Receive `StrandEvent` (Created / Modified / Deleted)
-/// 2. Append `KnotProcessing` to loom-log
+/// 2. Append `KnotProcessing` to the loom's run activity
 /// 3. Resolve agent config (profile ref → load profile, merge, or inline)
 /// 4. Build execution context from resolved config + `RigAgentConfig`
 /// 5. Call `AgentRunner::execute()` (skipped for Deleted events)
 /// 6. Call `TieOffSink::write()` with result
-/// 7. Append `KnotCompleted` or `KnotFailed` to loom-log
-/// 8. Append `StrandProcessed` to loom-log
+/// 7. Append `KnotCompleted` or `KnotFailed` to the loom's run activity
+/// 8. Append `StrandProcessed` to the loom's run activity
 pub struct ProcessStrand {
     pub(crate) store: LoomStore,
     pub(crate) log_port: Arc<dyn LoomLogPort>,
@@ -117,7 +116,7 @@ impl ProcessStrand {
     ///
     /// An unknown `model-ref` alias fails with
     /// `PortError::ModelRefNotFound` — the knot run fails with a
-    /// loom-log entry and the error visible in state `last_error`
+    /// run-activity event and the error visible in state `last_error`
     /// (mirrors `ProfileNotFound`).
     pub fn resolve_agent_config(
         &self,
@@ -152,7 +151,7 @@ impl ProcessStrand {
     /// ID — no queue removal happens (used by callers and tests that do
     /// not manage an event file).
     ///
-    /// Appends lifecycle events to loom-log: KnotProcessing, then
+    /// Appends lifecycle events to the loom's run activity: KnotProcessing, then
     /// KnotCompleted or KnotFailed, then StrandProcessed.
     pub fn execute(&self, event: StrandEvent) -> Result<(), PortError> {
         self.execute_inner(event, None)
@@ -324,7 +323,7 @@ impl ProcessStrand {
             Err(err) => return self.abort_with(event_id, err),
         }
 
-        // 1. Append KnotProcessing to loom-log
+        // 1. Append KnotProcessing to the loom's run activity
         if let Err(err) = self.log_port.append(LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
@@ -364,7 +363,7 @@ impl ProcessStrand {
                     session_id,
                 };
                 let _ = self.tie_off_sink.append(tie_off);
-                // Append KnotFailed to loom-log
+                // Append KnotFailed to the loom's run activity
                 let _ = self.log_port.append(LoomEvent::KnotFailed {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
@@ -399,7 +398,7 @@ impl ProcessStrand {
             &resolved.session_id,
         );
 
-        // Write rig-log for timeout (preserve unchanged).
+        // Record the timeout operational event (plan 083: `[EVENT]` line).
         if outcome.is_timeout() {
             let _ = self.rig_log.append(
                 crate::domain::events::RigLogEvent::TimeoutExceeded {

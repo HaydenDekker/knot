@@ -481,11 +481,11 @@ fn cli_share_without_rig_name_exits_with_error() {
 /// root themselves (regression: those tasks used to spawn first and
 /// turn `rig/tie-offs/` and `rig/events/` into false conflicts).
 ///
-/// Since 0.34.0 the startup sequence also clears the operational logs
-/// after migration and before discovery, so the moved loom-log is
-/// emptied at its new path and holds only the current run's events —
-/// the move is still proven by the file existing at the new path with
-/// the fresh discovery events.
+/// Plan 083: the migrated `.loom-log` / `.rig-log` files are inert —
+/// they survive the move untouched and are never read, cleared, or
+/// appended to. The discovery evidence now lives on stderr (`[KNOT]
+/// [EVENT] LoomStarted …`), and the state writer replaces the moved
+/// `state.json` with the current snapshot.
 #[test]
 fn cli_startup_migrates_legacy_layout() {
     let tmp = tempfile::tempdir().unwrap();
@@ -518,21 +518,21 @@ fn cli_startup_migrates_legacy_layout() {
         runtime_root.join("review-loom").join("tie-off-k.md").exists(),
         "legacy tie-offs should be migrated.\nstderr: {stderr}"
     );
-    // Moved loom-log at the new path: cleared at startup (per-run
-    // scope — the legacy line is residue) and then appended to by
-    // discovery, so it carries the current run's events only.
+    // Moved loom-log at the new path: inert (plan 083) — its legacy
+    // content survives untouched and nothing is appended to it.
     let loom_log = fs::read_to_string(
         runtime_root.join("review-loom").join(".loom-log"),
     )
     .unwrap_or_default();
     assert!(
-        !loom_log.lines().any(|l| l.contains("legacy-line")),
-        "moved loom-log must be cleared at its new path\nstderr: {stderr}"
+        loom_log.lines().any(|l| l.contains("legacy-line")),
+        "moved loom-log must be untouched (inert).\nstderr: {stderr}"
     );
+    // Discovery is proven by the `[EVENT]` line on stderr (the log
+    // files are no longer the event record).
     assert!(
-        loom_log.contains("LoomStarted"),
-        "discovery must append to the new-path loom-log\
-         (proves migration ran before log appends).\nstderr: {stderr}"
+        stderr.contains("[KNOT][EVENT] LoomStarted loom=review-loom"),
+        "discovery must emit the LoomStarted `[EVENT]` line\n\nstderr: {stderr}"
     );
     // The events dir moved — not lost to a conflict with the queue's
     // own directory creation
@@ -544,14 +544,20 @@ fn cli_startup_migrates_legacy_layout() {
         !rig.join("events").exists(),
         "rig/events must not remain after migration.\nstderr: {stderr}"
     );
-    // state.json and .rig-log at the runtime root
+    // state.json at the runtime root (the moved legacy `{}` replaced
+    // by the state writer's first write); the moved `.rig-log` is
+    // inert.
+    let state: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(runtime_root.join("state.json")).unwrap(),
+    )
+    .unwrap_or(serde_json::Value::Null);
     assert!(
-        runtime_root.join("state.json").exists(),
-        "state.json should be at the runtime root.\nstderr: {stderr}"
+        state.get("looms").is_some(),
+        "state.json should be the current snapshot at the runtime root.\nstderr: {stderr}"
     );
     assert!(
         runtime_root.join(".rig-log").exists(),
-        ".rig-log should be at the runtime root.\nstderr: {stderr}"
+        ".rig-log should be at the runtime root (inert).\nstderr: {stderr}"
     );
     // Rig left source-only
     assert!(!rig.join("tie-offs").exists(), "rig left source-only");

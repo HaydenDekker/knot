@@ -1,5 +1,60 @@
 # Release Notes
 
+## v0.41.0 — 2026-09-07
+
+### Feature — Consolidated Service Log + Change-Driven State Writes (Plan 083)
+
+Observability ran on three moving parts: the per-loom `.loom-log` JSONL
+file, the rig-level `.rig-log` JSONL file, and `state.json` — rewritten
+on a 5-second tick whether or not anything had changed (so its mtime
+churned and `updated_at` lied about when the state last moved). Plan
+083 collapses the two log files into the one log the service already
+had — its **stderr** — and stops the no-op `state.json` writes.
+
+- **One line per record on stderr** — every domain event (loom
+  lifecycle, strand processing, timeouts, `SessionResumed`,
+  `QueueIdle`, …) renders as a single-line
+  `[2026-09-07T15:35:57+10:00] [KNOT][EVENT] KnotCompleted loom=… knot=…
+  strand=… tie-off=…` record: one emit-time timestamp, the event's
+  fields as `key=value` pairs (only the fields that variant carries —
+  no `timestamp=` field, no `"null"`), one physical line (no embedded
+  newlines). Every `state.json` write renders the same way:
+  `[KNOT][STATE] initial snapshot looms=N knots=N profiles=N queue=N` at
+  startup, then `change` deltas naming exactly what moved (loom/knot/
+  profile add/remove, knot/profile field changes, queue add/drain).
+- **In-memory run activity** — `.loom-log` and `.rig-log` are gone:
+  run events live in a per-process `RunActivity` (the in-memory adapters
+  own the `[EVENT]` emit). The existing query use cases (`GetLoomActivity`,
+  `KnotStatus`) keep working over the same log ports, now backed by the
+  current run instead of a file. Nothing is cleared at startup anymore —
+  the Plan 072 truncation mechanism is removed, and legacy log files a
+  0.31.0 migration may have moved are **inert** (never read, written,
+  or appended to; safe to delete).
+- **Change-driven `state.json` writes** — the state writer diffs the
+  freshly derived state against the last *written* state (ignoring
+  `updated_at`, which is the only field that ever differs between
+  identical snapshots). Identical content and an existing file → no
+  write, no mtime churn, no log line. A real change or a missing file
+  (fresh rig) → write, plus the `[KNOT][STATE]` delta line.
+  `state.json` keeps its schema; `updated_at` now means *last actual
+  change*, and between changes the file stays byte-identical (operators
+  can watch its mtime and know the rig is idle).
+- **Durable records unchanged** — the tie-off files remain the audit
+  record of completed work, and `knot-service.log` (appended by the
+  `knot-start` skill, which appends the service stderr) remains the
+  durable *operational* record across restarts. Starting Knot
+  foreground with plain `cargo run` still works — you just watch
+  stderr.
+- **Tests** — every retired-log assertion was converted (no vacuous
+  passes): binary-level `tests/consolidated_log.rs` pins the `[EVENT]`
+  run sequence, the absence of `.rig-log`/`.loom-log`, the baseline +
+  change-driven `state.json` behaviour (idle ticks cause no write),
+  burst-2-strand `queue+`/`queue-` deltas, and `knot step` baseline +
+  delta lines; in-process suites assert on the durable surfaces
+  (`state.json`, tie-off sections, event-queue files) instead of the
+  retired files; the legacy-layout migration test now proves the
+  migrated logs survive byte-identical and inert.
+
 ## v0.40.0 — 2026-09-03
 
 ### Feature — Inactivity Timeout: Kill Blocked Sessions, Restart with a Blocking-Call Note (Plan 081)

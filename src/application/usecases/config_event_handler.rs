@@ -21,7 +21,7 @@ use super::types::format_timestamp;
 ///
 /// Receives `ConfigEvent`s from the file watcher (via outbound adapter)
 /// and updates the in-memory `LoomStore`, starts/stops watchers, and
-/// writes loom-log entries.
+/// records loom activity events (rendered to stderr).
 ///
 /// - `ConfigEvent::LoomAdded` — scan the loom directory via
 ///   `LoomRepository::scan()` and register the loom (same flow as

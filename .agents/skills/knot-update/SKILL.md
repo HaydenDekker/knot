@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.19.0"
-  compatibility: "Knot 0.38.2+"
+  version: "1.20.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,57 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Consolidated Service Log + Change-Driven `state.json` (Knot 0.41.0, 2026-09-07)
+
+**What changed:** two observability changes — no project document
+format changes.
+
+1. **The per-run log files are gone.** The per-loom `.loom-log` and the
+   rig-level `.rig-log` JSONL files (and the startup clear they
+   carried since 0.34.0) are removed. Every domain event is emitted
+   as a single-line `[KNOT][EVENT]` record on the service's stderr —
+   e.g. `LoomStarted loom=X`, `KnotProcessing loom=X knot=Y
+   strand=…`, `KnotCompleted … tie-off=…`, `TimeoutExceeded …`,
+   `QueueIdle`. The `knot-start` skill appends that stderr to
+   `tie-offs/<rig>/knot-service.log`, which is the durable operational
+   record across restarts (filter per loom with
+   `grep 'loom=<id>'`). Run activity is in-memory per process;
+   **nothing is cleared at startup anymore**.
+2. **`state.json` is written on change.** The state-writer task derives
+   the state on every 5-second tick and diffs it against the last
+   written state (ignoring `updated_at`, which is the only field that
+   would differ); a no-op tick writes nothing, so `state.json`'s mtime
+   is no longer a liveness signal in steady state. The baseline is
+   written immediately at startup, so a fresh `updated_at` still proves
+   a recent start; steady-state liveness is the service pidfile
+   (`kill -0`). Each real write logs one or more `[KNOT][STATE]` lines
+   (`initial snapshot` / `change knot loom/knot: status
+   idle→completed` / `change queue+ …` / …).
+
+**Affected documents:** none — no profile, knot, loom, or tie-off
+format change. The `state.json` schema is unchanged; `updated_at`
+now records the last *actual* change, not the last 5-second tick.
+
+| Artifact | Before 0.41.0 | 0.41.0+ |
+|---|---|---|
+| `.loom-log` / `.rig-log` | per-run JSONL files, cleared at every startup | removed — one-line `[KNOT][EVENT]` records on stderr; the appended `knot-service.log` is the durable record |
+| `state.json` writes | rewritten every 5-second tick regardless of change | written only when the state actually changes (baseline immediately at startup) |
+| `state.json` mtime | fresh every 5 seconds while running | unchanged in steady state; steady-state liveness is the pidfile |
+| Legacy `.loom-log` / `.rig-log` files (0.31.0 migration) | cleared at every startup | inert — not read, not cleared, not written |
+
+**Migration: none required.**
+
+- No document edits. Legacy `.loom-log`/`.rig-log` files left behind
+  by earlier versions are inert; they may be deleted at leisure.
+- Workflows that read the retired log files (activity tailing, event
+  counting, `QueueIdle` monitoring) must now grep the service log:
+  `grep '\[KNOT\]\[EVENT\]' tie-offs/<rig>/knot-service.log`.
+- Workflows that used `state.json`'s mtime as a liveness probe must use
+  the pidfile instead (`kill -0 $(cat .knot-service.pid)`); the state
+  baseline at startup is still valid for verifying a fresh start.
 
 ---
 

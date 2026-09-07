@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-03 (plan 081 complete — inactivity timeout with restart note, default adapter flip for fresh rigs; released in v0.40.0)
+> **Last Updated:** 2026-09-07 (plan 083 complete — consolidated service log + change-driven state writes, released in v0.41.0; plan indexes made unique: graceful-completion renumbered 082→084, event-log-flags renumbered 084→085, system-event-subscriptions listed as 082)
 
 ## How to Add a Plan
 
@@ -46,6 +46,10 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ⬜ Planned | 2026-09-07 |
+| 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ⬜ Planned | 2026-09-07 |
+| 83 | [Consolidated Service Log + Change-Driven State Writes](083-consolidated-service-log/consolidated-service-log-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
+| 82 | [System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers](082-system-event-subscriptions/system-event-subscriptions-plan.md) | ⬜ Planned | 2026-09-07 |
 | 81 | [Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note](081-inactivity-timeout/inactivity-timeout-plan.md) | ✅ Complete (2026-09-03) — released in v0.40.0 | 2026-09-02 |
 | 80 | [Context Overflow Without Compaction — Fail Fast, Warn at Startup](080-overflow-error-fail-fast/overflow-error-fail-fast-plan.md) | ✅ Complete (2026-08-27) — released in v0.38.1 | 2026-08-27 |
 | 79 | [Context Overflow — Compact and Continue](079-context-overflow-compact-and-continue/context-overflow-compact-and-continue-plan.md) | ✅ Complete (2026-08-26) — released in v0.38.0 | 2026-08-26 |
@@ -69,6 +73,40 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 85. Event-Parse Log Flags and Anchored Rig `.gitignore` Entry
+
+**Status:** ⬜ Planned
+**Created:** 2026-09-07
+**Goal:** Show the `occurred` boolean next to each event id on the `event parse …` console line (so active events and `occurred: false` acknowledgements are distinguishable), and anchor the auto-appended rig `.gitignore` entry with a leading slash (`/{basename}/`) — force-migrating any existing bare `{basename}/` line in place — so it ignores only the top-level rig dir and no longer over-matches nested directories such as `tie-offs/rig/`.
+
+Full details in [085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md).
+
+### 84. Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out
+
+**Status:** ⬜ Planned
+**Created:** 2026-09-07
+**Goal:** Add an opt-in `pi-rpc` agent runner (pi's JSONL command protocol over stdin, side-by-side with `pi-json`) that watches the session's live context usage and, when it crosses a per-alias `ctx-wrap-up-limit` (tokens, set in `rig/models.yml`, below the model's effective compaction point), **steers** the running agent — via pi's RPC `steer` command, delivered at the next turn boundary — to stop starting new work, commit all complete work, update its progress, note what is incomplete and where it left off, and produce its final tie-off; one steer per run, recorded as a `ContextWrapUpSteered` loom-log entry, so context exhaustion ends in a clean handoff instead of an uncommitted working tree. `pi-json` removal is the explicitly deferred next change.
+
+Full details in [084-graceful-completion/graceful-completion-plan.md](084-graceful-completion/graceful-completion-plan.md).
+
+### 83. Consolidated Service Log + Change-Driven State Writes
+
+**Status:** ✅ Complete (2026-09-07) — released in v0.41.0
+**Created:** 2026-09-07
+**Goal:** Retire the per-run `.loom-log`/`.rig-log` JSONL files in favour of one consolidated, durable service log (single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records on stderr, appended to `tie-offs/<rig>/knot-service.log` by the `knot-start` skill), keep run activity in-memory per process (nothing cleared at startup — the 072 startup-clear is retired), and make `state.json` writes change-driven (a no-op tick writes nothing, so an unchanged mtime means the rig is idle; `updated_at` records the last actual change).
+
+Completed in Knot 0.41.0: `[EVENT]` lines render every `LoomEvent` (18 variants) and `RigLogEvent` variant as one line, field names mirroring the domain structs, `None` fields omitted (pinned per variant in unit tests over the pure renderers in `src/adapters/service_log.rs`); run activity lives in `src/application/activity.rs` (`RunActivity` + the `InMemoryLoomLog`/`InMemoryRigLog` port impls that emit on append and answer the existing activity/knot-status queries); the state writer now diffs the freshly derived state against the last written state (ignoring `updated_at`) and skips no-op writes — each real write logs `[STATE]` delta lines (initial snapshot / `change knot …: status idle→completed` / `change queue± …` / …), rendered from `diff_state` in `src/domain/state_change.rs`; the `StartupOptions`/startup-clear machinery of 072 is removed (`run_startup` is 2-arg); the deprecated file adapters (`FileSystemLoomLog`, `FileSystemRigLog`) are deleted and legacy `.loom-log`/`.rig-log` files are inert. Test strategy: binary-level subprocess tests (`tests/consolidated_log.rs`) pin the live `[EVENT]`/`[STATE]` stderr lines and the no-log-files invariant; in-process tests assert durable surfaces (`state.json`, tie-off sections, event-queue files). All skills and docs updated; `knot-update` carries the 0.41.0 entry (no document migration required).
+
+Full details in [083-consolidated-service-log/consolidated-service-log-plan.md](083-consolidated-service-log/consolidated-service-log-plan.md).
+
+### 82. System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers
+
+**Status:** ⬜ Planned
+**Created:** 2026-09-07
+**Goal:** Make every system event the rig writes (`LoomEvent`/`RigLogEvent` variant names) subscribable through `strand-dir: event:<producer>:<VariantId>` — with `*` accepted as a wildcard producer (any knot, loom, or the rig) — by dispatching system-produced events through the existing dispatch machinery, so recovery, reporting, and janitor knots can react to knot outcomes and exceptions (failure, timeout, inactivity, context overflow, empty response); `EventsDispatched` is the single non-dispatchable exception (it is the dispatch record itself).
+
+Full details in [082-system-event-subscriptions/system-event-subscriptions-plan.md](082-system-event-subscriptions/system-event-subscriptions-plan.md).
 
 ### 81. Inactivity Timeout — Kill Blocked Sessions, Restart with a Blocking-Call Note
 

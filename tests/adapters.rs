@@ -11,7 +11,6 @@ use std::thread;
 use std::time::Duration;
 
 use knot::adapters::outbound::event_source::NotifyEventSource;
-use knot::adapters::outbound::loom_log::FileSystemLoomLog;
 use knot::adapters::outbound::loom_repository::FileSystemLoomRepository;
 use knot::adapters::outbound::profile_repo::FileSystemAgentProfileRepository;
 use knot::adapters::outbound::state_writer::FileSystemStateWriter;
@@ -19,14 +18,13 @@ use knot::adapters::outbound::tieoff_sink::FileSystemTieOffSink;
 use knot::adapters::pi_json::PiJsonAgentRunner;
 use knot::adapters::pi_stdio::PiStdioAgentRunner;
 use knot::application::ports::{
-    AgentProfileRepository, AgentRunner, EventSource, LoomLogPort,
+    AgentProfileRepository, AgentRunner, EventSource,
     LoomRepository, PortError, StateWriterPort, TieOffSink,
 };
 use knot::domain::entities::{
     EventMetadata, KnotId, LoomId, RigState, RigStateKnot, RigStateLoom,
     RigStateProfile, StrandPath, TieOff, TieOffPath, TieOffStatus,
 };
-use knot::domain::events::LoomEvent;
 use tokio::sync::mpsc;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -501,98 +499,7 @@ mod tieoff_sink_adapter {
     }
 }
 
-// ── FileSystemLoomLog ──────────────────────────────────────────────────────
 
-mod loom_log_adapter {
-    use super::*;
-
-    /// `open()` creates directory + empty log file.
-    #[test]
-    fn open_creates_directory_and_log_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let rig_dir = dir.path().join("rig");
-        let log = FileSystemLoomLog::new(rig_dir);
-        let loom_id = LoomId("open-test-loom".to_string());
-
-        assert!(log.open(&loom_id).is_ok());
-        // Log lives at the runtime root: tie-offs/<rig-basename>/{loom}/
-        let log_path = dir.path().join("tie-offs/rig/open-test-loom/.loom-log");
-        assert!(
-            log_path.exists(),
-            "open should create the .loom-log file"
-        );
-    }
-
-    /// `append()` writes JSONL entry.
-    #[test]
-    fn append_writes_jsonl_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let rig_dir = dir.path().join("rig");
-        let log = FileSystemLoomLog::new(rig_dir);
-        let loom_id = LoomId("append-test-loom".to_string());
-
-        log.append(LoomEvent::LoomStarted {
-            loom_id: loom_id.clone(),
-            timestamp: "2026-06-10T12:00:00Z".to_string(),
-        })
-        .unwrap();
-
-        let log_path = dir.path().join("tie-offs/rig/append-test-loom/.loom-log");
-        let content = fs::read_to_string(&log_path).unwrap();
-        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines.len(), 1);
-        assert!(
-            lines[0].contains("LoomStarted"),
-            "JSONL entry should contain LoomStarted"
-        );
-    }
-
-    /// `read_all()` returns parsed events.
-    #[test]
-    fn read_all_returns_parsed_events() {
-        let dir = tempfile::tempdir().unwrap();
-        let rig_dir = dir.path().join("rig");
-        let log = FileSystemLoomLog::new(rig_dir);
-        let loom_id = LoomId("readall-test-loom".to_string());
-
-        log.append(LoomEvent::LoomStarted {
-            loom_id: loom_id.clone(),
-            timestamp: "2026-06-10T12:00:00Z".to_string(),
-        })
-        .unwrap();
-        log.append(LoomEvent::KnotRegistered {
-            loom_id: loom_id.clone(),
-            knot_id: KnotId("k1".to_string()),
-            timestamp: "2026-06-10T12:00:01Z".to_string(),
-        })
-        .unwrap();
-
-        let events = log.read_all(&loom_id).unwrap();
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], LoomEvent::LoomStarted { .. }));
-        assert!(matches!(events[1], LoomEvent::KnotRegistered { .. }));
-    }
-
-    /// Idempotent `open()` — no error on re-open.
-    #[test]
-    fn open_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let rig_dir = dir.path().join("rig");
-        let log = FileSystemLoomLog::new(rig_dir);
-        let loom_id = LoomId("idempotent-loom".to_string());
-
-        assert!(log.open(&loom_id).is_ok());
-        assert!(log.open(&loom_id).is_ok()); // second call should not error
-        assert!(log.open(&loom_id).is_ok()); // third call too
-
-        // Can still append after multiple opens
-        log.append(LoomEvent::LoomStarted {
-            loom_id: loom_id.clone(),
-            timestamp: "2026-06-10T12:00:00Z".to_string(),
-        })
-        .unwrap();
-    }
-}
 
 // ── FileSystemStateWriter ──────────────────────────────────────────────────
 

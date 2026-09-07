@@ -1,8 +1,9 @@
 //! Acceptance tests for model aliases (069 phase 4).
 //!
 //! Real `FileSystemModelRegistry`, `FileSystemAgentProfileRepository`,
-//! `FileSystemLoomLog`, and `FileSystemTieOffSink` against a `tempfile`
-//! rig tree, with `MockAgentRunner` standing in for the CLI.
+//! and `FileSystemTieOffSink` against a `tempfile` rig tree, with
+//! in-memory log adapters (plan 083) and `MockAgentRunner` standing in
+//! for the CLI.
 //!
 //! Covers:
 //! 1. Full flow — `models.yml` + `model-ref` profile → tie-off written,
@@ -22,9 +23,9 @@ use std::sync::{Arc, Mutex};
 
 use knot::adapters::outbound::{
     ContentInspectorChecker, FileSystemAgentProfileRepository,
-    FileSystemLoomLog, FileSystemModelRegistry, FileSystemRigLog,
-    FileSystemTieOffSink,
+    FileSystemModelRegistry, FileSystemTieOffSink,
 };
+use knot::application::activity::{InMemoryLoomLog, InMemoryRigLog, RunActivity};
 use knot::application::ports::{
     AgentProfileRepository, AgentRunner, LoomLogPort, ModelRegistryPort,
     PortError, StateWriterPort, StrandEventQueue,
@@ -39,7 +40,7 @@ use knot::domain::entities::{Loom, LoomId, RigState, StrandPath};
 use knot::domain::events::{LoomEvent, StrandEvent};
 use knot::domain::knot_file::derive_runtime_root;
 use knot::domain::value_objects::RigAgentConfig;
-use knot::{AppConfig, StartupOptions, build_app_context, run_startup};
+use knot::{AppConfig, build_app_context, run_startup};
 use tempfile::TempDir;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -94,9 +95,11 @@ fn build_pipeline(
         store.register(loom);
     }
 
-    let runtime_root = derive_runtime_root(&rig_dir);
+    // Plan 083: current-run activity is in-memory — the log ports back
+    // a shared RunActivity (no .loom-log / .rig-log files).
+    let activity = Arc::new(RunActivity::new());
     let log_port: Arc<dyn LoomLogPort> =
-        Arc::new(FileSystemLoomLog::new(rig_dir.clone()));
+        Arc::new(InMemoryLoomLog::new(activity.clone()));
     let profile_repo: Arc<dyn AgentProfileRepository> = Arc::new(
         FileSystemAgentProfileRepository::new(rig_dir.join("profiles")),
     );
@@ -112,7 +115,7 @@ fn build_pipeline(
         rig_dir.clone(),
         profile_repo.clone(),
         model_registry.clone(),
-        Arc::new(FileSystemRigLog::new(runtime_root)),
+        Arc::new(InMemoryRigLog::new(activity)),
         Arc::new(MockGitVersioningPort::default()),
         Arc::new(ContentInspectorChecker),
         Arc::new(MockEventDispatcher::default()),
@@ -307,7 +310,7 @@ fn unknown_alias_fails_knot_and_surfaces_in_loom_log_and_state() {
 
     // State: the knot is failed with the error in `last_error`.
     let collector = Arc::new(StateCollector::default());
-    let write_state = WriteState::new(
+    let mut write_state = WriteState::new(
         pipeline.store.clone(),
         pipeline.log_port.clone(),
         pipeline.profile_repo.clone(),
@@ -392,7 +395,7 @@ fn run_startup_creates_models_yml_and_never_overwrites() {
 
     let config = AppConfig::with_rig_dir(rig_dir.clone());
     let (ctx, _strand_rx, _config_rx) = build_app_context(&config);
-    run_startup(&ctx, &rig_dir, &StartupOptions::service()).unwrap();
+    run_startup(&ctx, &rig_dir).unwrap();
 
     // File created with the template.
     let models_path = rig_dir.join("models.yml");
@@ -406,7 +409,7 @@ fn run_startup_creates_models_yml_and_never_overwrites() {
     // Second run does NOT overwrite user content.
     let custom = "models:\n  default:\n    provider: anthropic\n    model: claude-sonnet-4-20250514\n";
     fs::write(&models_path, custom).unwrap();
-    run_startup(&ctx, &rig_dir, &StartupOptions::service()).unwrap();
+    run_startup(&ctx, &rig_dir).unwrap();
     let after = fs::read_to_string(&models_path).unwrap();
     assert_eq!(after, custom, "existing models.yml must not be overwritten");
 }

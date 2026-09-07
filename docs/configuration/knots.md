@@ -45,7 +45,7 @@ Knots accept **any text file** as strand input — not just `.md` files.
 Supported extensions include `.rs`, `.json`, `.py`, `.txt`, `.yaml`,
 and any other text file. Binary files (detected by null bytes in the
 first 8KB) are silently skipped and logged as `StrandIgnored` in the
-loom-log.
+service log.
 
 This means a knot can process source code, configuration files, or any
 text-based document.
@@ -68,7 +68,6 @@ project_root/
     │   └── fast.md
     ├── tie-offs/
     │   └── prd-review-loom/
-    │       ├── .loom-log
     │       └── tie-off-goals-review.md
     └── prd-review-loom/             ← loom directory
         └── goals-review.md          ← knot definition
@@ -109,7 +108,7 @@ Knot discovers the new file automatically via its file watcher.
 ### Modify a Knot
 
 Edit the `.md` file directly. Changes are picked up by the file watcher
-and logged in the loom-log.
+and recorded as a `KnotUpdated` event in the service log.
 
 ### Delete a Knot
 
@@ -146,12 +145,12 @@ all produce or maintain plans.
 |----------|---------|-----|
 | Profile not found | Knot fails with `ProfileNotFound` | Create the profile at `rig/profiles/{name}.md` |
 | Strand dir missing | Knot registers but finds no files | Create the directory or fix the path |
-| Invalid frontmatter | Knot is skipped; `KnotParseWarning` in loom-log | Check YAML syntax in the `.md` file |
+| Invalid frontmatter | Knot is skipped; `KnotParseWarning` in the service log | Check YAML syntax in the `.md` file |
 | Duplicate knot name | Second knot overwrites first in the loom | Use unique names within each loom |
-| Binary file as strand | `StrandIgnored` in loom-log | Use a text file, or change the strand-dir |
+| Binary file as strand | `StrandIgnored` in the service log | Use a text file, or change the strand-dir |
 
-Check the loom activity log to diagnose issues:
+Check the service log to diagnose issues:
 
 ```bash
-cat tie-offs/rig/prd-review-loom/.loom-log
+grep '[KNOT][EVENT]' tie-offs/rig/knot-service.log
 ```

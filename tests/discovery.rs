@@ -27,7 +27,7 @@ fn discovers_looms_at_startup() {
     let (ctx, strand_rx, config_rx) = knot::build_app_context(&config);
 
     // Run startup discovery
-    let looms = knot::run_startup(&ctx, &rig_dir, &knot::StartupOptions::service()).unwrap();
+    let looms = knot::run_startup(&ctx, &rig_dir).unwrap();
     assert_eq!(looms.len(), 1);
     assert_eq!(looms[0].id.0, "review-loom");
     assert_eq!(looms[0].knots.len(), 1);
@@ -55,7 +55,7 @@ fn ignores_non_loom_directories() {
     let (ctx, strand_rx, config_rx) = knot::build_app_context(&config);
 
     // Run startup discovery
-    let looms = knot::run_startup(&ctx, &rig_dir, &knot::StartupOptions::service()).unwrap();
+    let looms = knot::run_startup(&ctx, &rig_dir).unwrap();
     assert!(looms.is_empty(), "should find no looms");
 
     drop(strand_rx);
@@ -80,7 +80,7 @@ fn discovers_multiple_looms() {
     let config = AppConfig::with_rig_dir(rig_dir.clone());
     let (ctx, strand_rx, config_rx) = knot::build_app_context(&config);
 
-    let looms = knot::run_startup(&ctx, &rig_dir, &knot::StartupOptions::service()).unwrap();
+    let looms = knot::run_startup(&ctx, &rig_dir).unwrap();
     assert_eq!(looms.len(), 2);
 
     let ids: Vec<_> = looms.iter().map(|l| l.id.0.as_str()).collect();

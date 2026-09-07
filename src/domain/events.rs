@@ -246,7 +246,8 @@ pub fn build_listener_context(
            counts as acknowledgement.\n\
          - If a pendening event satisfies the event that has just occured set occured: false to avoid duplicated events.\n\
          - You may conclude a pending event is already relevant but requires additonal context but do not edit the pending event and instead\n\
-           emit a new event of the same type with additional context.\n\n\
+           emit a new event of the same type with additional context.\n\
+         - Never write or read directly from `tie-offs/` files — tie-offs are managed by the infrastructure service; deliver your output as your final response and emit event blocks there.\n\n\
          ---\n\n",
     );
 
@@ -390,7 +391,8 @@ pub enum LoomEvent {
     /// A strand file was ignored (not a text file).
     ///
     /// Binary or non-text files in a strand directory are silently
-    /// skipped. A warning is written to the loom-log and stderr.
+    /// skipped. A warning is emitted on stderr (the event is also
+    /// recorded in run activity).
     StrandIgnored {
         loom_id: LoomId,
         knot_id: KnotId,
@@ -475,7 +477,7 @@ pub enum LoomEvent {
     ///
     /// The 4th tuple element (created file path) was added in Knot 0.33.0;
     /// legacy 3-tuple entries from earlier binaries fail to deserialize
-    /// and are skipped by the loom-log reader with a warning (graceful
+    /// and are skipped by the activity reader with a warning (graceful
     /// degradation — no data loss, the producer tie-off retains all
     /// events). Same precedent as the 2→3 tuple expansion in 0.30.1.
     EventsDispatched {
@@ -536,10 +538,12 @@ pub struct KnotRegistered {
 
 // ── Rig-Log Events ─────────────────────────────────────────────────────────
 
-/// An operational event written to the rig-log (`rig/.rig-log`).
+/// An operational rig-level event (plan 083: run activity).
 ///
-/// The rig-log is an append-only JSONL file that records serious operational
-/// events so the user or an external watcher can monitor and react.
+/// These serious operational events (timeouts, queue idle) are
+/// in-memory run activity; each is rendered as a single-line
+/// `[KNOT][EVENT]` record on stderr (the service log) so the user or
+/// an external watcher can monitor and react.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RigLogEvent {
     /// An agent session exceeded its timeout deadline.
@@ -838,6 +842,32 @@ mod tests {
         assert!(
             !context.contains("plan-validator"),
             "generic message should not contain consumer knot name: {}",
+            context
+        );
+    }
+
+    /// The injected tie-off directions tell the agent never to access
+    /// tie-off files directly — they are owned by the infrastructure.
+    #[test]
+    fn build_listener_context_forbids_direct_tieoff_access() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        assert!(
+            context.contains(
+                "Never write or read directly from `tie-offs/` files"
+            ),
+            "tie-off directions should forbid direct tie-offs/ access: {}",
+            context
+        );
+        assert!(
+            context.contains("managed by the infrastructure service"),
+            "tie-off directions should state tie-offs are infrastructure-managed: {}",
             context
         );
     }

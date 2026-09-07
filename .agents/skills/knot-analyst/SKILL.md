@@ -1,28 +1,28 @@
 ---
 name: knot-analyst
-description: "Analyse rig productivity and project progress at runtime. Tail the rig-log and loom-logs, inspect git history, assess project completion against plan documents, and identify blockers. USE FOR: analyse rig, rig analysis, rig productivity, project progress, how far along, rig health, rig performance, blocker detection, stalled rig, rig diagnosis, activity analysis, progress report, rig review, project health check, rig assessment, knot productivity, service log. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting raw state (use knot-inspect), designing knots (use knot-design), starting or stopping the service (use knot-start)."
+description: "Analyse rig productivity and project progress at runtime. Read the service log (`[KNOT][EVENT]` / `[KNOT][STATE]` lines), inspect git history, assess project completion against plan documents, and identify blockers. USE FOR: analyse rig, rig analysis, rig productivity, project progress, how far along, rig health, rig performance, blocker detection, stalled rig, rig diagnosis, activity analysis, progress report, rig review, project health check, rig assessment, knot productivity, service log. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting raw state (use knot-inspect), designing knots (use knot-design), starting or stopping the service (use knot-start)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.6.0"
-  compatibility: "Knot 0.34.0+"
+  version: "1.7.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Analyst Skill
 
 Analyse the productivity and progress of a running Knot rig. This skill
-combines operational signals (rig-log, loom-logs, git history, knot
+combines operational signals (the service log, git history, knot
 processing state) with project-document signals (plans, specs, decision
 records) to produce a structured assessment of how the rig is performing
 and whether the project is making progress.
 
-**Rig-log:** `tie-offs/<rig>/.rig-log` (append-only JSONL — operational
-events, **cleared at knot startup** — per-run scope)
-**Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log` (append-only JSONL —
-per-loom activity, **cleared at knot startup** — per-run scope)
-**Service log:** `tie-offs/<rig>/knot-service.log` (raw stderr, appended
-across runs by `knot-start` — the only cross-run operational record)
-**State file:** `tie-offs/<rig>/state.json` (current rig snapshot)
+**Service log:** `tie-offs/<rig>/knot-service.log` — the service's
+single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records, **appended across
+runs by `knot-start`** — the only cross-run operational record (run
+activity is in-memory per process since Knot 0.41.0; the retired
+`.rig-log` / `.loom-log` JSONL files are gone)
+**State file:** `tie-offs/<rig>/state.json` (current rig snapshot, written
+on state change — an unchanged mtime means the rig is idle)
 
 ---
 
@@ -38,7 +38,7 @@ signals to answer this.
 ### File-First
 
 All analysis reads from files — no HTTP calls needed. Read
-`tie-offs/<rig>/.rig-log`, loom-logs, `tie-offs/<rig>/state.json`,
+`tie-offs/<rig>/knot-service.log`, `tie-offs/<rig>/state.json`,
 git log, and project documents.
 
 ### Signal-Based, Not Prescriptive
@@ -82,12 +82,16 @@ structured report.
 
 Determine whether the rig has been doing meaningful work.
 
-**Read `tie-offs/<rig>/.rig-log`:**
+**Read the service log** at `tie-offs/<rig>/knot-service.log`:
 
-The rig-log is an append-only JSONL file recording serious operational
-events of the **current run only** — it is truncated at every knot
-startup (per-run scope; the tie-off files hold the durable history).
-Tail the last 50 lines (or the full file if smaller).
+The service log is the single operational record: one line per domain
+event (`[KNOT][EVENT]`) and one line per actual `state.json` write
+(`[KNOT][STATE]`), appended across runs. Run activity itself is
+in-memory per process, so events of an earlier process run survive only
+if the run was captured in this file (start Knot with `knot-start`;
+the tie-off files hold the durable audit history either way). Tail the
+last 50 lines (or the full file if smaller); filter per loom with
+`grep 'loom=<id>'`.
 
 Look for:
 
@@ -95,36 +99,26 @@ Look for:
 |--------|-----------------|----------------|
 | `TimeoutExceeded` events | Count, which knots, frequency | Repeated timeouts indicate the agent is struggling with its workload — too complex a task, insufficient timeout, or a stuck session |
 | `QueueIdle` events | Timestamps between idle periods | Long idle gaps mean the rig is waiting for input. Frequent idle means work is completing quickly. A single idle at the end with no follow-up means work has stopped |
+| `KnotFailed` events | Which strand and error message | Knot encountered errors |
+| `KnotCompleted` events | Count | Successful processing. Compare count to failures |
+| `KnotProcessing` without `KnotCompleted` | Knot started but never finished — likely timed out or crashed |
+| `KnotParseWarning` events | Which knot file | Knot definition has issues (unknown frontmatter fields) |
+| Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
+| `SessionResumed` events | Retry counts | Session retries occurred. High retry counts signal fragile invocations |
+| `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. Informational only — count to gauge noise, do not flag |
+| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event is persisted in `tie-offs/<rig>/events/*.json` and removed from the queue at the point of failure — it does not recur. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
+| `[KNOT][STATE]` lines | When the state last changed | A long gap since the last `[STATE]` line means the rig has been idle (the state file is now change-driven — mtime and log agree) |
 | Age of last entry | Compare to current time | If the last entry is hours or days old, the rig may have stalled or completed all work |
 
-**Read each loom-log** at `tie-offs/<rig>/{loom-id}/.loom-log`:
-
-Tail the last 30 lines per loom. Look for:
-
-| Signal | Interpretation |
-|--------|---------------|
-| `KnotFailed` events | Knot encountered errors. Note which strand and error message |
-| `KnotCompleted` events | Successful processing. Compare count to failures |
-| `KnotProcessing` without `KnotCompleted` | Knot started but never finished — likely timed out or crashed |
-| `KnotParseWarning` events | Knot definition has issues (unknown frontmatter fields) |
-| Repeated `KnotCompleted` on the same strand | The knot is re-triggering. If the tie-off says "no changes needed" each time, the strand is stale (see Dimension 4) |
-| `SessionResumed` events | Session retries occurred. High retry counts signal fragile invocations |
-| `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. These are informational only and do not indicate a problem. Count them to gauge noise levels but do not flag as issues. |
-| `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event watcher fires instantly, but the file may be short-lived (a script creates, reads, and deletes it within milliseconds). The event is persisted in `tie-offs/<rig>/events/*.json` and removed from the queue at the point of failure — it does not recur from the same event. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
-
-**Read the service log** at `tie-offs/<rig>/knot-service.log`:
-
-The rig-log and loom-logs cover the **current run only**. The service log
-is the one file that spans every run (appended at start by `knot-start`,
-never truncated), so it is where cross-run operational failure shows up:
+**Cross-run signals** (still read from the same service log):
 
 | Signal | Interpretation |
 |--------|----------------|
-| Repeated startup output within a short window | The service is **crash-looping** — the structured logs are wiped on each boot, so this file is the only evidence |
+| Repeated startup output within a short window | The service is **crash-looping** — run activity is in-memory, so this file is the only evidence across boots |
 | `WARNING: startup discovery failed` | Loom discovery failed — the rig looks idle but has no watches registered |
 | `[startup] loaded N persisted event(s)` with N growing across boots | Events are re-queued every restart: they keep failing, or the service dies mid-run |
 | `[queue] repaired …` | A knot definition's queue identity was repaired — check for a malformed knot file |
-| `panic`, `[state-writer] write failed` | Process-level faults that never reach the JSONL logs |
+| `panic`, `[state-writer] write failed` | Process-level faults |
 | No service log at all | The service was started outside `knot-start` — note it; cross-run analysis is unavailable |
 
 **Produce a summary:**
@@ -293,9 +287,9 @@ work.
 
 **Check for error accumulation:**
 
-From loom-logs, count `KnotFailed` events per knot since the last
-startup (the log is cleared at every knot startup, so it holds the
-current run's events only). If a single knot has 3+ failures, flag it
+From the service log (`grep 'KnotFailed' tie-offs/<rig>/knot-service.log`),
+count `KnotFailed` events per knot since the last startup. If a single
+knot has 3+ failures, flag it
 as a recurring problem.
 
 **Produce a summary:**
@@ -322,7 +316,7 @@ Synthesise findings across all dimensions to identify specific blockers.
 
 | Pattern | Dimensions involved | Action to suggest |
 |---------|-------------------|-------------------|
-| **Timeout wall** | Operational (rig-log timeouts) + Git (no recent commits from affected knot) | Increase profile timeout, or reduce task complexity in knot instructions |
+| **Timeout wall** | Operational (service-log `TimeoutExceeded`) + Git (no recent commits from affected knot) | Increase profile timeout, or reduce task complexity in knot instructions |
 | **Stale input** | Stagnation (same strand repeated) + Git (no new commits to strand directory) | Input directory has not been updated — the rig is waiting for new work |
 | **Loop oscillation** | Stagnation (alternating tie-offs) + Operational (high processing count) | Check knot authority boundaries. One knot may be overwriting the other's output |
 | **Missing profile** | Operational (`ProfileNotFound` errors) + State (knot references missing profile) | Create the referenced profile in `rig/profiles/` |
@@ -414,7 +408,7 @@ For lightweight, targeted queries:
 
 ### "Is the rig working?"
 
-1. Read `tie-offs/<rig>/.rig-log` — last 10 lines. Any entries in the last hour?
+1. Read `tie-offs/<rig>/knot-service.log` — last 10 `[KNOT][EVENT]` lines. Any entries in the last hour?
 2. Run `git log --oneline -5` — any commits in the last 24h?
 3. Read `tie-offs/<rig>/state.json` — are any knots in `processing` or `completed`?
 
@@ -427,8 +421,8 @@ For lightweight, targeted queries:
 
 ### "Is anything broken?"
 
-1. Tail `tie-offs/<rig>/.rig-log` for `TimeoutExceeded` events in last 24h.
-2. Tail each loom-log for `KnotFailed` events in last 24h.
+1. Grep the service log for `TimeoutExceeded` events in the last 24h.
+2. Grep the service log for `KnotFailed` events in the last 24h (filter per loom with `grep 'loom=<id>'`).
 3. Check `tie-offs/<rig>/state.json` for knots with `last_error` set.
 4. Report any non-zero findings.
 
@@ -438,12 +432,11 @@ For lightweight, targeted queries:
 
 | Scenario | Action |
 |----------|--------|
-| `tie-offs/<rig>/.rig-log` does not exist | Rig-log may not have been written yet (no serious events). Report "No rig-log found — no timeout or idle events recorded." |
+| `tie-offs/<rig>/knot-service.log` does not exist | The service was started without `knot-start` — no operational record. Report "No service log found — start Knot with `knot-start` to record one." |
 | `tie-offs/<rig>/state.json` does not exist | Knot is not running. Report and suggest `knot-start`; continue from the service log, tie-offs, and git. |
-| `tie-offs/<rig>/knot-service.log` does not exist | The service was started without `knot-start`. Cross-run analysis is unavailable — analyse the current run only and say so. |
 | Git is not initialised | Project may not be in a git repo. Skip git analysis, note in report. |
 | No `project/` directory | Cannot assess project document progress. Report "No project documents found." |
-| Loom-log missing for a loom | Loom has no recorded activity. Report "No activity for `{loom-id}`." |
+| No events for a loom in the service log | Loom has no recorded activity. Report "No activity for `{loom-id}`." |
 | Tie-off file is empty or missing | Knot has not yet produced output. Not an error. |
 
 ---
@@ -451,17 +444,17 @@ For lightweight, targeted queries:
 ## Quick Reference
 
 ```bash
-# Tail rig-log for recent issues
-tail -50 tie-offs/rig/.rig-log
+# Recent event activity
+grep '\[KNOT\]\[EVENT\]' tie-offs/rig/knot-service.log | tail -50
 
 # Cross-run operational view (survives restarts)
 grep -nE 'WARNING|Error|panic|persisted event' tie-offs/rig/knot-service.log | tail -20
 
-# Count timeouts in last 24h
-grep "TimeoutExceeded" tie-offs/rig/.rig-log | tail -20
+# Count timeouts
+grep "TimeoutExceeded" tie-offs/rig/knot-service.log | tail -20
 
-# Check loom activity
-for log in tie-offs/rig/*/.loom-log; do echo "=== $log ==="; tail -5 "$log"; done
+# Check one loom's activity
+grep 'loom=prd-review-loom' tie-offs/rig/knot-service.log | tail -10
 
 # Recent git activity
 git log --oneline --since="7 days ago" | head -20

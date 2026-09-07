@@ -4,8 +4,8 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.8.0"
-  compatibility: "Knot 0.37.2+"
+  version: "4.9.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Init Skill
@@ -15,8 +15,10 @@ whether a rig already exists, verifies that Knot is running by checking
 for `tie-offs/<rig>/state.json`, creates the rig directory structure, and
 sets up a default agent profile if none exist.
 
-**State file:** `tie-offs/<rig>/state.json` (written every 5 seconds by
-Knot). For the default rig this is `tie-offs/rig/state.json`; for a named
+**State file:** `tie-offs/<rig>/state.json` (written when the state
+changes — Knot 0.41.0+; the baseline is written immediately at startup,
+so a fresh `updated_at` is proof of a recent start).
+For the default rig this is `tie-offs/rig/state.json`; for a named
 rig (e.g. `dev-rig`) it is `tie-offs/dev-rig/state.json`.
 
 ---
@@ -285,7 +287,7 @@ When asked to initialise a Knot rig:
      directory, never to interactive pi elsewhere. With compaction on,
      pi recovers from a context overflow in-process
      (compact-and-continue) instead of ending the turn in error; knot
-     records each compaction as a `ContextCompacted` loom-log entry
+     records each compaction as a `ContextCompacted` service-log event
      and fails the strand immediately (`ContextLimitReached`) when
      the context still cannot fit after compaction (Knot 0.38.0+).
 
@@ -504,7 +506,7 @@ Since Knot 0.31.0, the rig is versioned in **its own git repository**
   `git rm -r --cached rig/` untrack step (step 4c). Knot detects this
   and logs a warning instead of doing it.
 - **Runtime data lives in the project tree** at `tie-offs/<rig>/`
-  (tie-offs, loom-logs, event queue, rig-log, state) and is committed
+  (tie-offs, the appended service log, event queue, state) and is committed
   with the project's git history by Knot's per-knot-run commits.
 
 ---

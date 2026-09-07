@@ -4,8 +4,8 @@ description: "Review the rig's work using git history and tie-off files. Examine
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
-  compatibility: "Knot 0.31.0+"
+  version: "1.4.0"
+  compatibility: "Knot 0.41.0+"
 ---
 
 # Knot Manage Skill
@@ -21,15 +21,18 @@ review** of completed work: what was written, what was communicated,
 and whether the interaction chain achieved its goal.
 
 **Tie-off files:** `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
-**Loom-logs:** `tie-offs/<rig>/{loom-id}/.loom-log`
+**Service log:** `tie-offs/<rig>/knot-service.log` (single-line
+`[KNOT][EVENT]` / `[KNOT][STATE]` records, appended across runs by
+`knot-start`; filter per loom with `grep 'loom=<id>'`) — since Knot
+0.41.0 there are no per-run log files
 **Git commits:** Knot-generated commits follow the pattern
 `knot: <knot-id> — processed <strand-name> (<event-type>)`
 
 Since Knot 0.31.0 there are **two independent git repositories**:
 
 - **Project git** — the audit trail. Contains the runtime tree
-  (`tie-offs/<rig>/`: tie-offs, loom-logs, event queue, rig-log, state
-  snapshots) plus everything the knots wrote to the project domain.
+  (`tie-offs/<rig>/`: tie-offs, the appended service log, event queue,
+  state snapshots) plus everything the knots wrote to the project domain.
   Knot's per-knot-run commits live here.
 - **Rig git** (`rig/.git`) — the rig source (looms, knots, profiles,
   config). Committed **manually by the user**; Knot never commits it and
@@ -192,8 +195,8 @@ instructed to emit that event type).
 These are separate `.md` files created by Knot's event parser — **not**
 by the producer agent. They appear in the consumer's dispatch directory
 and are what the consumer knot actually processes as strands. If the
-directory exists but is empty (only a `DirectoryCreated` loom-log entry),
-it means Knot created the watch directory for the subscription but no
+directory exists but is empty (only a `DirectoryCreated` service-log
+event), it means Knot created the watch directory for the subscription but no
 event has been dispatched yet.
 
 The producer **never writes to the dispatch directory directly**.
@@ -296,7 +299,7 @@ When asked to review the full rig's communication patterns:
 3. **Identify communication gaps**:
    | Gap | Detection |
    |-----|-----------|
-   | **Unanswered events** | Producer emitted events (in tie-off) but consumer's tie-off has no corresponding entries. Check consumer's loom-log for `KnotProcessing` on those event strands. |
+   | **Unanswered events** | Producer emitted events (in tie-off) but consumer's tie-off has no corresponding entries. Check the service log for `KnotProcessing` on those event strands (`grep 'knot=<consumer-knot>'`). |
    | **Dead subscriptions** | Consumer subscribes to an event but the producer's tie-off never emits it. The dispatch directory is empty. |
    | **Oscillating chain** | Producer and consumer alternate changes on the same file, each re-triggering the other. Tie-offs show repeated "changes applied" without convergence. |
    | **Over-broadcast** | Producer emits the same event for every minor change. Consumer processes many events that result in "no changes needed." |
@@ -406,13 +409,13 @@ dispatched to consumers.
 | `rig/` tracked by project git | Pre-0.31.0 layout. Run the one-time `git rm -r --cached rig/` + commit untrack step (see knot-init), then verify `git check-ignore -v rig/`. |
 | No Knot commits | Either `git-versioned: false` on all knots, or the rig has not produced successful output. Check tie-off files directly. |
 | Tie-off file missing | Knot has not yet produced output. Not an error — knot may not have been triggered. |
-| Tie-off file is empty | Knot may have started processing but not completed. Check loom-log for `KnotProcessing` without `KnotCompleted`. |
+| Tie-off file is empty | Knot may have started processing but not completed. Check the service log for `KnotProcessing` without `KnotCompleted`. |
 | Git user not configured | Commits may fail silently. Check `git config user.email` and `git config user.name`. |
 
-## Loom-Log Entries to Ignore During Review
+## Service-Log Entries to Ignore During Review
 
-When reviewing loom-logs (`tie-offs/<rig>/{loom-id}/.loom-log`), these entries
-are expected and do not indicate problems:
+When reviewing the service log (`tie-offs/<rig>/knot-service.log`), these
+entries are expected and do not indicate problems:
 
 - **`StrandSkipped` with reason `"filtered temp file"`** — A temp file from
   `sed -i` (macOS/Linux), or similar in-place editor triggered a filesystem
@@ -514,8 +517,8 @@ ls -la tie-offs/rig/planning-loom/ReviewCompleted/
 # Find all event subscriptions (consumer wiring)
 grep -r "strand-dir:.*event:" rig/*-loom/
 
-# Check loom-log for dispatched events
-grep EventsDispatched tie-offs/rig/review-loom/.loom-log
+# Check the service log for dispatched events
+grep EventsDispatched tie-offs/rig/knot-service.log
 
 # Rig source history (separate git repo, user-committed)
 git -C rig log --oneline -20

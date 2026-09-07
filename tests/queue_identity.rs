@@ -245,19 +245,36 @@ fn count_event_files(fixture: &RigFixture) -> usize {
         .unwrap_or(0)
 }
 
-/// The `strand_path` values of `KnotCompleted` events in a loom-log,
-/// in processing order.
+/// The `strand_path` values of the tie-off completion sections for a
+/// loom's knots, in processing order (plan 083 replacement for the
+/// retired loom-log `KnotCompleted` events).
 fn completed_strands(fixture: &RigFixture, loom_id: &str) -> Vec<String> {
-    helpers::read_loom_log(&fixture.rig_dir, loom_id)
-        .iter()
-        .filter(|e| helpers::loom_log_event_type(e) == Some("KnotCompleted"))
-        .filter_map(|e| {
-            e.get("KnotCompleted")?
-                .get("strand_path")?
-                .as_str()
-                .map(|s| s.to_string())
-        })
-        .collect()
+    let dir = runtime_root(fixture).join(loom_id);
+    let mut strands: Vec<String> = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return strands;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("tie-off-") || !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        // Section header: `## {knot} triggered by {event} {strand}`.
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("## ") {
+                if let Some(after) = rest.split(" triggered by ").nth(1) {
+                    if let Some(strand) = after.rsplit_once(' ') {
+                        strands.push(strand.1.to_string());
+                    }
+                }
+            }
+        }
+    }
+    strands
 }
 
 /// The agent invocations recorded by the mock `pi` (one line per run,
@@ -268,24 +285,21 @@ fn agent_runs(fixture: &RigFixture) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn read_rig_log(rig_dir: &Path) -> Vec<serde_json::Value> {
-    let log_path =
-        knot::domain::knot_file::derive_runtime_root(rig_dir).join(".rig-log");
-    let content = match fs::read_to_string(&log_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    content
-        .lines()
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
-}
-
-fn rig_log_has_queue_idle(rig_dir: &Path) -> bool {
-    read_rig_log(rig_dir)
-        .iter()
-        .any(|e| e.get("QueueIdle").is_some())
+/// The queue is drained: no event files on disk and an empty
+/// `strand_queue` in `state.json` — the observable form of the
+/// `QueueIdle` rig event (now in-memory only; the `[EVENT]` line is
+/// asserted at the binary level in `tests/consolidated_log.rs`).
+fn queue_drained(fixture: &RigFixture) -> bool {
+    if count_event_files(fixture) != 0 {
+        return false;
+    }
+    match helpers::read_state_file(&fixture.rig_dir) {
+        Ok(state) => state["strand_queue"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 // ── Step-mode runner ─────────────────────────────────────────────────────
@@ -426,9 +440,9 @@ fn backdated_head_processes_first_and_drains() {
     // rig-log with the queue empty. (The pre-fix behaviour is
     // QueueIdle with the queue still full — a phantom head.)
     wait_until(
-        || rig_log_has_queue_idle(&f.rig_dir),
+        || queue_drained(&f),
         10_000,
-        "QueueIdle after a clean drain",
+        "queue drained cleanly",
     );
     assert_eq!(
         count_event_files(&f),
@@ -519,9 +533,9 @@ fn restart_over_duplicate_key_files_collapses_to_one() {
     );
 
     wait_until(
-        || rig_log_has_queue_idle(&f.rig_dir),
+        || queue_drained(&f),
         10_000,
-        "QueueIdle after the drain",
+        "queue drained",
     );
 
     handle.abort();

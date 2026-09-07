@@ -14,7 +14,10 @@ use crate::domain::entities::{
     RigStateStrandQueueEntry,
 };
 use crate::domain::events::LoomEvent;
+use crate::domain::knot_file::derive_runtime_root;
+#[cfg(test)]
 use crate::domain::pending_event::PendingEvent;
+use crate::domain::state_change::diff_state;
 
 use super::types::format_timestamp;
 
@@ -41,6 +44,12 @@ pub struct WriteState {
     state_writer: Arc<dyn StateWriterPort>,
     rig_dir: PathBuf,
     strand_queue: Option<StrandQueueRef>,
+    /// The last state actually written to disk (`None` before the first
+    /// write of this run). Change-driven writes (plan 083): a tick whose
+    /// built state is content-equal to this (ignoring `updated_at`) and
+    /// whose `state.json` still exists on disk is skipped — no write,
+    /// no mtime churn, no `[STATE]` line.
+    last_written: Option<RigState>,
 }
 
 impl WriteState {
@@ -66,6 +75,7 @@ impl WriteState {
             state_writer,
             rig_dir,
             strand_queue: Some(strand_queue),
+            last_written: None,
         }
     }
 
@@ -152,10 +162,55 @@ impl WriteState {
         })
     }
 
-    /// Execute: build state and write to disk atomically.
-    pub fn execute(&self) -> Result<(), PortError> {
+    /// Execute: build state and write to disk atomically — but only
+    /// when the content actually changed (plan 083, change-driven
+    /// state writes).
+    ///
+    /// Skip rule: when the built state is equal to the last written
+    /// state (every field except `updated_at`, which is the write
+    /// tick) and `state.json` still exists on disk, nothing is written
+    /// and no `[STATE]` line is emitted. When the content changed, the
+    /// state is written and the delta is logged as `[KNOT][STATE]`
+    /// lines (the first write of the run is the baseline line). A
+    /// content-equal state whose `state.json` was deleted externally
+    /// is rewritten (no delta lines — the content did not change).
+    pub fn execute(&mut self) -> Result<(), PortError> {
         let state = self.build_state()?;
-        self.state_writer.write_state(&state)
+
+        let state_path = derive_runtime_root(&self.rig_dir).join("state.json");
+        let content_changed = match &self.last_written {
+            Some(prev) => !Self::equal_ignoring_write_tick(prev, &state),
+            None => true,
+        };
+        let file_missing = !state_path.exists();
+
+        if !content_changed && !file_missing {
+            // Nothing new to say and the file is still there — skip
+            // the write entirely (no mtime churn, no log line).
+            return Ok(());
+        }
+
+        let change = diff_state(self.last_written.as_ref(), &state);
+        let first_write = self.last_written.is_none();
+
+        self.state_writer.write_state(&state)?;
+        self.last_written = Some(state.clone());
+        crate::adapters::service_log::log_state_write_lines(
+            first_write,
+            &change,
+            &state,
+        );
+        Ok(())
+    }
+
+    /// Compare two states on everything except `updated_at` (the write
+    /// tick, which changes on every build and is never "the change").
+    fn equal_ignoring_write_tick(a: &RigState, b: &RigState) -> bool {
+        let mut a = a.clone();
+        let mut b = b.clone();
+        a.updated_at.clear();
+        b.updated_at.clear();
+        a == b
     }
 
     /// Build the strand queue entries from the current queue snapshot.
@@ -341,11 +396,6 @@ mod write_state_tests {
                 .get(&loom_id.0)
                 .cloned()
                 .unwrap_or_default())
-        }
-
-        fn clear_all(&self) -> Result<(), PortError> {
-            self.events.write().unwrap().clear();
-            Ok(())
         }
     }
 
@@ -918,7 +968,7 @@ mod write_state_tests {
 
     #[test]
     fn execute_builds_and_writes_state() {
-        let (uc, store, _, profile_repo, writer) = build_use_case();
+        let (mut uc, store, _, profile_repo, writer) = build_use_case();
 
         store.register(test_loom("prds"));
         profile_repo.add_profile(
@@ -955,7 +1005,7 @@ mod write_state_tests {
         let model_registry = Arc::new(
             crate::application::usecases::test_fixtures::MockModelRegistry::default(),
         );
-        let uc = WriteState::new(
+        let mut uc = WriteState::new(
             store.clone(),
             log_port,
             profile_repo,
@@ -973,7 +1023,7 @@ mod write_state_tests {
 
     #[test]
     fn multiple_looms_in_state() {
-        let (uc, store, _, _, writer) = build_use_case();
+        let (mut uc, store, _, _, writer) = build_use_case();
 
         store.register(test_loom("prds"));
         let loom2 = test_loom("docs");
@@ -989,7 +1039,7 @@ mod write_state_tests {
 
     #[test]
     fn rig_state_json_matches_spec() {
-        let (uc, store, log_port, profile_repo, writer) = build_use_case();
+        let (mut uc, store, log_port, profile_repo, writer) = build_use_case();
 
         store.register(test_loom("my-loom"));
         log_port.add_events(
@@ -1200,5 +1250,168 @@ mod write_state_tests {
         assert_eq!(state.strand_queue[2].loom_id, "docs-loom");
         assert_eq!(state.strand_queue[2].knot_id, "docs");
         assert_eq!(state.strand_queue[2].event_kind, "deleted");
+    }
+
+    // ── Change-driven write tests (plan 083) ────────────────────────
+
+    /// A state writer that both records every write and materialises
+    /// the `state.json` file (so the existence check in `execute` sees
+    /// the same file a production run would).
+    struct CountingStateWriter {
+        dir: PathBuf,
+        writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl CountingStateWriter {
+        fn new(dir: PathBuf) -> Self {
+            Self {
+                dir,
+                writes: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+
+        fn count(&self) -> usize {
+            self.writes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn state_path(&self) -> PathBuf {
+            self.dir.join("state.json")
+        }
+    }
+
+    impl StateWriterPort for CountingStateWriter {
+        fn write_state(&self, state: &RigState) -> Result<(), PortError> {
+            use std::io::Write;
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let json = serde_json::to_string_pretty(state)
+                .map_err(|e| PortError::StateWriteFailed(e.to_string()))?;
+            std::fs::create_dir_all(&self.dir)
+                .map_err(|e| PortError::StateWriteFailed(e.to_string()))?;
+            let mut file = std::fs::File::create(self.state_path())
+                .map_err(|e| PortError::StateWriteFailed(e.to_string()))?;
+            file.write_all(json.as_bytes())
+                .map_err(|e| PortError::StateWriteFailed(e.to_string()))?;
+            Ok(())
+        }
+    }
+
+    /// Build a `WriteState` over a real directory layout
+    /// (`rig_dir = <tmp>/rig` → runtime root `<tmp>/tie-offs/rig`) with
+    /// the counting file materialising writer.
+    fn build_change_driven_uc(
+        rig_dir: PathBuf,
+    ) -> (
+        WriteState,
+        std::sync::Arc<CountingStateWriter>,
+        LoomStore,
+        Arc<MockProfileRepoForState>,
+        PathBuf,
+    ) {
+        let store = LoomStore::new();
+        let log_port: Arc<dyn LoomLogPort> =
+            Arc::new(MockLoomLogForState::default());
+        let profile_repo = Arc::new(MockProfileRepoForState::default());
+        let model_registry = Arc::new(
+            crate::application::usecases::test_fixtures::MockModelRegistry::default(),
+        );
+        let runtime_root = derive_runtime_root(&rig_dir);
+        let writer = std::sync::Arc::new(CountingStateWriter::new(
+            runtime_root.clone(),
+        ));
+        let strand_queue: StrandQueueRef =
+            Arc::new(std::sync::Mutex::new(None));
+        let uc = WriteState::new(
+            store.clone(),
+            log_port,
+            profile_repo.clone(),
+            model_registry,
+            writer.clone() as std::sync::Arc<dyn StateWriterPort>,
+            rig_dir.clone(),
+            strand_queue,
+        );
+        (uc, writer, store, profile_repo, runtime_root)
+    }
+
+    #[test]
+    fn second_identical_tick_is_skipped_and_change_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        let (mut uc, writer, store, profile_repo, runtime_root) =
+            build_change_driven_uc(rig_dir);
+        store.register(test_loom("prds"));
+
+        // First write: creates state.json (the run's baseline).
+        uc.execute().unwrap();
+        assert_eq!(writer.count(), 1, "first write must happen");
+        let state_file = runtime_root.join("state.json");
+        assert!(state_file.exists());
+        let first = std::fs::read_to_string(&state_file).unwrap();
+
+        // Second tick: identical content (only the updated_at tick
+        // differs) and the file exists → no write, no churn.
+        uc.execute().unwrap();
+        assert_eq!(
+            writer.count(),
+            1,
+            "unchanged tick must be skipped"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&state_file).unwrap(),
+            first,
+            "file content must be untouched on a skipped tick"
+        );
+
+        // A real change (new profile) → written.
+        profile_repo.add_profile(
+            AgentProfile::new(
+                "fast".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+                "Fast.".to_string(),
+            )
+            .unwrap(),
+        );
+        uc.execute().unwrap();
+        assert_eq!(
+            writer.count(),
+            2,
+            "changed content must be written"
+        );
+
+        // External deletion of state.json → forced rewrite even though
+        // the content is unchanged again.
+        std::fs::remove_file(&state_file).unwrap();
+        uc.execute().unwrap();
+        assert_eq!(
+            writer.count(),
+            3,
+            "a missing state.json must be rewritten"
+        );
+        assert!(state_file.exists(), "state.json restored");
+
+        // And the tick after that is skipped again.
+        uc.execute().unwrap();
+        assert_eq!(writer.count(), 3, "post-rewrite tick is skipped");
+    }
+
+    #[test]
+    fn updated_at_alone_never_forces_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        let (mut uc, writer, _, _, _) = build_change_driven_uc(rig_dir);
+
+        uc.execute().unwrap();
+        assert_eq!(writer.count(), 1);
+        // Every subsequent tick stamps a new updated_at; none of them
+        // may force a write.
+        for _ in 0..3 {
+            uc.execute().unwrap();
+        }
+        assert_eq!(
+            writer.count(),
+            1,
+            "only the updated_at tick must not trigger writes"
+        );
     }
 }

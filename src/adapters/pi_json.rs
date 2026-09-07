@@ -203,7 +203,7 @@ impl PiJsonAgentRunner {
                 // intermediate tool-use messages from final responses.
             }
             Some("compaction_end") => {
-                // Plan 079: record the compaction for loom-log visibility
+                // Plan 079: record the compaction for run-activity visibility
                 // and terminal-overflow detection. `result` is absent on
                 // failed compactions (pi omits undefined keys in JSON),
                 // so `tokens_before` is `None` there.

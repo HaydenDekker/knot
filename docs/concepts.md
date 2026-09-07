@@ -20,11 +20,10 @@ Rig (reusable source — its own git repo)
 
 Runtime tree (project output — committed with project git)
 tie-offs/<rig>/
- ├── state.json (live observability, written every 5s)
- ├── .rig-log (operational events)
- ├── knot-service.log (raw service stderr, appended by the launcher)
+ ├── state.json (live observability, written on state change)
+ ├── knot-service.log (consolidated service log, appended by the launcher)
  ├── events/ (disk-backed event queue)
- └── {loom-id}/ (.loom-log, tie-off files, event dispatch dirs)
+ └── {loom-id}/ (tie-off files, event dispatch dirs)
 ```
 
 ### Rig
@@ -73,7 +72,7 @@ processing task.
 A **text file** in a knot's strand directory. Any text file is accepted
 (`.md`, `.rs`, `.json`, `.py`, `.txt`, etc.) — not just Markdown.
 Binary files are detected and silently skipped (logged as
-`StrandIgnored` in the loom-log).
+`StrandIgnored` in the service log).
 
 When a strand is created, modified, or deleted, the knot that watches
 that directory is triggered to process it. The strand is the raw input
@@ -96,7 +95,7 @@ root (the directory containing `rig/`).
 
 ### Rig State
 
-`tie-offs/<rig>/state.json` is written every 5 seconds and contains the
+`tie-offs/<rig>/state.json` is written **when the state actually changes** (the writer ticks every 5 seconds but skips no-op writes — an unchanged mtime means the rig is idle) and contains the
 complete live state of the rig: registered looms, their knots with processing
 status, agent profiles, and the pending strand queue. This is Knot's
 primary observability interface — no HTTP API is used.
@@ -154,8 +153,9 @@ final response — is a **failure**, not a timeout: Knot re-enters the
 session to request the final response (above); only when the nudges are
 exhausted does the knot end with status `failed` and
 `no final response: … after N attempts (session resume exhausted)` as
-the error. A failed tie-off section is written and the rig-log stays
-untouched (`TimeoutExceeded` records genuine deadline breaches only).
+the error. A failed tie-off section is written; no operational event is
+recorded (only deadline breaches are — `TimeoutExceeded` records genuine
+deadline breaches only).
 Without a session ID (stdio adapter, unparseable output) there is no
 re-entry — the terminal failure stands after the first attempt.
 
@@ -170,7 +170,8 @@ A healthy long-running command keeps streaming output (pi relays
 tool output as a throttled stream) and keeps resetting the timer, so
 an active session may run past the inactivity window until the
 budget; a hung command or stalled provider goes silent and is killed
-at the window. Each kill is recorded as an `AgentInactivity` loom-log
+at the window. Each kill is recorded as an `AgentInactivity` event in the
+service log
 entry — attempt, silent seconds, window, captured session ID, and the
 **blocked call** named from the stream when derivable (e.g.
 `bash("npm run build")`) — and the retry re-enters the same session
@@ -181,7 +182,7 @@ alive (run the task in the background and poll its output, or stream
 the output) instead of re-hanging. When the inactivity attempts are
 exhausted the knot terminates with
 `inactivity: session resume exhausted 10 retries after N inactivity
-kills` — a `TimeoutExceeded` rig-log entry (a deadline did fire) and
+kills` — a `TimeoutExceeded` operational event (a deadline did fire) and
 no tie-off write, the same shape as a total timeout.
 
 ### Context Compaction (Compact-and-Continue)
@@ -211,7 +212,7 @@ default).
 - **Terminal overflow fails fast** — if the kept context itself
   cannot fit the window even after compaction, the strand fails
   immediately with `context limit reached: …` — no session-resume
-  retries, no clock-up, and no rig-log timeout (no deadline was
+  retries, no clock-up, and no timeout operational event (no deadline was
   exceeded).
 
 ## Event Queue
@@ -235,7 +236,7 @@ starts.
 
 - **On success** the event file is removed as the **last step before the
   git commit** — the tie-off append, dispatch of emitted events,
-  loom-log entries, and event enforcement all happen first, and the
+  service-log entries, and event enforcement all happen first, and the
   commit captures everything, including the removal.
 - **On failure or skip** the event file is removed **at the point of
   failure** (consume-on-failure — a broken event does not poison the
@@ -274,26 +275,35 @@ manually by the user.
 
 ## Logs
 
-Knot maintains several log files for observability:
+Knot has a single consolidated **service log** (plan 083): one line per
+record on the service's stderr, timestamped and tagged:
 
-| Log | Location | Purpose |
-|-----|----------|---------|
-| **Loom-log** | `tie-offs/<rig>/{loom-id}/.loom-log` | Per-loom activity: knot registration, processing events, errors |
-| **Rig-log** | `tie-offs/<rig>/.rig-log` | JSONL of serious events: timeouts (`TimeoutExceeded`) and idle periods (`QueueIdle`) |
-| **Service log** | `tie-offs/<rig>/knot-service.log` | Raw stderr/stdout of the service. Knot does not open this file — the launcher appends it (`knot-start`), which is why it is the only log that survives a restart |
+```
+[2026-09-07T15:35:57+10:00] [KNOT][EVENT] KnotCompleted loom=review-loom knot=review strand=… tie-off=…
+[2026-09-07T15:36:02+10:00] [KNOT][STATE] change knot review-loom/review: status idle→completed
+```
 
-Logs are **per-run**: at every startup, Knot truncates the rig-log and
-every loom-log *before* loom discovery, so each log always contains
-only the events of the current run (it starts with the fresh
-`KnotRegistered`/`LoomStarted` events and ends with `LoomStopped` at
-shutdown). Cross-run history is not kept in the logs — the tie-off
-files are the durable audit record (plain text, git-versioned), and the
-appended service log is the durable *operational* record (start Knot
-with the `knot-start` skill to get one).
+- **`[KNOT][EVENT]`** — one line per domain event: loom lifecycle
+  (`LoomStarted`, `KnotRegistered`, …), strand processing
+  (`KnotProcessing`, `KnotCompleted`, `KnotFailed`, `StrandProcessed`,
+  …), timeouts (`TimeoutExceeded`, `AgentInactivity`), and queue idle
+  (`QueueIdle`). The line carries the event's fields as `key=value` pairs
+  (e.g. `loom=`, `knot=`, `strand=`, `tie-off=`, `error=`).
+- **`[KNOT][STATE]`** — one line per actual `state.json` write: an
+  `initial snapshot` baseline, then `change` deltas (loom/knot/profile
+  additions, removals, and field changes, queue additions/drain).
 
-The logs support multiple consumers (append-only within a run,
-single-line JSON entries); knots and operators react to events of the
-*current* run only.
+Run activity is **in-memory per process** — the retired `.loom-log` /
+`.rig-log` JSONL files are gone, and nothing is cleared at startup
+(legacy files, if a migration moved them, are inert). The `knot-start`
+skill appends the service stderr to `tie-offs/<rig>/knot-service.log`,
+so that file is the durable operational record across restarts. The
+tie-off files remain the durable audit record of completed work (plain
+text, git-versioned), and `state.json` is the live snapshot.
+
+Knots and operators react to events of the *current* run only (in-memory
+run activity); cross-run history lives in the appended service log and
+tie-offs.
 
 ## Key Principles
 
@@ -301,8 +311,8 @@ single-line JSON entries); knots and operators react to events of the
 
 All configuration lives as `.md` files with YAML frontmatter. Write files
 directly to disk — Knot's file watcher picks up changes automatically.
-Observation is through `tie-offs/<rig>/state.json`, written every 5
-seconds.
+Observation is through `tie-offs/<rig>/state.json`, written whenever the
+state actually changes (idle ticks never rewrite it).
 
 ### Version-Controllable
 

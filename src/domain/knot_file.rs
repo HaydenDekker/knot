@@ -211,9 +211,9 @@ pub fn parse(
 /// file name (e.g. `rig`, `dev-rig`).
 ///
 /// All runtime artifacts — tie-off files, event dispatch directories,
-/// loom-logs, `state.json`, `.rig-log`, and the `events/` queue — live
-/// under this root. The rig directory itself holds only reusable source
-/// (looms, knots, profiles, config), so it can be versioned independently.
+/// `state.json`, and the `events/` queue — live under this root. The
+/// rig directory itself holds only reusable source (looms, knots,
+/// profiles, config), so it can be versioned independently.
 ///
 /// Degenerate case: a rig directory at the filesystem root has no
 /// parent — the existing `project_root = rig_dir` fallback applies and
@@ -241,19 +241,6 @@ pub fn derive_tieoff_path(
     rig: &std::path::Path,
 ) -> std::path::PathBuf {
     derive_runtime_root(rig).join(loom_id)
-}
-
-/// Derive the loom-log path for a loom.
-///
-/// Returns `tie-offs/<rig-basename>/{loom-id}/.loom-log` (under the
-/// runtime root). Moved from `rig/{loom-id}/.loom-log` to separate
-/// outputs from definitions, and from `rig/tie-offs/…` to separate the
-/// project runtime tree from the reusable rig source.
-pub fn derive_loom_log_path(
-    loom_id: &str,
-    rig: &std::path::Path,
-) -> std::path::PathBuf {
-    derive_runtime_root(rig).join(loom_id).join(".loom-log")
 }
 
 /// Extract the YAML frontmatter and optional body from a markdown file.
@@ -653,24 +640,6 @@ Review the document
         assert_eq!(
             path,
             PathBuf::from("/workspace/tie-offs/dev-rig/my-loom")
-        );
-    }
-
-    #[test]
-    fn derive_loom_log_path_builds_correct_path() {
-        let path = derive_loom_log_path("my-loom", Path::new("/workspace/rig"));
-        assert_eq!(
-            path,
-            PathBuf::from("/workspace/tie-offs/rig/my-loom/.loom-log")
-        );
-    }
-
-    #[test]
-    fn derive_loom_log_path_named_rig() {
-        let path = derive_loom_log_path("my-loom", Path::new("/workspace/dev-rig"));
-        assert_eq!(
-            path,
-            PathBuf::from("/workspace/tie-offs/dev-rig/my-loom/.loom-log")
         );
     }
 

@@ -62,8 +62,8 @@ timeout: 600
 You are a code generation agent. Take your time to be thorough.
 ```
 
-When a session exceeds its timeout, a `TimeoutExceeded` event is
-recorded in the rig-log (`tie-offs/<rig>/.rig-log`) and the tie-off file is
+When a session exceeds its timeout, a `TimeoutExceeded` operational event is
+recorded in the service log and the tie-off file is
 preserved unchanged.
 
 ## How Profiles Are Used at Processing Time
@@ -154,7 +154,7 @@ attempts to resume the session:
 - Each retry appends the final-response request — *"Please produce
   your final response, or continue if you have not finished."* — to the
   session (one prompt for all resumes)
-- Session resume events are logged as `SessionResumed` in the loom-log
+- Session resume events are logged as `SessionResumed` in the service log
 
 This makes Knot resilient to transient failures and abrupt turn-ends
 without losing agent context.
