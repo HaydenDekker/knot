@@ -94,7 +94,9 @@ fn loom_id_of(event: &LoomEvent) -> &LoomId {
         | LoomEvent::EventsDispatched { loom_id, .. }
         | LoomEvent::KnotEventsMissing { loom_id, .. }
         | LoomEvent::KnotParseWarning { loom_id, .. }
-        | LoomEvent::DirectoryCreated { loom_id, .. } => loom_id,
+        | LoomEvent::DirectoryCreated { loom_id, .. }
+        | LoomEvent::TasksIncomplete { loom_id, .. }
+        | LoomEvent::BatchIncomplete { loom_id, .. } => loom_id,
     }
 }
 

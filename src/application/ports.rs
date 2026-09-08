@@ -86,6 +86,14 @@ pub enum PortError {
         blocked_call: Option<String>,
         session_id: Option<String>,
     },
+    /// Plan 086: the pi-json runner's water-mark stop-resume — the
+    /// session's context usage crossed `ctx-wrap-up-limit` and the
+    /// process was SIGINT'd. Resumable: the session-resume retry
+    /// re-invokes with `--session-id` + the `HANDOFF_NOTE`.
+    WaterMarkStop {
+        /// The captured session ID (from the JSON stream).
+        session_id: Option<String>,
+    },
     /// Failed to write tie-off output.
     TieOffWriteFailed(String),
     /// An agent profile was not found.
@@ -161,6 +169,9 @@ impl std::fmt::Display for PortError {
             PortError::AgentInactivity { message, .. } => {
                 write!(f, "inactivity: {message}")
             }
+            PortError::WaterMarkStop { .. } => {
+                write!(f, "water-mark stop (context usage crossed limit)")
+            }
             PortError::TieOffWriteFailed(msg) => {
                 write!(f, "tie-off write failed: {msg}")
             }
@@ -208,7 +219,8 @@ impl PortError {
             | PortError::AgentExecutionFailed { session_id, .. }
             | PortError::AgentNoResponse { session_id, .. }
             | PortError::ContextLimitReached { session_id, .. }
-            | PortError::AgentInactivity { session_id, .. } => {
+            | PortError::AgentInactivity { session_id, .. }
+            | PortError::WaterMarkStop { session_id, .. } => {
                 session_id.as_ref()
             }
             _ => None,
@@ -227,6 +239,7 @@ impl PortError {
                 | PortError::AgentExecutionFailed { .. }
                 | PortError::AgentNoResponse { .. }
                 | PortError::AgentInactivity { .. }
+                | PortError::WaterMarkStop { .. }
         )
     }
 }
@@ -373,6 +386,10 @@ pub struct WrapUpRecord {
     pub context_tokens: u64,
     /// The configured `ctx-wrap-up-limit`.
     pub limit: u64,
+    /// How the handoff note was delivered (plan 086): `"steer"`
+    /// (the `pi-rpc` live-steer path) or `"stop-resume"` (the
+    /// `pi-json` SIGINT + re-invoke path).
+    pub mechanism: String,
 }
 
 /// Metadata captured from an agent invocation.
@@ -1644,6 +1661,7 @@ mod tests {
             wrap_up: Some(WrapUpRecord {
                 context_tokens: 150_000,
                 limit: 140_000,
+                mechanism: "steer".to_string(),
             }),
         };
         let json = serde_json::to_string(&metadata).unwrap();

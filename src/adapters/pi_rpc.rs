@@ -61,13 +61,10 @@ use crate::domain::value_objects::AgentConfig;
 
 /// The steering message queued when the context crosses the wrap-up limit.
 ///
-/// Instructs the agent to converge: persist the work, record progress, and
-/// leave a final tie-off that names what remains — so the next resumption
-/// (or the operator) has a clean hand-off instead of a mid-task transcript.
-const WRAP_UP_STEER: &str = "You are approaching the context limit. Wrap up \
-     gracefully before the session is compacted: persist any in-flight work \
-     (commit it), update the progress notes, and record a final tie-off that \
-     states what is done and what remains incomplete. Then stop.";
+/// Plan 086: the water-mark handoff note (replacing 084's terminal
+/// `WRAP_UP_STEER` wind-down). Reuses the greppable const from
+/// `value_objects` so the text is single-sourced.
+const WRAP_UP_STEER: &str = crate::domain::value_objects::HANDOFF_NOTE;
 
 /// Bounded grace after `agent_end` for the process to exit on its own
 /// (stdin is closed at `agent_end`); beyond this the group is force-killed.
@@ -556,9 +553,9 @@ impl AgentRunner for PiRpcAgentRunner {
         knot_name: Option<String>,
         timeout: Option<Duration>,
     ) -> Result<AgentOutput, PortError> {
-        // Mirror the JSON runner: add the session title and the @file strand
-        // reference as CLI args (they are CLI-level mechanisms, independent
-        // of the RPC stdin protocol).
+        // The session title is a CLI-level arg (supported in RPC mode). The
+        // strand content is delivered via the stdin prompt, not a `@file`
+        // CLI arg — see below.
         let mut config = agent_config.clone();
         let strand_filename = strand_path
             .0
@@ -573,8 +570,25 @@ impl AgentRunner for PiRpcAgentRunner {
         );
         config.extra_args.push("--name".to_string());
         config.extra_args.push(session_title);
+        // RPC mode rejects `@file` CLI args (pi: "Error: @file arguments
+        // are not supported in RPC mode"), so the strand content is
+        // delivered through the stdin prompt instead of as a CLI arg —
+        // mirroring the effect the JSON/stdio runners get from pi's
+        // `@file` expansion.
+        let mut prompt = prompt;
         if let Some(ref file_path) = strand_file_ref {
-            config.extra_args.push(format!("@{}", file_path.0.display()));
+            match std::fs::read_to_string(&file_path.0) {
+                Ok(content) => {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&content);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "WARNING: pi-rpc could not read strand file {} for prompt injection: {err}",
+                        file_path.0.display()
+                    );
+                }
+            }
         }
 
         let ctx = ExecutionContext {
@@ -720,6 +734,7 @@ fn run_rpc_driver(
                                         .wrap_up = Some(WrapUpRecord {
                                             context_tokens: tokens,
                                             limit,
+                                            mechanism: "steer".to_string(),
                                         });
                                 }
                             }

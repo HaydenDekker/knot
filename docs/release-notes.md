@@ -1,5 +1,65 @@
 # Release Notes
 
+## v0.43.0 — 2026-09-08
+
+### New Capability — Graceful Task Handoff: Checkpointed Continuation Chains (Plan 086)
+
+A `task-loop` knot that outgrows a single context window used to either
+overflow (losing uncommitted work) or re-derive its scope from scratch on
+every re-dispatch. Plan 086 lets such a knot work through a **durable,
+rig-owned checklist** across a chain of bounded sessions: it **hands off
+gracefully** when its context water-mark is crossed and a **fresh session
+resumes from the checklist** — so a long batch completes across as many
+hops as it needs, each hop starting from the on-disk state.
+
+- **`TasksIncomplete` self-continuation** — a new loom event a knot
+  acknowledges in its own tie-off. When `ctx-wrap-up-limit` is set on the
+  alias and the agent is steered at the water-mark, it commits in-flight
+  work, updates the checklist, and emits a fenced `markdown` block with
+  `event: TasksIncomplete`. `occurred: true` (with `next-task-context` —
+  the operational resume brief — and `background-additional` — thin
+  persistent facts) dispatches a **continuation**: the same knot re-run in
+  a fresh session that resumes from the checklist. `occurred: false` is
+  the explicit “batch complete” declaration that ends the chain.
+- **The chain obeys the original clock.** A continuation never resets the
+  timer: its `profile_timeout` is derived from the `batch-deadline-epoch`
+  stamped on its event, so the whole chain shares the first session’s
+  budget (“fresh context, never a fresh budget”). The `MAX_CONTINUATIONS`
+  cap (10) and the deadline bound the chain; hitting either records a
+  terminal `BatchIncomplete` loom event (`reason: "caps"` or
+  `reason: "deadline"`) and drains the queue.
+- **Knot stays task-blind.** It neither owns nor parses the checklist — its
+  format, location, and authorship are the rig designer’s. The
+  agent-emitted `TasksIncomplete` is the only task-specific seam, and its
+  body is a **pointer block** to durable state (the checklist + committed
+  files), never a re-statement of context.
+- **The contract is delivered at the water-mark, not the base prompt.** The
+  `TasksIncomplete` description is no longer injected into every base
+  prompt for a water-marked alias — that `Subscriber Events` block was
+  ~900 tokens of the base context and shrank the working headroom that
+  decides how much real work fits before the steer. It now rides in the
+  self-contained wrap-up steer, which also specifies the `event:`
+  front-matter field the tie-off parser requires (the old base prompt
+  carried it via the generic “Event Format” example). Regular subscriber
+  events still inject at the start.
+- **Two adapters, one seam.** The water-mark steer — and hence the handoff —
+  is `pi-rpc` only; on `pi-json`/`claude` the existing overflow/timeout
+  terminal handling re-dispatches the idempotent knot, which resumes from
+  the checklist.
+- **Fixes from rig testing.** (a) the `pi-rpc` adapter no longer passes the
+  strand as a `@{path}` CLI arg (pi RPC mode rejects it) — the strand
+  content is injected through the stdin prompt instead; (b) the tie-off
+  parser recovers a fenced `markdown` block left open at EOF, so a
+  correctly front-matter-delimited handoff is not dropped when a model
+  omits the closing fence.
+
+**Tests** — unit tests cover continuation dispatch (deadline-derived
+timeout, cap, `occurred` filtering), the self-contained steer contract
+(`HANDOFF_NOTE` carries the `event:` field), and the unclosed-fence
+recovery. Verified empirically on a `pi-rpc` rig: a 6-item checklist batch
+completes across a water-mark-driven continuation chain, ending in an
+`occurred: false` “batch complete” declaration. The full suite passes.
+
 ## v0.42.0 — 2026-09-07
 
 ### New Capability — `pi-rpc` Runner + Context Wrap-Up Steering (Plan 084)

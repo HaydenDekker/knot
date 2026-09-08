@@ -266,6 +266,30 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             loom_id.0,
             knot_id.0
         ),
+        LoomEvent::TasksIncomplete {
+            loom_id,
+            knot_id,
+            strand_path,
+            continuations,
+            reason,
+            ..
+        } => format!(
+            "[task-loop] handoff loom={} knot={} strand={} continuations={continuations} reason={reason}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display()
+        ),
+        LoomEvent::BatchIncomplete {
+            loom_id,
+            knot_id,
+            reason,
+            continuations,
+            ..
+        } => format!(
+            "[task-loop] batch-incomplete loom={} knot={} reason={reason} continuations={continuations}",
+            loom_id.0,
+            knot_id.0
+        ),
     }
 }
 
@@ -637,7 +661,7 @@ mod tests {
 
     #[test]
     fn context_wrap_up_steered_line() {
-        let e = LoomEvent::ContextWrapUpSteered { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), context_tokens: 150_000, limit: 140_000, attempt: 1, timestamp: ts() };
+        let e = LoomEvent::ContextWrapUpSteered { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), context_tokens: 150_000, limit: 140_000, attempt: 1, mechanism: "steer".into(), timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
             "ContextWrapUpSteered loom=review-loom knot=review strand=strands/prd.md session=sess-1 context-tokens=150000 limit=140000 attempt=1"

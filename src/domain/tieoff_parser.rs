@@ -238,6 +238,15 @@ fn extract_markdown_blocks(content: &str) -> Vec<String> {
         }
     }
 
+    // An agent that opens a ```markdown event block but never closes it (an
+    // unclosed trailing fence — observed with smaller local models) still has
+    // its frontmatter delimited by `---`. Emit the trailing block so
+    // `parse_event_block` can recover the event instead of dropping a
+    // correctly-declared (but fence-unclosed) handoff.
+    if in_block && !current_lines.is_empty() {
+        blocks.push(current_lines.join("\n"));
+    }
+
     blocks
 }
 
@@ -811,6 +820,37 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_id, "GoalsApproved");
         assert_eq!(events[0].payload.get("prd"), Some(&"PRD-042".to_string()));
+    }
+
+    #[test]
+    fn extract_agent_events_unclosed_trailing_fence_still_parsed() {
+        // Plan 086 regression: a smaller model opened the ```markdown event
+        // block (with `|` block-scalar fields) but never closed the fence.
+        // The frontmatter `---` delimiters are intact, so the event must still
+        // be recovered instead of dropped as "handoff-missed".
+        let content = concat!(
+            "Wrapping up per the water-mark.\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: TasksIncomplete\n",
+            "occurred: true\n",
+            "description: Batch stopped at the water-mark with work remaining\n",
+            "timestamp: 2026-09-08T16:10:00+10:00\n",
+            "next-task-context: |\n",
+            "  Resume by reading work/checklist.md and continue top to bottom.\n",
+            "  Mark each item done only after its deliverable is written.\n",
+            "background-additional: |\n",
+            "  [hop 2]\n",
+            "  T1 done; T2-T6 remain pending.\n",
+            "---\n",
+            "\n",
+            "Stopping here per the water-mark note. (fence intentionally left open)",
+        );
+        let events = extract_agent_events(content);
+        assert_eq!(events.len(), 1, "unclosed trailing fence must not drop the event");
+        assert_eq!(events[0].event_id, "TasksIncomplete");
+        assert!(events[0].occurred);
     }
 
     #[test]

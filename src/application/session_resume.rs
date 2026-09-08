@@ -64,7 +64,14 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 ///
 /// If less than this amount of budget remains, the loop bails rather
 /// than starting an attempt that is almost certain to time out.
-const MIN_REMAINING_SECS: u64 = 5;
+pub(crate) const MIN_REMAINING_SECS: u64 = 5;
+
+/// Maximum number of self-continuation hops in a task-handoff chain
+/// (plan 086). Mirrors [`MAX_RETRIES`] — a global constant, not a
+/// per-knot knob. When a continuation with `continuations ==
+/// MAX_CONTINUATIONS` declares `TasksIncomplete: true`, Knot suppresses
+/// the dispatch and records `BatchIncomplete` (reason `caps`).
+pub const MAX_CONTINUATIONS: u32 = 10;
 
 /// The final-response request appended to the prompt on every session
 /// resume (plan 078). One message covers both failure shapes:
@@ -198,6 +205,7 @@ fn log_wrap_up(
         context_tokens: record.context_tokens,
         limit: record.limit,
         attempt,
+        mechanism: record.mechanism.clone(),
         timestamp: format_timestamp(),
     });
     emit_system(
@@ -516,6 +524,46 @@ fn execute_with_resume_internal(
                 )),
             );
         }
+
+        // Plan 086: water-mark stop — the pi-json monitor SIGINT'd the
+        // process when usage.total crossed ctx-wrap-up-limit. Record
+        // ContextWrapUpSteered (mechanism stop-resume) and queue the
+        // HANDOFF_NOTE for the retry prompt.
+        if let PortError::WaterMarkStop { .. } = &first_error {
+            pending_note = Some(
+                crate::domain::value_objects::HANDOFF_NOTE.to_string(),
+            );
+            loom_log.append(LoomEvent::ContextWrapUpSteered {
+                loom_id: loom_id.clone(),
+                knot_id: knot_id.clone(),
+                strand_path: strand_path.clone(),
+                session_id: session_id.clone().unwrap_or_default(),
+                context_tokens: 0,
+                limit: 0,
+                attempt: 1,
+                mechanism: "stop-resume".to_string(),
+                timestamp: format_timestamp(),
+            })?;
+            // System event (plan 082) — water-mark stop on attempt 1.
+            emit_system(
+                emitter,
+                loom_id,
+                knot_id,
+                strand_path,
+                "ContextWrapUpSteered",
+                &[
+                    (
+                        "session-id",
+                        session_id.clone().filter(|s| !s.is_empty()),
+                    ),
+                    ("mechanism", Some("stop-resume".to_string())),
+                ],
+                Some(format!(
+                    "Knot '{}' water-mark stop (attempt 1)",
+                    knot_id.0
+                )),
+            );
+        }
     }
 
     // --- Retry loop ---
@@ -774,6 +822,26 @@ fn execute_with_resume_internal(
                         )),
                     );
                 }
+
+                // Plan 086: water-mark stop in the retry loop — record
+                // ContextWrapUpSteered (mechanism stop-resume) and
+                // queue the HANDOFF_NOTE for the next retry.
+                if let PortError::WaterMarkStop { .. } = &first_error {
+                    pending_note = Some(
+                        crate::domain::value_objects::HANDOFF_NOTE.to_string(),
+                    );
+                    let _ = loom_log.append(LoomEvent::ContextWrapUpSteered {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        session_id: session_id.clone().unwrap_or_default(),
+                        context_tokens: 0,
+                        limit: 0,
+                        attempt: attempt + 1,
+                        mechanism: "stop-resume".to_string(),
+                        timestamp: format_timestamp(),
+                    });
+                }
             }
         }
     }
@@ -1015,6 +1083,7 @@ mod tests {
                 wrap_up: Some(crate::application::ports::WrapUpRecord {
                     context_tokens,
                     limit,
+                    mechanism: "steer".to_string(),
                 }),
             }),
         }

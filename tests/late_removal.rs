@@ -334,6 +334,8 @@ fn loom_event_name(e: &LoomEvent) -> &'static str {
         LoomEvent::ContextCompacted { .. } => "ContextCompacted",
         LoomEvent::ContextWrapUpSteered { .. } => "ContextWrapUpSteered",
         LoomEvent::AgentInactivity { .. } => "AgentInactivity",
+        LoomEvent::TasksIncomplete { .. } => "TasksIncomplete",
+        LoomEvent::BatchIncomplete { .. } => "BatchIncomplete",
     }
 }
 

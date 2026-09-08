@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-07 (plan 084 complete — `pi-rpc` runner + context wrap-up steering, released in v0.42.0; plan 085 complete — event-parse log flags + anchored rig `.gitignore`, released in v0.41.1)
+> **Last Updated:** 2026-09-08 (plan 086 complete — Graceful Task Handoff: checkpointed continuation chains for task-bearing knots, released in v0.43.0)
+> **Prior:** 2026-09-07 (plan 084 complete — `pi-rpc` runner + context wrap-up steering, released in v0.42.0; plan 085 complete — event-parse log flags + anchored rig `.gitignore`, released in v0.41.1)
 
 ## How to Add a Plan
 
@@ -46,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
 | 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
 | 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ✅ Complete (2026-09-07) — released in v0.42.0 | 2026-09-07 |
 | 83 | [Consolidated Service Log + Change-Driven State Writes](083-consolidated-service-log/consolidated-service-log-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.0 | 2026-09-07 |
@@ -73,6 +75,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 86. Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots
+
+**Status:** ✅ Complete (2026-09-08) — released in v0.43.0
+**Created:** 2026-09-08
+**Goal:** Let a knot marked `task-loop` work through a durable, **rig-owned checklist** across a chain of bounded sessions, **handing off gracefully** when its context water-mark is crossed and resuming from the checklist — instead of accumulating to an overflow (single-session) or re-deriving scope per task (per-event sessions). Two tiers degrade but always recover: the plan-084 water-mark `steer` re-pointed at a handoff that wraps up (full tie-off **and/or** a `TasksIncomplete` event) (`pi-rpc` only), and the existing overflow/timeout terminal handling, where the re-dispatched idempotent knot resumes from the checklist (all adapters). Knot stays **task-blind**: it neither owns nor parses the checklist (format, location, and authorship — e.g. a planner knot writing a phase checklist the phase runner works from — are the rig designer's); the agent-emitted `TasksIncomplete` is the only task-specific seam, and its body is a **pointer block** to durable state (the checklist + committed files), never a re-statement of context. A **continuation never resets the timer** — it derives its `profile_timeout` from the batch deadline stamped on its event, so the whole chain obeys the original clock ("fresh context, never a fresh budget"); a `max_continuations` cap and the deadline bound the chain. The earlier draft's `tasks-per-session` count gate is dropped (a count heuristic, superseded by the water-mark where steering exists and by overflow recovery elsewhere — `pi-rpc` is the recommended adapter for task-bearing knots).
+
+Full details in [086-graceful-task-handoff/graceful-task-handoff-plan.md](086-graceful-task-handoff/graceful-task-handoff-plan.md).
 
 ### 85. Event-Parse Log Flags and Anchored Rig `.gitignore` Entry
 

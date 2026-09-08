@@ -103,6 +103,12 @@ pub struct BuildContext {
     /// querying the in-memory queue (source of truth) instead of
     /// scanning the filesystem.
     pub strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
+    /// Plan 086: the self-continuation `TasksIncomplete` description to
+    /// include in the `# Subscriber Events` block. `Some(desc)` when the
+    /// knot's profile alias carries `ctx-wrap-up-limit` (the water-mark
+    /// note can fire, so the format must be known before it can).
+    /// `None` for non-water-marked aliases (the block is unchanged).
+    pub self_continuation_desc: Option<String>,
 }
 
 /// A provider that builds dynamic prompt context segments.
@@ -150,6 +156,7 @@ pub fn build_listener_context(
     knot: &Knot,
     loom_id: &LoomId,
     all_knots: &[Knot],
+    self_continuation_desc: Option<&str>,
 ) -> String {
     use crate::domain::value_objects::StrandSource;
 
@@ -172,14 +179,14 @@ pub fn build_listener_context(
         }
     }
 
-    // No listeners — no injection needed.
-    if matching_knots.is_empty() {
+    // No listeners and no self-continuation — no injection needed.
+    if matching_knots.is_empty() && self_continuation_desc.is_none() {
         return String::new();
     }
 
     // Group by event-id, preserving insertion order (first seen wins for
-    // the description). Only keep the first consumer knot for each event.
-    let mut seen_ids: std::collections::HashMap<String, &Knot> =
+    // the description). Map event_id -> description.
+    let mut seen_ids: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for consumer in &matching_knots {
         if let StrandSource::EventUri {
@@ -188,9 +195,22 @@ pub fn build_listener_context(
         } = &consumer.strand_source
         {
             if !seen_ids.contains_key(event_id) {
-                seen_ids.insert(event_id.clone(), consumer);
+                let desc = consumer.event_description.as_deref().unwrap_or(
+                    "If this event occurs, emit a structured event block in your final response.",
+                );
+                seen_ids.insert(event_id.clone(), desc.to_string());
             }
         }
+    }
+
+    // Plan 086: add the implicit self-continuation entry for
+    // water-marked aliases. The knot self-consumes this event; the
+    // description is the handoff contract (TASKS_INCOMPLETE_DESCRIPTION).
+    if let Some(desc) = self_continuation_desc {
+        seen_ids.insert(
+            "TasksIncomplete".to_string(),
+            desc.to_string(),
+        );
     }
 
     let mut output = String::from(
@@ -201,13 +221,7 @@ pub fn build_listener_context(
          The following event/s have been declared by subscribers:\n\n",
     );
 
-    for (event_id, consumer) in &seen_ids {
-        let description = if let Some(desc) = &consumer.event_description {
-            desc.as_str()
-        } else {
-            "If this event occurs, emit a structured event block in your final response."
-        };
-
+    for (event_id, description) in &seen_ids {
         output.push_str(&format!(
             "- `{}` — {}\n",
             event_id, description
@@ -489,6 +503,13 @@ pub enum LoomEvent {
         /// Attempt the steer was sent on
         /// (1 = first attempt, 2 = first retry, …).
         attempt: u32,
+        /// How the handoff note was delivered (plan 086):
+        /// `"steer"` (the `pi-rpc` live-steer path — the 084 default)
+        /// or `"stop-resume"` (the `pi-json` SIGINT + re-invoke path).
+        /// Serde-defaulted to `"steer"` so 084's pi-rpc records are
+        /// unchanged on deserialization.
+        #[serde(default = "default_wrap_up_mechanism")]
+        mechanism: String,
         timestamp: String,
     },
     /// One or more agent events were dispatched to consumer knots.
@@ -550,6 +571,57 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// A task-bearing session declared `TasksIncomplete: true` in its
+    /// tie-off — work remains and the batch will continue via a
+    /// self-continuation dispatch (plan 086). Recorded alongside the
+    /// `KnotCompleted` tie-off event.
+    ///
+    /// `reason` ties the declaration back to the injection:
+    /// `"water-mark"` — a `ContextWrapUpSteered` fired this session
+    /// (the note asked the agent to wrap up); `"voluntary"` — the agent
+    /// declared `occurred: true` at a stop with no water-mark.
+    TasksIncomplete {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: Option<String>,
+        /// Continuations carried by the dispatched event (1 = first hop).
+        continuations: u32,
+        /// Optional visibility-only progress (agent-populated; Knot
+        /// never validates).
+        tasks_done: Option<u32>,
+        tasks_remaining: Option<u32>,
+        /// The stamped batch-deadline-epoch (Unix epoch seconds).
+        deadline_epoch: u64,
+        /// Why the declaration was made.
+        reason: String,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+    /// A continuation chain stopped with work remaining (plan 086).
+    ///
+    /// `reason` is `"deadline"` (the batch deadline was exhausted before
+    /// the continuation could spawn — no session, degenerate tie-off
+    /// written) or `"caps"` (`continuations >= MAX_CONTINUATIONS` —
+    /// dispatch suppressed). In both cases the work is not lost
+    /// (checklist + commits are durable) and the batch resumes on the
+    /// next dispatch with a fresh budget.
+    BatchIncomplete {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// `"deadline"` or `"caps"`.
+        reason: String,
+        continuations: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+}
+
+/// Serde default for [`LoomEvent::ContextWrapUpSteered::mechanism`]:
+/// `"steer"` (the 084 pi-rpc path).
+fn default_wrap_up_mechanism() -> String {
+    "steer".to_string()
 }
 
 /// A Knot was registered with a Loom.
@@ -661,7 +733,7 @@ mod tests {
     #[test]
     fn build_listener_context_no_consumers_returns_empty() {
         let producer = make_test_knot("plan-creator");
-        let context = build_listener_context(&producer, &default_loom_id(), &[]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[], None);
         assert!(
             context.is_empty(),
             "no consumers should produce empty context: '{}'",
@@ -674,7 +746,7 @@ mod tests {
     fn build_listener_context_only_filesystem_knots_returns_empty() {
         let producer = make_test_knot("plan-creator");
         let filesystem_knot = make_test_knot("reviewer");
-        let context = build_listener_context(&producer, &default_loom_id(), &[filesystem_knot]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[filesystem_knot], None);
         assert!(
             context.is_empty(),
             "only filesystem knots should produce empty context: '{}'",
@@ -692,7 +764,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.starts_with("# Subscriber Events\n"),
             "context should start with heading: {}",
@@ -710,7 +782,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created for the first time".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("When a plan is created for the first time"),
             "context should contain event description: {}",
@@ -729,7 +801,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         // The consumer knot ID should NOT appear in the output
         assert!(
             !context.contains("secret-validator"),
@@ -748,7 +820,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("occurred:"),
             "context should instruct to use 'occurred' field: {}",
@@ -771,7 +843,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("description:"),
             "context should require description field: {}",
@@ -789,7 +861,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(!context.is_empty());
         assert!(context.contains("# Subscriber Events"));
         assert!(context.contains("PlanCreated"));
@@ -815,7 +887,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created for audit".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2], None);
         // Count occurrences of "PlanCreated" in the event list (should appear
         // only once as a bullet point)
         let count = context.matches("- `PlanCreated`").count();
@@ -838,7 +910,7 @@ mod tests {
             "ValidationFailed",
             Some("When validation fails".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer1, consumer2], None);
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("ValidationFailed"));
         assert!(context.contains("When a plan is created"));
@@ -855,7 +927,7 @@ mod tests {
             "PlanCreated",
             None, // no event-description
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("If this event occurs, emit a structured event block in your final response."),
             "should use generic message when event-description is None: {}",
@@ -880,7 +952,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains(
                 "Never write or read directly from `tie-offs/` files"
@@ -905,7 +977,7 @@ mod tests {
             "OtherEvent",
             Some("Some event".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[other_consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[other_consumer], None);
         assert!(context.is_empty());
     }
 
@@ -926,7 +998,7 @@ mod tests {
             "OtherEvent",
             Some("Some event".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[matching, non_matching]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[matching, non_matching], None);
         assert!(!context.is_empty());
         assert!(context.contains("PlanCreated"));
         assert!(context.contains("When a plan is created"));
@@ -946,7 +1018,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("```markdown"),
             "prompt should use ```markdown fence: {}",
@@ -964,7 +1036,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("---"),
             "prompt should show frontmatter delimiters (---): {}",
@@ -987,7 +1059,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         // Prompt should NOT contain event: None anymore
         assert!(
             !context.contains("event: None"),
@@ -1020,7 +1092,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("timestamp:"),
             "prompt should include timestamp field: {}",
@@ -1043,7 +1115,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("do not edit the pending event"),
             "prompt should contain 'do not edit' guidance: {}",
@@ -1067,7 +1139,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer]);
+        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains("required"),
             "prompt should mention required fields: {}",
@@ -1098,7 +1170,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &loom_id, &[consumer]);
+        let context = build_listener_context(&producer, &loom_id, &[consumer], None);
         assert!(!context.is_empty());
         assert!(context.contains("# Subscriber Events"));
         assert!(context.contains("PlanCreated"));
@@ -1117,7 +1189,7 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context(&producer, &loom_id, &[consumer]);
+        let context = build_listener_context(&producer, &loom_id, &[consumer], None);
         assert!(
             context.is_empty(),
             "loom-level subscription should not match a different loom: {}",
@@ -1146,7 +1218,7 @@ mod tests {
             Some("When a plan is created for audit".to_string()),
         );
         let context =
-            build_listener_context(&producer, &loom_id, &[knot_consumer, loom_consumer]);
+            build_listener_context(&producer, &loom_id, &[knot_consumer, loom_consumer], None);
         assert!(!context.is_empty());
         assert!(context.contains("PlanCreated"));
         // Both consumers subscribe to the same event — should deduplicate
@@ -1175,9 +1247,9 @@ mod tests {
         let knot2 = make_test_knot("plan-reviewer");
         let knot3 = make_test_knot("plan-approver");
 
-        let ctx1 = build_listener_context(&knot1, &loom_id, &[consumer.clone()]);
-        let ctx2 = build_listener_context(&knot2, &loom_id, &[consumer.clone()]);
-        let ctx3 = build_listener_context(&knot3, &loom_id, &[consumer.clone()]);
+        let ctx1 = build_listener_context(&knot1, &loom_id, &[consumer.clone()], None);
+        let ctx2 = build_listener_context(&knot2, &loom_id, &[consumer.clone()], None);
+        let ctx3 = build_listener_context(&knot3, &loom_id, &[consumer.clone()], None);
 
         assert!(!ctx1.is_empty(), "knot1 should get injection");
         assert!(!ctx2.is_empty(), "knot2 should get injection");
@@ -1658,6 +1730,7 @@ mod tests {
             context_tokens: 150_000,
             limit: 140_000,
             attempt: 1,
+            mechanism: "steer".to_string(),
             timestamp: "2026-06-10T12:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -2553,6 +2626,7 @@ mod tests {
             all_knots: all_knots.clone(),
             rig_dir: rig_dir.clone(),
             strand_queue: None,
+        self_continuation_desc: None,
         };
 
         assert_eq!(ctx.knot, knot);
@@ -2574,6 +2648,7 @@ mod tests {
             all_knots: all_knots.clone(),
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
+        self_continuation_desc: None,
         };
 
         assert_eq!(ctx.all_knots.len(), 2);
@@ -2599,6 +2674,7 @@ mod tests {
             all_knots: vec![],
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
+        self_continuation_desc: None,
         };
 
         let result = provider.build_context(&ctx);
@@ -2628,6 +2704,7 @@ mod tests {
             all_knots: vec![],
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
+        self_continuation_desc: None,
         };
 
         let combined: String = providers

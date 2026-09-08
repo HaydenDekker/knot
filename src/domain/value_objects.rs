@@ -249,6 +249,24 @@ pub enum AgentAdapter {
 /// watchdog.
 pub const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 300;
 
+/// Plan 086: the water-mark handoff note sent at `ctx-wrap-up-limit`
+/// (replacing 084's terminal `WRAP_UP_STEER` wind-down for every knot
+/// on a water-marked alias). Delivered as the `pi-rpc` steer payload
+/// and the `pi-json` stop-resume injection. Greppable const per the
+/// 078/084 convention.
+/// The self-contained wrap-up instruction delivered at the water-mark
+/// trigger (plan 086). Because the `TasksIncomplete` contract is no longer
+/// injected into the base prompt, the steer carries the full format so the
+/// agent can emit the handoff event block at the trigger moment.
+pub const HANDOFF_NOTE: &str = "You have crossed the context water-mark: wrap up now. First update your durable checklist/state and commit in-flight work. Then acknowledge the handoff by emitting exactly one ```markdown block in your tie-off whose `---` frontmatter includes: `event: TasksIncomplete`, `occurred: true`, a one-line `description`, and — because `occurred` is true — `next-task-context` (the operational brief that gets the next session up and running on the in-flight item) and `background-additional` (new persistent facts for the remainder of the chain: thin, facts and pointers, not narrative; anything that must outlive the batch also goes into the checklist). The block's body is a short pointer to the checklist and the committed state (never a re-statement of the context). If no work remains, emit the same block with `occurred: false` — the explicit \"batch complete\" declaration. Declare `occurred: true` only if work genuinely remains and your durable state points at it — a spurious `true` costs a continuation hop.";
+
+/// Plan 086: the handoff contract description for the self
+/// `TasksIncomplete` entry in the `# Subscriber Events` prompt block.
+/// Listed on water-marked aliases only. This is the text the agent
+/// sees in its prompt before the note can fire, so the format is never
+/// a surprise.
+pub const TASKS_INCOMPLETE_DESCRIPTION: &str = "You self-consume this event. When a wrap-up note asks you to stop (steered or stop-resumed at the water-mark): first update your durable checklist/state and commit in-flight work, then acknowledge `TasksIncomplete` in your tie-off — `occurred: true` with a body that points at the checklist and the committed state (never a re-statement of the context), `next-task-context` — the operational brief that gets the next session up and running on the in-flight item, and `background-additional` — new persistent facts for the remainder of the chain (thin: facts and pointers, not narrative; anything that must outlive the batch also goes into the checklist) if work remains; `occurred: false` if nothing remains — the explicit \"batch complete\" declaration. If you stop with work remaining for any other reason, declare `occurred: true` the same way. If you finish your work normally without a wrap-up note, no block is needed. Declare `occurred: true` **only if work genuinely remains and your durable state points at it** — a spurious `true` costs a continuation hop.";
+
 /// Rig-level agent configuration. One config per rig,
 /// shared by all knots in that rig.
 ///
@@ -1288,6 +1306,22 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use super::*;
+
+    // Plan 086 regression: the water-mark steer is self-contained (the
+    // `TasksIncomplete` contract is no longer injected into the base
+    // prompt), so it must carry the `event:` field — otherwise the agent
+    // omits it and `parse_event_block` skips the block (handoff-missed).
+    #[test]
+    fn handoff_note_is_self_contained_event_contract() {
+        let note = HANDOFF_NOTE.to_ascii_lowercase();
+        assert!(
+            note.contains("event: tasksincomplete"),
+            "steer must specify the `event: TasksIncomplete` frontmatter field"
+        );
+        assert!(note.contains("occurred"));
+        assert!(note.contains("next-task-context"));
+        assert!(note.contains("background-additional"));
+    }
 
     #[test]
     fn agent_config_defaults() {

@@ -11,13 +11,112 @@
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::adapters::live_output::{
     join_all, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
 };
+
+/// Plan 086: spawn a water-mark monitor thread for the pi-json runner.
+///
+/// The monitor polls the drained stdout buffer every 500 ms, parses the
+/// JSON-L lines for `usage` data, and SIGINTs the process group when
+/// `usage.total` crosses `ctx_wrap_up_limit` (fire-once). The
+/// `fired` flag is set so the caller can detect the water-mark stop
+/// after the process exits.
+fn spawn_water_mark_monitor(
+    child_pid: i32,
+    ctx_wrap_up_limit: Option<u64>,
+    live_stdout: &Arc<Mutex<Vec<u8>>>,
+    cancelled: &Arc<AtomicBool>,
+    fired: &Arc<AtomicBool>,
+) -> Result<std::thread::JoinHandle<()>, String> {
+    let limit = match ctx_wrap_up_limit {
+        Some(l) => l,
+        None => {
+            // No limit set — no monitor needed.
+            let handle = std::thread::Builder::new()
+                .name("json-watermark".to_string())
+                .spawn(|| {})
+                .map_err(|e| format!("failed to spawn noop thread: {e}"))?
+            ;
+            return Ok(handle);
+        }
+    };
+
+    let live_stdout = Arc::clone(live_stdout);
+    let cancelled = Arc::clone(cancelled);
+    let fired = Arc::clone(fired);
+
+    std::thread::Builder::new()
+        .name("json-watermark".to_string())
+        .spawn(move || {
+            // Track the last seen usage.total to avoid re-parsing the
+            // entire buffer on every poll.
+            let mut last_total: u64 = 0;
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                if cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                if fired.load(Ordering::Relaxed) {
+                    break;
+                }
+                let data = {
+                    let buf = live_stdout.lock().unwrap();
+                    String::from_utf8_lossy(&buf).to_string()
+                };
+                // Find the latest usage.total in the stream.
+                // The JSON-L stream has `agent_end` events with a
+                // `usage` field. We scan from the end for efficiency.
+                if let Some(total) = extract_latest_usage_total(&data) {
+                    if total > last_total {
+                        last_total = total;
+                    }
+                    if total >= limit {
+                        // Fire once: SIGINT the process group.
+                        if fired.compare_exchange(
+                            false, true,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ).is_ok() {
+                            // Send SIGINT to the process group.
+                            unsafe {
+                                libc::kill(child_pid, libc::SIGINT);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .map_err(|e| format!("failed to spawn water-mark monitor: {e}"))
+}
+
+/// Extract the latest `usage.total` from a JSON-L stream string.
+///
+/// Scans from the end for the most recent `agent_end` or `message_end`
+/// event with a `usage` field. Returns `None` if no usage data found.
+fn extract_latest_usage_total(data: &str) -> Option<u64> {
+    for line in data.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+        let v: serde_json::Value =
+            match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+        if let Some(usage) = v.get("usage") {
+            if let Some(total) = usage.get("total").and_then(|t| t.as_u64()) {
+                return Some(total);
+            }
+        }
+    }
+    None
+}
 use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionRecord,
     ExecutionContext, PortError, TokenUsage,
@@ -643,6 +742,23 @@ impl AgentRunner for PiJsonAgentRunner {
             }
         })?;
 
+        // Plan 086: water-mark monitor — SIGINTs the process when
+        // usage.total crosses ctx-wrap-up-limit.
+        let water_mark_fired = Arc::new(AtomicBool::new(false));
+        let _water_mark_monitor = spawn_water_mark_monitor(
+            child_pid,
+            ctx.agent_config.ctx_wrap_up_limit,
+            &live.stdout,
+            &cancelled,
+            &water_mark_fired,
+        )
+        .map_err(|e| {
+            PortError::AgentExecutionFailed {
+                message: e,
+                session_id: None,
+            }
+        })?;
+
         // Write the prompt to the child's stdin.
         let mut stdin = child.stdin.take().expect("stdin was piped");
         let profile_prompt = ctx.profile_prompt.clone();
@@ -701,8 +817,18 @@ impl AgentRunner for PiJsonAgentRunner {
         let raw_stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
         // If status code is None, the process was killed by a signal
-        // (SIGKILL from the watchdog, or an external signal).
+        // (SIGKILL from the watchdog, SIGINT from the water-mark
+        // monitor, or an external signal).
         if status.code().is_none() {
+            // Plan 086: water-mark stop — the monitor SIGINT'd the
+            // process when usage.total crossed ctx-wrap-up-limit.
+            if water_mark_fired.load(std::sync::atomic::Ordering::Relaxed) {
+                let (_, session_id, _, _, _, _) =
+                    Self::parse_stdout(&raw_stdout);
+                return Err(PortError::WaterMarkStop {
+                    session_id,
+                });
+            }
             // Plan 081: classify by the watchdog's kill reason — the
             // child lost the race to a deadline. `None` is an
             // external signal kill: keep the legacy Timeout shape.

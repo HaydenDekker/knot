@@ -53,7 +53,12 @@ impl AgentEventsContextProvider {
     /// instructions.
     fn build_full_context(&self, input: &BuildContext) -> String {
         let emission_instructions =
-            build_listener_context(&input.knot, &input.loom_id, &input.all_knots);
+            build_listener_context(
+                &input.knot,
+                &input.loom_id,
+                &input.all_knots,
+                input.self_continuation_desc.as_deref(),
+            );
 
         // No listeners — no injection needed at all.
         if emission_instructions.is_empty() {
@@ -361,6 +366,7 @@ mod tests {
             all_knots,
             rig_dir,
             strand_queue: None,
+            self_continuation_desc: None,
         }
     }
 
