@@ -272,24 +272,48 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             strand_path,
             continuations,
             reason,
+            budget_secs,
+            batch_start_epoch,
             ..
-        } => format!(
-            "[task-loop] handoff loom={} knot={} strand={} continuations={continuations} reason={reason}",
-            loom_id.0,
-            knot_id.0,
-            strand_path.0.display()
-        ),
+        } => {
+            let mut line = format!(
+                "[task-loop] handoff loom={} knot={} strand={} hop={}/{} reason={reason}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display(),
+                continuations,
+                crate::application::session_resume::MAX_CONTINUATIONS,
+            );
+            if let Some(budget) = budget_secs {
+                line.push_str(&format!(" remaining={budget}'s"));
+            }
+            if let Some(start) = batch_start_epoch {
+                line.push_str(&format!(" batch-start={start}"));
+            }
+            line
+        }
         LoomEvent::BatchIncomplete {
             loom_id,
             knot_id,
             reason,
             continuations,
+            budget_secs,
+            batch_start_epoch,
             ..
-        } => format!(
-            "[task-loop] batch-incomplete loom={} knot={} reason={reason} continuations={continuations}",
-            loom_id.0,
-            knot_id.0
-        ),
+        } => {
+            let mut line = format!(
+                "[task-loop] batch-incomplete loom={} knot={} reason={reason} continuations={continuations}",
+                loom_id.0,
+                knot_id.0
+            );
+            if let Some(budget) = budget_secs {
+                line.push_str(&format!(" budget={budget}'s"));
+            }
+            if let Some(start) = batch_start_epoch {
+                line.push_str(&format!(" batch-start={start}"));
+            }
+            line
+        },
     }
 }
 

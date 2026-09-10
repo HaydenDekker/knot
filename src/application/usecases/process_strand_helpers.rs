@@ -31,9 +31,19 @@ pub struct ResolvedExecution {
     /// Plan 086: the incoming continuations count from the strand file's
     /// front-matter (0 for a fresh dispatch, N for a continuation hop).
     pub incoming_continuations: u32,
-    /// Plan 086: the incoming `batch-deadline-epoch` from the strand
-    /// file's front-matter. `None` for a fresh dispatch.
-    pub batch_deadline_epoch: Option<u64>,
+    /// Plan 087: the incoming `budget-secs` from the strand file's
+    /// front-matter — the batch's remaining *execution* budget in
+    /// seconds (queue wait is exempt; only execution decrements it).
+    /// `None` for a fresh dispatch.
+    pub budget_secs: Option<u64>,
+    /// Plan 087: the inherited `batch-start-epoch` (Unix epoch seconds)
+    /// — the batch's first handoff. `None` for a fresh dispatch.
+    pub batch_start_epoch: Option<u64>,
+    /// Plan 087: this hop's dequeue instant (Unix epoch seconds) — the
+    /// start of the hop's execution window. `execution_secs` at handoff
+    /// is `now − dequeue_epoch` (wall-clock, including Knot overhead),
+    /// the only thing that decrements the budget.
+    pub dequeue_epoch: Option<u64>,
     /// Plan 086: whether a `ContextWrapUpSteered` fired this session
     /// (the water-mark note was delivered). Used for the handoff-missed
     /// enforcement.
@@ -206,21 +216,24 @@ pub fn resolve_config_and_build(
     let (agent_config, mut effective_timeout, profile) =
         ps.resolve_agent_config(knot)?;
 
-    // Plan 086: continuation file detection — read the strand file's
-    // front-matter for the batch stamps (`batch-deadline-epoch`,
-    // `continuations`). When present, the timeout is derived from the
-    // batch deadline (remaining global budget), not the profile's
-    // `session_timeout()`.
-    let (incoming_continuations, batch_deadline_epoch) =
+    // Plan 087: continuation file detection — read the strand file's
+    // front-matter for the batch stamps (`budget-secs`,
+    // `batch-start-epoch`, `continuations`). When a budget is present,
+    // the timeout is the stamped remaining *execution* budget applied in
+    // full — queue wait never erodes it (plan 087 Bound 2).
+    let (incoming_continuations, budget_secs, batch_start_epoch) =
         read_continuation_stamps(strand_path);
-    if let Some(deadline) = batch_deadline_epoch {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let remaining = deadline.saturating_sub(now);
-        if remaining < crate::application::session_resume::MIN_REMAINING_SECS {
-            // Plan 086: deadline exhausted — do not spawn a session.
+    // Plan 087: capture this hop's dequeue instant — the start of the
+    // hop's execution window. At handoff, `execution_secs =
+    // now − dequeue_epoch` is the only amount that decrements the batch
+    // budget (queue wait is exempt).
+    let dequeue_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Some(budget) = budget_secs {
+        if budget < crate::application::session_resume::MIN_REMAINING_SECS {
+            // Plan 087: budget exhausted — do not spawn a session.
             // Write a Knot-authored degenerate terminal tie-off
             // (deferral), record `BatchIncomplete` (reason `deadline`),
             // and let the normal late-removal consume the event.
@@ -231,9 +244,12 @@ pub fn resolve_config_and_build(
                 strand_path,
                 tie_off_path,
                 incoming_continuations,
+                budget_secs,
+                batch_start_epoch,
+                dequeue_epoch,
             );
         }
-        effective_timeout = Some(std::time::Duration::from_secs(remaining));
+        effective_timeout = Some(std::time::Duration::from_secs(budget));
     }
 
     // Plan 084: a wrap-up limit is only meaningful under `pi-rpc` (the sole
@@ -353,7 +369,9 @@ pub fn resolve_config_and_build(
         all_knots,
         profile_timeout: effective_timeout,
         incoming_continuations,
-        batch_deadline_epoch,
+        budget_secs,
+        batch_start_epoch,
+        dequeue_epoch: Some(dequeue_epoch),
         was_watermarked,
     })
 }
@@ -424,6 +442,21 @@ pub fn handle_success(
                     );
                 }
 
+                // Plan 087: compute the stamped budget for the
+                // continuation — the batch's remaining *execution*
+                // budget after this hop. Only this hop's execution
+                // (dequeue → handoff, wall-clock) decrements it; queue
+                // wait is exempt. Computed here so the loom event +
+                // service-log line carry the same budget the
+                // continuation file will be stamped with.
+                let (stamped_budget, stamped_start) = stamp_continuation_budget(
+                    ps,
+                    knot,
+                    resolved.budget_secs,
+                    resolved.batch_start_epoch,
+                    resolved.dequeue_epoch,
+                );
+
                 // Record LoomEvent::TasksIncomplete.
                 let reason = if resolved.was_watermarked {
                     "water-mark".to_string()
@@ -444,9 +477,8 @@ pub fn handle_success(
                         .payload
                         .get("tasks-remaining")
                         .and_then(|v| v.parse::<u32>().ok()),
-                    deadline_epoch: resolved
-                        .batch_deadline_epoch
-                        .unwrap_or(0),
+                    budget_secs: Some(stamped_budget),
+                    batch_start_epoch: Some(stamped_start),
                     reason: reason.clone(),
                     timestamp: crate::application::usecases::types::format_timestamp(),
                 });
@@ -459,20 +491,20 @@ pub fn handle_success(
                     strand_path,
                     first_ti,
                     resolved.incoming_continuations,
-                    resolved.batch_deadline_epoch,
+                    stamped_budget,
+                    stamped_start,
                 );
 
-                // Service log line.
-                let remaining_str = first_ti
-                    .payload
-                    .get("tasks-remaining")
-                    .cloned()
-                    .unwrap_or_else(|| "?".to_string());
+                // Service log line (plan 087: the budget is the
+                // stamped remaining execution budget; the hop is
+                // `N/MAX_CONTINUATIONS`).
                 crate::adapters::logging::log_strand_event(
                     &format!(
-                        "[task-loop] handoff (knot={}, continuations={}, remaining={remaining_str}, trigger={reason})",
+                        "[task-loop] handoff (knot={}, hop={}/{}, remaining={}s, trigger={reason})",
                         knot_id.0,
                         resolved.incoming_continuations + 1,
+                        crate::application::session_resume::MAX_CONTINUATIONS,
+                        stamped_budget,
                     ),
                     &strand_path.0,
                 );
@@ -724,41 +756,70 @@ pub fn handle_success(
 
 /// Read the continuation stamps from a strand file's YAML front-matter.
 ///
-/// Returns `(continuations, batch_deadline_epoch)` — both `0`/`None`
-/// for a fresh dispatch (no continuation stamps in the file).
+/// Returns `(continuations, budget_secs, batch_start_epoch)` — all
+/// `0`/`None` for a fresh dispatch (no continuation stamps in the file).
+///
+/// Plan 087: the batch stamps are `budget-secs` (the batch's remaining
+/// *execution* budget in seconds — queue wait never erodes it) and
+/// `batch-start-epoch` (the absolute origin — the batch's first
+/// handoff). **Compatibility shim (one release):** pre-087 files carry
+/// only `batch-deadline-epoch`; when `budget-secs` is absent the budget
+/// is derived as `deadline − now` at read time (the 086 wall-clock
+/// semantics, where queue wait erodes the budget) and the batch start is
+/// `None`.
 pub fn read_continuation_stamps(
     strand_path: &StrandPath,
-) -> (u32, Option<u64>) {
+) -> (u32, Option<u64>, Option<u64>) {
     use crate::application::usecases::strand_event_metadata::parse_yaml_frontmatter;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     let content = match std::fs::read_to_string(&strand_path.0) {
         Ok(c) => c,
-        Err(_) => return (0, None),
+        Err(_) => return (0, None, None),
     };
     let frontmatter = match parse_yaml_frontmatter(&content) {
         Some(fm) => fm,
-        None => return (0, None),
+        None => return (0, None, None),
     };
 
     let continuations = frontmatter
         .get("continuations")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    let deadline = frontmatter
-        .get("batch-deadline-epoch")
+
+    // Plan 087: the stamped budget, with the pre-087 fallback.
+    let budget_secs = frontmatter
+        .get("budget-secs")
+        .and_then(|v| v.parse::<u64>().ok())
+        .or_else(|| {
+            frontmatter
+                .get("batch-deadline-epoch")
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|deadline| {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    deadline.saturating_sub(now)
+                })
+        });
+    let batch_start_epoch = frontmatter
+        .get("batch-start-epoch")
         .and_then(|v| v.parse::<u64>().ok());
 
-    (continuations, deadline)
+    (continuations, budget_secs, batch_start_epoch)
 }
 
-/// Plan 086: write a Knot-authored degenerate terminal tie-off when the
-/// batch deadline is exhausted. This is a deferral, not a failure:
-/// "batch deadline exhausted; remaining work is in the checklist; resume
-/// on the next dispatch." Records `BatchIncomplete` (reason `deadline`).
+/// Plan 086/087: write a Knot-authored degenerate terminal tie-off when
+/// the batch's execution budget is exhausted. This is a deferral, not a
+/// failure: "batch execution budget exhausted; remaining work is in the
+/// checklist; resume on the next dispatch." Records `BatchIncomplete`
+/// (reason `deadline`).
 ///
 /// Returns a `ResolvedExecution` with a `TieOffOutcome::Failed` so the
 /// caller can proceed through the normal failure path (late-removal,
 /// log, etc.) without spawning an agent session.
+#[allow(clippy::too_many_arguments)] // flat stamp list keeps the single call site readable
 pub fn degenerate_deadline_tieoff(
     ps: &ProcessStrand,
     knot: &Knot,
@@ -766,6 +827,9 @@ pub fn degenerate_deadline_tieoff(
     strand_path: &StrandPath,
     _tie_off_path: &TieOffPath,
     continuations: u32,
+    budget_secs: Option<u64>,
+    batch_start_epoch: Option<u64>,
+    dequeue_epoch: u64,
 ) -> Result<ResolvedExecution, PortError> {
     use crate::application::usecases::types::format_timestamp;
     use crate::domain::entities::TieOffStatus;
@@ -773,7 +837,7 @@ pub fn degenerate_deadline_tieoff(
 
     let knot_id = knot.id.clone();
     let note = format!(
-        "Batch deadline exhausted. Remaining work is in the checklist; resume on the next dispatch.\n\nKnot: {}\nContinuations: {continuations}",
+        "Batch execution budget exhausted. Remaining work is in the checklist; resume on the next dispatch.\n\nKnot: {}\nContinuations: {continuations}",
         knot_id.0,
     );
 
@@ -796,43 +860,111 @@ pub fn degenerate_deadline_tieoff(
     };
     let _ = ps.tie_off_sink.append(tie_off);
 
-    // Record BatchIncomplete (reason deadline).
+    // Record BatchIncomplete (reason deadline) with the batch's budget
+    // state (plan 087: remaining execution budget + batch origin).
     let _ = ps.log_port.append(LoomEvent::BatchIncomplete {
         loom_id: loom_id.clone(),
         knot_id: knot_id.clone(),
         strand_path: strand_path.clone(),
         reason: "deadline".to_string(),
         continuations,
+        budget_secs,
+        batch_start_epoch,
         timestamp: format_timestamp(),
     });
 
     // Return a Failed outcome so the caller takes the failure path
-    // (late-removal, log, git commit).
+    // (late-removal, log, git commit). The stamps are carried through
+    // so the `ResolvedExecution` faithfully reflects the continuation
+    // file that was deferred.
     Ok(ResolvedExecution {
         outcome: TieOffOutcome::Failed {
-            error: "batch deadline exhausted (degenerate tie-off)".to_string(),
+            error: "batch execution budget exhausted (degenerate tie-off)".to_string(),
         },
         session_id: None,
         listener_context: String::new(),
         all_knots: Vec::new(),
         profile_timeout: None,
         incoming_continuations: continuations,
-        batch_deadline_epoch: None,
+        budget_secs,
+        batch_start_epoch,
+        dequeue_epoch: Some(dequeue_epoch),
         was_watermarked: false,
     })
 }
 
-/// Plan 086: dispatch the self-continuation for a `TasksIncomplete`
+/// Plan 087 Bound 2: compute the stamped budget + batch start for the
+/// continuation event (the batch total execution budget).
+///
+/// The budget is the batch's **remaining execution duration** in seconds
+/// — only execution decrements it; queue wait never does. First handoff
+/// (fresh dispatch, no incoming budget): `profile_secs −
+/// execution_secs` with `start = now` (the batch's first handoff stamps
+/// the origin). Continuation hop: `incoming_budget − execution_secs`
+/// with `start` inherited verbatim (never recomputed). `execution_secs`
+/// is wall-clock (dequeue → handoff), including Knot overhead.
+///
+/// The budget only ever *decreases* — it is never reset to a full
+/// `profile_timeout` at any handoff ("fresh context, never a fresh
+/// budget"). The profile timeout defaults to 300s when unset.
+pub fn stamp_continuation_budget(
+    ps: &ProcessStrand,
+    knot: &Knot,
+    incoming_budget: Option<u64>,
+    incoming_start: Option<u64>,
+    dequeue_epoch: Option<u64>,
+) -> (u64, u64) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // This hop's execution: wall-clock from dequeue to handoff, including
+    // Knot overhead (locked decision — the runner-metadata variant is a
+    // future refinement).
+    let execution_secs = now.saturating_sub(dequeue_epoch.unwrap_or(now));
+
+    match incoming_budget {
+        Some(budget) => {
+            // Continuation hop: decay by this hop's execution; inherit
+            // the batch origin.
+            (
+                budget.saturating_sub(execution_secs),
+                incoming_start.unwrap_or(now),
+            )
+        }
+        None => {
+            // First handoff: the batch gets one total execution budget —
+            // the profile's per-invocation timeout, hop 1's execution
+            // already deducted.
+            let profile_secs = ps
+                .resolve_agent_config(knot)
+                .ok()
+                .and_then(|(_, timeout, _)| timeout)
+                .map(|d| d.as_secs())
+                .unwrap_or(300);
+            (profile_secs.saturating_sub(execution_secs), now)
+        }
+    }
+}
+
+/// Plan 086/087: dispatch the self-continuation for a `TasksIncomplete`
 /// `occurred: true` declaration.
 ///
 /// Creates a continuation event file in the knot's own strand dir with
-/// the stamps (`batch-deadline-epoch`, `continuations`, accumulated
-/// `background-additional`) and the handoff content (accumulated
-/// background + handoff body + `next-task-context`).
+/// the stamps (`budget-secs`, `batch-start-epoch`, `continuations`,
+/// accumulated `background-additional`) and the handoff content
+/// (accumulated background + handoff body + `next-task-context`).
+///
+/// `budget_secs` + `batch_start_epoch` are the stamped values computed by
+/// the caller ([`stamp_continuation_budget`]) so the loom event and the
+/// service-log line carry the same budget the file is stamped with.
 ///
 /// Returns the path of the created file, or `None` when the
 /// max-continuations cap is reached (records `BatchIncomplete` reason
 /// `caps`).
+#[allow(clippy::too_many_arguments)] // flat stamp list keeps the single call site readable
 pub fn dispatch_self_continuation(
     ps: &ProcessStrand,
     knot: &Knot,
@@ -840,17 +972,18 @@ pub fn dispatch_self_continuation(
     strand_path: &StrandPath,
     event: &crate::domain::events::AgentEvent,
     incoming_continuations: u32,
-    incoming_deadline: Option<u64>,
+    budget_secs: u64,
+    batch_start_epoch: u64,
 ) -> Result<Option<std::path::PathBuf>, PortError> {
     use crate::application::usecases::types::format_timestamp;
     use crate::domain::events::LoomEvent;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     let knot_id = knot.id.clone();
     let next_continuations = incoming_continuations + 1;
 
     // Plan 086: max-continuations cap — if at the cap, suppress the
-    // dispatch and record BatchIncomplete (reason caps).
+    // dispatch and record BatchIncomplete (reason caps) with the budget
+    // the suppressed continuation would have carried (plan 087).
     if next_continuations > crate::application::session_resume::MAX_CONTINUATIONS {
         let _ = ps.log_port.append(LoomEvent::BatchIncomplete {
             loom_id: loom_id.clone(),
@@ -858,26 +991,12 @@ pub fn dispatch_self_continuation(
             strand_path: strand_path.clone(),
             reason: "caps".to_string(),
             continuations: incoming_continuations,
+            budget_secs: Some(budget_secs),
+            batch_start_epoch: Some(batch_start_epoch),
             timestamp: format_timestamp(),
         });
         return Ok(None);
     }
-
-    // Inherit the deadline verbatim (never recomputed from the current
-    // invocation). For the chain's first event, compute now + profile_timeout.
-    let deadline_epoch = incoming_deadline.unwrap_or_else(|| {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let profile_secs = ps
-            .resolve_agent_config(knot)
-            .ok()
-            .and_then(|(_, timeout, _)| timeout)
-            .map(|d| d.as_secs())
-            .unwrap_or(300);
-        now + profile_secs
-    });
 
     // Accumulate the background-additional: incoming accumulation +
     // this event's contribution (append-only, hop-labelled).
@@ -906,8 +1025,9 @@ pub fn dispatch_self_continuation(
     lines.push(format!("event-id: TasksIncomplete"));
     lines.push(format!("target-knot: {}", knot_id.0));
     lines.push(format!("timestamp: {timestamp}"));
-    lines.push(format!("batch-deadline-epoch: {deadline_epoch}"));
     lines.push(format!("continuations: {next_continuations}"));
+    lines.push(format!("budget-secs: {budget_secs}"));
+    lines.push(format!("batch-start-epoch: {batch_start_epoch}"));
     if !accumulated_bg.is_empty() {
         // Multi-line YAML: use a block scalar
         lines.push("background-additional: |".to_string());
@@ -966,4 +1086,203 @@ pub fn dispatch_self_continuation(
     })?;
 
     Ok(Some(file_path))
+}
+
+// ── Plan 087: tests ──────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::ports::AgentRunner;
+    use crate::application::usecases::test_fixtures::{
+        build_knot_with_profile, build_loom, MockAgentRunner, MockEventDispatcher,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        MockTieOffSink,
+    };
+    use crate::application::store::LoomStore;
+    use crate::domain::events::LoomEvent;
+    use crate::domain::value_objects::{AgentProfile, RigAgentConfig};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Write a continuation-file body into `dir` and return its path.
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, content).expect("write test strand file");
+        path
+    }
+
+    fn build_process_strand(
+        profile: AgentProfile,
+    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
+        let store = LoomStore::new();
+        store.register(build_loom(
+            "test-loom",
+            vec![build_knot_with_profile("k1", "budgeted")],
+        ));
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            Arc::new(MockAgentRunner::default()) as Arc<dyn AgentRunner>,
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            Arc::new(MockProfileRepository {
+                profiles: Arc::new(Mutex::new(HashMap::from_iter([(
+                    "budgeted".to_string(),
+                    profile,
+                )]))),
+            }),
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+        (use_case, log_events)
+    }
+
+    /// The knot registered by `build_process_strand`.
+    fn budgeted_knot() -> Knot {
+        build_knot_with_profile("k1", "budgeted")
+    }
+
+    // ── read_continuation_stamps (plan 087) ──────────────────────────
+
+    /// The 087 stamps (`budget-secs` + `batch-start-epoch`) resolve to the
+    /// `(continuations, budget_secs, batch_start_epoch)` triple.
+    #[test]
+    fn read_continuation_stamps_reads_budget_and_start() {
+        let dir = TempDir::new().unwrap();
+        let t0 = now_secs() - 3600;
+        let path = write_file(
+            dir.path(),
+            "event-20260101T000000-continuation.md",
+            &format!(
+                "---\nevent-id: TasksIncomplete\nbatch-start-epoch: {t0}\nbudget-secs: 1200\ncontinuations: 2\n---\n\n## Handoff\nbody",
+            ),
+        );
+        let (continuations, budget, start) =
+            read_continuation_stamps(&StrandPath(path));
+        assert_eq!(continuations, 2);
+        assert_eq!(budget, Some(1200));
+        assert_eq!(start, Some(t0));
+    }
+
+    /// Compatibility shim: a pre-087 file with only `batch-deadline-epoch`
+    /// still resolves a budget (deadline − now, at read time) and no batch
+    /// start.
+    #[test]
+    fn read_continuation_stamps_shim_deadline_only() {
+        let dir = TempDir::new().unwrap();
+        let deadline = now_secs() + 1200;
+        let path = write_file(
+            dir.path(),
+            "event-20260101T000000-continuation.md",
+            &format!(
+                "---\nevent-id: TasksIncomplete\nbatch-deadline-epoch: {deadline}\ncontinuations: 1\n---\n\n## Handoff\nbody",
+            ),
+        );
+        let (continuations, budget, start) =
+            read_continuation_stamps(&StrandPath(path));
+        assert_eq!(continuations, 1);
+        let b = budget.expect("shim must resolve a budget from the deadline");
+        assert!(
+            (1195..=1200).contains(&b),
+            "budget should be deadline−now (~1200), got {b}"
+        );
+        assert_eq!(start, None, "pre-087 files carry no batch start");
+    }
+
+    /// A fresh dispatch (no continuation stamps) resolves to
+    /// `(0, None, None)`.
+    #[test]
+    fn read_continuation_stamps_fresh_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let path = write_file(dir.path(), "strand.md", "plain strand content");
+        let (continuations, budget, start) =
+            read_continuation_stamps(&StrandPath(path));
+        assert_eq!(continuations, 0);
+        assert_eq!(budget, None);
+        assert_eq!(start, None);
+    }
+
+    // ── stamp_continuation_budget (plan 087 Bound 2) ─────────────────
+
+    /// First handoff (no incoming budget): the batch gets one total
+    /// execution budget — `profile_secs − execution_secs` — with the batch
+    /// start stamped at now.
+    #[test]
+    fn stamp_continuation_budget_first_handoff() {
+        let profile = AgentProfile::new(
+            "budgeted".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Budgeted.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(1800));
+        let (ps, _events) = build_process_strand(profile);
+        let knot = budgeted_knot();
+        let dequeue = now_secs();
+        let (budget, start) =
+            stamp_continuation_budget(&ps, &knot, None, None, Some(dequeue));
+        let after = now_secs();
+        // execution_secs ∈ [0, after − dequeue]; budget = 1800 − execution.
+        assert!((1799..=1800).contains(&budget), "got budget {budget}");
+        assert!(
+            (start as i64 - after as i64).abs() <= 1,
+            "batch start must be stamped at the first handoff (start={start}, after={after})"
+        );
+    }
+
+    /// Continuation hop (incoming budget): the budget decays by this hop's
+    /// execution only — `incoming_budget − execution_secs` — and the batch
+    /// start is inherited verbatim (never recomputed), even when stale.
+    #[test]
+    fn stamp_continuation_budget_continuation_hop_inherits_start() {
+        let (ps, _events) = build_process_strand(
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+        let knot = budgeted_knot();
+        let t0 = now_secs() - 7200; // a stale origin must be inherited
+        let dequeue = now_secs();
+        let (budget, start) =
+            stamp_continuation_budget(&ps, &knot, Some(1200), Some(t0), Some(dequeue));
+        assert!((1199..=1200).contains(&budget), "got budget {budget}");
+        assert_eq!(start, t0, "batch start must be inherited, never recomputed");
+    }
+
+    /// The budget only ever *decreases* by execution — a long queue wait
+    /// (stale `batch-start-epoch`, full `budget-secs`) does not erode the
+    /// stamped budget.
+    #[test]
+    fn stamp_continuation_budget_queue_wait_exempt() {
+        let (ps, _events) = build_process_strand(
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+        let knot = budgeted_knot();
+        // The continuation sat in the queue for 24h; its budget is intact.
+        let t0 = now_secs() - 86_400;
+        let dequeue = now_secs();
+        let (budget, start) =
+            stamp_continuation_budget(&ps, &knot, Some(1200), Some(t0), Some(dequeue));
+        assert!((1199..=1200).contains(&budget), "queue wait must not erode the budget");
+        assert_eq!(start, t0);
+    }
 }

@@ -591,8 +591,14 @@ pub enum LoomEvent {
         /// never validates).
         tasks_done: Option<u32>,
         tasks_remaining: Option<u32>,
-        /// The stamped batch-deadline-epoch (Unix epoch seconds).
-        deadline_epoch: u64,
+        /// Plan 087: the stamped `budget-secs` — the batch's remaining
+        /// *execution* budget in seconds after this hop (queue wait is
+        /// exempt; only execution decrements it).
+        budget_secs: Option<u64>,
+        /// Plan 087: the batch's `batch-start-epoch` (Unix epoch
+        /// seconds — the batch's first handoff). Observability + the
+        /// staleness backstop; never eroded by queue wait.
+        batch_start_epoch: Option<u64>,
         /// Why the declaration was made.
         reason: String,
         /// ISO 8601 timestamp (local time).
@@ -600,12 +606,12 @@ pub enum LoomEvent {
     },
     /// A continuation chain stopped with work remaining (plan 086).
     ///
-    /// `reason` is `"deadline"` (the batch deadline was exhausted before
-    /// the continuation could spawn — no session, degenerate tie-off
-    /// written) or `"caps"` (`continuations >= MAX_CONTINUATIONS` —
-    /// dispatch suppressed). In both cases the work is not lost
-    /// (checklist + commits are durable) and the batch resumes on the
-    /// next dispatch with a fresh budget.
+    /// `reason` is `"deadline"` (the batch's execution budget was
+    /// exhausted before the continuation could spawn — no session,
+    /// degenerate tie-off written) or `"caps"` (`continuations >=
+    /// MAX_CONTINUATIONS` — dispatch suppressed). In both cases the work
+    /// is not lost (checklist + commits are durable) and the batch
+    /// resumes on the next dispatch with a fresh budget.
     BatchIncomplete {
         loom_id: LoomId,
         knot_id: KnotId,
@@ -613,6 +619,13 @@ pub enum LoomEvent {
         /// `"deadline"` or `"caps"`.
         reason: String,
         continuations: u32,
+        /// Plan 087: the batch's remaining *execution* budget in seconds
+        /// at the stop (the exhausted budget for `deadline`; the budget
+        /// the suppressed continuation would have carried for `caps`).
+        budget_secs: Option<u64>,
+        /// Plan 087: the batch's `batch-start-epoch` (Unix epoch
+        /// seconds — the batch's first handoff).
+        batch_start_epoch: Option<u64>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },

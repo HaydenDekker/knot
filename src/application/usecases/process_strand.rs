@@ -2823,6 +2823,223 @@ mod profile_timeout_tests {
     }
 }
 
+// ── Plan 087: Batch Total Execution Budget (Bound 2) Tests ──────
+//
+// The deque-timeout shape: a continuation's `budget-secs` is applied
+// **directly** as the runner timeout (queue wait is exempt — it never
+// erodes the budget), and a budget below `MIN_REMAINING_SECS` defers
+// with a degenerate `Failed` tie-off + `BatchIncomplete (deadline)`
+// instead of spawning a session. The compatibility shim keeps a
+// pre-087 `batch-deadline-epoch`-only file working.
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::application::usecases::test_fixtures::{
+        build_knot_with_profile, build_loom, MockEventDispatcher,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker,
+        TrackingAgentRunner, TrackingTieOffSink,
+    };
+    use crate::domain::entities::{KnotId, LoomId, TieOffStatus};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Build a `ProcessStrand` wired with a budgeted profile
+    /// (`timeout: Some(1800)`), a tracking runner, and a tracking
+    /// tie-off sink.
+    #[allow(clippy::type_complexity)]
+    fn build_budget_use_case() -> (
+        ProcessStrand,
+        Arc<Mutex<Vec<LoomEvent>>>,
+        Arc<Mutex<Vec<TieOff>>>,
+        Arc<Mutex<Vec<crate::application::ports::ExecutionContext>>>,
+    ) {
+        let profile = crate::domain::value_objects::AgentProfile::new(
+            "budgeted".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Budgeted.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(1800));
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([(
+                "budgeted".to_string(),
+                profile,
+            )]))),
+        });
+
+        let store = LoomStore::new();
+        let loom = build_loom("test-loom", vec![build_knot_with_profile("k1", "budgeted")]);
+        store.register(loom);
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, tie_off_appends, _tie_off_content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (runner, captured_contexts) = TrackingAgentRunner::new();
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            Arc::new(runner) as Arc<dyn crate::application::ports::AgentRunner>,
+            Arc::new(tie_off_sink),
+            RigAgentConfig::default_config(),
+            PathBuf::from("/rig"),
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+        (use_case, log_events, tie_off_appends, captured_contexts)
+    }
+
+    fn continuation_strand(dir: &std::path::Path, front_matter: &str) -> std::path::PathBuf {
+        let path = dir.join("event-20260101T000000-continuation.md");
+        std::fs::write(
+            &path,
+            format!("---\n{front_matter}\n---\n\n## Handoff\nbody"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn created_event(path: std::path::PathBuf) -> StrandEvent {
+        StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(path),
+        }
+    }
+
+    /// A continuation with `budget-secs: 1200` gets a 1200s runner
+    /// timeout **regardless of elapsed wall-clock** — the batch start is
+    /// 24h stale and the queue wait was long, but the budget is applied
+    /// in full (queue wait is exempt).
+    #[test]
+    fn continuation_budget_secs_applied_directly_as_runner_timeout() {
+        let dir = TempDir::new().unwrap();
+        let path = continuation_strand(
+            dir.path(),
+            &format!(
+                "event-id: TasksIncomplete\ntarget-knot: k1\nbatch-start-epoch: {}\nbudget-secs: 1200\ncontinuations: 1",
+                now_secs() - 86_400,
+            ),
+        );
+
+        let (use_case, _log_events, _tie_offs, captured_contexts) =
+            build_budget_use_case();
+
+        let result = use_case.execute(created_event(path));
+        assert!(result.is_ok(), "execution should succeed: {result:?}");
+
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1, "exactly one session should be spawned");
+        assert_eq!(
+            contexts[0].timeout,
+            Some(Duration::from_secs(1200)),
+            "budget-secs must be applied directly as the runner timeout (queue wait exempt)"
+        );
+    }
+
+    /// A continuation whose budget fell below `MIN_REMAINING_SECS` (5s)
+    /// is a degenerate deferral: no session, a Knot-authored `Failed`
+    /// tie-off, and `BatchIncomplete (reason: deadline)`.
+    #[test]
+    fn continuation_budget_below_min_remaining_defers() {
+        let dir = TempDir::new().unwrap();
+        let path = continuation_strand(
+            dir.path(),
+            &format!(
+                "event-id: TasksIncomplete\ntarget-knot: k1\nbatch-start-epoch: {}\nbudget-secs: 3\ncontinuations: 1",
+                now_secs() - 3600,
+            ),
+        );
+
+        let (use_case, log_events, tie_off_appends, captured_contexts) =
+            build_budget_use_case();
+
+        let result = use_case.execute(created_event(path));
+        assert!(result.is_ok(), "deferral should complete the strand: {result:?}");
+
+        // No session spawned.
+        assert!(
+            captured_contexts.lock().unwrap().is_empty(),
+            "a degenerate deferral must not spawn a session"
+        );
+
+        // BatchIncomplete (reason: deadline) recorded.
+        let events = log_events.lock().unwrap();
+        let batch_incomplete: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                LoomEvent::BatchIncomplete {
+                    reason, continuations, ..
+                } => Some((reason.clone(), *continuations)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            batch_incomplete,
+            vec![("deadline".to_string(), 1)],
+            "a degenerate deferral must record BatchIncomplete (deadline)"
+        );
+
+        // A Knot-authored Failed tie-off was written.
+        let tie_offs = tie_off_appends.lock().unwrap();
+        assert!(
+            tie_offs
+                .iter()
+                .any(|t| t.status == TieOffStatus::Failed),
+            "a degenerate deferral must write a Failed tie-off"
+        );
+    }
+
+    /// Compatibility shim: a pre-087 continuation file carrying only
+    /// `batch-deadline-epoch` still resolves a budget (deadline − now) and
+    /// runs with a shrunken timeout — the 086 behaviour is preserved for
+    /// one release.
+    #[test]
+    fn pre_087_deadline_only_file_still_resolves_budget() {
+        let dir = TempDir::new().unwrap();
+        let path = continuation_strand(
+            dir.path(),
+            &format!(
+                "event-id: TasksIncomplete\ntarget-knot: k1\nbatch-deadline-epoch: {}\ncontinuations: 1",
+                now_secs() + 1200,
+            ),
+        );
+
+        let (use_case, _log_events, _tie_offs, captured_contexts) =
+            build_budget_use_case();
+
+        let result = use_case.execute(created_event(path));
+        assert!(result.is_ok(), "execution should succeed: {result:?}");
+
+        let contexts = captured_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1);
+        let timeout = contexts[0].timeout;
+        assert!(
+            timeout.is_some() && timeout.unwrap().as_secs() >= 1195 && timeout.unwrap().as_secs() <= 1200,
+            "the shim must derive the budget from deadline−now (got {timeout:?})"
+        );
+    }
+}
+
 // ── Git Versioning Tests ────────────────────────────────
 
 #[cfg(test)]
