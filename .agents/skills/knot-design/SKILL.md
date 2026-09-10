@@ -1,10 +1,10 @@
 ---
 name: knot-design
-description: "Design looms and knots for the Knot agent orchestration framework. Covers idempotency, naming conventions, responsibility boundaries, domain direction, loop design, and loop-breaking patterns. USE FOR: design knot, design loom, knot design, loom design, knot architecture, agent loop, feedback loop, knot naming, strand direction, knot responsibility, idempotent knot, loop-breaking, knot workflow design. DO NOT USE FOR: creating looms/knots (use knot-create), initialising a rig (use knot-init), inspecting state (use knot-inspect)."
+description: "Design looms and knots for the Knot agent orchestration framework. Covers idempotency, naming conventions, responsibility boundaries, domain direction, loop design, loop-breaking patterns, and multi-session task-list design (choosing a durable store for knots whose work spans sessions). USE FOR: design knot, design loom, knot design, loom design, knot architecture, agent loop, feedback loop, knot naming, strand direction, knot responsibility, idempotent knot, loop-breaking, knot workflow design, multi-session knot, task list, durable checklist, fan-out, chain continuation, context overflow, task-list store. DO NOT USE FOR: creating looms/knots (use knot-create), initialising a rig (use knot-init), inspecting state (use knot-inspect)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.6.0"
   compatibility: "Knot 0.31.0+"
 ---
 
@@ -667,6 +667,147 @@ When designing a pair of knots that form a loop:
 
 ---
 
+## Multi-Session Work & Task-List Stores
+
+A knot is designed to reach its goal in one invocation, and most knots should
+stay that way. But some work is larger than one context window: the knot
+enumerates or iterates an **unbounded set** (every CI, every delivered file,
+every user story), or a single item can balloon as it is worked. When work
+spans several sessions the question is not *whether* to carry a list forward —
+it is **where the list lives, and how far its durability must reach**.
+
+### First, does the work fit one session?
+
+Decide this before choosing a store:
+
+- **Single bounded unit → no task list.** The knot names exactly one unit of
+  work and emits one bounded output. Adding a list is pure overhead.
+- **Read-bloat, not a backlog.** A knot that overflows because it *reads* too
+  much into one window (scanning a large tree, ingesting many inputs) does not
+  need a list either — it needs **bounded reads**. A checklist does not shrink
+  an oversized prompt; only narrower scope does.
+- **Genuine backlog → choose a store** (below).
+
+> **Do not reach for a task list by default.** In a well-decomposed rig most
+> knots are single-unit or read-bounded. Reserve multi-session design for knots
+> that actually work a list of items — and do not opt them into multi-session
+> machinery unless they do.
+
+### The four stores
+
+A store's whole job is to survive the gap between one session ending and the
+next beginning. They differ by **durability scope** — how far the list must be
+trusted to outlive a session.
+
+| Store | Durability reaches | Choose when | Cost |
+|-------|--------------------|-------------|------|
+| **None** | Not at all — single session | Single bounded unit; or read-bloat | (n/a — don't add one) |
+| **Chain accumulator** | One continuation **chain** | Backlog fits within one bounded chain; items semi-independent | Serial; lost if the chain breaks (cap / budget) |
+| **Durable file (checklist)** | The whole **batch**, across dispatches | Backlog may exceed one chain, span dispatches, or items interdepend | Must own a writable, git-tracked path |
+| **The queue (fan-out)** | The whole batch, **per item**, in parallel | Many **independent** items | Event/queue overhead; needs a de-duplicating, idempotent worker |
+
+Two of these rows are load-bearing:
+
+- **The queue *is* a durable task list.** A producer that emits one event per
+  item and a consumer that processes one item per session already get a durable,
+  resumable, **at-least-once**, per-item-fault-isolated, parallel-drained
+  backlog — for free, on the runtime's own primitives. A hand-rolled checklist
+  inside one knot is a *re-creation of a queue* for a knot that has a single
+  input and cannot otherwise carry a backlog. For **independent** items, prefer
+  the queue over a chain: a continuation chain is serial and count-capped, so it
+  is strictly worse for embarrassingly-parallel work.
+- **The chain accumulator is only as durable as the chain.** It carries the
+  remaining work *in the continuation itself*. If the chain stops (a cap, or the
+  run budget is exhausted) and the batch continues on a later dispatch, the
+  accumulator is **gone** — facts that must survive a batch spanning dispatches
+  belong in the durable file, not the accumulator. That is exactly the line
+  between the chain store and the file store.
+
+### Choosing the store — checklist
+
+- [ ] Single bounded unit? → **None.** Stop here.
+- [ ] Pressure is **read-bloat** (too much *input*)? → **None**; bound the reads.
+- [ ] Items are **independent** and numerous? → **Queue (fan-out).**
+- [ ] Items **interdepend**, or the backlog can **outlive one chain** (exceed a
+      bounded hop count, or span dispatches)? → **Durable file.**
+- [ ] Backlog is **small and one-chain-bounded**? → **Chain accumulator**
+      (cheapest multi-session store — no file).
+
+### The split rule — the termination guarantee
+
+A backlog terminates only if it **shrinks toward empty**. If a single item can
+grow larger than one session, the knot must **split it into strictly smaller
+items rather than attempt it whole**. Items are bounded below (an item is at
+least one indivisible action), so they cannot split forever — every item
+eventually becomes small enough to finish and the list drains.
+
+This is a **rig-side guarantee**: the runtime never inspects the list, so the
+split convention written in the knot's instructions is the only enforcement. A
+knot without it can hang on one item that will never fit.
+
+### Two properties the store rests on
+
+- **Idempotency is load-bearing across sessions, not just re-runs.** The same
+  First Rule that makes a re-trigger safe is what lets a *later* session resume:
+  the resumed session replays from the durable store (file / queue / committed
+  files), so re-entry must be a **no-op for items already done**. A store whose
+  items cannot be safely re-attempted breaks the chain exactly where recovery
+  needs it.
+- **Pointer, not copy.** The hand-forward carries a **pointer** to durable state
+  (the checklist path, the commits) plus a **thin next-step brief** — never a
+  re-statement of the working context. Re-stating both re-derives (wasteful) and,
+  because it changes the head of the prompt, busts the provider's cached prefix
+  on every hop. Pointers keep each session small and robust to a compaction.
+
+### Knot wiring — the context water-mark (0.42.0+) & handoff (0.43.0+)
+
+The runtime supplies two seams, from different releases: the **context
+water-mark** (0.42.0+, `pi-rpc` only — it reads live context usage over the
+runner's RPC protocol) and the **handoff chain** (0.43.0+, extended to
+event-source knots in 0.44.0). When a knot's model alias carries a context
+wrap-up limit (`ctx-wrap-up-limit`), at the water-mark the `pi-rpc` runner
+injects a one-shot wrap-up instruction, and the knot is then expected to
+persist its list (to whichever store it chose above) and declare whether work
+remains.
+
+Design consequences:
+
+- **The engine is list-blind.** It never reads or writes the checklist. The seam
+  is a single tie-off declaration — *work remains* (self-continues) or *nothing
+  remains* (batch complete). Everything about the list's shape, format, and
+  location stays the rig's choice; the four-store ladder above is the rig's to
+  apply.
+- **The water-mark is not the store decision.** The limit only decides *whether
+  the handoff clause is in the prompt and can fire*. Two knots on the same
+  water-marked alias may use different stores (one a chain, one a file). Choose
+  the store by the checklist above — never by "is it water-marked".
+- **Cross-fire for the queue store.** A continuation delivered into a *shared*
+  event dispatch dir re-triggers **every knot watching that dir** — the
+  dispatcher keys off the *watching* knot's `(loom, knot)`, not the file's
+  `target-knot`, so the runtime does not filter it out. Mitigate by (a) making
+  the worker **idempotent** (a cross-fired continuation is a no-op for a knot
+  that is not its target) and (b) having the worker **honour `target-knot`**
+  and skip a continuation that is not addressed to it — a worker convention the
+  runtime does not enforce. Giving each unit of work its own event id still
+  helps keep a single knot's backlog from piling into one dir — the same
+  caution as *Event Subscription Design*.
+- **Config lives in another skill.** The wrap-up limit, the runner/adapter that
+  can steer mid-run, and the migration to 0.42 are **knot-init / knot-create /
+  knot-update** concerns. This skill decides *whether* a knot spans sessions and
+  *where* its list lives — not how the dial is wired.
+
+### Multi-session design checklist
+
+- [ ] Confirmed the work genuinely spans sessions (not single-unit or read-bloat)
+- [ ] Store chosen by durability scope: none / chain / **file** / **queue**
+- [ ] Independent + many → **queue**, not a serial chain
+- [ ] A **split-if-too-large** rule is stated in the knot's instructions
+- [ ] Items are **idempotent** — re-entry after a resume is a no-op for done items
+- [ ] The hand-forward **points** at durable state, it does not **copy** context
+- [ ] The knot declares work-remains / complete **explicitly** (never inferred)
+
+---
+
 ## Designing a New Knot — Step by Step
 
 ### Step 1: Define the Data Flow
@@ -731,6 +872,14 @@ domain? If yes:
 - Document the loop in the knot's markdown body
 - Ensure one side has authority (see Breaking Patterns above)
 - Add a stale-strand check
+
+### Step 7: Decide the Task-List Store
+
+Does the knot reach one bounded goal, or work a backlog? If it works a backlog,
+choose its store (see *Multi-Session Work & Task-List Stores*): none, chain
+accumulator, durable file, or the queue — then state the **split-if-too-large**
+rule and the **per-item idempotency** the store depends on. If it is a single
+bounded unit, record "single session" and move on.
 
 ---
 
