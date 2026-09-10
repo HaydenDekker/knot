@@ -3128,16 +3128,32 @@ mod suppression_ordering_tests {
     }
 
     /// Cap suppression: a continuation already at `MAX_CONTINUATIONS`
-    /// (next hop would exceed it) records `BatchIncomplete (caps)` and
-    /// emits **no** `TasksIncomplete` loom event (no claimed hop).
+    /// (next hop would exceed it) records `BatchIncomplete (caps)`, emits
+    /// **no** `TasksIncomplete` loom event (no claimed hop), and writes
+    /// **no continuation file** to the knot's inbox.
     #[test]
     fn cap_suppression_skips_tasks_incomplete_event() {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         std::fs::create_dir_all(&rig_dir).unwrap();
-        let knot = build_knot_with_profile("k1", "budgeted");
+        // An event-source knot so the continuation's inbox is a
+        // deterministic absolute path we can assert is empty on
+        // suppression (the "no continuation file" half of the check).
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "budgeted".to_string(),
+            prompt_template: crate::domain::value_objects::PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "SomeEvent".to_string(),
+            },
+            event_description: Some("When SomeEvent occurs.".to_string()),
+        };
         let (use_case, log_events) =
-            build_use_case(budgeted_profile(1800), knot, rig_dir);
+            build_use_case(budgeted_profile(1800), knot, rig_dir.clone());
 
         // A continuation strand already at the cap (`continuations: 10`);
         // a generous budget so the cap — not the budget — is the reason.
@@ -3174,6 +3190,24 @@ mod suppression_ordering_tests {
             caps,
             vec![10],
             "cap suppression must record BatchIncomplete (caps) with the incoming continuations"
+        );
+
+        // No continuation file was written to the event inbox — a
+        // suppressed hop produces no durable continuation artifact.
+        let inbox = crate::domain::knot_file::derive_runtime_root(&rig_dir)
+            .join("test-loom")
+            .join("SomeEvent");
+        let has_continuation = std::fs::read_dir(&inbox)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .any(|e| e.file_name().to_string_lossy().ends_with("-continuation.md"))
+            })
+            .unwrap_or(false);
+        assert!(
+            !has_continuation,
+            "a cap-suppressed hop must not write a continuation file to the inbox ({})",
+            inbox.display()
         );
     }
 

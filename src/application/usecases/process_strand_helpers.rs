@@ -1513,4 +1513,126 @@ mod tests {
         assert!(content.contains("budget-secs: 1200"));
         assert!(content.contains("batch-start-epoch"));
     }
+
+    // ── FIFO / D3 ordering (plan 087 phase 3) ─────────────────────────
+
+    /// **FIFO (D3 ordering)**: a continuation written to the knot's inbox
+    /// is queued **after** any already-queued events (appended to the end,
+    /// never front-inserted). The continuation enters the durable queue
+    /// through the existing watcher → debounce → `push_or_replace` path, so
+    /// it is pushed after the events that were already queued. The head of
+    /// the queue is still the oldest already-queued event; the continuation
+    /// is popped last.
+    #[test]
+    fn continuation_written_to_inbox_is_queued_after_already_queued_events() {
+        use crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue;
+        use crate::application::ports::StrandEventQueue;
+        use crate::domain::pending_event::{
+            PendingEvent, PendingEventId, PendingEventOrShutdown,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let (ps, _events) = build_process_strand_at(
+            rig_dir,
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+
+        // An event-source knot — its inbox is the event dispatch dir
+        // `derive_runtime_root(rig_dir)/<loom>/<event-id>`.
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: crate::domain::value_objects::PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "SomeEvent".to_string(),
+            },
+            event_description: Some("When SomeEvent occurs.".to_string()),
+        };
+        let loom_id = LoomId("test-loom".to_string());
+        let trigger = StrandPath(write_file(
+            dir.path(),
+            "event-20260101T000000-SomeEvent.md",
+            "event file body",
+        ));
+        let t0 = now_secs() - 60;
+
+        // The handoff writes the continuation into the knot's inbox.
+        let cont_path = dispatch_self_continuation(
+            &ps,
+            &knot,
+            &loom_id,
+            &trigger,
+            &tasks_incomplete_event(),
+            0,
+            1200,
+            t0,
+        )
+        .expect("dispatch must not fail")
+        .expect("an event-source knot whose work remains must get a continuation");
+
+        // The durable queue, seeded with two already-queued events whose
+        // 13-digit timestamp prefixes are far earlier than the
+        // continuation's (a real, current Unix-millisecond timestamp), so
+        // they deterministically sort before it by filename (FIFO).
+        let queue = DiskBackedEventQueue::new(dir.path().join("events"));
+        queue.push_or_replace(PendingEvent {
+            id: PendingEventId("1000000000000-aaaa".to_string()),
+            kind: "Created".to_string(),
+            loom_id: "test-loom".to_string(),
+            knot_id: "k1".to_string(),
+            strand_path: "/already/queued/a.md".to_string(),
+            queued_at: "2026-01-01T00:00:00Z".to_string(),
+        });
+        queue.push_or_replace(PendingEvent {
+            id: PendingEventId("1500000000000-bbbb".to_string()),
+            kind: "Created".to_string(),
+            loom_id: "test-loom".to_string(),
+            knot_id: "k1".to_string(),
+            strand_path: "/already/queued/b.md".to_string(),
+            queued_at: "2026-01-01T00:00:01Z".to_string(),
+        });
+
+        // Simulate the watcher → debounce push: the continuation file's
+        // `StrandEvent::Created` is converted via the real
+        // `From<StrandEvent>` (a fresh, later timestamp id) and
+        // `push_or_replace`d, exactly as the debounce engine does.
+        let cont_pending: PendingEvent =
+            crate::domain::events::StrandEvent::Created {
+                loom_id: LoomId("test-loom".to_string()),
+                knot_id: KnotId("k1".to_string()),
+                strand_path: StrandPath(cont_path.clone()),
+            }
+            .into();
+        queue.push_or_replace(cont_pending);
+
+        // The head is still the first already-queued event — the
+        // continuation was appended, not front-inserted.
+        assert_eq!(
+            queue.front().unwrap().strand_path,
+            "/already/queued/a.md",
+            "the continuation must not be front-inserted ahead of queued events"
+        );
+
+        // Pop order: the two already-queued events first, the continuation
+        // last (FIFO append-to-end).
+        let order: Vec<String> = (0..3)
+            .map(|_| match queue.pop() {
+                Some(PendingEventOrShutdown::Event(e)) => e.strand_path,
+                other => panic!("expected an event, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(order[0], "/already/queued/a.md");
+        assert_eq!(order[1], "/already/queued/b.md");
+        assert_eq!(
+            order[2],
+            cont_path.to_string_lossy().to_string(),
+            "the continuation must be queued after the already-queued events"
+        );
+    }
 }
