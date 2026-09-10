@@ -464,3 +464,18 @@ changes), `src/domain/events.rs` (loom-event fields).
   `strand_source` on a knot (D1 explicitly rejects both).
 - Changes to the water-mark trigger, `HANDOFF_NOTE`, or the 079/080
   overflow/safety-net ladder.
+
+## Implementation Status: ✅ Complete (2026-09-10)
+
+- All four phases (0–3) complete; full suite green (1349 passed, 0
+  failed) — the one new test this phase is the D3 FIFO ordering test
+  (`continuation_written_to_inbox_is_queued_after_already_queued_events`).
+- Released in **v0.44.0** (see `docs/release-notes.md`).
+- Continuation front-matter format change (`batch-deadline-epoch` →
+  `budget-secs` + `batch-start-epoch`) recorded in the `knot-update` skill
+  changelog; the one-time read-only compatibility shim keeps pre-0.44.0
+  continuation files working for one release.
+- **Backstop (not implemented):** the optional dequeue-time staleness check
+  (`now > batch-start-epoch + k·profile_timeout`, `k = 4`) remains a flagged
+  open question — the stamps it would consume are in place, so adoption is a
+  small check, but it was not built (see the plan's *Risks / open questions*).

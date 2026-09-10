@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-10 (plan 087 added — Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget)
+> **Last Updated:** 2026-09-10 (plan 087 complete — Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget, released in v0.44.0)
 > **Prior:** 2026-09-08 (plan 086 complete — Graceful Task Handoff: checkpointed continuation chains for task-bearing knots, released in v0.43.0)
 
 ## How to Add a Plan
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | 🟡 In Progress (phases 0–2 complete) | 2026-09-10 |
+| 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
 | 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
 | 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
 | 84 | [Graceful Completion — Steer the Session to Wrap Up Before Context Runs Out](084-graceful-completion/graceful-completion-plan.md) | ✅ Complete (2026-09-07) — released in v0.42.0 | 2026-09-07 |
@@ -79,7 +79,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 87. Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget
 
-**Status:** 🟡 In Progress (phase 0 complete)
+**Status:** ✅ Complete (2026-09-10) — released in v0.44.0
 **Created:** 2026-09-10
 **Goal:** Extend plan 086's self-continuation (a knot resuming a bounded task chain after its context water-mark, delivered into its own existing input) to **event-source** knots (`strand-dir: event:<producer>:<EventId>`) — which v1 left out — by delivering the stamped continuation into the knot's existing event dispatch dir so its own watcher re-triggers it; and replace 086's absolute `batch-deadline-epoch` (which subtracts queue wait) with a **queue-wait-exempt batch execution budget** (`budget-secs`, the remaining seconds carried across hops and decremented only by execution time), so a lengthy event queued between a handoff and the continuation's dequeue never shrinks the continuation's budget.
 

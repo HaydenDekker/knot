@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.20.0"
+  version: "1.21.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,65 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Event-Source Self-Continuation + Queue-Wait-Exempt Budget (Knot 0.44.0, 2026-09-10)
+
+**What changed:** two changes to the `TasksIncomplete` self-continuation
+chain (plan 087, building on 086).
+
+1. **Event-source knots now self-continue.** v1 (0.43.0) left event-source
+   knots (`strand-dir: event:<producer>:<EventId>`) out of the
+   self-continuation: the dispatcher had no target for them, so a batch
+   paused with work remaining. The stamped continuation is now delivered
+   into the knot's **existing event dispatch dir**
+   (`tie-offs/<rig>/<loom>/<event-id>/`) — the dir the knot's existing
+   watcher already watches (bound to `(loom, knot)`) — so the watcher fires
+   `StrandEvent::Created` for that knot and the batch re-enters through the
+   normal dispatch pipeline. No new subscription, queue, or `strand-source`.
+   Filesystem-strand knots are unchanged (the continuation still lands in the
+   knot's own strand dir).
+2. **Queue-wait-exempt batch execution budget.** 0.43.0 stamped an absolute
+   `batch-deadline-epoch` and, at dequeue, subtracted elapsed wall-clock
+   (`remaining = deadline − now`) — so a lengthy event queued *between* the
+   handoff and the continuation's dequeue eroded the budget. The continuation
+   front-matter now carries the **remaining execution budget in seconds**
+   (`budget-secs`) plus the batch's absolute origin (`batch-start-epoch`).
+   Only execution decrements the budget (`budget-secs = incoming −
+   execution_secs`); queue wait never does. The whole batch (all hops,
+   including the first) shares one total execution budget of
+   `profile_timeout`, never reset at a handoff.
+
+**Continuation front-matter (a Knot-owned runtime artifact, never authored by
+the agent):**
+
+| Field | 0.43.0 (086) | 0.44.0+ |
+|---|---|---|
+| `continuations` | present | present (unchanged) |
+| `batch-deadline-epoch` | absolute deadline (eroded by queue wait) | **removed** |
+| `budget-secs` | — | remaining execution budget in seconds (only execution decrements) |
+| `batch-start-epoch` | — | absolute origin (first handoff; observability only) |
+
+**Affected documents:** none — the continuation file is a **Knot-owned
+runtime artifact** (written into the event dispatch dir / strand dir, never
+authored by the agent or a rig document). No profile, knot, loom, or
+`models.yml` format changes.
+
+**Migration: none required.**
+
+- Existing rigs are unchanged; no file edits.
+- A continuation file written by a 0.43.0 build (carrying only
+  `batch-deadline-epoch`) is read by 0.44.0 with a one-time **read-only
+  shim**: the budget is derived from the deadline at read time
+  (`budget_secs = deadline − now`). New continuations never write
+  `batch-deadline-epoch`, so the shim is a single-release bridge and is
+  removed afterwards. Any in-flight 0.43.0 continuation simply re-runs with a
+  budget derived from its deadline.
+- The `[task-loop] handoff` service-log line now prints the stamped remaining
+  budget (`remaining=<B>s`) and the delivery path (`source=filesystem|event`);
+  the `TasksIncomplete` / `BatchIncomplete` loom events carry `budget-secs`
+  + `batch-start-epoch`.
 
 ---
 

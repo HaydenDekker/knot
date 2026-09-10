@@ -1,5 +1,57 @@
 # Release Notes
 
+## v0.44.0 — 2026-09-10
+
+### Extended — Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget (Plan 087)
+
+Plan 086's self-continuation — a `task-loop` knot resuming a bounded task
+chain after its context water-mark, delivered into its own existing input —
+was scoped to filesystem-strand knots. v1 left event-source knots
+(`strand-dir: event:<producer>:<EventId>`) out: their continuation was never
+written, so the batch paused with work remaining (re-entry fell back to the
+explicit event chain or the overflow safety net). v0.44.0 completes the chain
+for event-source knots and refines 086's budget model so a lengthy event
+queued between a handoff and the continuation's dequeue no longer erodes the
+continuation's budget.
+
+- **Event-source knots now self-continue.** A continuation is delivered into
+  the knot's **existing input** — its event dispatch dir
+  (`tie-offs/<rig>/<loom>/<event-id>/`) — the same dir the knot's existing
+  watcher already watches, bound to `(loom, knot)`. The watcher fires
+  `StrandEvent::Created` for that knot, so the batch re-enters through the
+  normal dispatch pipeline. No new subscription, no new queue, no second
+  `strand-source`. Filesystem-strand behaviour is unchanged (the continuation
+  still lands in the knot's own strand dir).
+- **Queue-wait-exempt batch execution budget.** 0.43.0 stamped an absolute
+  `batch-deadline-epoch` and, at dequeue, subtracted elapsed wall-clock
+  (`remaining = deadline − now`) — so a lengthy event queued *between* the
+  handoff and the continuation's dequeue stole budget the knot never used.
+  The continuation front-matter now carries the **remaining execution budget
+  in seconds** (`budget-secs`) plus the batch's absolute origin
+  (`batch-start-epoch`). Only *execution* decrements the budget
+  (`budget-secs = incoming − execution_secs`, where `execution_secs` is the
+  hop's wall-clock dequeue→handoff span); **queue wait never does**. The
+  whole batch — all hops, including the first — shares one total execution
+  budget of `profile_timeout`, and the budget is never reset at a handoff
+  ("fresh context, never a fresh budget").
+- **Honest observability.** The `TasksIncomplete` loom event and the
+  `[task-loop] handoff` service-log line now record the **stamped remaining
+  budget** (`remaining=<B>s`) and the delivery path
+  (`source=filesystem|event`), and are emitted **only when the hop actually
+  happens**: on the max-continuations cap or an exhausted budget the
+  continuation is suppressed and a `BatchIncomplete` is recorded instead, so
+  the log never claims a hop that did not happen.
+- **Durable + replayable.** The continuation is written to disk before the
+  per-turn project commit, so it is captured in the project's git commit (the
+  rig repo stays source-only) — replay the batch hop by hop by navigating the
+  project's commits.
+
+**Compatibility:** a continuation file written by a 0.43.0 (086) build
+carries only `batch-deadline-epoch`; the 0.44.0 reader derives its budget
+from the deadline at read time (a one-time read-only shim). New
+continuations never write `batch-deadline-epoch`; the shim is removed after
+one release.
+
 ## v0.43.0 — 2026-09-08
 
 ### New Capability — Graceful Task Handoff: Checkpointed Continuation Chains (Plan 086)
