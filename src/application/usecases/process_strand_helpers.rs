@@ -457,65 +457,104 @@ pub fn handle_success(
                     resolved.dequeue_epoch,
                 );
 
-                // Record LoomEvent::TasksIncomplete.
-                let reason = if resolved.was_watermarked {
-                    "water-mark".to_string()
+                // Plan 087 phase 2: pre-check the suppression conditions
+                // **before** recording the `TasksIncomplete` loom event +
+                // the `[task-loop] handoff` service-log line, so the log
+                // never claims a hop that did not happen. Suppression:
+                // (a) the max-continuations cap (`next_continuations >
+                // MAX_CONTINUATIONS`), (b) an exhausted batch execution
+                // budget (`stamped_budget < MIN_REMAINING_SECS` — the
+                // next hop would be a degenerate deferral).
+                let next_continuations = resolved.incoming_continuations + 1;
+                let suppressed_reason = if next_continuations
+                    > session_resume::MAX_CONTINUATIONS
+                {
+                    Some("caps")
+                } else if stamped_budget < session_resume::MIN_REMAINING_SECS {
+                    Some("deadline")
                 } else {
-                    "voluntary".to_string()
+                    None
                 };
-                let _ = ps.log_port.append(LoomEvent::TasksIncomplete {
-                    loom_id: loom_id.clone(),
-                    knot_id: knot_id.clone(),
-                    strand_path: strand_path.clone(),
-                    session_id: resolved.session_id.clone(),
-                    continuations: resolved.incoming_continuations + 1,
-                    tasks_done: first_ti
-                        .payload
-                        .get("tasks-done")
-                        .and_then(|v| v.parse::<u32>().ok()),
-                    tasks_remaining: first_ti
-                        .payload
-                        .get("tasks-remaining")
-                        .and_then(|v| v.parse::<u32>().ok()),
-                    budget_secs: Some(stamped_budget),
-                    batch_start_epoch: Some(stamped_start),
-                    reason: reason.clone(),
-                    timestamp: crate::application::usecases::types::format_timestamp(),
-                });
 
-                // Dispatch the self-continuation (best-effort).
-                let _ = dispatch_self_continuation(
-                    ps,
-                    knot,
-                    loom_id,
-                    strand_path,
-                    first_ti,
-                    resolved.incoming_continuations,
-                    stamped_budget,
-                    stamped_start,
-                );
+                if let Some(reason) = suppressed_reason {
+                    // Suppressed: record `BatchIncomplete` and skip the
+                    // `TasksIncomplete` event + the `[task-loop] handoff`
+                    // line + the continuation file. The work is not lost
+                    // (checklist + commits are durable); the batch resumes
+                    // on the next dispatch with a fresh budget.
+                    let _ = ps.log_port.append(LoomEvent::BatchIncomplete {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        reason: reason.to_string(),
+                        continuations: resolved.incoming_continuations,
+                        budget_secs: Some(stamped_budget),
+                        batch_start_epoch: Some(stamped_start),
+                        timestamp: crate::application::usecases::types::format_timestamp(),
+                    });
+                } else {
+                    // Not suppressed — the hop happens. Record
+                    // `LoomEvent::TasksIncomplete` (before the dispatch,
+                    // as before), then dispatch, then the service-log line.
+                    let reason = if resolved.was_watermarked {
+                        "water-mark".to_string()
+                    } else {
+                        "voluntary".to_string()
+                    };
+                    let _ = ps.log_port.append(LoomEvent::TasksIncomplete {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        session_id: resolved.session_id.clone(),
+                        continuations: next_continuations,
+                        tasks_done: first_ti
+                            .payload
+                            .get("tasks-done")
+                            .and_then(|v| v.parse::<u32>().ok()),
+                        tasks_remaining: first_ti
+                            .payload
+                            .get("tasks-remaining")
+                            .and_then(|v| v.parse::<u32>().ok()),
+                        budget_secs: Some(stamped_budget),
+                        batch_start_epoch: Some(stamped_start),
+                        reason: reason.clone(),
+                        timestamp: crate::application::usecases::types::format_timestamp(),
+                    });
 
-                // Service log line (plan 087: the budget is the
-                // stamped remaining execution budget; the hop is
-                // `N/MAX_CONTINUATIONS`; `source` tags the delivery
-                // path so the two are greppable).
-                let source = match &knot.strand_source {
-                    crate::domain::value_objects::StrandSource::Filesystem(_)
-                    => "filesystem",
-                    crate::domain::value_objects::StrandSource::EventUri {
-                        ..
-                    } => "event",
-                };
-                crate::adapters::logging::log_strand_event(
-                    &format!(
-                        "[task-loop] handoff (knot={}, hop={}/{}, remaining={}s, trigger={reason}, source={source})",
-                        knot_id.0,
-                        resolved.incoming_continuations + 1,
-                        crate::application::session_resume::MAX_CONTINUATIONS,
+                    // Dispatch the self-continuation (best-effort).
+                    let _ = dispatch_self_continuation(
+                        ps,
+                        knot,
+                        loom_id,
+                        strand_path,
+                        first_ti,
+                        resolved.incoming_continuations,
                         stamped_budget,
-                    ),
-                    &strand_path.0,
-                );
+                        stamped_start,
+                    );
+
+                    // Service log line (plan 087: the budget is the
+                    // stamped remaining execution budget; the hop is
+                    // `N/MAX_CONTINUATIONS`; `source` tags the delivery
+                    // path so the two are greppable).
+                    let source = match &knot.strand_source {
+                        crate::domain::value_objects::StrandSource::Filesystem(_)
+                        => "filesystem",
+                        crate::domain::value_objects::StrandSource::EventUri {
+                            ..
+                        } => "event",
+                    };
+                    crate::adapters::logging::log_strand_event(
+                        &format!(
+                            "[task-loop] handoff (knot={}, hop={}/{}, remaining={}s, trigger={reason}, source={source})",
+                            knot_id.0,
+                            next_continuations,
+                            crate::application::session_resume::MAX_CONTINUATIONS,
+                            stamped_budget,
+                        ),
+                        &strand_path.0,
+                    );
+                }
             }
             // occurred: false — normal completion, no dispatch, no
             // loom event. The tie-off itself is the explicit
@@ -974,9 +1013,11 @@ pub fn stamp_continuation_budget(
 /// the caller ([`stamp_continuation_budget`]) so the loom event and the
 /// service-log line carry the same budget the file is stamped with.
 ///
-/// Returns the path of the created file, or `None` when the
-/// max-continuations cap is reached (records `BatchIncomplete` reason
-/// `caps`).
+/// Returns the path of the created file, or `None` when the hop is
+/// suppressed: the max-continuations cap (records `BatchIncomplete`
+/// reason `caps`) or an exhausted batch execution budget (`budget_secs`
+/// below `MIN_REMAINING_SECS` — the next hop would be a degenerate
+/// deferral; records `BatchIncomplete` reason `deadline`).
 #[allow(clippy::too_many_arguments)] // flat stamp list keeps the single call site readable
 pub fn dispatch_self_continuation(
     ps: &ProcessStrand,
@@ -1003,6 +1044,25 @@ pub fn dispatch_self_continuation(
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             reason: "caps".to_string(),
+            continuations: incoming_continuations,
+            budget_secs: Some(budget_secs),
+            batch_start_epoch: Some(batch_start_epoch),
+            timestamp: format_timestamp(),
+        });
+        return Ok(None);
+    }
+
+    // Plan 087 phase 2: exhausted batch execution budget — the stamped
+    // remaining budget fell below `MIN_REMAINING_SECS`, so the next hop
+    // would be a degenerate deferral. Suppress the dispatch and record
+    // `BatchIncomplete` (reason deadline) instead of writing a
+    // continuation that could only be deferred.
+    if budget_secs < crate::application::session_resume::MIN_REMAINING_SECS {
+        let _ = ps.log_port.append(LoomEvent::BatchIncomplete {
+            loom_id: loom_id.clone(),
+            knot_id: knot_id.clone(),
+            strand_path: strand_path.clone(),
+            reason: "deadline".to_string(),
             continuations: incoming_continuations,
             budget_secs: Some(budget_secs),
             batch_start_epoch: Some(batch_start_epoch),

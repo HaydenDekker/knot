@@ -3040,6 +3040,374 @@ mod budget_tests {
     }
 }
 
+// ── Plan 087: Suppression Ordering Tests (phase 2 / observability fix) ──
+//
+// When the max-continuations cap or an exhausted batch execution budget
+// suppresses the self-continuation, `handle_success` records
+// `BatchIncomplete` and **skips** the `LoomEvent::TasksIncomplete` +
+// `[task-loop] handoff` line — so the log never claims a hop that did not
+// happen (plan 087 phase 2). These are `execute()`-level tests mirroring
+// the `budget_tests` seam.
+
+#[cfg(test)]
+mod suppression_ordering_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::application::usecases::test_fixtures::{
+        build_knot_with_profile, build_loom, MockAgentRunner, MockEventDispatcher,
+        MockGitVersioningPort, MockLoomLogPort, MockModelRegistry,
+        MockProfileRepository, MockRigLogPort, MockStrandFileChecker, MockTieOffSink,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    /// Tie-off content declaring `TasksIncomplete occurred: true` (a
+    /// handoff that would self-continue, were it not suppressed).
+    const TI_TIE_OFF: &str = "Done 3 of 5 tasks.\n\n```markdown\n---\nevent: TasksIncomplete\noccurred: true\ntasks-done: 3\ntasks-remaining: 2\nnext-task-context: Resume at task 4.\n---\nChecklist at tasks/checklist.md.\n```\n";
+
+    /// Build a `ProcessStrand` wired with a runner that returns the
+    /// `TasksIncomplete occurred: true` tie-off, a profile with the given
+    /// session timeout (seconds), and the given knot.
+    fn build_use_case(
+        profile: AgentProfile,
+        knot: Knot,
+        rig_dir: PathBuf,
+    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([("budgeted".to_string(), profile)]))),
+        });
+        let store = LoomStore::new();
+        store.register(build_loom("test-loom", vec![knot]));
+
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let runner = MockAgentRunner::new(Ok(AgentOutput {
+            stdout: TI_TIE_OFF.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        }));
+
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            Arc::new(runner) as Arc<dyn AgentRunner>,
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            rig_dir,
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+        (use_case, log_events)
+    }
+
+    fn created_event(path: PathBuf) -> StrandEvent {
+        StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(path),
+        }
+    }
+
+    fn budgeted_profile(timeout_secs: u64) -> AgentProfile {
+        AgentProfile::new(
+            "budgeted".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Budgeted.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(timeout_secs))
+    }
+
+    /// Cap suppression: a continuation already at `MAX_CONTINUATIONS`
+    /// (next hop would exceed it) records `BatchIncomplete (caps)` and
+    /// emits **no** `TasksIncomplete` loom event (no claimed hop).
+    #[test]
+    fn cap_suppression_skips_tasks_incomplete_event() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let knot = build_knot_with_profile("k1", "budgeted");
+        let (use_case, log_events) =
+            build_use_case(budgeted_profile(1800), knot, rig_dir);
+
+        // A continuation strand already at the cap (`continuations: 10`);
+        // a generous budget so the cap — not the budget — is the reason.
+        let path = dir.path().join("event-20260101T000000-continuation.md");
+        std::fs::write(
+            &path,
+            "---\nevent-id: TasksIncomplete\ncontinuations: 10\nbudget-secs: 1200\n---\n\n## Handoff\nbody",
+        )
+        .unwrap();
+
+        let result = use_case.execute(created_event(path));
+        assert!(
+            result.is_ok(),
+            "a cap-suppressed hop should complete the strand: {result:?}"
+        );
+
+        let events = log_events.lock().unwrap();
+        assert!(
+            !events.iter().any(|e| matches!(e, LoomEvent::TasksIncomplete { .. })),
+            "a cap-suppressed hop must not claim a TasksIncomplete handoff: {events:?}"
+        );
+        let caps: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                LoomEvent::BatchIncomplete { reason, continuations, .. }
+                    if reason == "caps" =>
+                {
+                    Some(*continuations)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            caps,
+            vec![10],
+            "cap suppression must record BatchIncomplete (caps) with the incoming continuations"
+        );
+    }
+
+    /// Budget-exhaustion suppression: a first handoff whose stamped
+    /// remaining budget falls below `MIN_REMAINING_SECS` records
+    /// `BatchIncomplete (deadline)` and emits **no** `TasksIncomplete`
+    /// loom event.
+    #[test]
+    fn budget_exhaustion_suppression_skips_tasks_incomplete_event() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let knot = build_knot_with_profile("k1", "budgeted");
+        // A 3s profile timeout is below MIN_REMAINING_SECS (5s), so the
+        // stamped budget (3 − execution_secs) is always < 5.
+        let (use_case, log_events) =
+            build_use_case(budgeted_profile(3), knot, rig_dir);
+
+        // Fresh dispatch (no continuation stamps).
+        let path = dir.path().join("strand.md");
+        std::fs::write(&path, "plain strand").unwrap();
+
+        let result = use_case.execute(created_event(path));
+        assert!(
+            result.is_ok(),
+            "a budget-exhausted hop should complete the strand: {result:?}"
+        );
+
+        let events = log_events.lock().unwrap();
+        assert!(
+            !events.iter().any(|e| matches!(e, LoomEvent::TasksIncomplete { .. })),
+            "a budget-exhausted hop must not claim a TasksIncomplete handoff: {events:?}"
+        );
+        let deadline: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                LoomEvent::BatchIncomplete { reason, .. } if reason == "deadline" => {
+                    Some(())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deadline.len(),
+            1,
+            "budget exhaustion must record BatchIncomplete (deadline)"
+        );
+    }
+}
+
+// ── Plan 087: Commit Capture Tests (phase 2 / D3) ─────────────────────────
+//
+// The continuation file is a durable, git-versioned artifact in the
+// project's runtime tree: it is written to disk **before** the per-turn
+// commit, so the project's `git_versioner` commit (`git add -A` +
+// `git reset -q -- rig`) captures it — replay = navigate the project's
+// commits. The rig's own dir (source-only) is excluded from the commit.
+
+#[cfg(test)]
+mod commit_capture_tests {
+    use super::*;
+    use crate::adapters::outbound::git_versioner::FileSystemGitVersioner;
+    use crate::application::ports::AgentOutput;
+    use crate::application::usecases::test_fixtures::{
+        build_loom, MockAgentRunner, MockEventDispatcher, MockLoomLogPort,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, MockTieOffSink,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    /// Run a git command in `dir`, asserting success.
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git should be available on test system");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The `TasksIncomplete occurred: true` tie-off the agent returns (a
+    /// handoff with a generous budget — not suppressed — so the
+    /// continuation file is written and committed).
+    const TI_TIE_OFF: &str = "Done 3 of 5 tasks.\n\n```markdown\n---\nevent: TasksIncomplete\noccurred: true\ntasks-done: 3\ntasks-remaining: 2\nnext-task-context: Resume at task 4.\n---\nChecklist at tasks/checklist.md.\n```\n";
+
+    /// The continuation file is captured in the **project's** per-turn
+    /// commit (replay-by-commit source), while the rig dir (source-only)
+    /// is excluded from that commit.
+    #[test]
+    fn continuation_file_captured_in_project_commit() {
+        let dir = TempDir::new().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // 1. Project git repo with a user configured (commits must work).
+        run_git(&project_root, &["init", "-b", "main"]);
+        run_git(&project_root, &["config", "user.email", "test@test.com"]);
+        run_git(&project_root, &["config", "user.name", "Test User"]);
+
+        // 2. Clean baseline commit.
+        std::fs::write(project_root.join("initial.txt"), "start").unwrap();
+        run_git(&project_root, &["add", "-A"]);
+        run_git(&project_root, &["commit", "-m", "initial"]);
+
+        // 3. Rig dir with a source file, created **after** the baseline
+        //    (a new untracked file the versioner's `git add -A` would
+        //    stage, and `git reset -q -- rig` must unstage).
+        let rig_dir = project_root.join("rig");
+        std::fs::create_dir_all(rig_dir.join("test-loom")).unwrap();
+        std::fs::write(rig_dir.join("test-loom/knot.md"), "# knot source\n").unwrap();
+
+        // 4. The event-source knot (the continuation lands in
+        //    `tie-offs/rig/<loom>/<event-id>/` — inside the project repo,
+        //    outside the excluded rig dir).
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "budgeted".to_string(),
+            prompt_template: crate::domain::value_objects::PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "SomeEvent".to_string(),
+            },
+            event_description: Some("When SomeEvent occurs.".to_string()),
+        };
+
+        let profile = crate::domain::value_objects::AgentProfile::new(
+            "budgeted".to_string(),
+            "openai".to_string(),
+            "gpt-4o".to_string(),
+            "Budgeted.".to_string(),
+        )
+        .unwrap()
+        .with_timeout(Some(1800));
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(Mutex::new(HashMap::from_iter([("budgeted".to_string(), profile)]))),
+        });
+        let store = LoomStore::new();
+        store.register(build_loom("test-loom", vec![knot]));
+
+        let (log_port, _log_events) = MockLoomLogPort::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let runner = MockAgentRunner::new(Ok(AgentOutput {
+            stdout: TI_TIE_OFF.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        }));
+
+        let versioner = FileSystemGitVersioner::new(
+            project_root.clone(),
+            rig_dir.clone(),
+        );
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            Arc::new(runner) as Arc<dyn AgentRunner>,
+            Arc::new(MockTieOffSink::default()),
+            RigAgentConfig::default_config(),
+            rig_dir.clone(),
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(versioner) as Arc<dyn GitVersioningPort>,
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+
+        // 5. The triggering event file (a real file on disk).
+        let strand_path = dir.path().join("event-20260101T000000-SomeEvent.md");
+        std::fs::write(&strand_path, "event file body").unwrap();
+
+        // 6. Run the turn.
+        let event = StrandEvent::Created {
+            loom_id: LoomId("test-loom".to_string()),
+            knot_id: KnotId("k1".to_string()),
+            strand_path: StrandPath(strand_path),
+        };
+        let result = use_case.execute(event);
+        assert!(result.is_ok(), "the turn should succeed: {result:?}");
+
+        // 7. The continuation file must be in the project's commit.
+        let expected_cont_dir = project_root
+            .join("tie-offs")
+            .join("rig")
+            .join("test-loom")
+            .join("SomeEvent");
+        assert!(
+            expected_cont_dir.exists(),
+            "the continuation dir must exist: {}",
+            expected_cont_dir.display()
+        );
+        let cont_file = std::fs::read_dir(&expected_cont_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().ends_with("-continuation.md"))
+            .map(|e| e.path())
+            .expect("a continuation file must have been written");
+
+        let output = Command::new("git")
+            .args(["log", "-1", "--name-only", "--format="])
+            .current_dir(&project_root)
+            .output()
+            .unwrap();
+        let names = String::from_utf8_lossy(&output.stdout).to_string();
+        let rel = cont_file
+            .strip_prefix(&project_root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            names.lines().any(|l| l == rel),
+            "the continuation file ({rel}) must be in the project's commit:\n{names}"
+        );
+
+        // The rig source (source-only) must NOT be in the project's commit.
+        assert!(
+            !names.lines().any(|l| l == "rig" || l.starts_with("rig/")),
+            "the rig dir must stay out of the project commit (source-only):\n{names}"
+        );
+    }
+}
+
 // ── Git Versioning Tests ────────────────────────────────
 
 #[cfg(test)]
