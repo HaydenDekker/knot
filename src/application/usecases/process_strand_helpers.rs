@@ -497,10 +497,18 @@ pub fn handle_success(
 
                 // Service log line (plan 087: the budget is the
                 // stamped remaining execution budget; the hop is
-                // `N/MAX_CONTINUATIONS`).
+                // `N/MAX_CONTINUATIONS`; `source` tags the delivery
+                // path so the two are greppable).
+                let source = match &knot.strand_source {
+                    crate::domain::value_objects::StrandSource::Filesystem(_)
+                    => "filesystem",
+                    crate::domain::value_objects::StrandSource::EventUri {
+                        ..
+                    } => "event",
+                };
                 crate::adapters::logging::log_strand_event(
                     &format!(
-                        "[task-loop] handoff (knot={}, hop={}/{}, remaining={}s, trigger={reason})",
+                        "[task-loop] handoff (knot={}, hop={}/{}, remaining={}s, trigger={reason}, source={source})",
                         knot_id.0,
                         resolved.incoming_continuations + 1,
                         crate::application::session_resume::MAX_CONTINUATIONS,
@@ -952,10 +960,15 @@ pub fn stamp_continuation_budget(
 /// Plan 086/087: dispatch the self-continuation for a `TasksIncomplete`
 /// `occurred: true` declaration.
 ///
-/// Creates a continuation event file in the knot's own strand dir with
-/// the stamps (`budget-secs`, `batch-start-epoch`, `continuations`,
-/// accumulated `background-additional`) and the handoff content
-/// (accumulated background + handoff body + `next-task-context`).
+/// Creates a continuation event file in the knot's **existing input** —
+/// its watched strand dir for a filesystem source, or its event dispatch
+/// dir (`derive_runtime_root(rig_dir)/<loom_id>/<event_id>`) for an
+/// event source (plan 087 D1) — with the stamps (`budget-secs`,
+/// `batch-start-epoch`, `continuations`, accumulated
+/// `background-additional`) and the handoff content (accumulated
+/// background + handoff body + `next-task-context`). The existing
+/// watcher (bound to this `(loom_id, knot_id)` pair) picks the file up
+/// like any other dispatched event and re-triggers the knot.
 ///
 /// `budget_secs` + `batch_start_epoch` are the stamped values computed by
 /// the caller ([`stamp_continuation_budget`]) so the loom event and the
@@ -1060,24 +1073,31 @@ pub fn dispatch_self_continuation(
 
     let content = lines.join("\n");
 
-    // Create the file in the knot's own strand dir.
-    let strand_dir = match &knot.strand_source {
-        crate::domain::value_objects::StrandSource::Filesystem(path) => path.clone(),
-        _ => {
-            // v1: task-bearing knots are filesystem-strand-triggered.
-            // Event-source knots are a later extension.
-            return Ok(None);
+    // Plan 087 (D1): the continuation lands in the knot's *existing
+    // input* — the dir the watcher already watches, bound to this
+    // `(loom_id, knot_id)` pair:
+    // - filesystem source: the knot's own strand dir (v1 behaviour);
+    // - event source: the event dispatch dir (the same dir
+    //   `FileSystemEventDispatcher::dispatch` writes and
+    //   `ensure_event_uri_watch` watches).
+    let target_dir = match &knot.strand_source {
+        crate::domain::value_objects::StrandSource::Filesystem(path) => {
+            path.clone()
         }
+        crate::domain::value_objects::StrandSource::EventUri { event_id, .. } =>
+            crate::domain::knot_file::derive_runtime_root(&ps.rig_dir)
+                .join(&loom_id.0)
+                .join(event_id),
     };
-    std::fs::create_dir_all(&strand_dir).map_err(|e| {
+    std::fs::create_dir_all(&target_dir).map_err(|e| {
         PortError::EventDispatchFailed(format!(
-            "failed to create continuation strand dir '{}': {e}",
-            strand_dir.display()
+            "failed to create continuation dir '{}': {e}",
+            target_dir.display()
         ))
     })?;
 
     let filename = format!("event-{timestamp}-continuation.md");
-    let file_path = strand_dir.join(filename);
+    let file_path = target_dir.join(filename);
     std::fs::write(&file_path, content).map_err(|e| {
         PortError::EventDispatchFailed(format!(
             "failed to write continuation file '{}': {e}",
@@ -1126,6 +1146,16 @@ mod tests {
     fn build_process_strand(
         profile: AgentProfile,
     ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
+        build_process_strand_at(PathBuf::from("/rig"), profile)
+    }
+
+    /// Same as `build_process_strand` but with an explicit `rig_dir`
+    /// (plan 087 phase 1: the event-source continuation test needs a
+    /// writable runtime root under the rig dir).
+    fn build_process_strand_at(
+        rig_dir: PathBuf,
+        profile: AgentProfile,
+    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
         let store = LoomStore::new();
         store.register(build_loom(
             "test-loom",
@@ -1140,7 +1170,7 @@ mod tests {
             Arc::new(MockAgentRunner::default()) as Arc<dyn AgentRunner>,
             Arc::new(MockTieOffSink::default()),
             RigAgentConfig::default_config(),
-            PathBuf::from("/rig"),
+            rig_dir,
             Arc::new(MockProfileRepository {
                 profiles: Arc::new(Mutex::new(HashMap::from_iter([(
                     "budgeted".to_string(),
@@ -1284,5 +1314,143 @@ mod tests {
             stamp_continuation_budget(&ps, &knot, Some(1200), Some(t0), Some(dequeue));
         assert!((1199..=1200).contains(&budget), "queue wait must not erode the budget");
         assert_eq!(start, t0);
+    }
+
+    // ── dispatch_self_continuation delivery (plan 087 phase 1, D1) ────
+
+    /// The `TasksIncomplete` event a `occurred: true` tie-off declares.
+    fn tasks_incomplete_event() -> crate::domain::events::AgentEvent {
+        let mut payload = HashMap::new();
+        payload.insert("tasks-done".to_string(), "3".to_string());
+        payload.insert("tasks-remaining".to_string(), "2".to_string());
+        payload.insert(
+            "next-task-context".to_string(),
+            "Resume at checklist task 4.".to_string(),
+        );
+        crate::domain::events::AgentEvent {
+            event_id: "TasksIncomplete".to_string(),
+            occurred: true,
+            payload,
+            body: Some("Checklist is at tasks/checklist.md.".to_string()),
+        }
+    }
+
+    /// **Event-source** delivery (the v1 gap this phase closes): the
+    /// continuation lands in the knot's event dispatch dir —
+    /// `derive_runtime_root(rig_dir)/<loom_id>/<event_id>/` — and carries
+    /// the stamped budget + batch origin. The existing watcher (bound to
+    /// this `(loom, knot)` pair) picks the file up like any other
+    /// dispatched event.
+    #[test]
+    fn dispatch_self_continuation_event_source_lands_in_event_dir() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let (ps, _events) = build_process_strand_at(
+            rig_dir.clone(),
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: crate::domain::value_objects::PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "SomeEvent".to_string(),
+            },
+            event_description: Some("When SomeEvent occurs.".to_string()),
+        };
+        let loom_id = LoomId("test-loom".to_string());
+        let strand_path = StrandPath(write_file(
+            dir.path(),
+            "event-20260101T000000-SomeEvent.md",
+            "event file body",
+        ));
+        let t0 = now_secs() - 60;
+
+        let result = dispatch_self_continuation(
+            &ps,
+            &knot,
+            &loom_id,
+            &strand_path,
+            &tasks_incomplete_event(),
+            0,
+            1200,
+            t0,
+        )
+        .expect("dispatch must not fail");
+        let path = result.expect(
+            "an event-source knot whose work remains must get a continuation (v1 gap)",
+        );
+
+        let expected_dir =
+            crate::domain::knot_file::derive_runtime_root(&rig_dir)
+                .join("test-loom")
+                .join("SomeEvent");
+        assert!(
+            path.starts_with(&expected_dir),
+            "continuation must land in the event dispatch dir {}: got {}",
+            expected_dir.display(),
+            path.display()
+        );
+
+        // The file carries the stamped budget + batch origin (087 stamps).
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("event-id: TasksIncomplete"));
+        assert!(content.contains("target-knot: k1"));
+        assert!(content.contains("continuations: 1"));
+        assert!(content.contains("budget-secs: 1200"));
+        assert!(content.contains(&format!("batch-start-epoch: {t0}")));
+        assert!(content.contains("## Next Task Context"));
+    }
+
+    /// **Filesystem** delivery (preserved from v1): the continuation still
+    /// lands in the knot's own watched strand dir.
+    #[test]
+    fn dispatch_self_continuation_filesystem_lands_in_strand_dir() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let (ps, _events) = build_process_strand_at(
+            rig_dir,
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+
+        let strand_dir = dir.path().join("strands");
+        let knot = crate::application::usecases::test_fixtures::build_knot_with_strand_source(
+            "k1",
+            strand_dir.clone(),
+        );
+        let loom_id = LoomId("test-loom".to_string());
+        let strand_path = StrandPath(write_file(dir.path(), "strand.md", "plain strand content"));
+        let t0 = now_secs() - 60;
+
+        let result = dispatch_self_continuation(
+            &ps,
+            &knot,
+            &loom_id,
+            &strand_path,
+            &tasks_incomplete_event(),
+            0,
+            1200,
+            t0,
+        )
+        .expect("dispatch must not fail");
+        let path = result.expect("filesystem knots keep their strand-dir continuation");
+
+        assert!(
+            path.starts_with(&strand_dir),
+            "continuation must land in the knot's own strand dir {}: got {}",
+            strand_dir.display(),
+            path.display()
+        );
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("budget-secs: 1200"));
+        assert!(content.contains("batch-start-epoch"));
     }
 }
