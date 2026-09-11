@@ -1514,6 +1514,117 @@ mod tests {
         assert!(content.contains("batch-start-epoch"));
     }
 
+    /// **Plan 087 p4 (accumulation round-trip)**: the continuation chain
+    /// must pass the incoming accumulation **through** and **append** the
+    /// agent's new input each hop. Hop 1 writes a continuation whose
+    /// `background-additional: |` carries hop 1's facts; hop 2 (fed by that
+    /// file, so `incoming_bg` reads it back through the now block-scalar
+    /// -aware `parse_yaml_frontmatter`) must produce a continuation whose
+    /// `## Accumulated Background` contains **both** hop 1's body **and** the
+    /// new `[hop 2]` contribution.
+    #[test]
+    fn dispatch_self_continuation_accumulates_background_across_hops() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let (ps, _events) = build_process_strand_at(
+            rig_dir.clone(),
+            crate::application::usecases::test_fixtures::default_profile(),
+        );
+
+        let knot = Knot {
+            id: KnotId("k1".to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: crate::domain::value_objects::PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: crate::domain::value_objects::StrandSource::EventUri {
+                producer_knot: "producer".to_string(),
+                event_id: "SomeEvent".to_string(),
+            },
+            event_description: Some("When SomeEvent occurs.".to_string()),
+        };
+        let loom_id = LoomId("test-loom".to_string());
+        let t0 = now_secs() - 120;
+
+        // An initial (non-continuation) trigger file for hop 1.
+        let trigger = StrandPath(write_file(
+            dir.path(),
+            "event-20260101T000000-SomeEvent.md",
+            "event file body",
+        ));
+
+        // Hop 1: the agent's tie-off contributes new facts (hop 1).
+        let mut hop1 = tasks_incomplete_event();
+        hop1.payload.insert(
+            "background-additional".to_string(),
+            "Only the data layer changed; app wiring untouched.".to_string(),
+        );
+
+        let hop1_path = dispatch_self_continuation(
+            &ps,
+            &knot,
+            &loom_id,
+            &trigger,
+            &hop1,
+            0,
+            1200,
+            t0,
+        )
+        .expect("hop 1 must not fail")
+        .expect("hop 1 must get a continuation");
+
+        // Hop 1's file carries its `[hop 1]` contribution (unindented) in the
+        // `## Accumulated Background` body — the pass-through source for hop 2.
+        let hop1_content = std::fs::read_to_string(&hop1_path).unwrap();
+        assert!(
+            hop1_content
+                .contains("[hop 1]\nOnly the data layer changed; app wiring untouched."),
+            "hop 1 contribution must be written: {}",
+            hop1_content
+        );
+
+        // Hop 2: fed by hop 1's file (so `incoming_bg` reads it back), the
+        // agent contributes new facts (hop 2).
+        let mut hop2 = tasks_incomplete_event();
+        hop2.payload.insert(
+            "background-additional".to_string(),
+            "test:unit and test:components are green.".to_string(),
+        );
+
+        let hop2_path = dispatch_self_continuation(
+            &ps,
+            &knot,
+            &loom_id,
+            &StrandPath(hop1_path.clone()),
+            &hop2,
+            1,
+            1169,
+            t0,
+        )
+        .expect("hop 2 must not fail")
+        .expect("hop 2 must get a continuation");
+
+        // The invariant: hop 2's accumulated background carries hop 1's
+        // pass-through body AND the new [hop 2] contribution, in order.
+        let hop2_content = std::fs::read_to_string(&hop2_path).unwrap();
+        assert!(
+            hop2_content
+                .contains("[hop 1]\nOnly the data layer changed; app wiring untouched."),
+            "hop 1 pass-through must survive into hop 2: {}",
+            hop2_content
+        );
+        assert!(
+            hop2_content.contains("[hop 2]\ntest:unit and test:components are green."),
+            "hop 2 append must be present: {}",
+            hop2_content
+        );
+        let h1 = hop2_content.find("[hop 1]").expect("hop 1 label");
+        let h2 = hop2_content.find("[hop 2]").expect("hop 2 label");
+        assert!(h1 < h2, "hop 1 must precede hop 2");
+    }
+
     // ── FIFO / D3 ordering (plan 087 phase 3) ─────────────────────────
 
     /// **FIFO (D3 ordering)**: a continuation written to the knot's inbox

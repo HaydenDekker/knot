@@ -1,5 +1,43 @@
 # Release Notes
 
+## v0.44.1 — 2026-09-10
+
+### Fix — Continuation Background Accumulation Round-Trips Block Scalars (Plan 087, Phase 4)
+
+The self-continuation chain's "accumulated, hop-labelled"
+`background-additional` (v0.44.0 / plan 086) did **not** accumulate across
+hops. Each continuation front-matter block-scalar collapsed to the literal
+`|` marker, so the next hop's continuation carried an empty `[hop N]` label
+and a bare-`|` `## Next Task Context` — the prior hops' background and the
+agent's newly-appended facts were both lost.
+
+**Root cause:** the two front-matter readers are naive `key: value`
+line-splitters with no YAML block-scalar (`|` / `>`) support.
+`tieoff_parser::parse_frontmatter` (which parses the agent's ```markdown
+tie-off into the event payload) and
+`strand_event_metadata::parse_yaml_frontmatter` (which reads the prior
+continuation file's front-matter to recover the incoming accumulation) both
+recorded a `key: |` block scalar as the value `"|"` and dropped the indented
+body. That broke **both** halves of the invariant — pass the incoming
+accumulation **through** and **append** the agent's new input.
+
+**Fix (read-side only; the writer already emitted a correct block scalar):**
+
+- `tieoff_parser::parse_frontmatter` is now block-scalar-aware (and public),
+  operating on raw, indentation-preserving lines: on `key: |` / `key: >`
+  (optional `+`/`-`) it collects the following indented body, de-indents by
+  the common leading whitespace, and joins with newlines.
+- `parse_event_block` passes raw front-matter lines (previously it pre-trimmed
+  every line, destroying the body's indentation).
+- `parse_yaml_frontmatter` delegates to the shared parser, so a continuation
+  file's `background-additional: |` round-trips.
+
+**No document or format change** — the on-disk continuation front-matter is
+unchanged. No migration required. One behaviour note: a top-level key with a
+leading space is no longer parsed as a key (top-level keys are column-0;
+indented lines are block-scalar bodies); Knot-written files are always
+column-0, so this never bites in practice.
+
 ## v0.44.0 — 2026-09-10
 
 ### Extended — Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget (Plan 087)

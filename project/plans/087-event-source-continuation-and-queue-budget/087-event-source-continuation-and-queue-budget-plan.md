@@ -416,6 +416,74 @@ changes), `src/domain/events.rs` (loom-event fields).
 | Compatibility shim: a pre-087 file with only `batch-deadline-epoch` still resolves a budget | migration |
 | FIFO: a continuation written to the inbox is queued **after** any already-queued events (append, not front) | D3 ordering |
 
+### Phase 4 — Bugfix: block-scalar front-matter round-trip (background accumulation)
+
+**Files:** `src/domain/tieoff_parser.rs`,
+`src/application/usecases/strand_event_metadata.rs`,
+`src/application/usecases/process_strand_helpers.rs`.
+
+**Symptom (first live run, 2026-09-10, `pwa-todo-2` rig):** a
+`TasksIncomplete` handoff whose continuation (hop 2) arrived with an
+effectively **empty** `background-additional` and `next-task-context` —
+the front-matter block-scalar rendered as lone `|` markers around an
+empty `[hop 2]` label, and the `## Next Task Context` section was a bare
+`|`. The "accumulated, hop-labelled (086)" background did **not**
+accumulate: the pass-through (prior hops) and the append (this hop's new
+facts) were both lost.
+
+**Root cause:** both front-matter parsers are naive line-based `key:
+value` splitters that do not understand YAML **block scalars** (`|` /
+`>`):
+
+- `tieoff_parser::parse_frontmatter` (via `parse_kv_line`) parses the
+  agent's ```markdown tie-off block into `AgentEvent.payload`. For
+  `next-task-context: |` / `background-additional: |` it records the
+  value as the literal `"|"` and **drops the indented body** (indented
+  body lines that happen to contain a `:` are even mis-parsed as spurious
+  top-level keys). This kills the **append** (the agent's new
+  contribution + operational brief).
+- `strand_event_metadata::parse_yaml_frontmatter` reads the **prior**
+  continuation file's front-matter to recover `incoming_bg`. The same
+  naive split yields `background-additional = "|"`, so the **pass-through**
+  collapses to a lone marker too.
+
+The two halves of the accumulation invariant — pass the incoming
+accumulation through **and** append the agent's new input — therefore both
+reduce to `"|"`, and `dispatch_self_continuation` writes `[hop N]` labels
+with empty bodies (the observed `|` / `[hop 2]` / `|`).
+
+**Fix:** make both parsers block-scalar-aware, with a single shared
+implementation:
+
+1. `tieoff_parser::parse_frontmatter` becomes block-scalar-aware and
+   **public**, operating on **raw (untrimmed)** lines so the body's
+   indentation survives. On a `key: |` / `key: >` line (optional `+`/`-`
+   chomping indicator), collect the following indented-or-blank lines as
+   the body, de-indent by the common leading whitespace, and join with
+   `\n`. All other keys keep the existing `key: value` behaviour.
+2. `parse_event_block` stops trimming each front-matter line (the
+   `.map(|s| s.trim())`) — it must pass **raw** lines to
+   `parse_frontmatter`, otherwise the block-scalar body's indentation is
+   destroyed before it can be recognised.
+3. `parse_yaml_frontmatter` delegates its line-parsing to the shared
+   `tieoff_parser::parse_frontmatter` (the continuation file's
+   `background-additional: |` then round-trips), preserving its `Option`
+   semantics (still `None` for no/empty front-matter). Simple scalar keys
+   (`continuations`, `budget-secs`, `event-id`, …) are unaffected.
+
+**Invariant restored:** hop N+1's continuation `## Accumulated Background`
+contains hop N's full content **and** the new `[hop N+1]` contribution —
+the accumulation is genuinely cumulative.
+
+**Red-first tests:**
+
+| Test | Covers |
+|------|--------|
+| `parse_frontmatter` captures a multi-line `next-task-context: \|` verbatim (de-indented) | append — the agent's operational brief |
+| `parse_frontmatter` captures a multi-line `background-additional: \|` verbatim (de-indented) | append — the agent's new facts |
+| `parse_yaml_frontmatter` round-trips a continuation file's `background-additional: \|` block | pass-through — the incoming accumulation |
+| `dispatch_self_continuation`: hop N+1's file `## Accumulated Background` carries hop N's body **and** the new `[hop N+1]` line | the full append-and-pass-through invariant, end-to-end |
+
 ## Risks / open questions
 
 - **`execution_secs` source — decided (wall-clock, dequeue → handoff).**
@@ -465,12 +533,30 @@ changes), `src/domain/events.rs` (loom-event fields).
 - Changes to the water-mark trigger, `HANDOFF_NOTE`, or the 079/080
   overflow/safety-net ladder.
 
-## Implementation Status: ✅ Complete (2026-09-10)
+## Implementation Status: Phases 0–3 ✅ Complete (v0.44.0) · Phase 4 (bugfix) ✅ Complete (v0.44.1)
 
 - All four phases (0–3) complete; full suite green (1349 passed, 0
   failed) — the one new test this phase is the D3 FIFO ordering test
   (`continuation_written_to_inbox_is_queued_after_already_queued_events`).
 - Released in **v0.44.0** (see `docs/release-notes.md`).
+- **Phase 4 (bugfix, ✅ complete — pending release):** the first live run of
+  the continuation chain (2026-09-10) exposed a block-scalar front-matter
+  regression — the "accumulated, hop-labelled" `background-additional` did not
+  accumulate: the pass-through (prior hops) and the append (this hop's new
+  facts) both collapsed to the literal `"|"`, so the next hop's continuation
+  carried an empty `[hop N]` label and a bare-`|` `## Next Task Context`. Root
+  cause: the two naive `key: value` front-matter parsers
+  (`tieoff_parser::parse_frontmatter`,
+  `strand_event_metadata::parse_yaml_frontmatter`) did not handle YAML block
+  scalars (`|` / `>`). **Fixed:** one shared block-scalar-aware
+  `parse_frontmatter` (made public, raw-line input), `parse_event_block` now
+  passes raw front-matter lines, and `parse_yaml_frontmatter` delegates to the
+  shared parser. Read-side only (the writer already emitted a correct block
+  scalar). Verified: full suite green (**1353 passed, 0 failed**, baseline
+  1349 + 4 new tests), `cargo clippy --all-targets` zero new warning bodies
+  (before/after warning-body multiset identical). No file-format change, no
+  migration. Details in *Phase 4* +
+  `event-source-continuation-and-queue-budget-phase-4.md`.
 - Continuation front-matter format change (`batch-deadline-epoch` →
   `budget-secs` + `batch-start-epoch`) recorded in the `knot-update` skill
   changelog; the one-time read-only compatibility shim keeps pre-0.44.0

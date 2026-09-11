@@ -286,9 +286,10 @@ fn parse_event_block(
 
     // Parse frontmatter key-value pairs
     let (mut payload, body) = if let Some(end) = frontmatter_end {
-        // Both delimiters found — normal case
-        let fm_lines: Vec<&str> = lines[start + 1..end].iter().map(|s| s.trim()).collect();
-        let payload = parse_frontmatter(&fm_lines);
+        // Both delimiters found — normal case. Front-matter lines are
+        // passed **raw** (indentation preserved) so `parse_frontmatter`
+        // can recognise and de-indent block-scalar bodies (plan 087 p4).
+        let payload = parse_frontmatter(&lines[start + 1..end]);
 
         // Body is everything after the closing ---
         let body_lines: Vec<&str> = lines[end + 1..].to_vec();
@@ -303,8 +304,7 @@ fn parse_event_block(
     } else {
         // Opening --- found but no closing ---
         // Treat everything after opening --- as frontmatter, body is None
-        let fm_lines: Vec<&str> = lines[start + 1..].iter().map(|s| s.trim()).collect();
-        (parse_frontmatter(&fm_lines), None)
+        (parse_frontmatter(&lines[start + 1..]), None)
     };
 
     // Extract event_id from payload
@@ -329,21 +329,103 @@ fn parse_event_block(
     })
 }
 
-/// Parse frontmatter lines into a HashMap of key-value pairs.
+/// Parse front-matter lines into a `HashMap` of key-value pairs.
 ///
-/// Lines without a `:` separator are skipped.
-fn parse_frontmatter(
+/// Handles plain `key: value` lines and YAML **block scalars** (`key: |` /
+/// `key: >`, with an optional `+`/`-` chomping indicator). A block scalar's
+/// value is the indented body that follows the marker line, de-indented by
+/// the common leading whitespace and joined with newlines — this is what
+/// carries the multi-line `next-task-context` / `background-additional`
+/// fields of a `TasksIncomplete` handoff through to the next continuation
+/// hop (plan 087 phase 4).
+///
+/// `lines` must be **raw** (indentation preserved): block-scalar bodies are
+/// recognised by their indentation relative to the column-0 key lines.
+/// Non-blank lines without a `:` separator that are not part of a block
+/// scalar are skipped.
+pub fn parse_frontmatter(
     lines: &[&str],
 ) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
-
-    for line in lines {
-        if let Some((key, value)) = parse_kv_line(line) {
-            map.insert(key, value);
+    let mut i = 0;
+    while i < lines.len() {
+        let raw = lines[i];
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        // An indented line reaching the top of the loop is stray content —
+        // a block-scalar body is consumed by the block branch below. Skip.
+        if raw.starts_with(' ') || raw.starts_with('\t') {
+            i += 1;
+            continue;
+        }
+        if let Some((key, value)) = parse_kv_line(trimmed) {
+            let value = value.trim().to_string();
+            if is_block_scalar_marker(&value) {
+                // Collect the indented body that follows the marker line.
+                i += 1;
+                let mut body: Vec<&str> = Vec::new();
+                while i < lines.len() {
+                    let next = lines[i];
+                    if next.trim().is_empty() {
+                        body.push("");
+                        i += 1;
+                    } else if next.starts_with(' ') || next.starts_with('\t') {
+                        body.push(next);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                // Drop trailing blank lines from the body.
+                while body.last().is_some_and(|l| l.is_empty()) {
+                    body.pop();
+                }
+                map.insert(key, dedent_block(&body));
+            } else {
+                map.insert(key, value);
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
     }
-
     map
+}
+
+/// Returns `true` when `value` is a YAML block-scalar indicator: `|`, `|-`,
+/// `|+`, `>`, `>-`, or `>+`.
+fn is_block_scalar_marker(value: &str) -> bool {
+    let v = value.trim();
+    let rest = match v.chars().next() {
+        Some(c) if c == '|' || c == '>' => &v[1..],
+        _ => return false,
+    };
+    rest.chars().all(|c| c == '-' || c == '+')
+}
+
+/// De-indent a block-scalar body — drop the common leading indentation from
+/// every non-blank line — and join the lines with newlines. Relative
+/// indentation (e.g. a sub-bullet under a bullet) is preserved.
+fn dedent_block(body: &[&str]) -> String {
+    let min_indent = body
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    body.iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                String::new()
+            } else {
+                l[min_indent.min(l.len())..].to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse a single indented line as `key: value`.
@@ -851,6 +933,75 @@ mod tests {
         assert_eq!(events.len(), 1, "unclosed trailing fence must not drop the event");
         assert_eq!(events[0].event_id, "TasksIncomplete");
         assert!(events[0].occurred);
+        // Plan 087 p4: the `|` block-scalar bodies must be captured verbatim
+        // (de-indented), not collapsed to the literal "|" marker.
+        assert_eq!(
+            events[0].payload.get("next-task-context"),
+            Some(&"Resume by reading work/checklist.md and continue top to bottom.\nMark each item done only after its deliverable is written.".to_string()),
+            "next-task-context block-scalar body must round-trip"
+        );
+        assert_eq!(
+            events[0].payload.get("background-additional"),
+            Some(&"[hop 2]\nT1 done; T2-T6 remain pending.".to_string()),
+            "background-additional block-scalar body must round-trip"
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_block_scalar_captured_verbatim() {
+        // Plan 087 p4: multi-line `|` block-scalar fields are captured
+        // verbatim (de-indented). Body lines that contain a `:` (which the
+        // naive splitter would mis-parse as a new top-level key) must stay
+        // inside the block, not leak into the payload.
+        let lines: Vec<&str> = vec![
+            "event: TasksIncomplete",
+            "occurred: true",
+            "plan: project/plans/01-x/plan.md",
+            "next-task-context: |",
+            "  Run the two app-UI legs: test:e2e, then test:e2e-app.",
+            "  1. test:e2e (showroom): prerequisite — start the dev server.",
+            "  2. test:e2e-app (app): prerequisite — build then preview.",
+            "  Once both pass, mark the gate item [x].",
+            "background-additional: |",
+            "  - Only the new data layer changed; app wiring untouched.",
+            "  - Build green (tsc --noEmit && vite build).",
+        ];
+        let map = parse_frontmatter(&lines);
+        assert_eq!(map.get("event"), Some(&"TasksIncomplete".to_string()));
+        assert_eq!(map.get("occurred"), Some(&"true".to_string()));
+        assert_eq!(
+            map.get("plan"),
+            Some(&"project/plans/01-x/plan.md".to_string())
+        );
+        assert_eq!(
+            map.get("next-task-context"),
+            Some(&"Run the two app-UI legs: test:e2e, then test:e2e-app.\n1. test:e2e (showroom): prerequisite — start the dev server.\n2. test:e2e-app (app): prerequisite — build then preview.\nOnce both pass, mark the gate item [x].".to_string())
+        );
+        assert_eq!(
+            map.get("background-additional"),
+            Some(&"- Only the new data layer changed; app wiring untouched.\n- Build green (tsc --noEmit && vite build).".to_string())
+        );
+        // No spurious keys leaked from the block-scalar bodies.
+        assert!(!map.contains_key("test"));
+        assert!(!map.contains_key("1. test"));
+        assert_eq!(map.len(), 5);
+    }
+
+    #[test]
+    fn parse_frontmatter_block_scalar_folding_and_chomp_markers() {
+        // `>`, `>-`, `|+` are all recognised as block-scalar indicators
+        // (plan 087 p4); v1 stores the de-indented body for each.
+        let lines: Vec<&str> = vec![
+            "folded: >",
+            "  line one",
+            "  line two",
+            "kept: |-",
+            "  alpha",
+            "  beta",
+        ];
+        let map = parse_frontmatter(&lines);
+        assert_eq!(map.get("folded"), Some(&"line one\nline two".to_string()));
+        assert_eq!(map.get("kept"), Some(&"alpha\nbeta".to_string()));
     }
 
     #[test]

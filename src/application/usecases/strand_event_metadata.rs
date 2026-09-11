@@ -118,20 +118,12 @@ pub fn parse_yaml_frontmatter(
     })?;
 
     let frontmatter_text = &after_open[..close_pos];
-    let mut map = std::collections::HashMap::new();
-
-    for line in frontmatter_text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            map.insert(
-                key.trim().to_string(),
-                value.trim().to_string(),
-            );
-        }
-    }
+    // Delegate to the shared block-scalar-aware parser (plan 087 p4) so a
+    // continuation file's `background-additional: |` round-trips. Simple
+    // scalar keys are unaffected; `Option` semantics are preserved below.
+    let map = crate::domain::tieoff_parser::parse_frontmatter(
+        &frontmatter_text.lines().collect::<Vec<_>>(),
+    );
 
     if map.is_empty() {
         None
@@ -214,7 +206,10 @@ mod event_metadata_tests {
 
     #[test]
     fn parse_yaml_frontmatter_whitespace_trimming() {
-        let content = "---\nevent-id: PlanCreated \n target-knot: plan-creator \n---\n\nBody";
+        // Top-level keys sit at column 0 (indented lines are block-scalar
+        // bodies — plan 087 p4); leading/trailing whitespace on a value is
+        // trimmed.
+        let content = "---\nevent-id: PlanCreated \ntarget-knot: plan-creator \n---\n\nBody";
         let result = parse_yaml_frontmatter(content);
         assert!(result.is_some());
         let map = result.unwrap();
@@ -232,6 +227,24 @@ mod event_metadata_tests {
         assert_eq!(map.len(), 2);
         assert_eq!(map.get("event-id"), Some(&"PlanCreated".to_string()));
         assert_eq!(map.get("target-knot"), Some(&"plan-creator".to_string()));
+    }
+
+    /// Plan 087 p4: a continuation file's `background-additional: |` block
+    /// scalar must round-trip through `parse_yaml_frontmatter` — the
+    /// pass-through half of the accumulation invariant. Simple scalar keys
+    /// still parse, and no block-body line leaks in as a spurious key.
+    #[test]
+    fn parse_yaml_frontmatter_block_scalar_round_trip() {
+        let content = "---\nevent-id: TasksIncomplete\ntarget-knot: k1\ncontinuations: 2\nbudget-secs: 1169\nbatch-start-epoch: 1789019659\nbackground-additional: |\n  [hop 1]\n  Only the data layer changed; app wiring untouched.\n  Build green (tsc --noEmit && vite build).\n  [hop 2]\n  test:unit and test:components are green.\n---\n\n## Accumulated Background\n...";
+        let map = parse_yaml_frontmatter(content).expect("front-matter must parse");
+        assert_eq!(map.get("event-id"), Some(&"TasksIncomplete".to_string()));
+        assert_eq!(map.get("continuations"), Some(&"2".to_string()));
+        assert_eq!(map.get("budget-secs"), Some(&"1169".to_string()));
+        assert_eq!(
+            map.get("background-additional"),
+            Some(&"[hop 1]\nOnly the data layer changed; app wiring untouched.\nBuild green (tsc --noEmit && vite build).\n[hop 2]\ntest:unit and test:components are green.".to_string())
+        );
+        assert!(!map.contains_key("test"));
     }
 
     // ── extract_event_metadata Tests ─────────────────────────────────
