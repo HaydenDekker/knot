@@ -22,10 +22,16 @@
 //! - **Steer (fire-once)**: the first sample with `tokens >= limit` (while
 //!   compaction is enabled) queues a single `steer` command and records a
 //!   [`WrapUpRecord`] for the metadata / `ContextWrapUpSteered` event.
-//! - **Teardown**: on `agent_end` the driver closes stdin; the main thread
-//!   waits a bounded grace for the process to exit and force-kills the
-//!   process group otherwise. A SIGKILL during teardown *after* `agent_end`
-//!   is a normal exit, not a timeout.
+//! - **Teardown**: the driver closes stdin when pi is *genuinely done* —
+//!   on `agent_settled` (pi's own "the whole prompt finished, post-agent
+//!   compaction included" event), or as a fallback for older pi on
+//!   `agent_end` with no compaction span open once a short settle window
+//!   has passed. It must not close earlier: pi's rpc mode exits on stdin
+//!   **EOF**, so an early close cuts off pi's post-`agent_end` work —
+//!   which is where auto-compaction runs (plan 089 D5). The main thread
+//!   then waits a bounded grace for the process to exit and force-kills
+//!   the process group otherwise. A SIGKILL during teardown *after* the
+//!   close is a normal exit, not a timeout.
 //!
 //! ## Threading
 //!
@@ -69,9 +75,24 @@ use crate::domain::value_objects::AgentConfig;
 /// `value_objects` so the text is single-sourced.
 const WRAP_UP_STEER: &str = crate::domain::value_objects::HANDOFF_NOTE;
 
-/// Bounded grace after `agent_end` for the process to exit on its own
-/// (stdin is closed at `agent_end`); beyond this the group is force-killed.
+/// Bounded grace after the driver closes stdin for the process to exit on
+/// its own; beyond this the group is force-killed. The close happens on
+/// `agent_settled` (or the `agent_end` fallback — see [`SETTLE_WINDOW`]),
+/// never at `agent_end` itself, so this grace never races a compaction.
 const TEARDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// How long the driver waits after `agent_end` before closing stdin on the
+/// **fallback** path (a pi old enough not to emit `agent_settled`), and the
+/// interval at which the driver re-checks its teardown predicate
+/// (plan 089 D5).
+///
+/// The window exists because pi emits `compaction_start` in the same tick
+/// *after* `agent_end`; closing on the `agent_end` line itself (or with no
+/// window) closes the pipe one line before the span opens, and pi exits on
+/// stdin EOF mid-compaction — the defect that made every threshold
+/// compaction end its attempt. A `compaction_start` arriving inside the
+/// window defers the close until the span closes.
+const SETTLE_WINDOW: Duration = Duration::from_millis(250);
 
 /// pi's default `reserveTokens` (tokens of context window held back from
 /// usable context; auto-compaction fires at `contextWindow - reserveTokens`).
@@ -94,6 +115,69 @@ struct RpcShared {
     compaction_enabled: Option<bool>,
     /// The context wrap-up steer, if the driver fired it (fire-once).
     wrap_up: Option<WrapUpRecord>,
+}
+
+/// Teardown / liveness flags exchanged between the driver thread (writer)
+/// and the main teardown loop + inactivity watchdog (readers).
+///
+/// Plan 089 (D4, D5, D8): the *decision* to close stdin lives in exactly
+/// one place — the driver's [`teardown_due`] predicate — and this is how the
+/// rest of the run learns its outcome:
+///
+/// - `agent_end` is **sticky** ("a turn finished at some point") and feeds
+///   the success classification only; the per-turn teardown decision uses
+///   the driver's own turn state.
+/// - `teardown_armed` is set the instant the driver closes stdin; the main
+///   loop starts [`TEARDOWN_GRACE`] from there, so the 5 s force-kill grace
+///   keeps its meaning (a *graceful* process that will not exit) and an
+///   in-flight compaction is bounded by the total budget instead.
+/// - `open_compaction` is set on `compaction_start` and cleared on
+///   `compaction_end`; it holds the teardown open (D4) and, from plan 089
+///   D8, the inactivity watchdog too.
+#[derive(Clone, Default)]
+struct RpcFlags {
+    /// A sticky `agent_end` was seen (run classification).
+    agent_end: Arc<AtomicBool>,
+    /// The driver closed stdin — arm the teardown grace.
+    teardown_armed: Arc<AtomicBool>,
+    /// A compaction span is open (no matching `compaction_end` yet).
+    open_compaction: Arc<AtomicBool>,
+}
+
+/// The driver's per-turn view of the session (plan 089 D5).
+///
+/// Reset when the driver asks the session to continue in-place, so the
+/// teardown predicate always describes the *current* turn rather than the
+/// first one.
+#[derive(Default)]
+struct TurnState {
+    /// `agent_end` seen for the current turn.
+    agent_end: bool,
+    /// When the current turn's `agent_end` arrived (start of the fallback
+    /// settle window), if it has.
+    agent_end_at: Option<Instant>,
+    /// `agent_settled` seen for the current turn — pi has finished the
+    /// whole prompt, post-agent compaction included (plan 089 D5).
+    settled: bool,
+}
+
+/// The one teardown predicate (plan 089 D5): close stdin when pi is done
+/// with the turn and nothing is still running inside it.
+///
+/// `agent_settled` is authoritative (pi ≥ 0.78). Without it, fall back to
+/// `agent_end` once no compaction span is open and the settle window has
+/// elapsed — pi emits `compaction_start` in the same tick *after*
+/// `agent_end`, so the window is what keeps the fallback from re-creating
+/// the mid-compaction kill on older pi.
+fn teardown_due(turn: &TurnState, compaction_open: bool) -> bool {
+    if turn.settled {
+        return true;
+    }
+    turn.agent_end
+        && !compaction_open
+        && turn
+            .agent_end_at
+            .is_some_and(|at| at.elapsed() >= SETTLE_WINDOW)
 }
 
 /// RPC implementation of [`AgentRunner`].
@@ -311,15 +395,11 @@ impl PiRpcAgentRunner {
         let prompt_message =
             PiJsonAgentRunner::build_prompt_with_context(&ctx, &profile_prompt);
         let shared = Arc::new(Mutex::new(RpcShared::default()));
-        let agent_end_seen = Arc::new(AtomicBool::new(false));
-        // Plan 089 (D4): a compaction is in flight (a `compaction_start` was
-        // seen with no following `compaction_end`). Teardown (force-kill on
-        // `agent_end`) is held while this is set, so an in-flight
-        // `compaction_end` that lands just after `agent_end` is still
-        // observed instead of being force-killed mid-compact (the
-        // interrupted-compact shape). Written by the driver, read by the
-        // main loop.
-        let open_compaction = Arc::new(AtomicBool::new(false));
+        // Plan 089 (D4 + D5): the teardown flags. The driver decides when to
+        // close stdin ([`teardown_due`]) and arms the grace here; an open
+        // compaction span holds the close (and the force-kill) until the
+        // span closes, bounded by the total budget.
+        let flags = RpcFlags::default();
         // Plan 088: shared session-id state for live compaction
         // observation (seeded from the `get_state` response).
         let observe_state = Arc::new(CompactionObserveState::new());
@@ -328,8 +408,7 @@ impl PiRpcAgentRunner {
             .name("rpc-driver".to_string())
             .spawn({
                 let shared = Arc::clone(&shared);
-                let agent_end_seen = Arc::clone(&agent_end_seen);
-                let open_compaction = Arc::clone(&open_compaction);
+                let flags = flags.clone();
                 let observer = observer.clone();
                 let observe_state = Arc::clone(&observe_state);
                 move || {
@@ -339,8 +418,7 @@ impl PiRpcAgentRunner {
                         prompt_message,
                         limit,
                         shared,
-                        agent_end_seen,
-                        open_compaction,
+                        flags,
                         observer,
                         observe_state,
                     );
@@ -355,25 +433,22 @@ impl PiRpcAgentRunner {
                 .spawn(move || child.wait())
                 .expect("failed to spawn wait thread");
 
-        // Teardown: exit early on `agent_end` **and no open compaction**
-        // (giving the grace window for a clean exit), otherwise bound by the
-        // total budget. Plan 089 (D4): while a compaction is still in-flight
-        // (`open_compaction`), teardown is held so an in-flight
-        // `compaction_end` that lands just after `agent_end` is still
-        // observed rather than force-killed mid-compact.
+        // Teardown: the driver closes stdin when pi is genuinely done
+        // (`agent_settled`, or the `agent_end` + settle-window fallback with
+        // no compaction span open — plan 089 D5) and sets `teardown_armed`.
+        // Only then does the main loop start the [`TEARDOWN_GRACE`] clock for
+        // a clean exit; until it is armed the run is bound by the total
+        // budget alone, so a long in-flight compaction is never raced
+        // (plan 089 D4).
         let start = Instant::now();
-        let mut agent_end_at: Option<Instant> = None;
+        let mut armed_at: Option<Instant> = None;
         loop {
-            let agent_end = agent_end_seen.load(Ordering::Relaxed);
-            let compaction_open = open_compaction.load(Ordering::Relaxed);
-            if agent_end && !compaction_open {
-                if agent_end_at.is_none() {
-                    agent_end_at = Some(Instant::now());
-                }
+            if flags.teardown_armed.load(Ordering::Relaxed) {
+                let at = *armed_at.get_or_insert_with(Instant::now);
                 if wait_handle.is_finished() {
                     break;
                 }
-                if agent_end_at.is_some_and(|t| t.elapsed() >= TEARDOWN_GRACE) {
+                if at.elapsed() >= TEARDOWN_GRACE {
                     break;
                 }
                 thread::sleep(Duration::from_millis(50));
@@ -426,7 +501,7 @@ impl PiRpcAgentRunner {
         let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
         let raw_stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
-        let saw_agent_end = agent_end_seen.load(Ordering::Relaxed);
+        let saw_agent_end = flags.agent_end.load(Ordering::Relaxed);
 
         // Parse the accumulated buffer (response text, compactions, error
         // message, and — as a fallback — any session id). Token usage and the
@@ -924,19 +999,23 @@ impl AgentRunner for PiRpcAgentRunner {
 /// sends `get_state` + `prompt`, then samples context on `turn_end` and
 /// fires the wrap-up steer once the limit is crossed.
 ///
-/// On `agent_end` the driver **closes stdin** (dropping the writer) to
-/// signal pi to exit, but keeps draining the channel so a `get_session_stats`
-/// response that lands after `agent_end` is still processed (it may carry
-/// the sample that trips the steer). The driver returns when the line
-/// channel disconnects (the stdout reader hit EOF — the process has exited).
+/// The driver **closes stdin** when the turn is really over — on
+/// `agent_settled`, or on `agent_end` with no compaction span open once the
+/// [`SETTLE_WINDOW`] has passed (plan 089 D5, [`teardown_due`]) — and keeps
+/// draining the channel afterwards so a `get_session_stats` response that
+/// lands late is still processed (it may carry the sample that trips the
+/// steer). Closing any earlier would end the run inside pi's post-
+/// `agent_end` compaction: pi's rpc mode treats stdin EOF as shutdown.
+/// The driver returns when the line channel disconnects (the stdout reader
+/// hit EOF — the process has exited).
+#[allow(clippy::too_many_arguments)] // flat parameter list keeps the single driver call site readable
 fn run_rpc_driver(
     stdin: BufWriter<ChildStdin>,
     line_rx: mpsc::Receiver<String>,
     prompt_message: String,
     limit: Option<u64>,
     shared: Arc<Mutex<RpcShared>>,
-    agent_end_seen: Arc<AtomicBool>,
-    open_compaction: Arc<AtomicBool>,
+    flags: RpcFlags,
     observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
     observe_state: Arc<CompactionObserveState>,
 ) {
@@ -953,8 +1032,29 @@ fn run_rpc_driver(
     let mut warned = false;
     let mut stats_in_flight: Option<String> = None;
     let mut stats_counter: u64 = 0;
+    // Plan 089 (D5): the current turn's teardown state. The loop ticks on a
+    // [`SETTLE_WINDOW`]-sized timeout so the fallback close happens even
+    // when pi goes silent after `agent_end` (the old-pi shape, where no
+    // `agent_settled` ever arrives).
+    let mut turn = TurnState::default();
 
-    while let Ok(line) = line_rx.recv() {
+    loop {
+        let line = match line_rx.recv_timeout(SETTLE_WINDOW) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No stream bytes for a tick: the settle window may have
+                // elapsed with the turn finished and no compaction open.
+                if stdin.is_some()
+                    && teardown_due(&turn, flags.open_compaction.load(Ordering::Relaxed))
+                {
+                    stdin = None;
+                    flags.teardown_armed.store(true, Ordering::Relaxed);
+                }
+                continue;
+            }
+            // The stdout reader hit EOF — the process exited.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -1081,26 +1181,45 @@ fn run_rpc_driver(
                 }
             }
             Some("agent_end") => {
-                agent_end_seen.store(true, Ordering::Relaxed);
-                // Close stdin to signal pi to exit; keep draining so a late
-                // stats response is still processed. Dropping the `Option`
-                // closes the pipe; the driver returns once the channel
-                // disconnects (after the process exits).
-                stdin = None;
+                // A turn finished and its text is in the buffer. This is
+                // **not** the end of the run: pi still runs its post-agent
+                // work (auto-compaction) in the same awaited prompt and
+                // emits `agent_settled` when that is done (plan 089 D5), so
+                // stdin stays open and the settle window starts here.
+                flags.agent_end.store(true, Ordering::Relaxed);
+                turn.agent_end = true;
+                turn.agent_end_at = Some(Instant::now());
             }
-            // Plan 089 (D4): track an in-flight compaction so the main loop
-            // holds teardown while one is open (an in-flight `compaction_end`
-            // that lands just after `agent_end` is observed, not force-killed
-            // mid-compact). `compaction_start` opens the window; the matching
-            // `compaction_end` closes it. pi runs compactions sequentially, so
-            // a single flag is well-defined across repeated spans.
+            // Plan 089 (D5): pi finished the whole prompt — post-agent
+            // compaction included. This is the authoritative teardown
+            // signal; the loop below closes stdin on it.
+            Some("agent_settled") => {
+                turn.settled = true;
+            }
+            // Plan 089 (D4): an in-flight compaction holds the teardown —
+            // stdin stays open (pi exits on EOF) and the main loop does not
+            // start the force-kill grace. `compaction_start` opens the
+            // span, the matching `compaction_end` closes it. pi runs
+            // compactions sequentially, so a single flag is well-defined
+            // across repeated spans.
             Some("compaction_start") => {
-                open_compaction.store(true, Ordering::Relaxed);
+                flags.open_compaction.store(true, Ordering::Relaxed);
             }
             Some("compaction_end") => {
-                open_compaction.store(false, Ordering::Relaxed);
+                flags.open_compaction.store(false, Ordering::Relaxed);
             }
             _ => {}
+        }
+
+        // Teardown check after every line: pi may settle (or end the turn,
+        // with no compaction open) on this very line.
+        if stdin.is_some()
+            && teardown_due(&turn, flags.open_compaction.load(Ordering::Relaxed))
+        {
+            // Dropping the writer closes the pipe — pi's rpc mode exits on
+            // EOF. The driver keeps draining until the channel disconnects.
+            stdin = None;
+            flags.teardown_armed.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -1410,7 +1529,14 @@ done
         )
         .unwrap();
         let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
-        let result = runner.execute(ctx("do the thing", None));
+        // The span is never closed and the mock does not die on its own, so
+        // the run is bounded by its total budget (plan 089 D4/D5: an open
+        // compaction holds stdin open and the deadline is the hard bound —
+        // a real pi crash exits the process and ends the run immediately).
+        // Kept short so the test does not wait the 120 s default.
+        let mut c = ctx("do the thing", None);
+        c.timeout = Some(Duration::from_millis(1200));
+        let result = runner.execute(c);
         assert!(
             result.is_err(),
             "interrupted overflow should fail, got: {result:?}"
@@ -1531,6 +1657,11 @@ echo '{"type":"compaction_end","reason":"threshold","result":{"tokensBefore":100
     /// `compaction_start { overflow }` + a clean `agent_end`, then holds
     /// (no `compaction_end`, no exit); the run must wait for the deadline
     /// (here 1200ms) and still succeed (the clean final answer is kept).
+    ///
+    /// Note the event order here is **inverted** with respect to real pi,
+    /// which emits `compaction_start` *after* `agent_end` (plan 089 D5). The
+    /// test is kept for the flag-hold behaviour on that order; the pi-shaped
+    /// order is covered by the D5 tests below with the stdin-aware mock.
     #[test]
     fn rpc_d4_open_compaction_holds_teardown_until_deadline() {
         let (path, _dir) = mock_script("placeholder");
@@ -1620,5 +1751,204 @@ sleep 10
             }
             other => panic!("Expected Ended, got {other:?}"),
         }
+    }
+
+    // ── Plan 089 (D5): settle-based teardown + the stdin hold ──
+
+    /// Build a **stdin-aware** mock that models pi's rpc mode (plan 089
+    /// D5) closely enough to catch the teardown bug:
+    ///
+    /// - `body` (pi's stream, in pi's real event order — `agent_end` first,
+    ///   `compaction_start` a tick later) is emitted by a background writer
+    ///   that inherits stdout;
+    /// - the foreground loop reads stdin until **EOF**, answering
+    ///   `get_state`, appending every command to `log` and the literal line
+    ///   `eof` when the pipe closes;
+    /// - at EOF it **kills the writer and exits** — pi's
+    ///   `process.stdin.on("end", … shutdown)` mid-work, so an early close
+    ///   loses the rest of the stream exactly like the real crash.
+    ///
+    /// A mock that ignores stdin (or emits its whole stream before reading)
+    /// cannot model pi: it neither dies on EOF nor loses events when it does,
+    /// which is why the plan-089 phase-4 tests passed while the defect stayed
+    /// live (D5's "why the D4 tests missed this").
+    fn pi_like_rpc_mock(log: &str, body: &str) -> String {
+        // Built by substitution (not `format!`) so the bash braces and the
+        // JSON braces need no escaping.
+        let template = r#"#!/usr/bin/env bash
+log="__LOG__"
+: > "$log"
+{
+__BODY__
+} &
+writer=$!
+while IFS= read -r line; do
+  echo "$line" >> "$log"
+  case "$line" in
+    *get_state*)
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-d5","autoCompactionEnabled":true}}'
+      ;;
+  esac
+done
+echo eof >> "$log"
+kill $writer 2>/dev/null
+exit 0
+"#;
+        template.replace("__LOG__", log).replace("__BODY__", body)
+    }
+
+    /// Run a pi-shaped mock and return the runner's result plus the elapsed
+    /// wall time.
+    fn run_pi_like(
+        script: &str,
+        timeout: Duration,
+    ) -> (Result<AgentOutput, PortError>, Duration) {
+        let (path, _dir) = mock_script("placeholder");
+        std::fs::write(&path, script).unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let mut c = ctx("do the thing", None);
+        c.timeout = Some(timeout);
+        let start = Instant::now();
+        let result = runner.execute(c);
+        (result, start.elapsed())
+    }
+
+    /// Plan 089 (D5): scenario A — pi ends the turn with no text, then runs
+    /// its post-`agent_end` **threshold** compaction. The driver must not
+    /// close stdin (pi exits on EOF) while that work is in flight: the
+    /// `compaction_end` is observed and the process exits cleanly instead of
+    /// dying ~1 s into the summarisation. Under the pre-D5 code the mock
+    /// exits at the `agent_end` close and never reaches `compaction_start`.
+    #[test]
+    fn rpc_agent_end_empty_then_threshold_compaction_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock(
+            log.to_str().unwrap(),
+            r#"echo '{"type":"agent_start"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[]}]}'
+sleep 0.05
+echo '{"type":"compaction_start","reason":"threshold"}'
+sleep 0.4
+echo '{"type":"compaction_end","reason":"threshold","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":140000,"details":{}},"aborted":false,"willRetry":false}'
+echo '{"type":"agent_settled"}'
+"#,
+        );
+        let (result, elapsed) = run_pi_like(&script, Duration::from_secs(15));
+        let out = result.expect("a compaction that completes must not fail the run");
+        let meta = out.metadata.as_ref().expect("metadata");
+        assert_eq!(
+            meta.compactions.len(),
+            1,
+            "the post-agent_end compaction_end must be observed, not killed mid-span"
+        );
+        assert_eq!(meta.compactions[0].reason, "threshold");
+        assert_eq!(meta.compactions[0].tokens_before, Some(140_000));
+        assert_eq!(
+            out.exit_code, 0,
+            "the process exits cleanly on the closed stdin (no force-kill)"
+        );
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            sent.contains("eof"),
+            "Knot closes stdin once the session settles: {sent}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the run ends on settle, not on a deadline (got {elapsed:?})"
+        );
+    }
+
+    /// Plan 089 (D5): the clean single-turn path keeps working — one prompt
+    /// is sent, stdin is closed on `agent_settled`, and the process exits
+    /// inside the grace (no force-kill, no second prompt).
+    #[test]
+    fn rpc_closes_stdin_on_agent_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock(
+            log.to_str().unwrap(),
+            r#"echo '{"type":"agent_start"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"all done"}]}]}'
+echo '{"type":"agent_settled"}'
+"#,
+        );
+        let (result, elapsed) = run_pi_like(&script, Duration::from_secs(15));
+        let out = result.expect("clean run");
+        assert_eq!(out.stdout, "all done");
+        assert_eq!(out.exit_code, 0);
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            sent.matches("\"prompt\"").count(),
+            1,
+            "exactly one prompt command: {sent}"
+        );
+        assert!(sent.contains("eof"), "Knot closed the stdin: {sent}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "teardown is on `agent_settled`, not on a timeout (got {elapsed:?})"
+        );
+    }
+
+    /// Plan 089 (D5): a pi old enough to omit `agent_settled` still gets a
+    /// teardown — `agent_end` plus the settle window closes the pipe, well
+    /// inside the deadline.
+    #[test]
+    fn rpc_fallback_settle_window_closes_stdin_without_settle_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock(
+            log.to_str().unwrap(),
+            r#"echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"old pi"}]}]}'
+"#,
+        );
+        let (result, elapsed) = run_pi_like(&script, Duration::from_secs(15));
+        let out = result.expect("old-pi shape still succeeds");
+        assert_eq!(out.stdout, "old pi");
+        assert_eq!(out.exit_code, 0);
+        assert!(
+            std::fs::read_to_string(&log).unwrap().contains("eof"),
+            "the fallback closes stdin after the settle window"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "settle window + exit, not the 15s deadline (got {elapsed:?})"
+        );
+    }
+
+    /// Plan 089 (D5): a `compaction_start` arriving **inside** the settle
+    /// window defers the fallback close — the span is observed and the run
+    /// still tears down afterwards (pi emits the start in the same tick
+    /// after `agent_end`, so this ordering is the normal one).
+    #[test]
+    fn rpc_fallback_settle_window_defers_for_compaction_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock(
+            log.to_str().unwrap(),
+            r#"echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"held"}]}]}'
+sleep 0.05
+echo '{"type":"compaction_start","reason":"overflow"}'
+sleep 0.4
+echo '{"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":false}'
+"#,
+        );
+        let (result, elapsed) = run_pi_like(&script, Duration::from_secs(15));
+        let out = result.expect("deferred close still succeeds");
+        assert_eq!(out.stdout, "held");
+        let meta = out.metadata.as_ref().expect("metadata");
+        assert_eq!(
+            meta.compactions.len(),
+            1,
+            "the span opened inside the settle window is still observed"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "the close waited for the span, not the 250ms window (got {elapsed:?})"
+        );
+        assert!(
+            std::fs::read_to_string(&log).unwrap().contains("eof"),
+            "stdin is closed once the span closes"
+        );
     }
 }

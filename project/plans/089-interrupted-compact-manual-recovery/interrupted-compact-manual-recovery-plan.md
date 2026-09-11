@@ -733,10 +733,46 @@ change, so they land after the phases that change behaviour.
 ## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–13 pending)
 
 **Pending (added 2026-09-12 from the rig-run evidence table, target
-v0.47.0):** phase 8 — settle-based teardown + stdin hold (D5); phase 9 —
-in-session continuation (D6); phase 10 — threshold interruptions (D7);
-phase 11 — compaction-aware inactivity window (D8); phase 12 —
-observability (D9); phase 13 — verify, docs, v0.47.0.
+v0.47.0):** phase 9 — in-session continuation (D6); phase 10 — threshold
+interruptions (D7); phase 11 — compaction-aware inactivity window (D8);
+phase 12 — observability (D9); phase 13 — verify, docs, v0.47.0.
+
+#### Follow-on phase log
+
+**Phase 8 (D5) — complete.** `src/adapters/pi_rpc.rs`:
+
+- `RpcFlags` (`agent_end` sticky / `teardown_armed` / `open_compaction`) +
+  `TurnState` (`agent_end`, `agent_end_at`, `settled`) and the single
+  `teardown_due(turn, compaction_open)` predicate: close stdin on
+  `agent_settled`, else on `agent_end` with no span open once
+  `SETTLE_WINDOW` (250 ms) has elapsed. The driver loop now reads with
+  `recv_timeout(SETTLE_WINDOW)` so the fallback fires while pi is silent.
+- The main teardown loop starts `TEARDOWN_GRACE` from `teardown_armed`
+  (the driver's decision), so the 5 s grace means "graceful process that
+  will not exit" and an in-flight compaction is bounded by the total budget
+  only. Module doc + `TEARDOWN_GRACE` doc rewritten (pi exits on stdin EOF).
+- **Stdin-aware mock** `pi_like_rpc_mock(log, body)`: pi's stream is emitted
+  by a background writer; a foreground loop reads stdin until EOF (logging
+  each command plus an `eof` marker) and on EOF **kills the writer and
+  exits** — pi's `stdin.on("end", shutdown)`. Verified against the defect:
+  an early close loses `compaction_start`/`compaction_end` entirely, a
+  settled close captures them.
+- Tests: `rpc_agent_end_empty_then_threshold_compaction_completes`,
+  `rpc_closes_stdin_on_agent_settled`,
+  `rpc_fallback_settle_window_closes_stdin_without_settle_event`, and
+  `rpc_fallback_settle_window_defers_for_compaction_start` (the span opened
+  inside the settle window still lands). Both D4 tests kept; the older one
+  records that its event order is inverted w.r.t. pi.
+- **Deviation (implementation detail, no design change):** the main loop
+  arms the grace on the driver's `teardown_armed` flag rather than
+  re-evaluating the predicate itself — one source of truth for the decision,
+  same predicate. `rpc_compaction_attempted_but_could_not_fit` now sets a
+  1.2 s timeout: with stdin held open (D5), a mock that stays alive with a
+  span open now waits for its total budget instead of exiting at the EOF
+  that the old early close used to cause.
+- `cargo test` (1063 lib + all integration) and `cargo clippy` — no new
+  warnings from this phase (the driver's `too_many_arguments` line now
+  carries an `allow`, as `live_output::spawn_watchdog` does).
 
 ### Shipped in v0.46.0 (phases 0–7)
 
