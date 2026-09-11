@@ -188,13 +188,21 @@ no tie-off write, the same shape as a total timeout.
 ### Context Compaction (Compact-and-Continue)
 
 A session whose context approaches the model's context window is not a
-failure: pi **compacts the session in-process and continues**. The
-built-in compaction is enabled for rig sessions via a project-level
-`.pi/settings.json` (`{"compaction": {"enabled": true}}`) — the
-`knot-init` skill seeds the file at rig initialisation
-(create-if-absent, never overwrites). Project-level so interactive pi
-outside the rig directory is unaffected.
+failure: pi **compacts the session in-process and continues**.
 
+- **Auto-compaction is always on.** Knot self-heals the project's
+  `.pi/settings.json` at startup (Knot 0.45.0+): when the effective pi
+  setting resolves to disabled (the global `~/.pi/agent/settings.json`
+  says `compaction.enabled: false` with no project override — the shape
+  of rigs initialised before `knot-init` seeded the project file), Knot
+  **merges** `{"compaction": {"enabled": true}}` into the project file,
+  preserving every existing key. The project file is **Knot's own file**
+  (knot-init seeds it; the service maintains it); the global file is the
+  operator's and is **never written**. An **explicit** project-level
+  `compaction.enabled` (true **or** false) is the operator's decision
+  and is honoured — an explicit `false` still raises the startup warning.
+  Unparseable project files and write failures are left untouched, with
+  the same warning naming the reason.
 - **Proactive** — pi compacts before the hard limit
   (`contextTokens > contextWindow − reserveTokens`; 16k reserved by
 default).
@@ -202,18 +210,39 @@ default).
   compacts and auto-retries the prompt in-process. Recovery is once
   per user message, so every session-resume re-entry gets a fresh
   recovery chance.
-- **Loom-log visibility** — each observed compaction is recorded as a
-  `ContextCompacted` loom entry: `reason` (`"overflow"` = the context
-  limit was hit — the entries to count when narrowing prompt scope;
-  `"threshold"` = proactive), `tokens_before` (the pre-compaction
-  size), `session_id`, and `attempt` (1 = first attempt, 2 = first
-  retry). Failed compactions are not logged. The entries mark context
-  pressure so the prompt and strand scope can be narrowed.
+- **A compaction is a span** — pi's stream emits `compaction_start` when
+  a compaction begins and `compaction_end` when it finishes. Knot
+  observes both **live** (as the stream produces them) and records the
+  span boundaries as loom events:
+  - `CompactionStarted` — the span began: `reason` (pi's compaction
+    reason: `"threshold"` / `"overflow"` / `"manual"`), `session_id`,
+    `attempt`.
+  - `ContextCompacted` — the span **ended successfully**. This is the
+    operator-facing context-pressure signal (shape unchanged by Knot
+    0.45.0 — only the timing moved from after-the-invocation to
+    live): `reason` (`"overflow"` = the context limit was hit — the
+    entries to count when narrowing prompt scope; `"threshold"` =
+    proactive), `tokens_before` (the pre-compaction size),
+    `session_id`, and `attempt` (1 = first attempt, 2 = first retry).
+  - `ContextCompactionFailed` — the span ended **without success**
+    (pi reported an `errorMessage`, or the compaction was aborted): the
+    same fields plus `error` (pi's message, `None` when aborted
+    without one) and `aborted`. Previously failed compactions were
+    silent; they are now visible.
+- **Continuity across re-entries** — the session id is carried from the
+  runner: when a final-response nudge or a session-resume retry
+  re-enters a session, it re-enters the **runner-captured** session id
+  (from the invocation's stream), so a compaction observed mid-run
+  never loses the session identity for the retry.
 - **Terminal overflow fails fast** — if the kept context itself
   cannot fit the window even after compaction, the strand fails
   immediately with `context limit reached: …` — no session-resume
   retries, no clock-up, and no timeout operational event (no deadline was
   exceeded).
+- **The escape hatch** — `compaction.enabled` in `.pi/settings.json`
+  (`true`/`false`) remains the only switch: pi has no
+  "only-on-overflow" mode upstream, so the only way to turn compaction
+  off is an explicit project-level `false`.
 
 ### Graceful Completion (Wrap-Up Steering)
 

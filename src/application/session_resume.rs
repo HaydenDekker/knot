@@ -12,10 +12,11 @@
 //! instead. Retries are limited to 10 attempts or the profile's overall
 //! timeout budget, whichever comes first.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::application::ports::{
-    AgentOutput, AgentRunner,
+    AgentOutput, AgentRunner, CompactionObservation,
     LoomLogPort, PortError,
 };
 #[cfg(test)]
@@ -120,59 +121,136 @@ fn format_timestamp() -> String {
     crate::adapters::logging::format_timestamp()
 }
 
-/// Append one `ContextCompacted` loom event per successful compaction in
-/// the invocation's metadata (plan 079). Best-effort: observability must
-/// never fail a strand.
-fn log_compactions(
-    loom_log: &dyn LoomLogPort,
-    emitter: Option<&SystemEventEmitter>,
-    loom_id: &LoomId,
-    knot_id: &KnotId,
-    strand_path: &StrandPath,
+/// Plan 088: the per-attempt live compaction observer (D5).
+///
+/// Maps each stream observation to its loom event —
+/// `CompactionStarted` (span begins), `ContextCompacted` (successful
+/// end — the operator-facing context-pressure signal, unchanged shape),
+/// or `ContextCompactionFailed` (failed / aborted end — plan 079's
+/// `error.is_none()` filter is now a routing decision) — and appends it
+/// to the loom log (the `[KNOT][EVENT]` line is written live, the event
+/// is stored in `RunActivity`), then emits the plan 082 system event,
+/// following the existing `ContextCompacted` pattern. The closure runs
+/// on the runner's reader / driver thread: it captures `Arc`-cloned
+/// ports (the loom log, the emitter) plus the attempt context, holds no
+/// locks across the `append` calls, and is best-effort — observability
+/// must never fail a strand (matching the steer's send-failure
+/// posture).
+fn compaction_observer(
+    loom_log: Arc<dyn LoomLogPort>,
+    emitter: Option<SystemEventEmitter>,
+    loom_id: LoomId,
+    knot_id: KnotId,
+    strand_path: StrandPath,
     attempt: u32,
-    output: &AgentOutput,
-) {
-    let Some(metadata) = output.metadata.as_ref() else {
-        return;
-    };
-    for record in metadata
-        .compactions
-        .iter()
-        .filter(|r| r.error.is_none())
-    {
-        let session_id = metadata.session_id.clone().unwrap_or_default();
-        let _ = loom_log.append(LoomEvent::ContextCompacted {
-            loom_id: loom_id.clone(),
-            knot_id: knot_id.clone(),
-            strand_path: strand_path.clone(),
-            session_id: session_id.clone(),
-            reason: record.reason.clone(),
-            tokens_before: record.tokens_before,
-            attempt,
-            timestamp: format_timestamp(),
-        });
-        // System event (plan 082) — one per compaction observed.
-        emit_system(
-            emitter,
-            loom_id,
-            knot_id,
-            strand_path,
-            "ContextCompacted",
-            &[
-                ("session-id", Some(session_id.clone())),
-                ("attempt", Some(attempt.to_string())),
-                ("reason", Some(record.reason.clone())),
-                (
-                    "tokens-before",
-                    record.tokens_before.map(|t| t.to_string()),
-                ),
-            ],
-            Some(format!(
-                "Context compacted (reason={}, attempt {})",
-                record.reason, attempt
-            )),
-        );
-    }
+) -> Arc<dyn Fn(&CompactionObservation) + Send + Sync> {
+    Arc::new(move |observation: &CompactionObservation| {
+        match observation {
+            CompactionObservation::Started {
+                session_id,
+                reason,
+            } => {
+                let _ = loom_log.append(LoomEvent::CompactionStarted {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    session_id: session_id.clone().unwrap_or_default(),
+                    reason: reason.clone(),
+                    attempt,
+                    timestamp: format_timestamp(),
+                });
+                // System event (plan 082) — the span begins.
+                emit_system(
+                    emitter.as_ref(),
+                    &loom_id,
+                    &knot_id,
+                    &strand_path,
+                    "CompactionStarted",
+                    &[
+                        ("session-id", session_id.clone()),
+                        ("attempt", Some(attempt.to_string())),
+                        ("reason", Some(reason.clone())),
+                    ],
+                    Some(format!(
+                        "Compaction started (reason={reason}, attempt {attempt})"
+                    )),
+                );
+            }
+            CompactionObservation::Ended {
+                session_id,
+                record,
+            } => {
+                if record.error.is_none() && !record.aborted {
+                    // Success — `ContextCompacted` (unchanged shape;
+                    // plan 088 moved its timing from post-hoc to
+                    // live).
+                    let _ = loom_log.append(LoomEvent::ContextCompacted {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        session_id: session_id.clone().unwrap_or_default(),
+                        reason: record.reason.clone(),
+                        tokens_before: record.tokens_before,
+                        attempt,
+                        timestamp: format_timestamp(),
+                    });
+                    emit_system(
+                        emitter.as_ref(),
+                        &loom_id,
+                        &knot_id,
+                        &strand_path,
+                        "ContextCompacted",
+                        &[
+                            ("session-id", session_id.clone()),
+                            ("attempt", Some(attempt.to_string())),
+                            ("reason", Some(record.reason.clone())),
+                            (
+                                "tokens-before",
+                                record.tokens_before.map(|t| t.to_string()),
+                            ),
+                        ],
+                        Some(format!(
+                            "Context compacted (reason={}, attempt {})",
+                            record.reason, attempt
+                        )),
+                    );
+                } else {
+                    // Failed / aborted end — `ContextCompactionFailed`
+                    // (plan 088: the failed end is visible instead of
+                    // silent).
+                    let _ = loom_log.append(LoomEvent::ContextCompactionFailed {
+                        loom_id: loom_id.clone(),
+                        knot_id: knot_id.clone(),
+                        strand_path: strand_path.clone(),
+                        session_id: session_id.clone().unwrap_or_default(),
+                        reason: record.reason.clone(),
+                        error: record.error.clone(),
+                        aborted: record.aborted,
+                        attempt,
+                        timestamp: format_timestamp(),
+                    });
+                    emit_system(
+                        emitter.as_ref(),
+                        &loom_id,
+                        &knot_id,
+                        &strand_path,
+                        "ContextCompactionFailed",
+                        &[
+                            ("session-id", session_id.clone()),
+                            ("attempt", Some(attempt.to_string())),
+                            ("reason", Some(record.reason.clone())),
+                            ("aborted", Some(record.aborted.to_string())),
+                            ("error", record.error.clone()),
+                        ],
+                        Some(format!(
+                            "Context compaction failed (reason={}, aborted={}, attempt {})",
+                            record.reason, record.aborted, attempt
+                        )),
+                    );
+                }
+            }
+        }
+    })
 }
 
 /// Plan 084 "Graceful Completion": record the adapter's wrap-up steer as a
@@ -301,9 +379,14 @@ pub fn inject_event_request(
 ///
 /// `agent_config` contains the provider/model/tools. The retry loop
 /// appends `--session-id` to `agent_config.extra_args` on each attempt.
+///
+/// `loom_log` is the `Arc` (not a bare reference): the plan 088 live
+/// compaction observer captures an `Arc` clone into its per-attempt
+/// closure (the closure outlives the call and runs on the runner's
+/// reader / driver thread).
 pub fn execute_with_resume(
     agent_runner: &dyn AgentRunner,
-    loom_log: &dyn LoomLogPort,
+    loom_log: &Arc<dyn LoomLogPort>,
     loom_id: &LoomId,
     knot_id: &KnotId,
     strand_path: &StrandPath,
@@ -348,7 +431,7 @@ pub fn execute_with_resume(
 /// Core retry-loop implementation with configurable delay for testing.
 fn execute_with_resume_internal(
     agent_runner: &dyn AgentRunner,
-    loom_log: &dyn LoomLogPort,
+    loom_log: &Arc<dyn LoomLogPort>,
     loom_id: &LoomId,
     knot_id: &KnotId,
     strand_path: &StrandPath,
@@ -373,9 +456,18 @@ fn execute_with_resume_internal(
     let mut inactivity_kills: u32 = 0;
 
     // --- First attempt (no session ID) ---
-    // Delegate to execute_with_config so the adapter layer can
-    // inject --name and @{path} into extra_args.
-    let result = agent_runner.execute_with_config(
+    // Delegate to execute_with_config_and_observer so the adapter
+    // layer can inject --name and @{path} into extra_args, and the
+    // plan 088 live compaction observer runs on the stream.
+    let compaction_obs_1 = compaction_observer(
+        loom_log.clone(),
+        emitter.cloned(),
+        loom_id.clone(),
+        knot_id.clone(),
+        strand_path.clone(),
+        1,
+    );
+    let result = agent_runner.execute_with_config_and_observer(
         &agent_config,
         strand_path.clone(),
         strand_file_ref.clone(),
@@ -384,6 +476,7 @@ fn execute_with_resume_internal(
         event_type.clone(),
         knot_name.clone(),
         profile_timeout,
+        Some(compaction_obs_1),
     );
 
     let mut first_error;
@@ -442,11 +535,11 @@ fn execute_with_resume_internal(
                     *session_id = Some(sid.clone());
                 }
             }
-            // Plan 079: record successful compactions observed on the
-            // first attempt (best-effort).
-            log_compactions(loom_log, emitter, loom_id, knot_id, strand_path, 1, &output);
+            // Plan 088: compactions are now recorded live by the
+            // observer (CompactionStarted / ContextCompacted /
+            // ContextCompactionFailed) — no post-hoc log pass.
             // Plan 084: record a wrap-up steer observed on the first attempt.
-            log_wrap_up(loom_log, emitter, loom_id, knot_id, strand_path, 1, &output);
+            log_wrap_up(loom_log.as_ref(), emitter, loom_id, knot_id, strand_path, 1, &output);
             return Ok(output);
         }
     } else {
@@ -659,10 +752,23 @@ fn execute_with_resume_internal(
         );
 
         // Build context with remaining time and execute.
-        // Delegate to execute_with_config so the adapter layer
-        // can inject --name and @{path} into extra_args.
+        // Delegate to execute_with_config_and_observer so the adapter
+        // layer can inject --name and @{path} into extra_args, and the
+        // plan 088 live compaction observer runs on the stream.
         let timeout = profile_timeout.as_ref().map(|t| t.saturating_sub(start.elapsed()));
-        match agent_runner.execute_with_config(
+        // KNotEmptyResponse convention: loop attempt `attempt` is
+        // execution attempt `attempt + 1` (attempt 1 was the initial
+        // call outside the loop).
+        let exec_attempt = attempt + 1;
+        let compaction_obs = compaction_observer(
+            loom_log.clone(),
+            emitter.cloned(),
+            loom_id.clone(),
+            knot_id.clone(),
+            strand_path.clone(),
+            exec_attempt,
+        );
+        match agent_runner.execute_with_config_and_observer(
             &agent_config,
             strand_path.clone(),
             strand_file_ref.clone(),
@@ -671,6 +777,7 @@ fn execute_with_resume_internal(
             event_type.clone(),
             knot_name.clone(),
             timeout,
+            Some(compaction_obs),
         ) {
             Ok(output) => {
                 if output.stdout.trim().is_empty() {
@@ -721,25 +828,17 @@ fn execute_with_resume_internal(
                         *session_id = Some(sid.clone());
                     }
                 }
-                // Plan 079: record successful compactions observed on
-                // this retry (KnotEmptyResponse convention: attempt + 1).
-                log_compactions(
-                    loom_log,
-                    emitter,
-                    loom_id,
-                    knot_id,
-                    strand_path,
-                    attempt + 1,
-                    &output,
-                );
+                // Plan 088: compactions are now recorded live by the
+                // observer (CompactionStarted / ContextCompacted /
+                // ContextCompactionFailed) — no post-hoc log pass.
                 // Plan 084: record a wrap-up steer observed on this retry.
                 log_wrap_up(
-                    loom_log,
+                    loom_log.as_ref(),
                     emitter,
                     loom_id,
                     knot_id,
                     strand_path,
-                    attempt + 1,
+                    exec_attempt,
                     &output,
                 );
                 return Ok(output);
@@ -904,12 +1003,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     /// Mock agent runner with configurable response sequence and context
-    /// capture for verifying retry parameters.
+    /// capture for verifying retry parameters. Plan 088: also carries a
+    /// per-call queue of compaction observations the mock "observes
+    /// live" (the real runners fire these from the stream reader /
+    /// driver line loop).
     #[derive(Default)]
     struct TestAgentRunner {
         responses: Arc<Mutex<VecDeque<Result<AgentOutput, PortError>>>>,
         contexts: Arc<Mutex<Vec<ExecutionContext>>>,
         call_count: Arc<AtomicU32>,
+        observations: Arc<Mutex<VecDeque<Vec<CompactionObservation>>>>,
     }
 
     impl TestAgentRunner {
@@ -920,6 +1023,22 @@ mod tests {
                 responses: Arc::new(Mutex::new(responses.into())),
                 contexts: Arc::new(Mutex::new(Vec::new())),
                 call_count: Arc::new(AtomicU32::new(0)),
+                observations: Arc::new(Mutex::new(VecDeque::new())),
+            }
+        }
+
+        /// Plan 088: responses plus a per-call queue of compaction
+        /// observations (one entry per call; `vec![]` / missing = no
+        /// compaction observed on that call).
+        fn new_with_observations(
+            responses: Vec<Result<AgentOutput, PortError>>,
+            observations: Vec<Vec<CompactionObservation>>,
+        ) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses.into())),
+                contexts: Arc::new(Mutex::new(Vec::new())),
+                call_count: Arc::new(AtomicU32::new(0)),
+                observations: Arc::new(Mutex::new(observations.into())),
             }
         }
 
@@ -949,6 +1068,45 @@ mod tests {
                     session_id: Some("sess-test".to_string()),
                 })
             }
+        }
+
+        /// Plan 088: fire the queued compaction observations (the real
+        /// runners fire these live on the stream), then delegate to the
+        /// default `execute_with_config` → `execute` path so the context
+        /// is recorded exactly as production records it.
+        fn execute_with_config_and_observer(
+            &self,
+            agent_config: &AgentConfig,
+            strand_path: StrandPath,
+            strand_file_ref: Option<StrandPath>,
+            prompt: String,
+            profile_prompt: String,
+            event_type: String,
+            knot_name: Option<String>,
+            timeout: Option<Duration>,
+            observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+        ) -> Result<AgentOutput, PortError> {
+            if let Some(observer) = observer {
+                let queued = self
+                    .observations
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_default();
+                for obs in queued.iter() {
+                    observer(obs);
+                }
+            }
+            self.execute_with_config(
+                agent_config,
+                strand_path,
+                strand_file_ref,
+                prompt,
+                profile_prompt,
+                event_type,
+                knot_name,
+                timeout,
+            )
         }
     }
 
@@ -1007,7 +1165,25 @@ mod tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
+            }),
+        }
+    }
+
+    /// Empty-response output with a captured session id (plan 088 phase 0
+    /// re-entry test).
+    fn empty_output_with_sid(sid: &str) -> AgentOutput {
+        AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some(sid.to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
             }),
         }
     }
@@ -1042,6 +1218,36 @@ mod tests {
             tokens_before,
             will_retry,
             error: error.map(String::from),
+            aborted: false,
+        }
+    }
+
+    /// Plan 088: a compaction observation for the mock runner's queue.
+    fn comp_obs_started(sid: &str, reason: &str) -> CompactionObservation {
+        CompactionObservation::Started {
+            session_id: Some(sid.to_string()),
+            reason: reason.to_string(),
+        }
+    }
+
+    /// Plan 088: a compaction-end observation (success when `error` is
+    /// `None` and `aborted` is `false`).
+    fn comp_obs_ended(
+        sid: &str,
+        reason: &str,
+        tokens_before: Option<u64>,
+        error: Option<&str>,
+        aborted: bool,
+    ) -> CompactionObservation {
+        CompactionObservation::Ended {
+            session_id: Some(sid.to_string()),
+            record: crate::application::ports::CompactionRecord {
+                reason: reason.to_string(),
+                tokens_before,
+                will_retry: error.is_none(),
+                error: error.map(String::from),
+                aborted,
+            },
         }
     }
 
@@ -1060,7 +1266,8 @@ mod tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions,
-            wrap_up: None,
+                compaction_starts: vec![],
+                wrap_up: None,
             }),
         }
     }
@@ -1080,6 +1287,7 @@ mod tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
                 wrap_up: Some(crate::application::ports::WrapUpRecord {
                     context_tokens,
                     limit,
@@ -1100,12 +1308,13 @@ mod tests {
     // Helper for execute_with_resume calls with zero-delay for tests.
     fn execute(
         runner: &dyn AgentRunner,
-        log: &dyn LoomLogPort,
+        log: &Arc<TestLoomLog>,
         timeout_secs: u64,
     ) -> Result<AgentOutput, PortError> {
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         execute_with_resume_internal(
             runner,
-            log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1134,11 +1343,12 @@ mod tests {
     // (zero delay) — MAX_RETRIES is the only bound on the retry loop.
     fn execute_no_budget(
         runner: &dyn AgentRunner,
-        log: &dyn LoomLogPort,
+        log: &Arc<TestLoomLog>,
     ) -> Result<AgentOutput, PortError> {
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         execute_with_resume_internal(
             runner,
-            log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1169,7 +1379,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success after retry")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1195,7 +1405,7 @@ mod tests {
             .map(|_| Err(err_timeout("sess-abc")))
             .collect();
         let runner = TestAgentRunner::new(responses);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 3600);
 
@@ -1231,15 +1441,16 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Err(err_timeout("sess-abc")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         // Verify that budget < MIN_REMAINING_SECS causes immediate bail.
         // Budget=4s < MIN_REMAINING_SECS=5s.
         // First attempt fails, check: remaining=4s < 5 → bail immediately.
         // Result: 0 retries logged, budget exhaustion error returned.
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         let result = execute_with_resume_internal(
             &runner,
-            &log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1289,12 +1500,13 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Err(err_timeout("sess-abc")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         // Budget of 3s is less than MIN_REMAINING_SECS (5s) after first attempt
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         let result = execute_with_resume_internal(
             &runner,
-            &log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1334,7 +1546,7 @@ mod tests {
     #[test]
     fn no_retry_on_fatal_error() {
         let runner = TestAgentRunner::new(vec![Err(err_fatal())]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1355,7 +1567,7 @@ mod tests {
     fn no_retry_when_no_session_id() {
         let runner =
             TestAgentRunner::new(vec![Err(err_timeout_no_sid())]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1380,7 +1592,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
@@ -1403,7 +1615,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
@@ -1431,14 +1643,15 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         // Use a real delay for this test (100ms instead of 10s)
         let start = Instant::now();
 
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         let result = execute_with_resume_internal(
             &runner,
-            &log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1477,13 +1690,14 @@ mod tests {
             Err(err_timeout("sess-captured")),
             Ok(ok_output_with_sid("success", "sess-captured")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let mut session_id: Option<String> = None;
 
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
         let result = execute_with_resume_internal(
             &runner,
-            &log,
+            &dyn_log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -1517,7 +1731,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("success")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
@@ -1534,7 +1748,7 @@ mod tests {
     #[test]
     fn first_attempt_succeeds_no_retry() {
         let runner = TestAgentRunner::new(vec![Ok(ok_output("immediate"))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
@@ -1561,7 +1775,7 @@ mod tests {
             exit_code: 0,
             metadata: None,
         })]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1604,7 +1818,7 @@ mod tests {
             Ok(ok_output("")),
             Ok(ok_output("success after empty")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
@@ -1653,7 +1867,7 @@ mod tests {
             Ok(ok_output_with_sid("", "sess-abc")),
             Ok(ok_output_with_sid("final response", "sess-abc")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1726,7 +1940,7 @@ mod tests {
             exit_code: 0,
             metadata: None,
         })]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -1772,7 +1986,7 @@ mod tests {
             .map(|_| Ok(ok_output_with_sid("", "sess-abc")))
             .collect();
         let runner = TestAgentRunner::new(responses);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
 
@@ -1821,7 +2035,7 @@ mod tests {
         .chain((0..10).map(|_| Err(err_timeout("sess-abc"))))
         .collect();
         let runner = TestAgentRunner::new(responses);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
 
@@ -1853,19 +2067,22 @@ mod tests {
         assert_eq!(resumed_count, 10, "expected 10 SessionResumed events");
     }
 
-    // ── Plan 079: compaction visibility + terminal overflow ──────
+    // ── Plan 088: live compaction events + terminal overflow ─────
 
-    /// Plan 079: a successful compaction observed on the **first attempt**
-    /// is logged as `ContextCompacted { attempt: 1 }` — no `SessionResumed`
+    /// Plan 088 (D5): a successful compaction observed **live** on the
+    /// **first attempt** logs `CompactionStarted` followed by
+    /// `ContextCompacted { attempt: 1 }` — no `SessionResumed`
     /// (nothing failed).
     #[test]
     fn compaction_logged_on_first_attempt() {
-        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_compactions(
-            "done",
-            "sess-abc",
-            vec![comp_rec("overflow", Some(150000), true, None)],
-        ))]);
-        let log = TestLoomLog::default();
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Ok(ok_output("done"))],
+            vec![vec![
+                comp_obs_started("sess-abc", "overflow"),
+                comp_obs_ended("sess-abc", "overflow", Some(150000), None, false),
+            ]],
+        );
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(
@@ -1876,26 +2093,35 @@ mod tests {
         assert_eq!(result.unwrap().stdout, "done");
 
         let events = log.events();
-        assert_eq!(events.len(), 1, "exactly one loom-log event");
+        assert_eq!(events.len(), 2, "span start + end: {events:?}");
         match &events[0] {
+            LoomEvent::CompactionStarted {
+                session_id,
+                reason,
+                attempt,
+                ..
+            } => {
+                assert_eq!(session_id, "sess-abc");
+                assert_eq!(reason, "overflow");
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected CompactionStarted, got {other:?}"),
+        }
+        match &events[1] {
             LoomEvent::ContextCompacted {
+                session_id,
                 reason,
                 tokens_before,
                 attempt,
                 ..
             } => {
+                assert_eq!(session_id, "sess-abc");
                 assert_eq!(reason, "overflow");
                 assert_eq!(*tokens_before, Some(150000));
                 assert_eq!(*attempt, 1);
             }
             other => panic!("Expected ContextCompacted, got {other:?}"),
         }
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
-            "no SessionResumed on a successful first attempt"
-        );
     }
 
     /// Plan 084: a wrap-up steer recorded in the metadata on the **first
@@ -1908,7 +2134,7 @@ mod tests {
             150_000,
             140_000,
         ))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(
@@ -1945,7 +2171,7 @@ mod tests {
             "sess-abc",
             vec![],
         ))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
         let result = execute(&runner, &log, 120);
         assert!(result.is_ok());
         let events = log.events();
@@ -1957,20 +2183,29 @@ mod tests {
         );
     }
 
-    /// Plan 079: a successful compaction observed on a **retry** is logged
-    /// after the `SessionResumed` that started the retry, with the
-    /// `KnotEmptyResponse` attempt convention (attempt 2 = first retry).
+    /// Plan 088 (D5): a successful compaction observed **live** on a
+    /// **retry** is logged after the `SessionResumed` that started the
+    /// retry, with the `KnotEmptyResponse` attempt convention (attempt
+    /// 2 = first retry).
     #[test]
     fn compaction_logged_on_retry_attempt() {
-        let runner = TestAgentRunner::new(vec![
-            Err(err_timeout("sess-abc")),
-            Ok(ok_output_with_compactions(
-                "done",
-                "sess-abc",
-                vec![comp_rec("threshold", Some(90000), true, None)],
-            )),
-        ]);
-        let log = TestLoomLog::default();
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Err(err_timeout("sess-abc")), Ok(ok_output("done"))],
+            vec![
+                vec![],
+                vec![
+                    comp_obs_started("sess-abc", "threshold"),
+                    comp_obs_ended(
+                        "sess-abc",
+                        "threshold",
+                        Some(90000),
+                        None,
+                        false,
+                    ),
+                ],
+            ],
+        );
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(
@@ -1980,7 +2215,7 @@ mod tests {
         );
 
         let events = log.events();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3, "{events:?}");
         match &events[0] {
             LoomEvent::SessionResumed { attempt, .. } => {
                 assert_eq!(*attempt, 1);
@@ -1988,6 +2223,14 @@ mod tests {
             other => panic!("Expected SessionResumed, got {other:?}"),
         }
         match &events[1] {
+            LoomEvent::CompactionStarted { session_id, reason, attempt, .. } => {
+                assert_eq!(session_id, "sess-abc");
+                assert_eq!(reason, "threshold");
+                assert_eq!(*attempt, 2);
+            }
+            other => panic!("Expected CompactionStarted, got {other:?}"),
+        }
+        match &events[2] {
             LoomEvent::ContextCompacted { reason, attempt, .. } => {
                 assert_eq!(reason, "threshold");
                 assert_eq!(
@@ -1999,22 +2242,26 @@ mod tests {
         }
     }
 
-    /// Plan 079: a **failed** compaction (`error: Some(…)`) is not logged —
-    /// only successful compactions mark context pressure. The non-empty
-    /// stdout means the turn still produced a final response.
+    /// Plan 088 (D5): a **failed** compaction end (`error: Some(…)`) is
+    /// logged as `ContextCompactionFailed` — the failed end is visible
+    /// instead of silent. The non-empty stdout means the turn still
+    /// produced a final response.
     #[test]
-    fn failed_compaction_not_logged() {
-        let runner = TestAgentRunner::new(vec![Ok(ok_output_with_compactions(
-            "done",
-            "sess-abc",
-            vec![comp_rec(
-                "overflow",
-                None,
-                false,
-                Some("Context overflow recovery failed after one compact-and-retry attempt."),
-            )],
-        ))]);
-        let log = TestLoomLog::default();
+    fn failed_compaction_logged_as_failed_event() {
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Ok(ok_output("done"))],
+            vec![vec![
+                comp_obs_started("sess-abc", "overflow"),
+                comp_obs_ended(
+                    "sess-abc",
+                    "overflow",
+                    None,
+                    Some("Context overflow recovery failed after one compact-and-retry attempt."),
+                    false,
+                ),
+            ]],
+        );
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
         assert!(
@@ -2023,11 +2270,126 @@ mod tests {
             result.err()
         );
 
+        let events = log.events();
+        assert_eq!(events.len(), 2, "{events:?}");
+        match &events[0] {
+            LoomEvent::CompactionStarted { .. } => {}
+            other => panic!("Expected CompactionStarted, got {other:?}"),
+        }
+        match &events[1] {
+            LoomEvent::ContextCompactionFailed {
+                session_id,
+                reason,
+                error,
+                aborted,
+                attempt,
+                ..
+            } => {
+                assert_eq!(session_id, "sess-abc");
+                assert_eq!(reason, "overflow");
+                assert!(
+                    error
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("recovery failed")
+                );
+                assert!(!aborted);
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("Expected ContextCompactionFailed, got {other:?}"),
+        }
         assert!(
-            log.events().is_empty(),
-            "failed compactions are not logged, got: {:?}",
-            log.events()
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::ContextCompacted { .. })),
+            "a failed end is not a success: {events:?}"
         );
+    }
+
+    /// Plan 088 (D5): an **aborted** compaction end (no error,
+    /// `aborted: true`) routes to `ContextCompactionFailed` — a
+    /// cancelled span is not a success.
+    #[test]
+    fn aborted_compaction_logged_as_failed_event() {
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Ok(ok_output("done"))],
+            vec![vec![
+                comp_obs_started("sess-abc", "manual"),
+                comp_obs_ended("sess-abc", "manual", Some(160000), None, true),
+            ]],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let events = log.events();
+        assert_eq!(events.len(), 2, "{events:?}");
+        match &events[1] {
+            LoomEvent::ContextCompactionFailed {
+                error,
+                aborted,
+                ..
+            } => {
+                assert!(error.is_none(), "abortion carries no error");
+                assert!(*aborted, "aborted flag recorded");
+            }
+            other => panic!("Expected ContextCompactionFailed, got {other:?}"),
+        }
+    }
+
+    /// Plan 088 (phase 0): when the live observer captured a session id,
+    /// a re-entry nudge reuses it. Attempt 1 produces an empty response
+    /// (triggering the final-response re-entry) with a live compaction
+    /// on session `sess-captured`; the retry must re-enter with
+    /// `--session-id sess-captured`.
+    #[test]
+    fn compaction_then_reentry_uses_captured_session_id() {
+        let runner = TestAgentRunner::new_with_observations(
+            vec![
+                Ok(empty_output_with_sid("sess-captured")),
+                Ok(ok_output_with_sid("final answer", "sess-captured")),
+            ],
+            vec![
+                vec![
+                    comp_obs_started("sess-captured", "auto"),
+                    comp_obs_ended(
+                        "sess-captured",
+                        "auto",
+                        Some(120000),
+                        None,
+                        false,
+                    ),
+                ],
+                vec![],
+            ],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        // The retry re-entered the runner-captured session.
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2, "initial attempt + re-entry");
+        let retry_args = &contexts[1].agent_config.extra_args;
+        assert!(
+            retry_args
+                .windows(2)
+                .any(|w| w == ["--session-id", "sess-captured"]),
+            "re-entry must use the runner-captured session id, got {retry_args:?}"
+        );
+
+        // The live compaction events carry the captured session id.
+        let events = log.events();
+        let started = events.iter().find_map(|e| match e {
+            LoomEvent::CompactionStarted {
+                session_id: sid,
+                ..
+            } => Some(sid.clone()),
+            _ => None,
+        });
+        assert_eq!(started.as_deref(), Some("sess-captured"));
     }
 
     /// Plan 079: a terminal context overflow on the **first attempt** is
@@ -2037,7 +2399,7 @@ mod tests {
     fn terminal_overflow_first_attempt_no_retry() {
         let runner =
             TestAgentRunner::new(vec![Err(err_context_limit("sess-ctx"))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -2068,7 +2430,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Err(err_context_limit("sess-abc")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute(&runner, &log, 120);
 
@@ -2106,11 +2468,11 @@ mod tests {
             "```",
         );
         let runner = TestAgentRunner::new(vec![Ok(ok_output(response))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2138,11 +2500,11 @@ mod tests {
     #[test]
     fn inject_event_request_no_session_id_returns_err() {
         let runner = TestAgentRunner::new(vec![]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2168,11 +2530,11 @@ mod tests {
     #[test]
     fn inject_event_request_runner_error_propagates() {
         let runner = TestAgentRunner::new(vec![Err(err_fatal())]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2207,11 +2569,11 @@ mod tests {
         .to_string();
 
         let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let _result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2255,11 +2617,11 @@ mod tests {
     #[test]
     fn inject_event_request_does_not_resend_profile_prompt() {
         let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let _result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2291,11 +2653,11 @@ mod tests {
     #[test]
     fn inject_event_request_uses_session_id_from_first_invocation() {
         let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let _result = inject_event_request(
             &runner,
-            &log,
+            &*log,
             &make_loom_id(),
             &make_knot_id(),
             &make_strand_path(),
@@ -2354,7 +2716,7 @@ mod tests {
             Err(err_inactivity(Some("sess-inact"))),
             Ok(ok_output("done")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
         assert!(
@@ -2429,7 +2791,7 @@ mod tests {
             Err(err_inactivity(None)),
             Ok(ok_output("done")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
         assert!(
@@ -2463,7 +2825,7 @@ mod tests {
             Err(err_timeout("sess-abc")),
             Ok(ok_output("done")),
         ]);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
         assert!(
@@ -2496,7 +2858,7 @@ mod tests {
             .map(|_| Err(err_inactivity(Some("sess-inact"))))
             .collect();
         let runner = TestAgentRunner::new(responses);
-        let log = TestLoomLog::default();
+        let log = Arc::new(TestLoomLog::default());
 
         let result = execute_no_budget(&runner, &log);
 

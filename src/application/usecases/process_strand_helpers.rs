@@ -341,7 +341,7 @@ pub fn resolve_config_and_build(
     let mut session_id: Option<String> = None;
     let result = session_resume::execute_with_resume(
         &*ps.agent_runner,
-        &*ps.log_port,
+        &ps.log_port,
         loom_id,
         &knot.id,
         strand_path,

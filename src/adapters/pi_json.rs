@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::adapters::live_output::{
-    join_all, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
+    join_all, spawn_reader, spawn_reader_with_lines, spawn_watchdog, KillReason,
+    LiveOutput,
 };
 
 /// Plan 086: spawn a water-mark monitor thread for the pi-json runner.
@@ -118,8 +119,8 @@ fn extract_latest_usage_total(data: &str) -> Option<u64> {
     None
 }
 use crate::application::ports::{
-    AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionRecord,
-    ExecutionContext, PortError, TokenUsage,
+    AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionObservation,
+    CompactionRecord, ExecutionContext, PortError, TokenUsage,
 };
 use crate::domain::entities::StrandPath;
 use crate::domain::value_objects::AgentConfig;
@@ -271,6 +272,38 @@ impl PiJsonAgentRunner {
         full_prompt
     }
 
+    /// Parse the fields of a `compaction_end` JSON event into a
+    /// [`CompactionRecord`]. Shared by the post-hoc stream parse
+    /// ([`Self::parse_json_line`]) and the live observer
+    /// ([`observe_compaction_line`]).
+    fn parse_compaction_end(value: &serde_json::Value) -> CompactionRecord {
+        CompactionRecord {
+            reason: value
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            tokens_before: value
+                .get("result")
+                .and_then(|r| r.get("tokensBefore"))
+                .and_then(|t| t.as_u64()),
+            will_retry: value
+                .get("willRetry")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+            error: value
+                .get("errorMessage")
+                .and_then(|e| e.as_str())
+                .map(String::from),
+            // Plan 088: pi's `aborted` flag (compaction started but
+            // aborted rather than succeeding / failing with an error).
+            aborted: value
+                .get("aborted")
+                .and_then(|a| a.as_bool())
+                .unwrap_or(false),
+        }
+    }
+
     /// Parse a single JSON-L line and update tracked state.
     ///
     /// Returns `true` if the line was valid JSON, `false` otherwise.
@@ -281,6 +314,7 @@ impl PiJsonAgentRunner {
         response_text: &mut String,
         token_usage: &mut Option<TokenUsage>,
         compactions: &mut Vec<CompactionRecord>,
+        compaction_starts: &mut Vec<String>,
         error_message: &mut Option<String>,
     ) -> bool {
         let value: serde_json::Value = match serde_json::from_str(line) {
@@ -301,30 +335,25 @@ impl PiJsonAgentRunner {
                 // stopReason filtering. message_end cannot distinguish
                 // intermediate tool-use messages from final responses.
             }
-            Some("compaction_end") => {
-                // Plan 079: record the compaction for run-activity visibility
-                // and terminal-overflow detection. `result` is absent on
-                // failed compactions (pi omits undefined keys in JSON),
-                // so `tokens_before` is `None` there.
-                compactions.push(CompactionRecord {
-                    reason: value
+            Some("compaction_start") => {
+                // Plan 088: record the start reason (stream order) —
+                // the live observer emits the `CompactionStarted` event;
+                // this metadata record stays for tests and post-hoc
+                // debugging.
+                compaction_starts.push(
+                    value
                         .get("reason")
                         .and_then(|r| r.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    tokens_before: value
-                        .get("result")
-                        .and_then(|r| r.get("tokensBefore"))
-                        .and_then(|t| t.as_u64()),
-                    will_retry: value
-                        .get("willRetry")
-                        .and_then(|b| b.as_bool())
-                        .unwrap_or(false),
-                    error: value
-                        .get("errorMessage")
-                        .and_then(|e| e.as_str())
-                        .map(String::from),
-                });
+                );
+            }
+            Some("compaction_end") => {
+                // Plan 079: record the compaction for run-activity
+                // visibility and terminal-overflow detection. `result`
+                // is absent on failed compactions (pi omits undefined
+                // keys in JSON), so `tokens_before` is `None` there.
+                compactions.push(Self::parse_compaction_end(&value));
             }
             Some("agent_end") => {
                 // Extract token usage from usage object
@@ -415,8 +444,9 @@ impl PiJsonAgentRunner {
     }
 
     /// Parse JSON-L from raw stdout, extracting session_id, response,
-    /// token usage, compaction events, and the failed turn's provider
-    /// error message. Returns `true` if all lines parsed as valid JSON.
+    /// token usage, compaction events, compaction start reasons, and the
+    /// failed turn's provider error message. Returns `true` if all lines
+    /// parsed as valid JSON.
     pub(crate) fn parse_stdout(
         raw_stdout: &str,
     ) -> (
@@ -425,12 +455,14 @@ impl PiJsonAgentRunner {
         String,
         Option<TokenUsage>,
         Vec<CompactionRecord>,
+        Vec<String>,
         Option<String>,
     ) {
         let mut session_id: Option<String> = None;
         let mut response_text = String::new();
         let mut token_usage: Option<TokenUsage> = None;
         let mut compactions: Vec<CompactionRecord> = Vec::new();
+        let mut compaction_starts: Vec<String> = Vec::new();
         let mut error_message: Option<String> = None;
         let mut had_parse_error = false;
 
@@ -444,6 +476,7 @@ impl PiJsonAgentRunner {
                 &mut response_text,
                 &mut token_usage,
                 &mut compactions,
+                &mut compaction_starts,
                 &mut error_message,
             ) {
                 had_parse_error = true;
@@ -456,6 +489,7 @@ impl PiJsonAgentRunner {
             response_text,
             token_usage,
             compactions,
+            compaction_starts,
             error_message,
         )
     }
@@ -631,10 +665,17 @@ impl PiJsonAgentRunner {
             .or_else(|| Self::read_pi_compaction_enabled(global_settings))
             .unwrap_or(true)
     }
-}
 
-impl AgentRunner for PiJsonAgentRunner {
-    fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+    /// The `execute` body with an optional live compaction observer
+    /// (plan 088). `execute` delegates here with `None`;
+    /// `execute_with_config_and_observer` passes the usecase's observer
+    /// so compaction span boundaries are reported as the stream
+    /// produces them.
+    fn execute_inner(
+        &self,
+        ctx: ExecutionContext,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
         // Build CLI args from agent_config, then append --mode json.
         let base_args = ctx.agent_config.build_cli_args();
         let cli_args = Self::build_json_cli_args(&base_args);
@@ -692,15 +733,28 @@ impl AgentRunner for PiJsonAgentRunner {
         // suppresses its kill + warning.
         let cancelled = Arc::new(AtomicBool::new(false));
 
+        // Plan 088: shared session-id state for live compaction
+        // observation (seeded from the stream's `session` header line).
+        let observe_state = Arc::new(CompactionObserveState::new());
+
         // Reader threads drain stdout/stderr while the child runs —
         // any byte resets the inactivity timer (byte-level stall
-        // detection, plan 081).
+        // detection, plan 081). The stdout reader also invokes the
+        // compaction observer per complete line (plan 088) — lines are
+        // still buffered for the final parse as today.
         let stdout_reader =
-            spawn_reader(
+            spawn_reader_with_lines(
                 "json-stdout",
                 child.stdout.take().expect("stdout was piped"),
                 &live.stdout,
                 &live.last_activity,
+                {
+                    let observer = observer.clone();
+                    let state = Arc::clone(&observe_state);
+                    move |line: &str| {
+                        observe_compaction_line(line, &state, &observer);
+                    }
+                },
             )
             .map_err(|e| {
                 PortError::AgentExecutionFailed {
@@ -823,7 +877,7 @@ impl AgentRunner for PiJsonAgentRunner {
             // Plan 086: water-mark stop — the monitor SIGINT'd the
             // process when usage.total crossed ctx-wrap-up-limit.
             if water_mark_fired.load(std::sync::atomic::Ordering::Relaxed) {
-                let (_, session_id, _, _, _, _) =
+                let (_, session_id, _, _, _, _, _) =
                     Self::parse_stdout(&raw_stdout);
                 return Err(PortError::WaterMarkStop {
                     session_id,
@@ -839,6 +893,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 _response,
                 _token_usage,
                 _compactions,
+                _compaction_starts,
                 _error_message,
             ) = Self::parse_stdout(&raw_stdout);
             match reason {
@@ -884,6 +939,7 @@ impl AgentRunner for PiJsonAgentRunner {
                 _response,
                 _token_usage,
                 _compactions,
+                _compaction_starts,
                 _error_message,
             ) = Self::parse_stdout(&raw_stdout);
             return Err(PortError::AgentExecutionFailed {
@@ -911,8 +967,15 @@ impl AgentRunner for PiJsonAgentRunner {
             });
         }
 
-        let (had_parse_error, session_id, response_text, token_usage, compactions, error_message) =
-            Self::parse_stdout(&raw_stdout);
+        let (
+            had_parse_error,
+            session_id,
+            response_text,
+            token_usage,
+            compactions,
+            compaction_starts,
+            error_message,
+        ) = Self::parse_stdout(&raw_stdout);
 
         if had_parse_error {
             // Graceful degradation — treat as plain text.
@@ -970,9 +1033,118 @@ impl AgentRunner for PiJsonAgentRunner {
                 session_id,
                 token_usage,
                 compactions,
-            wrap_up: None,
+                compaction_starts,
+                wrap_up: None,
             }),
         })
+    }
+
+}
+// ── Live compaction observation (plan 088) ────────────────────────────────────
+
+/// Shared session-id state for live compaction observation (plan 088).
+///
+/// In JSON mode the reader callback updates it from the stream's
+/// `session` header line (compaction lines always follow it); in RPC
+/// mode the driver seeds it from the `get_state` response (the RPC
+/// stream has no `session` header event).
+pub(crate) struct CompactionObserveState {
+    session_id: Mutex<Option<String>>,
+}
+
+impl CompactionObserveState {
+    pub(crate) fn new() -> Self {
+        Self {
+            session_id: Mutex::new(None),
+        }
+    }
+
+    /// Record the known session id (set or replace).
+    pub(crate) fn set_session_id(&self, id: Option<String>) {
+        *self
+            .session_id
+            .lock()
+            .expect("compaction observe-state mutex poisoned") = id;
+    }
+
+    pub(crate) fn session_id(&self) -> Option<String> {
+        self.session_id
+            .lock()
+            .expect("compaction observe-state mutex poisoned")
+            .clone()
+    }
+}
+
+impl Default for CompactionObserveState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Observe one complete stream line for compaction events (plan 088),
+/// invoking the observer with the corresponding observation.
+///
+/// Cheap prefix filter first — most stream lines are not compaction
+/// events — then parse the match. Observation is **best-effort**:
+/// malformed lines are ignored, a `None` observer is a no-op, and a
+/// callback failure is the observer's own concern (the loom-log append
+/// and system-event emission are best-effort no-ops).
+///
+/// The `session` header line is tracked so compaction observations
+/// carry the session id captured so far; compaction lines always follow
+/// the header in JSON mode, and in RPC mode the driver seeds the state
+/// from `get_state`.
+pub(crate) fn observe_compaction_line(
+    line: &str,
+    state: &CompactionObserveState,
+    observer: &Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+    // Cheap prefix filter — reject the overwhelming majority of lines
+    // without parsing. (`"session"` with the closing quote does not
+    // match `"sessionId"`; `compaction_` covers both span events.)
+    if !line.contains("compaction_") && !line.contains("\"session\"") {
+        return;
+    }
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return, // malformed line — observation is best-effort
+    };
+    match value.get("type").and_then(|t| t.as_str()) {
+        Some("session") => {
+            if let Some(id) = value.get("id").and_then(|i| i.as_str()) {
+                state.set_session_id(Some(id.to_string()));
+            }
+        }
+        Some("compaction_start") => {
+            let reason = value
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let session_id = state.session_id();
+            observer(&CompactionObservation::Started {
+                session_id,
+                reason,
+            });
+        }
+        Some("compaction_end") => {
+            let record = PiJsonAgentRunner::parse_compaction_end(&value);
+            let session_id = state.session_id();
+            observer(&CompactionObservation::Ended {
+                session_id,
+                record,
+            });
+        }
+        _ => {}
+    }
+}
+
+impl AgentRunner for PiJsonAgentRunner {
+    fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+        self.execute_inner(ctx, None)
     }
 
     fn execute_with_config(
@@ -1019,6 +1191,51 @@ impl AgentRunner for PiJsonAgentRunner {
             timeout,
         };
         self.execute(ctx)
+    }
+
+    /// Plan 088: the observer variant — same CLI-arg injection as
+    /// [`Self::execute_with_config`], but the compaction observer runs
+    /// live on the stream reader thread.
+    fn execute_with_config_and_observer(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
+        let mut config = agent_config.clone();
+
+        let strand_filename = strand_path.0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot_name.as_deref().unwrap_or("unknown"),
+            event_type,
+            strand_filename,
+        );
+        config.extra_args.push("--name".to_string());
+        config.extra_args.push(session_title);
+        if let Some(ref file_path) = strand_file_ref {
+            config.extra_args.push(format!("@{}", file_path.0.display()));
+        }
+
+        let ctx = ExecutionContext {
+            agent_config: config,
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        self.execute_inner(ctx, observer)
     }
 
     fn runner_type(&self) -> &str {
@@ -1166,6 +1383,7 @@ sleep 300
         String,
         Option<TokenUsage>,
         Vec<CompactionRecord>,
+        Vec<String>,
         Option<String>,
     ) {
         PiJsonAgentRunner::parse_stdout(raw)
@@ -1176,7 +1394,7 @@ sleep 300
     fn test_json_runner_parses_session_id() {
         let raw = r#"{"type":"session","id":"abc-123"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"hello"}]}]}"#;
-        let (had_error, session_id, response_text, _usage, _compactions, _error_message) =
+        let (had_error, session_id, response_text, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(!had_error, "should parse cleanly");
         assert_eq!(session_id.as_deref(), Some("abc-123"));
@@ -1188,7 +1406,7 @@ sleep 300
     fn test_json_runner_parses_token_usage() {
         let raw = r#"{"type":"session","id":"sess-1"}
 {"type":"agent_end","usage":{"input":100,"output":50,"cache_read":10,"cache_write":5,"total":165},"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, usage, _compactions, _error_message) =
+        let (_had_error, _session_id, _response, usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         let usage = usage.unwrap();
         assert_eq!(usage.input, 100);
@@ -1203,7 +1421,7 @@ sleep 300
     fn test_json_runner_parses_response_text() {
         let raw = r#"{"type":"session","id":"sess-x"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"the response text"}]}]}"#;
-        let (_had_error, _session_id, response_text, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response_text, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(response_text.contains("the response text"));
     }
@@ -1212,7 +1430,7 @@ sleep 300
     #[test]
     fn test_json_runner_timeout_captures_session_id() {
         let raw = r#"{"type":"session","id":"timeout-sess"}"#;
-        let (_had_error, session_id, _response, _usage, _compactions, _error_message) =
+        let (_had_error, session_id, _response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("timeout-sess"));
     }
@@ -1221,7 +1439,7 @@ sleep 300
     #[test]
     fn test_json_runner_nonzero_exit_captures_session_id() {
         let raw = r#"{"type":"session","id":"fail-sess"}"#;
-        let (_had_error, session_id, _response, _usage, _compactions, _error_message) =
+        let (_had_error, session_id, _response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(session_id.as_deref(), Some("fail-sess"));
     }
@@ -1253,7 +1471,7 @@ sleep 300
     #[test]
     fn test_json_runner_malformed_json_fallback() {
         let raw = "not json at all\ngarbled output\n";
-        let (had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(had_error, "should have parse errors");
         // parse_stdout doesn't accumulate raw lines — response_text
@@ -1266,7 +1484,7 @@ sleep 300
     #[test]
     fn test_json_runner_empty_output() {
         let raw = "";
-        let (had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(!had_error);
         assert!(response.is_empty());
@@ -1289,7 +1507,7 @@ sleep 300
     fn test_json_runner_parses_message_end_response() {
         let raw = r#"{"type":"session","id":"msg-sess"}
 {"type":"message_end","role":"assistant","content":"response from message_end"}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         // message_end no longer extracts text — response should be empty
         assert!(response.is_empty());
@@ -1301,7 +1519,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_tool_use_messages() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Let me check the file..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"The file contains 42 lines."}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("42 lines"), "should contain final response");
         assert!(
@@ -1316,7 +1534,7 @@ sleep 300
     #[test]
     fn test_json_runner_includes_length_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"truncated response"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("truncated response"));
     }
@@ -1326,7 +1544,7 @@ sleep 300
     #[test]
     fn test_json_runner_excludes_error_stop_reason() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"error output"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(response.is_empty());
     }
@@ -1338,7 +1556,7 @@ sleep 300
         let raw = r#"{"type":"session","id":"sess-compact"}
 {"type":"compaction_end","reason":"overflow","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{}},"aborted":false,"willRetry":true}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}]}"#;
-        let (_had_error, _session_id, _response, _usage, compactions, _error_message) =
+        let (_had_error, _session_id, _response, _usage, compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
@@ -1356,7 +1574,7 @@ sleep 300
         let raw = r#"{"type":"session","id":"sess-compact-fail"}
 {"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt."}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"context overflow"}]}]}"#;
-        let (_had_error, _session_id, response, _usage, compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert_eq!(compactions.len(), 1, "one compaction recorded");
         assert_eq!(compactions[0].reason, "overflow");
@@ -1377,18 +1595,23 @@ sleep 300
         );
     }
 
-    /// Plan 079: `compaction_start` carries no data of interest — the end
-    /// event carries everything — so it produces no record.
+    /// Plan 088: `compaction_start` no longer produces a record (the end
+    /// event carries the record) but its `reason` is captured in
+    /// `compaction_starts` so the span boundary is observable.
     #[test]
-    fn test_json_runner_ignores_compaction_start() {
+    fn test_json_runner_records_compaction_start_reason() {
         let raw = r#"{"type":"session","id":"sess-compact-start"}
 {"type":"compaction_start","reason":"overflow"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, _usage, compactions, _error_message) =
+        let (_had_error, _session_id, _response, _usage, compactions, compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(
             compactions.is_empty(),
             "compaction_start must not produce a record"
+        );
+        assert_eq!(
+            compaction_starts, vec!["overflow".to_string()],
+            "the start reason is captured"
         );
     }
 
@@ -1397,7 +1620,7 @@ sleep 300
     #[test]
     fn test_json_runner_multiple_tool_use_then_stop() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Checking config..."}]},{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"Reading database..."}]},{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Config and database are in sync."}]}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, _error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, _error_message) =
             run_parse_stdout(raw);
         assert!(response.contains("in sync"), "should contain final response");
         assert!(
@@ -1497,7 +1720,7 @@ exit 0
     fn test_json_runner_parses_error_message() {
         let raw = r#"{"type":"session","id":"sess-err"}
 {"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400 request (200287 tokens) exceeds the available context size (200192 tokens), try increasing it"}]}"#;
-        let (_had_error, _session_id, response, _usage, _compactions, error_message) =
+        let (_had_error, _session_id, response, _usage, _compactions, _compaction_starts, error_message) =
             run_parse_stdout(raw);
         assert!(
             response.is_empty(),
@@ -1517,7 +1740,7 @@ exit 0
     #[test]
     fn test_json_runner_no_error_message_on_success() {
         let raw = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}"#;
-        let (_had_error, _session_id, _response, _usage, _compactions, error_message) =
+        let (_had_error, _session_id, _response, _usage, _compactions, _compaction_starts, error_message) =
             run_parse_stdout(raw);
         assert!(error_message.is_none(), "no errorMessage on a clean turn: {error_message:?}");
     }

@@ -88,6 +88,7 @@ fn ok_output_with_sid(stdout: &str, sid: &str) -> AgentOutput {
             session_id: Some(sid.to_string()),
             token_usage: None,
             compactions: vec![],
+            compaction_starts: vec![],
         wrap_up: None,
         }),
     }

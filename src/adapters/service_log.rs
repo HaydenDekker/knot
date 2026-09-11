@@ -175,6 +175,21 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             knot_id.0,
             strand_path.0.display()
         ),
+        LoomEvent::CompactionStarted {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            reason,
+            attempt,
+            ..
+        } => format!(
+            "CompactionStarted loom={} knot={} strand={} session={} reason={reason} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
         LoomEvent::ContextCompacted {
             loom_id,
             knot_id,
@@ -196,6 +211,30 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
                 line.push_str(&format!(" tokens-before={tokens}"));
             }
             line.push_str(&format!(" attempt={attempt}"));
+            line
+        }
+        LoomEvent::ContextCompactionFailed {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            reason,
+            error,
+            aborted,
+            attempt,
+            ..
+        } => {
+            let mut line = format!(
+                "ContextCompactionFailed loom={} knot={} strand={} session={} reason={reason}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display(),
+                session_id
+            );
+            if let Some(err) = error {
+                line.push_str(&format!(" error={err}"));
+            }
+            line.push_str(&format!(" aborted={aborted} attempt={attempt}"));
             line
         }
         LoomEvent::ContextWrapUpSteered {

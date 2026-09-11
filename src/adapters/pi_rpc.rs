@@ -51,10 +51,12 @@ use std::time::{Duration, Instant};
 use crate::adapters::live_output::{
     spawn_line_reader, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
 };
-use crate::adapters::pi_json::PiJsonAgentRunner;
+use crate::adapters::pi_json::{
+    observe_compaction_line, CompactionObserveState, PiJsonAgentRunner,
+};
 use crate::application::ports::{
-    AgentInvocationMetadata, AgentOutput, AgentRunner, ExecutionContext,
-    PortError, TokenUsage, WrapUpRecord,
+    AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionObservation,
+    ExecutionContext, PortError, TokenUsage, WrapUpRecord,
 };
 use crate::domain::entities::StrandPath;
 use crate::domain::value_objects::AgentConfig;
@@ -192,25 +194,18 @@ impl PiRpcAgentRunner {
         args.push("rpc".to_string());
         args
     }
-}
 
-/// Write one JSON line to the RPC stdin writer and flush it.
-///
-/// Returns `false` on a write/flush error (broken pipe — the child is
-/// dying); callers treat a failed send as a no-op rather than an error,
-/// because once the process is terminating there is nothing left to do.
-fn send_rpc_line(stdin: &mut Option<BufWriter<ChildStdin>>, line: &str) -> bool {
-    match stdin.as_mut() {
-        Some(w) => match writeln!(w, "{line}") {
-            Ok(()) => w.flush().is_ok(),
-            Err(_) => false,
-        },
-        None => false,
-    }
-}
-
-impl AgentRunner for PiRpcAgentRunner {
-    fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+    /// The `execute` body with an optional live compaction observer
+    /// (plan 088). `execute` delegates here with `None`;
+    /// `execute_with_config_and_observer` passes the usecase's observer.
+    /// The driver's line loop feeds the shared observation helper — the
+    /// session id is seeded from the `get_state` response (the RPC
+    /// stream has no `session` header event).
+    fn execute_inner(
+        &self,
+        ctx: ExecutionContext,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
         let cli_args = Self::build_rpc_cli_args(&ctx.agent_config);
         let cli_path = self.cli_path.clone();
 
@@ -316,12 +311,17 @@ impl AgentRunner for PiRpcAgentRunner {
             PiJsonAgentRunner::build_prompt_with_context(&ctx, &profile_prompt);
         let shared = Arc::new(Mutex::new(RpcShared::default()));
         let agent_end_seen = Arc::new(AtomicBool::new(false));
+        // Plan 088: shared session-id state for live compaction
+        // observation (seeded from the `get_state` response).
+        let observe_state = Arc::new(CompactionObserveState::new());
 
         let driver: JoinHandle<()> = thread::Builder::new()
             .name("rpc-driver".to_string())
             .spawn({
                 let shared = Arc::clone(&shared);
                 let agent_end_seen = Arc::clone(&agent_end_seen);
+                let observer = observer.clone();
+                let observe_state = Arc::clone(&observe_state);
                 move || {
                     run_rpc_driver(
                         stdin,
@@ -330,6 +330,8 @@ impl AgentRunner for PiRpcAgentRunner {
                         limit,
                         shared,
                         agent_end_seen,
+                        observer,
+                        observe_state,
                     );
                 }
             })
@@ -420,6 +422,7 @@ impl AgentRunner for PiRpcAgentRunner {
             response_text,
             parsed_usage,
             compactions,
+            compaction_starts,
             error_message,
         ) = PiJsonAgentRunner::parse_stdout(&raw_stdout);
         let (driver_session, driver_usage, driver_wrap_up) = {
@@ -482,6 +485,7 @@ impl AgentRunner for PiRpcAgentRunner {
                     session_id,
                     token_usage,
                     compactions,
+                    compaction_starts,
                     wrap_up: driver_wrap_up,
                 }),
             });
@@ -540,6 +544,28 @@ impl AgentRunner for PiRpcAgentRunner {
                 }
             }
         }
+    }
+
+}
+
+/// Write one JSON line to the RPC stdin writer and flush it.
+///
+/// Returns `false` on a write/flush error (broken pipe — the child is
+/// dying); callers treat a failed send as a no-op rather than an error,
+/// because once the process is terminating there is nothing left to do.
+fn send_rpc_line(stdin: &mut Option<BufWriter<ChildStdin>>, line: &str) -> bool {
+    match stdin.as_mut() {
+        Some(w) => match writeln!(w, "{line}") {
+            Ok(()) => w.flush().is_ok(),
+            Err(_) => false,
+        },
+        None => false,
+    }
+}
+
+impl AgentRunner for PiRpcAgentRunner {
+    fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
+        self.execute_inner(ctx, None)
     }
 
     fn execute_with_config(
@@ -603,6 +629,63 @@ impl AgentRunner for PiRpcAgentRunner {
         self.execute(ctx)
     }
 
+    /// Plan 088: the observer variant — same CLI-arg and prompt
+    /// injection as [`Self::execute_with_config`], but the compaction
+    /// observer runs live on the driver's line stream.
+    fn execute_with_config_and_observer(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
+        let mut config = agent_config.clone();
+        let strand_filename = strand_path
+            .0
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_title = format!(
+            "{} triggered by {} on {}",
+            knot_name.as_deref().unwrap_or("unknown"),
+            event_type,
+            strand_filename
+        );
+        config.extra_args.push("--name".to_string());
+        config.extra_args.push(session_title);
+        let mut prompt = prompt;
+        if let Some(ref file_path) = strand_file_ref {
+            match std::fs::read_to_string(&file_path.0) {
+                Ok(content) => {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&content);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "WARNING: pi-rpc could not read strand file {} for prompt injection: {err}",
+                        file_path.0.display()
+                    );
+                }
+            }
+        }
+
+        let ctx = ExecutionContext {
+            agent_config: config,
+            prompt,
+            profile_prompt,
+            strand_path,
+            event_type,
+            knot_name,
+            timeout,
+        };
+        self.execute_inner(ctx, observer)
+    }
+
     fn runner_type(&self) -> &str {
         "pi-rpc"
     }
@@ -624,6 +707,8 @@ fn run_rpc_driver(
     limit: Option<u64>,
     shared: Arc<Mutex<RpcShared>>,
     agent_end_seen: Arc<AtomicBool>,
+    observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    observe_state: Arc<CompactionObserveState>,
 ) {
     let mut stdin = Some(stdin);
 
@@ -643,6 +728,10 @@ fn run_rpc_driver(
         if line.trim().is_empty() {
             continue;
         }
+        // Plan 088: live compaction observation — the driver owns the
+        // line stream; the helper prefix-filters and no-ops when no
+        // observer is attached.
+        observe_compaction_line(&line, &observe_state, &observer);
         let v: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue, // malformed line — pass through, ignore
@@ -658,6 +747,11 @@ fn run_rpc_driver(
                             v.pointer("/data/sessionId").and_then(|s| s.as_str())
                         {
                             s.session_id = Some(sid.to_string());
+                            // Plan 088: seed the live compaction
+                            // observation state (the RPC stream has no
+                            // `session` header event).
+                            observe_state
+                                .set_session_id(Some(sid.to_string()));
                         }
                         if let Some(en) = v
                             .pointer("/data/autoCompactionEnabled")
@@ -953,5 +1047,165 @@ done
         assert!(meta.wrap_up.is_some());
         let sent = std::fs::read_to_string(&log).unwrap();
         assert_eq!(sent.matches("\"steer\"").count(), 1);
+    }
+
+    /// Plan 088 (D4): the mock's compaction-stream variants. `recovered`
+    /// mirrors pi's overflow recovery that succeeds (a `compaction_start`
+    /// + `compaction_end` span, then a clean `agent_end`); `terminal`
+    /// mirrors recovery that fails (two `compaction_end` records —
+    /// willRetry true, then willRetry false with the error message — and
+    /// an `agent_end` with `stopReason: "error"` and no final text).
+    /// JSON-mode parity: the same streams are what the pi_json overflow
+    /// tests feed the parser.
+    fn rpc_compaction_script(stdin_log: &str, variant: &str) -> String {
+        format!(
+            r#"#!/usr/bin/env bash
+log="{stdin_log}"
+variant="{variant}"
+while IFS= read -r line; do
+  echo "$line" >> "$log"
+  case "$line" in
+    *get_state*)
+      echo '{{"type":"response","command":"get_state","success":true,"data":{{"sessionId":"sess-compact","autoCompactionEnabled":true}}}}'
+      ;;
+    *prompt*)
+      echo '{{"type":"agent_start"}}'
+      echo '{{"type":"turn_start"}}'
+      if [ "$variant" = "recovered" ]; then
+        echo '{{"type":"compaction_start","reason":"auto"}}'
+        echo '{{"type":"compaction_end","reason":"auto","result":{{"summary":"s","firstKeptEntryId":"e","tokensBefore":120000,"details":{{}}}},"aborted":false,"willRetry":true}}'
+        echo '{{"type":"turn_end","turnIndex":0,"message":{{}},"toolResults":[]}}'
+        echo '{{"type":"agent_end","messages":[{{"role":"assistant","stopReason":"stop","content":[{{"type":"text","text":"done after compaction"}}]}}]}}'
+      else
+        echo '{{"type":"compaction_start","reason":"overflow"}}'
+        echo '{{"type":"compaction_end","reason":"overflow","result":{{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{{}}}},"aborted":false,"willRetry":true}}'
+        echo '{{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt. The session context is still too large."}}'
+        echo '{{"type":"agent_end","messages":[{{"role":"assistant","stopReason":"error","errorMessage":"prompt is too long","content":[{{"type":"text","text":"context overflow"}}]}}]}}'
+      fi
+      ;;
+  esac
+done
+"#
+        )
+    }
+
+    /// Plan 088 (D4): overflow recovery that succeeds over the RPC stream
+    /// is a **success** — the compaction end (reason `auto`, tokens
+    /// before, no error, not aborted) is recorded, and the start reason
+    /// is captured in `compaction_starts`.
+    #[test]
+    fn rpc_overflow_recovered_is_success() {
+        let (path, dir) = mock_script("placeholder");
+        let log = dir.path().join("stdin.log");
+        std::fs::write(
+            &path,
+            &rpc_compaction_script(log.to_str().unwrap(), "recovered"),
+        )
+        .unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let out = runner.execute(ctx("do the thing", None)).unwrap();
+        assert_eq!(out.stdout, "done after compaction");
+        let meta = out.metadata.as_ref().unwrap();
+        assert_eq!(meta.session_id.as_deref(), Some("sess-compact"));
+        assert_eq!(meta.compactions.len(), 1, "one recovered compaction");
+        let rec = &meta.compactions[0];
+        assert_eq!(rec.reason, "auto");
+        assert_eq!(rec.tokens_before, Some(120_000));
+        assert!(rec.error.is_none());
+        assert!(!rec.aborted);
+        assert_eq!(meta.compaction_starts, vec!["auto".to_string()]);
+    }
+
+    /// Plan 088 (D4): a terminal overflow over the RPC stream (recovery
+    /// ran and failed — `willRetry: false` with the error message, no
+    /// final response text) is classified as `ContextLimitReached`
+    /// carrying the session ID — JSON-mode parity (pi_json
+    /// `test_json_runner_terminal_overflow_returns_context_limit_reached`).
+    #[test]
+    fn rpc_terminal_overflow_returns_context_limit_reached() {
+        let (path, dir) = mock_script("placeholder");
+        let log = dir.path().join("stdin.log");
+        std::fs::write(
+            &path,
+            &rpc_compaction_script(log.to_str().unwrap(), "terminal"),
+        )
+        .unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let result = runner.execute(ctx("do the thing", None));
+        let err = result
+            .expect_err("terminal overflow must fail")
+            ;
+        assert!(
+            matches!(err, PortError::ContextLimitReached { .. }),
+            "expected ContextLimitReached, got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-compact"),
+            "the error carries the session id from get_state"
+        );
+        assert!(
+            err.to_string().contains("Context overflow recovery failed"),
+            "the error carries pi's recovery-failure message: {err:?}"
+        );
+    }
+
+    /// Plan 088 (D4 + D5): with the observer attached, the RPC driver
+    /// reports the compaction span live — `Started` (reason `auto`) then
+    /// `Ended` (reason + error) — and both carry the session id seeded
+    /// from the `get_state` response (the RPC stream has no `session`
+    /// header event).
+    #[test]
+    fn rpc_compaction_end_reasons_recorded() {
+        let (path, dir) = mock_script("placeholder");
+        let log = dir.path().join("stdin.log");
+        std::fs::write(
+            &path,
+            &rpc_compaction_script(log.to_str().unwrap(), "recovered"),
+        )
+        .unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let seen: Arc<Mutex<Vec<CompactionObservation>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let seen_c = Arc::clone(&seen);
+        let observer: Arc<dyn Fn(&CompactionObservation) + Send + Sync> =
+            Arc::new(move |o: &CompactionObservation| {
+                seen_c.lock().unwrap().push(o.clone());
+            });
+
+        let out = runner
+            .execute_inner(ctx("do the thing", None), Some(observer))
+            .unwrap();
+        assert_eq!(out.stdout, "done after compaction");
+
+        let observations = seen.lock().unwrap();
+        assert_eq!(observations.len(), 2, "span start + end: {observations:?}");
+        match &observations[0] {
+            CompactionObservation::Started {
+                session_id,
+                reason,
+            } => {
+                assert_eq!(
+                    session_id.as_deref(),
+                    Some("sess-compact"),
+                    "session id seeded from get_state"
+                );
+                assert_eq!(reason, "auto");
+            }
+            other => panic!("Expected Started, got {other:?}"),
+        }
+        match &observations[1] {
+            CompactionObservation::Ended {
+                session_id,
+                record,
+            } => {
+                assert_eq!(session_id.as_deref(), Some("sess-compact"));
+                assert_eq!(record.reason, "auto");
+                assert!(record.error.is_none(), "recovered span has no error");
+                assert!(!record.aborted);
+            }
+            other => panic!("Expected Ended, got {other:?}"),
+        }
     }
 }

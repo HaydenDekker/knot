@@ -1,5 +1,76 @@
 # Release Notes
 
+## v0.45.0 — 2026-09-11
+
+### Extended — Compaction Assurance: Auto-Compaction Always On, Overflow Recovery Continues the Session (Plan 088)
+
+Knot's context-overflow recovery (plan 079) relied on pi's built-in
+compact-and-continue, which pi settings alone control. Two gaps made that
+reliability invisible and fragile: compaction was off by default in the
+global pi settings (so legacy rigs ran overflow-unrecoverable, with only a
+startup warning), and a compaction's outcome was only visible after the
+fact — and only when it *succeeded*.
+v0.45.0 closes both: Knot now guarantees compaction is on for rig sessions,
+observes each compaction **live** as a span, and carries the session id
+across every re-entry.
+
+- **Startup self-heal (always-on compaction).** At startup, before watcher
+  registration, Knot checks the effective pi compaction setting (project
+  `.pi/settings.json` over global `~/.pi/agent/settings.json`; pi's default
+  is enabled). When it resolves to disabled (the global file explicitly
+  says `false` with no project override — the shape of rigs initialised
+  before `knot-init` seeded the project file), Knot **merges**
+  `{"compaction": {"enabled": true}}` into the project file, preserving
+  every existing key. The project file is Knot's own (knot-init seeds it;
+  the service maintains it); the global file is the operator's and is never
+  written. An **explicit** project-level `compaction.enabled` (true or
+  false) is honoured — an explicit `false` is an operator opt-out and still
+  raises the (now reason-annotated) plan 080 startup warning, as do an
+  unparseable project file (never clobbered) and a write failure.
+- **Live compaction spans.** pi emits `compaction_start` / `compaction_end`
+  events in the agent's JSON stream. Both runners (pi-json, pi-rpc) now
+  observe these **live** (on the stream reader / driver line loop) and the
+  session use case records the span boundaries as new loom events, each
+  emitting a system event like the existing `ContextCompacted` pattern:
+  - `CompactionStarted` — the span began: `session_id`, `reason` (pi's
+    `"threshold"` / `"overflow"` / `"manual"`), `attempt`.
+  - `ContextCompacted` — the span ended **successfully**. Operator-facing
+    context-pressure signal; **shape unchanged** (only the timing moved
+    from after-the-invocation to live).
+  - `ContextCompactionFailed` — the span ended **without success** (pi's
+    `errorMessage`, or an aborted span): `error`, `aborted`, plus the same
+    fields. Plan 079's `error.is_none()` filter — which silently dropped
+    failed compactions — is now a routing decision.
+  - `ContextCompacted` **fires only on success** (the success signal);
+    the failed/aborted ends route to `ContextCompactionFailed`.
+- **Continuity across re-entries.** The session id is carried from the
+  runner: when a final-response nudge (plan 078) or a session-resume retry
+  re-enters a session, it re-enters the **runner-captured** session id from
+  the invocation's stream — so a compaction observed mid-run never loses
+  the session identity for the retry.
+- **RPC parity for overflow recovery.** The `pi-rpc` adapter now records
+  `compaction_end` events (reason, `tokensBefore`, `errorMessage`,
+  `willRetry`, `aborted`) from its stream exactly as `pi-json` does —
+  including the terminal-overflow fail-fast (`ContextLimitReached`) —
+  with mock-CLI tests covering the recovered (success) and terminal
+  (fail-fast) streams.
+- **`compaction_starts` metadata.** Each runner's invocation metadata now
+  carries the list of `compaction_start` reasons observed in the stream
+  (the span begins are visible in the invocation record, not just the
+  ends).
+
+**No migration required.** The loom-log and service-log formats gain two
+new line shapes (`CompactionStarted`, `ContextCompactionFailed`); existing
+`ContextCompacted` lines are unchanged. No rig document or front-matter
+format changed.
+
+**Service-log shapes added:**
+
+```
+[KNOT][EVENT] CompactionStarted loom=<loom> knot=<knot> strand=<path> session=<id> reason=<reason> attempt=<n>
+[KNOT][EVENT] ContextCompactionFailed loom=<loom> knot=<knot> strand=<path> session=<id> reason=<reason> error=<message> aborted=<bool> attempt=<n>
+```
+
 ## v0.44.1 — 2026-09-10
 
 ### Fix — Continuation Background Accumulation Round-Trips Block Scalars (Plan 087, Phase 4)

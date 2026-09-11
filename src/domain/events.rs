@@ -464,12 +464,37 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// A compaction span has begun — pi's `compaction_start` observed
+    /// **live** in the agent's JSON stream (plan 088). One entry per
+    /// `compaction_start`, written when the line is observed (a long
+    /// run that compacts several times shows each span as it happens).
+    /// The matching end is `ContextCompacted` (success) or
+    /// `ContextCompactionFailed` (failure / abort).
+    CompactionStarted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// pi's compaction reason (`"threshold"` / `"overflow"` /
+        /// `"manual"`).
+        reason: String,
+        /// Attempt the span began on
+        /// (1 = first attempt, 2 = first retry, …).
+        attempt: u32,
+        timestamp: String,
+    },
     /// The agent session's context hit (or approached) the model window
-    /// and pi compacted it. One entry per compaction observed in an
-    /// invocation's JSON stream. `reason` is `"overflow"` (the context
+    /// and pi compacted it **successfully** — one entry per successful
+    /// `compaction_end` observed live in the invocation's JSON stream
+    /// (plan 088: written when the `compaction_end` line is observed,
+    /// not after the invocation). `reason` is `"overflow"` (the context
     /// limit was hit — compacted to continue) or `"threshold"` (pi
     /// proactively compacted before the limit). The entry marks context
-    /// pressure so the prompt/strand scope can be narrowed.
+    /// pressure so the prompt/strand scope can be narrowed. This is the
+    /// operator-facing context-pressure signal (troubleshooting:
+    /// check `ContextCompacted` entries; `reason: "overflow"` = limit
+    /// hit) — shape unchanged by plan 088; only the timing moved.
+    /// Failed / aborted compactions are `ContextCompactionFailed`.
     ContextCompacted {
         loom_id: LoomId,
         knot_id: KnotId,
@@ -478,6 +503,32 @@ pub enum LoomEvent {
         reason: String,
         tokens_before: Option<u64>,
         /// Attempt the compaction was observed on
+        /// (1 = first attempt, 2 = first retry, …).
+        attempt: u32,
+        timestamp: String,
+    },
+    /// A compaction span ended **without success** — pi's
+    /// `compaction_end` with an error or an abort, observed live in the
+    /// agent's JSON stream (plan 088). Plan 079's `error.is_none()`
+    /// filter (failed compactions were captured in metadata but not
+    /// logged) is now a routing decision: failed ends surface here with
+    /// pi's `errorMessage`, instead of being silent.
+    ContextCompactionFailed {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// pi's compaction reason (`"threshold"` / `"overflow"` /
+        /// `"manual"`).
+        reason: String,
+        /// pi's `errorMessage` (`None` when the compaction was aborted
+        /// without an error message).
+        error: Option<String>,
+        /// True when pi reported `aborted: true` (started but aborted,
+        /// e.g. user interrupt / inactivity) rather than failed with an
+        /// error message.
+        aborted: bool,
+        /// Attempt the end was observed on
         /// (1 = first attempt, 2 = first retry, …).
         attempt: u32,
         timestamp: String,

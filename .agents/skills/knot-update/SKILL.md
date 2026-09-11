@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.21.0"
+  version: "1.22.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,52 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Compaction Assurance — Always-On Compaction, Live Compaction Spans (Knot 0.45.0, 2026-09-11)
+
+**What changed:** plan 088 — compaction is now guaranteed on for rig
+sessions and observed live as a span.
+
+1. **Startup self-heal of `.pi/settings.json`.** At startup, when the
+   effective pi compaction setting resolves to disabled (the global
+   `~/.pi/agent/settings.json` says `compaction.enabled: false` with no
+   project override — the shape of legacy rigs), Knot **merges**
+   `{"compaction": {"enabled": true}}` into the project
+   `.pi/settings.json`, preserving existing keys. The project file is
+   Knot-owned (knot-init seeds it); the global file is never written. An
+   explicit project-level `compaction.enabled` (true or false) is
+   honoured; an explicit `false` (operator opt-out), an unparseable
+   project file, or a write failure raises the reason-annotated startup
+   warning instead.
+2. **Live compaction spans.** Both runners observe pi's
+   `compaction_start` / `compaction_end` stream events live and record the
+   span boundaries as new loom / service-log events:
+   `CompactionStarted` (span begins: `session`, `reason`, `attempt`),
+   `ContextCompacted` (successful end — shape unchanged, now written live),
+   and `ContextCompactionFailed` (failed/aborted end: `error`,
+   `aborted` — previously silent). `ContextCompacted` fires only on
+   success; failed/aborted ends route to `ContextCompactionFailed`.
+   Each also emits a system event (subscribable like any other log event).
+3. **Continuity.** Session-resume re-entries (final-response nudge, retry)
+   re-enter the runner-captured session id, so a compaction observed
+   mid-run never loses the session identity for the retry.
+4. **RPC parity.** `pi-rpc` records `compaction_end` events (reason,
+   `tokensBefore`, `errorMessage`, `willRetry`, `aborted`) and the
+   terminal-overflow fail-fast, exactly as `pi-json`.
+
+**Affected documents:** **none** — no rig document or front-matter format
+changed. `.pi/settings.json` is Knot-owned (the service may now merge one
+key into it at startup); the global pi settings are never touched. No
+migration required.
+
+**New service-log shapes** (observability only):
+
+```
+[KNOT][EVENT] CompactionStarted loom=<loom> knot=<knot> strand=<path> session=<id> reason=<reason> attempt=<n>
+[KNOT][EVENT] ContextCompactionFailed loom=<loom> knot=<knot> strand=<path> session=<id> reason=<reason> error=<message> aborted=<bool> attempt=<n>
+```
 
 ---
 

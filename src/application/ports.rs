@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::domain::entities::{
@@ -372,6 +373,44 @@ pub struct CompactionRecord {
     pub will_retry: bool,
     /// pi's error message when compaction failed (`errorMessage`).
     pub error: Option<String>,
+    /// pi's `aborted` flag on `compaction_end` (plan 088): the
+    /// compaction was started but aborted (e.g. user interrupt /
+    /// inactivity) rather than succeeding or failing with an error
+    /// message. Serde-defaulted so pre-088 records deserialize.
+    #[serde(default)]
+    pub aborted: bool,
+}
+
+/// One compaction span boundary observed **live** in the agent's JSON
+/// stream (plan 088) — emitted as the stream produces it, not after the
+/// invocation.
+///
+/// Multiple spans per session are the normal case: each
+/// `compaction_start`/`compaction_end` pair fires its own observation in
+/// stream order (threshold compactions repeat as the context refills,
+/// and overflow compact-and-retry fires per user message). There is no
+/// pairing assumption between starts and ends; the `session_id` is
+/// `None` when it has not yet been captured from the stream (JSON mode:
+/// the `session` header line; RPC mode: the `get_state` response).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactionObservation {
+    /// A `compaction_start` event — the span begins.
+    Started {
+        /// Session id captured so far from the stream, if any.
+        session_id: Option<String>,
+        /// pi's compaction reason (`"threshold"` / `"overflow"` /
+        /// `"manual"`).
+        reason: String,
+    },
+    /// A `compaction_end` event — the span ends. Success, failure, or
+    /// abort is discriminated by the record's `error` / `aborted`
+    /// fields.
+    Ended {
+        /// Session id captured so far from the stream, if any.
+        session_id: Option<String>,
+        /// The parsed `compaction_end` record.
+        record: CompactionRecord,
+    },
 }
 
 /// One context wrap-up steer observed in an invocation (plan 084).
@@ -404,6 +443,14 @@ pub struct AgentInvocationMetadata {
     /// the adapter does not report them (e.g. the stdio adapter).
     #[serde(default)]
     pub compactions: Vec<CompactionRecord>,
+    /// Compaction start reasons observed in the agent's JSON stream
+    /// (plan 088) — one per `compaction_start`, in stream order.
+    /// Still captured by the shared post-hoc parse (useful for tests
+    /// and debugging); the live source of the compaction events is the
+    /// observer ([`AgentRunner::execute_with_config_and_observer`]).
+    /// Serde-defaulted so pre-088 metadata deserializes.
+    #[serde(default)]
+    pub compaction_starts: Vec<String>,
     /// The context wrap-up steer observed in this invocation (plan 084).
     ///
     /// `None` when the `pi-rpc` runner did not steer (no limit set, the
@@ -589,6 +636,48 @@ pub trait AgentRunner: Send + Sync {
     /// Used by composition tests to verify the correct adapter is wired.
     fn runner_type(&self) -> &str {
         "unknown"
+    }
+
+    /// Execute the agent with a **live compaction observer** (plan 088).
+    ///
+    /// The observer is invoked, in stream order, for each
+    /// `compaction_start` and `compaction_end` event **as the runner's
+    /// stream reader observes it** — live, not after the invocation:
+    /// a long run that compacts several times reports each span the
+    /// moment it happens. The observer runs on the runner's reader /
+    /// driver thread, so it must be cheap, non-blocking-with-respect-to
+    /// the main thread, and `Send + Sync` (the pi-json loom-log append
+    /// + system-event emission satisfies both — best-effort, no locks
+    /// held across the append).
+    ///
+    /// `None` → no observation (the common case: mock runners and
+    /// adapters without a JSON stream). Default implementation ignores
+    /// the observer and delegates to [`Self::execute_with_config`] —
+    /// mock runners override this to fire the observer from their mock
+    /// output's compaction records, keeping usecase-level test parity.
+    fn execute_with_config_and_observer(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<Duration>,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
+        let _ = observer; // ignored by the default implementation
+        self.execute_with_config(
+            agent_config,
+            strand_path,
+            strand_file_ref,
+            prompt,
+            profile_prompt,
+            event_type,
+            knot_name,
+            timeout,
+        )
     }
 }
 
@@ -1632,6 +1721,7 @@ mod tests {
                 total: 165,
             }),
             compactions: vec![],
+            compaction_starts: vec![],
             wrap_up: None,
         };
         let output = AgentOutput {
@@ -1658,6 +1748,7 @@ mod tests {
             session_id: Some("sess-1".to_string()),
             token_usage: None,
             compactions: vec![],
+            compaction_starts: vec![],
             wrap_up: Some(WrapUpRecord {
                 context_tokens: 150_000,
                 limit: 140_000,
@@ -1676,6 +1767,7 @@ mod tests {
             session_id: Some("sess-1".to_string()),
             token_usage: None,
             compactions: vec![],
+            compaction_starts: vec![],
             wrap_up: None,
         };
         let json = serde_json::to_string(&metadata).unwrap();

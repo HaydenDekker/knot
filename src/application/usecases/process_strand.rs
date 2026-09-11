@@ -1271,6 +1271,7 @@ mod execution_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions,
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         }
@@ -1601,6 +1602,7 @@ mod execution_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         });
@@ -1612,6 +1614,7 @@ mod execution_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         });
@@ -1810,6 +1813,7 @@ mod execution_tests {
                 tokens_before: Some(150000),
                 will_retry: true,
                 error: None,
+                aborted: false,
             }],
         ));
         let runner = Arc::new(MockAgentRunner::new_sequence(vec![output]));
@@ -1827,10 +1831,18 @@ mod execution_tests {
         let result = use_case.execute(event);
         assert!(result.is_ok());
 
-        // Loom-log: KnotProcessing, ContextCompacted, KnotCompleted,
-        // StrandProcessed
+        // Loom-log: KnotProcessing, CompactionStarted, ContextCompacted,
+        // KnotCompleted, StrandProcessed (plan 088: compaction events are
+        // observed live — the span start precedes the end).
         let events = log_events.lock().unwrap();
-        assert_eq!(events.len(), 4, "should have 4 loom-log events");
+        assert_eq!(events.len(), 5, "should have 5 loom-log events");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                LoomEvent::CompactionStarted { attempt, reason, .. } if *attempt == 1 && reason == "overflow"
+            )),
+            "loom-log should contain CompactionStarted {{ attempt: 1, reason: overflow }}: {events:?}"
+        );
         assert!(
             events.iter().any(|e| matches!(
                 e,
@@ -1879,6 +1891,7 @@ mod execution_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         }
@@ -6789,6 +6802,7 @@ mod event_enforcement_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         }
@@ -7003,6 +7017,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         });
@@ -7076,6 +7091,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         };
@@ -7087,6 +7103,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         };
@@ -7163,6 +7180,7 @@ mod event_enforcement_tests {
                 session_id: Some("sess-test".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         };
@@ -8085,6 +8103,7 @@ mod tieoff_session_id_tests {
                 session_id: Some(sid.to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         }
@@ -8210,6 +8229,7 @@ mod tieoff_session_id_tests {
                 session_id: Some("sess-abc".to_string()),
                 token_usage: None,
                 compactions: vec![],
+                compaction_starts: vec![],
             wrap_up: None,
             }),
         });

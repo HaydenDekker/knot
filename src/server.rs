@@ -672,35 +672,164 @@ fn move_legacy_path(src: &StdPath, dst: &StdPath, label: &str, moved: &mut Vec<S
 /// All failures are non-fatal warnings — the rig directory is left
 /// source-only whenever a move succeeds.
 
-/// Plan 080: warn at startup when pi's auto-compaction is disabled for
-/// this project.
-///
-/// Knot's context-overflow recovery relies on pi's built-in
-/// compact-and-continue (plan 079), which pi settings alone control —
-/// there is no CLI flag. When the effective setting resolves to
-/// disabled (global `~/.pi/agent/settings.json` sets
-/// `compaction.enabled: false` and no project-level
-/// `.pi/settings.json` overrides it — the shape of rigs initialised
-/// before knot-init 4.6.0 seeded that file), an overflow fails the
-/// strand with `ContextLimitReached` instead of recovering. The warning
-/// makes that gap visible at startup. Non-fatal: the settings are the
-/// operator's to change.
-fn warn_if_pi_compaction_disabled(rig_dir: &StdPath) {
-    // The project root hosts `.pi/settings.json`: the rig dir's parent
-    // (plan 068 layout), falling back to CWD for a bare relative rig
-    // dir, then to the rig dir itself (filesystem-root degenerate case,
-    // mirroring `derive_runtime_root`).
-    let project_root = rig_dir
+/// Plan 088 (D1): the project root that hosts `.pi/settings.json`: the
+/// rig dir's parent (plan 068 layout), falling back to CWD for a bare
+/// relative rig dir, then to the rig dir itself (filesystem-root
+/// degenerate case, mirroring `derive_runtime_root`).
+fn derive_project_root(rig_dir: &StdPath) -> PathBuf {
+    rig_dir
         .parent()
         .map(StdPath::to_path_buf)
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| rig_dir.to_path_buf());
-    let project_settings = project_root.join(".pi").join("settings.json");
+        .unwrap_or_else(|| rig_dir.to_path_buf())
+}
+
+/// Plan 088: the two pi settings files the startup self-heal and the
+/// plan 080 warning read: the project-level `.pi/settings.json` (Knot's
+/// own file) and the global `~/.pi/agent/settings.json` (the
+/// operator's — never written). `None` when `HOME` is unset (the global
+/// file's location is unknown — treated as absent, as before).
+fn pi_settings_paths(rig_dir: &StdPath) -> Option<(PathBuf, PathBuf)> {
+    let project_settings =
+        derive_project_root(rig_dir).join(".pi").join("settings.json");
     let Some(home) = std::env::var_os("HOME") else {
+        return None;
+    };
+    let global_settings =
+        std::path::Path::new(&home).join(".pi/agent/settings.json");
+    Some((project_settings, global_settings))
+}
+
+/// Plan 088 (D1): self-heal the project's `.pi/settings.json` so pi's
+/// auto-compaction is enabled for rig sessions.
+///
+/// The project file is Knot's own file (knot-init seeds it); the service
+/// maintains it at startup. The global `~/.pi/agent/settings.json` is
+/// the operator's and is **never** written.
+///
+/// - an **explicit** project `compaction.enabled` (true or false) →
+///   untouched: an explicit `false` is an operator opt-out, honoured
+///   (the plan 080 warning still fires);
+/// - project file **absent, or without an explicit**
+///   `compaction.enabled`, and the effective setting resolves to
+///   disabled (the global file explicitly says `false` — the legacy-rig
+///   case the 080 warning used to cover) → **merge**
+///   `{"compaction": {"enabled": true}}` into the project file,
+///   preserving every existing key;
+/// - project file **unparseable** (or with a non-object root / a
+///   non-object `compaction`) → do **not** clobber unknown content;
+/// - any **write failure** (permissions, missing `.pi/` parent that
+///   cannot be created) → non-fatal.
+///
+/// Every "did not / could not enable" branch falls back to the plan 080
+/// startup warning, which names the reason.
+fn ensure_pi_compaction_enabled(
+    project_settings: &StdPath,
+    global_settings: &StdPath,
+) {
+    // An explicit project-level `compaction.enabled` (true or false) is
+    // the operator's decision — do nothing.
+    if PiJsonAgentRunner::read_pi_compaction_enabled(project_settings)
+        .is_some()
+    {
+        return;
+    }
+    // No explicit project setting — the effective state is pi's default
+    // (`true`) unless the global file explicitly disables it.
+    if PiJsonAgentRunner::effective_pi_compaction_enabled(
+        project_settings,
+        global_settings,
+    ) {
+        return;
+    }
+    // The effective setting resolves to disabled (global
+    // `compaction.enabled: false`, no project override). Merge
+    // `{"compaction": {"enabled": true}}` into the project file,
+    // preserving every existing key.
+    let mut value = serde_json::Value::Object(serde_json::Map::new());
+    if let Ok(raw) = std::fs::read_to_string(project_settings) {
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(existing) => value = existing,
+            Err(_) => {
+                // Unparseable project file — do not clobber unknown
+                // content; the 080 warning names the reason.
+                return;
+            }
+        }
+    }
+    let Some(root) = value.as_object_mut() else {
+        // A non-object JSON root is not a settings file — do not
+        // clobber it; the 080 warning names the reason.
         return;
     };
-    let global_settings = std::path::Path::new(&home).join(".pi/agent/settings.json");
+    let compaction = root
+        .entry("compaction")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(compaction) = compaction.as_object_mut() else {
+        // `compaction` exists but is not an object — do not clobber
+        // it; the 080 warning names the reason.
+        return;
+    };
+    compaction.insert("enabled".to_string(), serde_json::Value::Bool(true));
+    if let Some(parent) = project_settings.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            // Missing `.pi/` parent that cannot be created — non-fatal;
+            // the 080 warning fires.
+            return;
+        }
+    }
+    let pretty = match serde_json::to_string_pretty(&value) {
+        Ok(pretty) => pretty,
+        Err(e) => {
+            eprintln!(
+                "WARNING: [startup] could not serialize pi settings for {}: {e}",
+                project_settings.display()
+            );
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(project_settings, pretty) {
+        eprintln!(
+            "WARNING: [startup] could not enable pi auto-compaction in {}: {e}",
+            project_settings.display()
+        );
+        return;
+    }
+    eprintln!(
+        "[KNOT] enabled pi auto-compaction for this project (merged \"compaction\": {{\"enabled\": true}} into {})",
+        project_settings.display()
+    );
+}
+
+/// Plan 088 (D1): run the project-settings self-heal for a rig (the
+/// paths are derived from the rig dir). The plan 080 warning still runs
+/// afterwards and fires for every "did not enable" branch.
+fn ensure_pi_compaction_enabled_for_rig(rig_dir: &StdPath) {
+    let Some((project_settings, global_settings)) =
+        pi_settings_paths(rig_dir)
+    else {
+        return;
+    };
+    ensure_pi_compaction_enabled(&project_settings, &global_settings);
+}
+
+/// Plan 080 (088: reason-annotated): warn at startup when pi's
+/// auto-compaction is disabled for this project.
+///
+/// Knot's context-overflow recovery relies on pi's built-in
+/// compact-and-continue (plan 079), which pi settings alone control —
+/// there is no CLI flag. When the effective setting resolves to
+/// disabled, an overflow fails the strand with `ContextLimitReached`
+/// instead of recovering. The warning names why the startup self-heal
+/// (plan 088, D1) did not enable it: an explicit project-level
+/// opt-out, an unparseable project settings file, or a write failure.
+/// Non-fatal: the settings are the operator's to change.
+fn warn_if_pi_compaction_disabled(rig_dir: &StdPath) {
+    let Some((project_settings, global_settings)) = pi_settings_paths(rig_dir)
+    else {
+        return;
+    };
     if PiJsonAgentRunner::effective_pi_compaction_enabled(
         &project_settings,
         &global_settings,
@@ -710,13 +839,42 @@ fn warn_if_pi_compaction_disabled(rig_dir: &StdPath) {
     eprintln!(
         "WARNING: pi auto-compaction is disabled for this project — \
          context overflow cannot auto-recover in rig sessions (plan 079); \
-         strands fail with ContextLimitReached instead. To enable \
-         compaction, write \
-         {{\"compaction\": {{\"enabled\": true}}}} to {}",
+         strands fail with ContextLimitReached instead. Reason: {} (to \
+         enable compaction, write \
+         {{\"compaction\": {{\"enabled\": true}}}} to {})",
+        pi_compaction_disabled_reason(&project_settings),
         project_settings.display(),
     );
 }
-///
+
+/// Plan 088: classify why the effective pi compaction setting is
+/// disabled even after the startup self-heal, for the plan 080
+/// warning's reason clause.
+fn pi_compaction_disabled_reason(project_settings: &StdPath) -> String {
+    match PiJsonAgentRunner::read_pi_compaction_enabled(project_settings) {
+        Some(false) => format!(
+            "explicit opt-out — compaction.enabled is false in {}",
+            project_settings.display()
+        ),
+        Some(true) => "project settings enable compaction".to_string(),
+        None => {
+            // No explicit project boolean: either the file is absent
+            // (global `false` with no override — the self-heal write
+            // failed) or the file exists but does not carry a boolean
+            // `compaction.enabled` (unparseable / non-object).
+            match std::fs::read_to_string(project_settings) {
+                Ok(_) => format!(
+                    "project settings file {} does not carry a boolean compaction.enabled — left untouched by the self-heal",
+                    project_settings.display()
+                ),
+                Err(_) => format!(
+                    "no project-level override — compaction.enabled is false in the global pi settings (the self-heal write failed or was not applicable)"
+                ),
+            }
+        }
+    }
+}
+
 /// Must run before discovery and watcher registration so that moved
 /// dispatch directories, loom-logs, and the event queue are used at
 /// their new paths immediately (loom-log appends and watch
@@ -868,12 +1026,20 @@ agent-adapter: pi-json
         })?;
     }
 
-    // Plan 080: warn when pi compaction is disabled for this project —
-    // rig sessions cannot then recover from a context overflow
-    // in-process (plan 079), and the strand fails fast with
-    // ContextLimitReached instead of continuing. The check reads the
-    // same settings files pi resolves (project .pi/settings.json over
-    // global ~/.pi/agent/settings.json; pi's default is enabled).
+    // Plan 088 (D1): self-heal the project's .pi/settings.json so pi's
+    // auto-compaction is enabled for rig sessions (merge, never
+    // clobber; the global file is never written). Runs before watcher
+    // registration, next to the plan 080 check.
+    ensure_pi_compaction_enabled_for_rig(rig_dir);
+
+    // Plan 080: warn when pi compaction is still disabled for this
+    // project after the self-heal (explicit opt-out, unparseable
+    // file, or write failure) — rig sessions cannot then recover from a
+    // context overflow in-process (plan 079), and the strand fails
+    // fast with ContextLimitReached instead of continuing. The check
+    // reads the same settings files pi resolves (project
+    // .pi/settings.json over global ~/.pi/agent/settings.json; pi's
+    // default is enabled).
     warn_if_pi_compaction_disabled(rig_dir);
 
     // Migrate the legacy layout (runtime artifacts inside the rig dir)
@@ -2146,6 +2312,174 @@ mod composition_tests {
         assert!(
             state.looms.iter().any(|l| l.id == "review-loom"),
             "state.json reflects the discovered loom"
+        );
+    }
+}
+
+// ── Plan 088 (D1): startup self-heal of the project pi settings ────────
+
+#[cfg(test)]
+mod self_heal_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Fixture: a tempdir project root with a `rig/` subdir (the rig
+    /// dir), optional project `.pi/settings.json`, and optional global
+    /// `~/.pi/agent/settings.json` (stand-in — the core helper takes
+    /// explicit paths, so the real HOME is never touched).
+    fn fixture(
+        project_settings: Option<&str>,
+        global_settings: Option<&str>,
+    ) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let project_settings_path =
+            dir.path().join(".pi").join("settings.json");
+        let global_settings_path = dir.path().join("global-settings.json");
+        if let Some(content) = project_settings {
+            fs::create_dir_all(project_settings_path.parent().unwrap())
+                .unwrap();
+            fs::write(&project_settings_path, content).unwrap();
+        }
+        if let Some(content) = global_settings {
+            fs::write(&global_settings_path, content).unwrap();
+        }
+        (dir, project_settings_path, global_settings_path)
+    }
+
+    fn read_project(
+        path: &std::path::Path,
+    ) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// Global disabled, no project file → the project file is created
+    /// with `compaction.enabled == true`.
+    #[test]
+    fn self_heal_creates_project_file_when_global_disabled() {
+        let (_dir, project, global) = fixture(
+            None,
+            Some(r#"{"compaction":{"enabled":false}}"#),
+        );
+        ensure_pi_compaction_enabled(&project, &global);
+        let value = read_project(&project);
+        assert_eq!(
+            value.pointer("/compaction/enabled"),
+            Some(&serde_json::Value::Bool(true)),
+            "project file created with compaction.enabled == true: {value}"
+        );
+    }
+
+    /// Project file with unrelated keys, no `compaction` key, global
+    /// disabled → the file gains `compaction.enabled` and keeps the
+    /// existing keys.
+    #[test]
+    fn self_heal_merges_preserving_existing_keys() {
+        let (_dir, project, global) = fixture(
+            Some(r#"{"theme":"dark","other":{"x":1}}"#),
+            Some(r#"{"compaction":{"enabled":false}}"#),
+        );
+        ensure_pi_compaction_enabled(&project, &global);
+        let value = read_project(&project);
+        assert_eq!(
+            value.pointer("/compaction/enabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(value.get("theme"), Some(&serde_json::json!("dark")),
+            "existing keys preserved: {value}");
+        assert_eq!(value.get("other"), Some(&serde_json::json!({"x": 1})));
+    }
+
+    /// Project file with other `compaction` keys → gains `enabled:
+    /// true` and keeps them.
+    #[test]
+    fn self_heal_preserves_existing_compaction_keys() {
+        let (_dir, project, global) = fixture(
+            Some(r#"{"compaction":{"reserveTokens":8192}}"#),
+            Some(r#"{"compaction":{"enabled":false}}"#),
+        );
+        ensure_pi_compaction_enabled(&project, &global);
+        let value = read_project(&project);
+        assert_eq!(
+            value.pointer("/compaction/enabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            value.pointer("/compaction/reserveTokens"),
+            Some(&serde_json::json!(8192)),
+            "reserveTokens preserved: {value}"
+        );
+    }
+
+    /// Explicit project `compaction.enabled: false` → the file is
+    /// untouched (an operator opt-out is honoured; the 080 warning is
+    /// the loud part).
+    #[test]
+    fn self_heal_respects_explicit_project_false() {
+        let original = r#"{"compaction":{"enabled":false},"theme":"dark"}"#;
+        let (_dir, project, global) =
+            fixture(Some(original), Some(r#"{"compaction":{"enabled":false}}"#));
+        ensure_pi_compaction_enabled(&project, &global);
+        assert_eq!(
+            fs::read_to_string(&project).unwrap(),
+            original,
+            "explicit project-level opt-out leaves the file untouched"
+        );
+    }
+
+    /// Effective setting already enabled → the file is untouched, both
+    /// for a project-level explicit `true` (global disabled) and for
+    /// the no-global case (pi's default is on).
+    #[test]
+    fn self_heal_noop_when_effective_enabled() {
+        // (a) Project explicitly true, global disabled.
+        let project_a = r#"{"compaction":{"enabled":true}}"#;
+        let (_dir, project, global) =
+            fixture(Some(project_a), Some(r#"{"compaction":{"enabled":false}}"#));
+        ensure_pi_compaction_enabled(&project, &global);
+        assert_eq!(
+            fs::read_to_string(&project).unwrap(),
+            project_a,
+            "explicit project true leaves the file untouched"
+        );
+
+        // (b) No global file at all (pi's default is enabled), no
+        // project file → nothing to do, no file created.
+        let (_dir, project, global) = fixture(None, None);
+        ensure_pi_compaction_enabled(&project, &global);
+        assert!(
+            !project.exists(),
+            "no project file created when the effective setting is already enabled"
+        );
+    }
+
+    /// Unparseable project file → the file is untouched (no clobber of
+    /// unknown content); the 080 warning path is taken.
+    #[test]
+    fn self_heal_refuses_unparseable_project_file() {
+        let broken = "{not json at all";
+        let (_dir, project, global) =
+            fixture(Some(broken), Some(r#"{"compaction":{"enabled":false}}"#));
+        ensure_pi_compaction_enabled(&project, &global);
+        assert_eq!(
+            fs::read_to_string(&project).unwrap(),
+            broken,
+            "unparseable project file is left untouched"
+        );
+    }
+
+    /// A non-object `compaction` value → the file is untouched (do not
+    /// clobber unknown shapes).
+    #[test]
+    fn self_heal_refuses_non_object_compaction_key() {
+        let weird = r#"{"compaction":"weird"}"#;
+        let (_dir, project, global) =
+            fixture(Some(weird), Some(r#"{"compaction":{"enabled":false}}"#));
+        ensure_pi_compaction_enabled(&project, &global);
+        assert_eq!(
+            fs::read_to_string(&project).unwrap(),
+            weird,
+            "non-object compaction key leaves the file untouched"
         );
     }
 }

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::adapters::outbound::event_source::WatchType;
 use crate::application::ports::{
-    AgentOutput, AgentProfileRepository, AgentRunner,
+    AgentOutput, AgentProfileRepository, AgentRunner, CompactionObservation,
     ExecutionContext, EventDispatcherPort, EventSource, GitVersioningPort,
     LoomLogPort, LoomRepository, ModelRegistryPort, PortError, RigLogPort, TieOffSink,
 };
@@ -310,6 +310,51 @@ impl AgentRunner for MockAgentRunner {
             timeout,
         };
         self.execute(ctx)
+    }
+
+    /// Plan 088: fire the live compaction observer for each compaction
+    /// recorded in the mock output's metadata — the same span pattern the
+    /// real runners produce from the stream (a `Started` per record, then
+    /// the `Ended` carrying the record itself). The observations carry
+    /// the invocation's session id, exactly as the live observers do.
+    fn execute_with_config_and_observer(
+        &self,
+        agent_config: &AgentConfig,
+        strand_path: StrandPath,
+        strand_file_ref: Option<StrandPath>,
+        prompt: String,
+        profile_prompt: String,
+        event_type: String,
+        knot_name: Option<String>,
+        timeout: Option<std::time::Duration>,
+        observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    ) -> Result<AgentOutput, PortError> {
+        let result = self.execute_with_config(
+            agent_config,
+            strand_path,
+            strand_file_ref,
+            prompt,
+            profile_prompt,
+            event_type,
+            knot_name,
+            timeout,
+        );
+        if let (Some(observer), Ok(output)) = (&observer, &result) {
+            if let Some(meta) = &output.metadata {
+                let sid = meta.session_id.clone();
+                for rec in &meta.compactions {
+                    observer(&CompactionObservation::Started {
+                        session_id: sid.clone(),
+                        reason: rec.reason.clone(),
+                    });
+                    observer(&CompactionObservation::Ended {
+                        session_id: sid.clone(),
+                        record: rec.clone(),
+                    });
+                }
+            }
+        }
+        result
     }
 }
 

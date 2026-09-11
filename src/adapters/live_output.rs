@@ -183,6 +183,72 @@ pub fn spawn_line_reader(
         })
 }
 
+/// Spawn a reader thread that drains `src` into `buf` (stamping
+/// `last_activity` on every non-empty read, exactly like
+/// [`spawn_reader`]) **and** invokes `on_line` for each complete
+/// LF-terminated line (plan 088 — live compaction observation).
+///
+/// The byte buffer is the source of truth for the watchdog and for the
+/// post-hoc `parse_stdout`; `on_line` is an incremental, best-effort
+/// hook — the callback sees each complete line as it arrives and must
+/// be non-blocking with respect to the main thread (it runs on the
+/// reader thread, and the main thread only joins this one after the
+/// child exits). A trailing partial line (no closing newline) is held
+/// back, not emitted — pi's JSONL stream always terminates each line
+/// with LF, so in practice the held remainder is empty at EOF. A
+/// trailing `\r` is trimmed (CRLF tolerance).
+pub fn spawn_reader_with_lines(
+    thread_name: &str,
+    src: impl Read + Send + 'static,
+    buf: &Arc<Mutex<Vec<u8>>>,
+    last_activity: &Arc<AtomicU64>,
+    on_line: impl Fn(&str) + Send + 'static,
+) -> IoResult<JoinHandle<()>> {
+    let buf = Arc::clone(buf);
+    let last_activity = Arc::clone(last_activity);
+    std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || {
+            let mut src = src;
+            let mut chunk = [0u8; 8192];
+            let mut partial: Vec<u8> = Vec::new();
+            loop {
+                match src.read(&mut chunk) {
+                    Ok(0) => break, // EOF — all write ends closed
+                    Ok(n) => {
+                        last_activity.store(now_unix_nanos(), Ordering::Relaxed);
+                        buf.lock()
+                            .expect("output buffer mutex poisoned")
+                            .extend_from_slice(&chunk[..n]);
+                        partial.extend_from_slice(&chunk[..n]);
+                        // Invoke the callback for every complete line;
+                        // hold the tail. (The `buf` lock is already
+                        // dropped — the callback must not assume it.
+                        // It holds nothing either: its work — loom-log
+                        // append, system-event emission — takes its own
+                        // locks only inside the calls.)
+                        while let Some(pos) =
+                            partial.iter().position(|&b| b == b'\n')
+                        {
+                            let line_bytes: Vec<u8> = partial.drain(..=pos).collect();
+                            let mut line =
+                                String::from_utf8_lossy(&line_bytes).into_owned();
+                            if line.ends_with('\r') {
+                                line.pop();
+                            }
+                            on_line(&line);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            // A held partial (no closing newline) is intentionally not
+            // emitted — same convention as [`spawn_line_reader`].
+            let _ = partial;
+        })
+}
+
 /// Record the kill reason if no kill has been recorded yet — the first
 /// kill wins (the watchdog checks inactivity first, so it wins the
 /// race when both deadlines elapse).
@@ -192,7 +258,6 @@ fn record_kill(kill_reason: &Arc<Mutex<Option<KillReason>>>, reason: KillReason)
         *guard = Some(reason);
     }
 }
-
 /// Spawn the watchdog thread: polls every 250 ms and kills the child's
 /// process group (child + subprocesses, `kill(-pgid, SIGKILL)`) when a
 /// deadline elapses.

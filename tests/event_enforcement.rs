@@ -68,6 +68,7 @@ fn success_output_with_session(stdout: &str, session_id: &str) -> AgentOutput {
             session_id: Some(session_id.to_string()),
             token_usage: None,
             compactions: vec![],
+            compaction_starts: vec![],
         wrap_up: None,
         }),
     }
