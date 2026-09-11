@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-11 (plan 088 in progress — Compaction Assurance: always-on auto-compaction, overflow recovery continues the session)
+> **Last Updated:** 2026-09-11 (plan 088 complete — Compaction Assurance: always-on auto-compaction, overflow recovery continues the session, released in v0.45.0)
 > **Prior:** 2026-09-08 (plan 086 complete — Graceful Task Handoff: checkpointed continuation chains for task-bearing knots, released in v0.43.0)
 
 ## How to Add a Plan
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | 🟡 In Progress | 2026-09-11 |
+| 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | ✅ Complete (2026-09-11) — released in v0.45.0 | 2026-09-11 |
 | 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
 | 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
 | 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
@@ -77,6 +77,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 88. Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session
+
+**Status:** ✅ Complete (2026-09-11) — released in v0.45.0
+**Created:** 2026-09-11
+**Goal:** Close the four gaps in the rig's compaction story without adding any runtime mechanism (overflow recovery stays pi's; Knot's role stays observe + fail fast): (1) auto-compaction is **always on** for rig sessions — the service self-heals the project `.pi/settings.json` at startup (merges `compaction.enabled: true`, never clobbers, never touches the global file, honours and warns an explicit project-level opt-out); (2) it fires on context overflow via pi's in-process compact-and-retry; (3) the session continues after compaction — within the run and across session-resume re-entry with the captured session id (Knot's half pinned by test); and (4) `compaction_start` / `compaction_end` surface as **live** loom events — `CompactionStarted` / `ContextCompacted` / `ContextCompactionFailed` are written to the service log as the stream produces them, not after the invocation.
+
+Completed in Knot 0.45.0: `ensure_pi_compaction_enabled` startup self-heal in `src/server.rs` (D1 — merge-write beside the plan-080 warning, which remains the fallback with a reason); RPC adapter overflow test parity with the JSON adapter (D3 — recovered-overflow success and terminal `ContextLimitReached` through the mock-CLI harness); the continuity invariant test (D4 — a compaction-bearing re-entry re-enters with `--session-id <captured id>`); live span emission (D5 — a `CompactionObservation` observer callback on `execute_with_config_and_observer` in both pi runners, the post-hoc `log_compactions` removed, failed/aborted ends now logged as `ContextCompactionFailed` instead of filtered out; the two superseded plan-079 tests rewritten, not deleted). `ContextCompacted` is unchanged in shape and still success-only. No rig-document migration (knot-update 0.45.0 entry).
+
+Full details in [088-compaction-assurance/compaction-assurance-plan.md](088-compaction-assurance/compaction-assurance-plan.md).
 
 ### 87. Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget
 

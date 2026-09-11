@@ -388,3 +388,30 @@ passes; expected to be test-only (re-entry already appends
 - **pi-json / pi-stdio unchanged** — the overflow story is identical
   (same `compaction_end` stream, same fail-fast); only the RPC parity
   tests and the shared startup self-heal touch them.
+
+## Implementation Status: ✅ Complete (2026-09-11) — released in v0.45.0
+
+- All six phases (0–6) complete; `cargo test` full suite green, `cargo
+  clippy --all-targets` clean (no new warnings).
+- **D1:** `ensure_pi_compaction_enabled` startup self-heal in
+  `src/server.rs` (merge-write preserving existing keys, project file
+  only — the global file is never written; an explicit project-level
+  `compaction.enabled: false` or an unparseable project file falls back
+  to the plan-080 warning, which now carries the reason).
+- **D3/D4:** RPC overflow test parity (`rpc_overflow_recovered_is_`
+  `success`, `rpc_terminal_overflow_returns_context_limit_reached`,
+  start/end reason recording) and the continuity invariant
+  (`compaction_then_reentry_uses_captured_session_id`) — test-only as
+  predicted; no production code change was needed in Phases 2–3.
+- **D5:** live compaction spans — `CompactionStarted` /
+  `ContextCompacted` / `ContextCompactionFailed` loom events (+
+  `[KNOT][EVENT]` lines + plan-082 system events) are emitted from the
+  observer callback as the stream produces them; the post-hoc
+  `log_compactions` is removed and the two superseded plan-079 tests
+  are rewritten per Phase 4.7 (`failed_compaction_not_logged` → a
+  failed end now produces `ContextCompactionFailed`; `test_json_runner_`
+  `ignores_compaction_start` → starts are recorded with their reason).
+- **Docs:** release notes v0.45.0, `docs/concepts.md` overflow story,
+  `docs/troubleshooting.md` context-limit entry, knot-update changelog
+  (no document-format change).
+- Released in **v0.45.0** (see `docs/release-notes.md`).
