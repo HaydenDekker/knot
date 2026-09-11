@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-11 (plan 089 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
-> **Prior:** 2026-09-11 (plan 088 complete — Compaction Assurance: always-on auto-compaction, overflow recovery continues the session, released in v0.45.0)
+> **Last Updated:** 2026-09-12 (plan 089 reopened — phases 0–7 shipped in v0.46.0 and proven on a live rig; follow-on phases 8–13 added from the 2026-09-11/12 `pwa-todo-3` evidence: threshold compactions still end the attempt, compaction stalls trip the inactivity watchdog)
+> **Prior:** 2026-09-11 (plan 089 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
 
 ## How to Add a Plan
 
@@ -47,7 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | ✅ Complete (2026-09-11) — released in v0.46.0 | 2026-09-11 |
+| 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | 🟡 In Progress — phases 0–7 complete (v0.46.0); phases 8–13 pending (v0.47.0) | 2026-09-11 |
 | 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | ✅ Complete (2026-09-11) — released in v0.45.0 | 2026-09-11 |
 | 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
 | 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
@@ -81,9 +81,11 @@ _Overview sections for active and recently completed plans go here._
 
 ### 89. Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery
 
-**Status:** ✅ Complete (2026-09-11) — released in v0.46.0
+**Status:** 🟡 In Progress — phases 0–7 complete (2026-09-11, v0.46.0); phases 8–13 pending (2026-09-12, target v0.47.0)
 **Created:** 2026-09-11
-**Goal:** When pi's in-process overflow compact-and-retry dies mid-compaction (the process stops after `compaction_start` and before `compaction_end`), recover the session instead of failing it: detect the interrupted compaction, run a manual `compact` on the same session via the `pi-rpc` adapter, and re-enter with `--session-id` — logging each boundary (`CompactionInterrupted`, `ManualCompactionSucceeded` / `ManualCompactionFailed`, `SessionRestarted`) — and stop the adapter from force-killing a live in-flight compaction.
+**Goal:** When pi's in-process overflow compact-and-retry dies mid-compaction (the process stops after `compaction_start` and before `compaction_end`), recover the session instead of failing it: detect the interrupted compaction, run a manual `compact` on the same session via the `pi-rpc` adapter, and re-enter with `--session-id` — logging each boundary (`CompactionInterrupted`, `ManualCompactionSucceeded` / `ManualCompactionFailed`, `SessionRestarted`) — and stop the adapter from killing a live in-flight compaction.
+
+**Follow-on goal (phases 8–13):** finish the teardown fix (tear down on pi's `agent_settled`, and never close stdin while a compaction span is open — pi exits on stdin EOF, which is why every threshold compaction still ends its attempt), ask the compacted session to continue **in the same process** instead of restarting it, treat an interrupted `threshold` compaction as the interruption it is, let a compaction span count as activity for the inactivity watchdog, and make the remaining edges visible (`session=` on resumed attempts, abandoned in-flight runs).
 
 Full details in [089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md).
 
