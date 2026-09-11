@@ -239,6 +239,26 @@ default).
   immediately with `context limit reached: …` — no session-resume
   retries, no clock-up, and no timeout operational event (no deadline was
   exceeded).
+- **Interrupted compaction is recovered, not fatal** (Knot 0.46.0+) — a
+  different overflow shape is *resumable*, not terminal: the in-process
+  overflow compaction **started but never reported completion**
+  (`compaction_start { reason: overflow }` with no `compaction_end`, and no
+  terminal `errorMessage`) — i.e. pi's overflow recovery died *mid-turn*
+  (process killed, inactivity, or a stream gap), leaving the context still
+  over-full. This is classified as `CompactionInterrupted` (resumable: it
+  carries the live session id) rather than the terminal `ContextLimitReached`.
+  Knot's remedy is an **out-of-band manual compact**: it re-opens the *same*
+  session with `--session <id>` and sends a `compact` RPC (with a fixed
+  operator note as `customInstructions`). Because a manual compact is a
+  first-class command that *always* emits a `compaction_end`, the interrupted
+  span is closed and the context is actually shrunk. On success Knot records
+  `ManualCompactionSucceeded` + `SessionRestarted` and re-enters the session
+  with a restart note ("your context was just compacted — continue from the
+  compacted state"); if the explicit compact itself cannot reduce the
+  context it records `ManualCompactionFailed` and the run is terminal (a
+  re-entry would overflow again). The manual compact is bounded to **one** per
+  failed execution (a second interruption is left to the normal retry
+  machinery).
 - **The escape hatch** — `compaction.enabled` in `.pi/settings.json`
   (`true`/`false`) remains the only switch: pi has no
   "only-on-overflow" mode upstream, so the only way to turn compaction

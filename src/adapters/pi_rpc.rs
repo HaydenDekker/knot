@@ -52,11 +52,12 @@ use crate::adapters::live_output::{
     spawn_line_reader, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
 };
 use crate::adapters::pi_json::{
-    observe_compaction_line, CompactionObserveState, PiJsonAgentRunner,
+    observe_compaction_line, CompactionObserveState, OverflowFailure,
+    PiJsonAgentRunner,
 };
 use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionObservation,
-    ExecutionContext, PortError, TokenUsage, WrapUpRecord,
+    CompactionRecord, ExecutionContext, PortError, TokenUsage, WrapUpRecord,
 };
 use crate::domain::entities::StrandPath;
 use crate::domain::value_objects::AgentConfig;
@@ -311,6 +312,14 @@ impl PiRpcAgentRunner {
             PiJsonAgentRunner::build_prompt_with_context(&ctx, &profile_prompt);
         let shared = Arc::new(Mutex::new(RpcShared::default()));
         let agent_end_seen = Arc::new(AtomicBool::new(false));
+        // Plan 089 (D4): a compaction is in flight (a `compaction_start` was
+        // seen with no following `compaction_end`). Teardown (force-kill on
+        // `agent_end`) is held while this is set, so an in-flight
+        // `compaction_end` that lands just after `agent_end` is still
+        // observed instead of being force-killed mid-compact (the
+        // interrupted-compact shape). Written by the driver, read by the
+        // main loop.
+        let open_compaction = Arc::new(AtomicBool::new(false));
         // Plan 088: shared session-id state for live compaction
         // observation (seeded from the `get_state` response).
         let observe_state = Arc::new(CompactionObserveState::new());
@@ -320,6 +329,7 @@ impl PiRpcAgentRunner {
             .spawn({
                 let shared = Arc::clone(&shared);
                 let agent_end_seen = Arc::clone(&agent_end_seen);
+                let open_compaction = Arc::clone(&open_compaction);
                 let observer = observer.clone();
                 let observe_state = Arc::clone(&observe_state);
                 move || {
@@ -330,6 +340,7 @@ impl PiRpcAgentRunner {
                         limit,
                         shared,
                         agent_end_seen,
+                        open_compaction,
                         observer,
                         observe_state,
                     );
@@ -344,12 +355,18 @@ impl PiRpcAgentRunner {
                 .spawn(move || child.wait())
                 .expect("failed to spawn wait thread");
 
-        // Teardown: exit early on `agent_end` (giving the grace window for a
-        // clean exit), otherwise bound by the total budget.
+        // Teardown: exit early on `agent_end` **and no open compaction**
+        // (giving the grace window for a clean exit), otherwise bound by the
+        // total budget. Plan 089 (D4): while a compaction is still in-flight
+        // (`open_compaction`), teardown is held so an in-flight
+        // `compaction_end` that lands just after `agent_end` is still
+        // observed rather than force-killed mid-compact.
         let start = Instant::now();
         let mut agent_end_at: Option<Instant> = None;
         loop {
-            if agent_end_seen.load(Ordering::Relaxed) {
+            let agent_end = agent_end_seen.load(Ordering::Relaxed);
+            let compaction_open = open_compaction.load(Ordering::Relaxed);
+            if agent_end && !compaction_open {
                 if agent_end_at.is_none() {
                     agent_end_at = Some(Instant::now());
                 }
@@ -452,28 +469,25 @@ impl PiRpcAgentRunner {
                 });
             }
             if response_text.trim().is_empty() {
-                if let Some(rec) = PiJsonAgentRunner::terminal_overflow(&compactions) {
-                    return Err(PortError::ContextLimitReached {
-                        message: rec
-                            .error
-                            .clone()
-                            .unwrap_or_else(|| {
-                                "session context cannot fit the model window even after compaction"
-                                    .to_string()
-                            }),
-                        session_id,
-                    });
-                }
-                if error_message
-                    .as_deref()
-                    .is_some_and(PiJsonAgentRunner::is_context_overflow_message)
-                {
-                    let err_msg = error_message.as_deref().unwrap_or_default();
-                    return Err(PortError::ContextLimitReached {
-                        message: format!(
-                            "context overflow, but pi auto-compaction did \n                             not run ({err_msg}). Enable compaction for \n                             rig sessions with a project-level \n                             .pi/settings.json: \n                             {{\"compaction\": {{\"enabled\": true}}}}"
-                        ),
-                        session_id,
+                if let Some(failure) = PiJsonAgentRunner::classify_overflow_failure(
+                    &compactions,
+                    &compaction_starts,
+                    error_message.as_deref(),
+                ) {
+                    return Err(match failure {
+                        // Plan 089: interrupted auto-compact — resumable.
+                        OverflowFailure::CompactionInterrupted { reason } => {
+                            PortError::CompactionInterrupted {
+                                message: format!(
+                                    "pi's in-process overflow compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
+                                ),
+                                reason,
+                                session_id,
+                            }
+                        }
+                        OverflowFailure::ContextLimitReached { message } => {
+                            PortError::ContextLimitReached { message, session_id }
+                        }
                     });
                 }
             }
@@ -689,6 +703,221 @@ impl AgentRunner for PiRpcAgentRunner {
     fn runner_type(&self) -> &str {
         "pi-rpc"
     }
+
+    /// Plan 089: out-of-band manual compaction on an interrupted session.
+    ///
+    /// Opens the session via `pi --mode rpc --session <id>` (the session
+    /// restores its own model), issues the `compact` RPC command (carrying
+    /// `custom_instructions` as the summarisation guidance), and awaits the
+    /// `compaction_end { reason: "manual" }` event, bounded by the runner's
+    /// timeout. On success returns the [`CompactionRecord`] (reason
+    /// `"manual"`, `tokens_before` from `compaction_end.result.tokensBefore`);
+    /// on a missing end within the timeout, a `success: false` command
+    /// response, an `errorMessage`, or an `aborted` compact it returns
+    /// [`PortError::ManualCompactionFailed`] (terminal — the context is
+    /// over-full even after an explicit compact, so a re-entry would overflow
+    /// again).
+    fn manual_compact(
+        &self,
+        ctx: &ExecutionContext,
+        session_id: &str,
+        custom_instructions: &str,
+    ) -> Result<CompactionRecord, PortError> {
+
+        let failed = |message: String| PortError::ManualCompactionFailed {
+            message,
+            session_id: Some(session_id.to_string()),
+        };
+
+        // Build the RPC args the same way `execute` does (core + `--mode
+        // rpc`), then open the existing session by id.
+        let mut cli_args = Self::build_rpc_cli_args(&ctx.agent_config);
+        cli_args.push("--session".to_string());
+        cli_args.push(session_id.to_string());
+
+        // Spawn in its own process group so teardown can kill child +
+        // subprocesses (RPC mode stays open after the compact).
+        let child = unsafe {
+            std::process::Command::new(&self.cli_path)
+                .args(&cli_args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .pre_exec(|| {
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                })
+                .spawn()
+        };
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PortError::CommandNotFound(format!(
+                    "'{}': {}",
+                    self.cli_path, e
+                )));
+            }
+            Err(e) => {
+                return Err(failed(format!(
+                    "failed to spawn '{}' for manual compact: {}",
+                    self.cli_path, e
+                )));
+            }
+        };
+
+        let child_pid = child.id() as i32;
+        let mut stdin =
+            Some(BufWriter::new(child.stdin.take().expect("stdin was piped")));
+
+        let live = LiveOutput::new();
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let stdout_reader = spawn_line_reader(
+            "manual-compact-stdout",
+            child.stdout.take().expect("stdout was piped"),
+            &live.stdout,
+            &live.last_activity,
+            line_tx,
+        );
+        // Drain stderr so the child never blocks on a full stderr pipe.
+        let stderr_reader = spawn_reader(
+            "manual-compact-stderr",
+            child.stderr.take().expect("stderr was piped"),
+            &live.stderr,
+            &live.last_activity,
+        );
+
+        let result = (|| -> Result<CompactionRecord, PortError> {
+            // Issue the compact command (with the operator's summarisation
+            // instructions, when any).
+            let mut compact_cmd =
+                serde_json::json!({"id":"manual-compact","type":"compact"});
+            if !custom_instructions.is_empty() {
+                compact_cmd["customInstructions"] =
+                    serde_json::json!(custom_instructions);
+            }
+            if !send_rpc_line(&mut stdin, &compact_cmd.to_string()) {
+                return Err(failed(
+                    "failed to send the compact command to pi".to_string(),
+                ));
+            }
+
+            let deadline = Instant::now() + self.timeout;
+            // The `compact` command response and the `compaction_end` event
+            // both report the pre-compact token count; prefer the event
+            // (the plan's contract) and fall back to the command response.
+            let mut tokens_from_response: Option<u64> = None;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(failed(format!(
+                        "manual compact did not complete within {}s (no compaction_end)",
+                        self.timeout.as_secs()
+                    )));
+                }
+                match line_rx.recv_timeout(remaining) {
+                    Ok(line) => {
+                        let Ok(value) =
+                            serde_json::from_str::<serde_json::Value>(&line)
+                        else {
+                            continue;
+                        };
+                        let typ = value
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        match typ {
+                            "response" => {
+                                let command = value
+                                    .get("command")
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or("");
+                                if command != "compact" {
+                                    continue;
+                                }
+                                if value.get("success").and_then(|s| s.as_bool())
+                                    == Some(false)
+                                {
+                                    let error = value
+                                        .get("error")
+                                        .and_then(|e| e.as_str())
+                                        .unwrap_or("compact command rejected")
+                                        .to_string();
+                                    return Err(failed(error));
+                                }
+                                tokens_from_response = value
+                                    .get("data")
+                                    .and_then(|d| d.get("tokensBefore"))
+                                    .and_then(|t| t.as_u64());
+                            }
+                            "compaction_end" => {
+                                let reason = value
+                                    .get("reason")
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or("");
+                                if reason != "manual" {
+                                    continue; // not our compact
+                                }
+                                if value.get("aborted").and_then(|a| a.as_bool())
+                                    == Some(true)
+                                {
+                                    return Err(failed(
+                                        "manual compact was aborted by pi".to_string(),
+                                    ));
+                                }
+                                if let Some(err) =
+                                    value.get("errorMessage").and_then(|e| e.as_str())
+                                {
+                                    return Err(failed(err.to_string()));
+                                }
+                                let tokens_before = value
+                                    .get("result")
+                                    .and_then(|r| r.get("tokensBefore"))
+                                    .and_then(|t| t.as_u64())
+                                    .or(tokens_from_response);
+                                return Ok(CompactionRecord {
+                                    reason: "manual".to_string(),
+                                    tokens_before,
+                                    will_retry: false,
+                                    error: None,
+                                    aborted: false,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        return Err(failed(format!(
+                            "manual compact did not complete within {}s (no compaction_end)",
+                            self.timeout.as_secs()
+                        )));
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        // pi exited without a compaction_end — the recovery
+                        // never completed.
+                        return Err(failed(
+                            "pi exited before the manual compact completed (no compaction_end)"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        })();
+
+        // Terminate the child (and any subprocesses) regardless of outcome —
+        // RPC mode stays open after the compact.
+        let _ = unsafe { libc::kill(-child_pid, libc::SIGKILL) };
+        let _ = child.wait();
+        if let Ok(h) = stdout_reader {
+            let _ = h.join();
+        }
+        if let Ok(h) = stderr_reader {
+            let _ = h.join();
+        }
+
+        result
+    }
 }
 
 /// The RPC session driver: owns the stdin writer and the line receiver,
@@ -707,6 +936,7 @@ fn run_rpc_driver(
     limit: Option<u64>,
     shared: Arc<Mutex<RpcShared>>,
     agent_end_seen: Arc<AtomicBool>,
+    open_compaction: Arc<AtomicBool>,
     observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
     observe_state: Arc<CompactionObserveState>,
 ) {
@@ -857,6 +1087,18 @@ fn run_rpc_driver(
                 // closes the pipe; the driver returns once the channel
                 // disconnects (after the process exits).
                 stdin = None;
+            }
+            // Plan 089 (D4): track an in-flight compaction so the main loop
+            // holds teardown while one is open (an in-flight `compaction_end`
+            // that lands just after `agent_end` is observed, not force-killed
+            // mid-compact). `compaction_start` opens the window; the matching
+            // `compaction_end` closes it. pi runs compactions sequentially, so
+            // a single flag is well-defined across repeated spans.
+            Some("compaction_start") => {
+                open_compaction.store(true, Ordering::Relaxed);
+            }
+            Some("compaction_end") => {
+                open_compaction.store(false, Ordering::Relaxed);
             }
             _ => {}
         }
@@ -1076,6 +1318,9 @@ while IFS= read -r line; do
         echo '{{"type":"compaction_end","reason":"auto","result":{{"summary":"s","firstKeptEntryId":"e","tokensBefore":120000,"details":{{}}}},"aborted":false,"willRetry":true}}'
         echo '{{"type":"turn_end","turnIndex":0,"message":{{}},"toolResults":[]}}'
         echo '{{"type":"agent_end","messages":[{{"role":"assistant","stopReason":"stop","content":[{{"type":"text","text":"done after compaction"}}]}}]}}'
+      elif [ "$variant" = "attempted" ]; then
+        echo '{{"type":"compaction_start","reason":"overflow"}}'
+        echo '{{"type":"agent_end","messages":[{{"role":"assistant","stopReason":"error","errorMessage":"400 request (150001 tokens) exceeds the available context size (150000 tokens), try increasing it","content":[]}}]}}'
       else
         echo '{{"type":"compaction_start","reason":"overflow"}}'
         echo '{{"type":"compaction_end","reason":"overflow","result":{{"summary":"s","firstKeptEntryId":"e","tokensBefore":150000,"details":{{}}}},"aborted":false,"willRetry":true}}'
@@ -1147,6 +1392,174 @@ done
         assert!(
             err.to_string().contains("Context overflow recovery failed"),
             "the error carries pi's recovery-failure message: {err:?}"
+        );
+    }
+
+    /// Plan 089: the exact shape of the pwa-todo-3 incident over the RPC
+    /// stream — a `compaction_start { overflow }` observed but **no**
+    /// `compaction_end` (the pi process died mid-compaction). This is now
+    /// classified as the resumable `PortError::CompactionInterrupted` (not the
+    /// terminal `ContextLimitReached`), mirroring the JSON-runner parity.
+    #[test]
+    fn rpc_overflow_compaction_attempted_but_could_not_fit() {
+        let (path, dir) = mock_script("placeholder");
+        let log = dir.path().join("stdin.log");
+        std::fs::write(
+            &path,
+            &rpc_compaction_script(log.to_str().unwrap(), "attempted"),
+        )
+        .unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let result = runner.execute(ctx("do the thing", None));
+        assert!(
+            result.is_err(),
+            "interrupted overflow should fail, got: {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::CompactionInterrupted { .. }),
+            "expected CompactionInterrupted (interrupted auto-compact), got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-compact"),
+            "the error carries the session id from get_state"
+        );
+        // Resumable (a session was captured): the plan 089 manual-compact
+        // recovery applies.
+        assert!(
+            err.is_resumable(),
+            "interrupted compact with a session is resumable"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("interrupted"),
+            "the error states the compaction was interrupted: {err:?}"
+        );
+        assert!(
+            msg.contains("overflow"),
+            "the error carries the compaction reason: {err:?}"
+        );
+    }
+
+    // ── Plan 089 (D2): out-of-band manual compaction ──
+
+    /// Plan 089 (D2): a manual `compact` on an interrupted session that
+    /// completes emits a `compaction_end { reason: "manual" }` whose
+    /// `result.tokensBefore` is reported as the pre-compact context size.
+    #[test]
+    fn rpc_manual_compact_success() {
+        let (path, _dir) = mock_script("placeholder");
+        let script = r#"#!/usr/bin/env bash
+read -r _
+echo '{"type":"compaction_end","reason":"manual","result":{"summary":"s","firstKeptEntryId":"x","tokensBefore":120000,"details":{}},"aborted":false,"willRetry":false}'
+"#;
+        std::fs::write(&path, script).unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let result = runner.manual_compact(&ctx("do the thing", None), "sess-int", "keep task state");
+        let rec = result.expect("manual compact should succeed");
+        assert_eq!(rec.reason, "manual");
+        assert_eq!(rec.tokens_before, Some(120_000));
+        assert!(!rec.aborted, "a successful manual compact is not aborted");
+        assert!(rec.error.is_none(), "a successful manual compact carries no error");
+    }
+
+    /// Plan 089 (D2): a manual `compact` that never completes (no
+    /// `compaction_end` within the deadline) is a terminal
+    /// `ManualCompactionFailed` (the context is over-full even after the
+    /// explicit compact, so a re-entry would overflow again).
+    #[test]
+    fn rpc_manual_compact_timeout() {
+        let (path, _dir) = mock_script("placeholder");
+        // Reads the compact command, then hangs — never emits a
+        // compaction_end.
+        let script = r#"#!/usr/bin/env bash
+read -r _
+sleep 10
+"#;
+        std::fs::write(&path, script).unwrap();
+        // A short deadline so the test does not wait the 120s default.
+        let runner = PiRpcAgentRunner::with_cli_path_and_timeout(
+            path.to_string_lossy().to_string(),
+            Duration::from_millis(400),
+        );
+        let result = runner.manual_compact(&ctx("do the thing", None), "sess-int", "");
+        let err = result.expect_err("a manual compact that never ends should fail");
+        assert!(
+            matches!(err, PortError::ManualCompactionFailed { .. }),
+            "expected ManualCompactionFailed, got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-int"),
+            "the error carries the session id"
+        );
+        assert!(
+            !err.is_resumable(),
+            "a failed manual compact is terminal (not resumable)"
+        );
+    }
+
+    // ── Plan 089 (D4): the in-flight-compaction teardown hold ──
+
+    /// Plan 089 (D4): a stray `compaction_end` that lands after `agent_end`
+    /// (with no preceding `compaction_start`) must not break a clean run —
+    /// the run still returns success. The driver's end-arm is a no-op when no
+    /// compaction is open, so teardown proceeds normally at `agent_end`.
+    #[test]
+    fn rpc_d4_agent_end_then_stray_compaction_end_is_success() {
+        let (path, _dir) = mock_script("placeholder");
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}]}'
+echo '{"type":"compaction_end","reason":"threshold","result":{"tokensBefore":100000},"aborted":false,"willRetry":false}'
+"#;
+        std::fs::write(&path, script).unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let out =
+            runner.execute(ctx("do the thing", None)).expect("clean run must succeed");
+        assert!(
+            out.stdout.contains("done"),
+            "final text should be the agent_end text: {}",
+            out.stdout
+        );
+    }
+
+    /// Plan 089 (D4): when a `compaction_start` is open at `agent_end` (an
+    /// in-flight compaction), teardown is **held** until the deadline rather
+    /// than force-killing on the short `agent_end` grace — so the run is
+    /// bounded by the total timeout, not the 5s grace. The mock emits
+    /// `compaction_start { overflow }` + a clean `agent_end`, then holds
+    /// (no `compaction_end`, no exit); the run must wait for the deadline
+    /// (here 1200ms) and still succeed (the clean final answer is kept).
+    #[test]
+    fn rpc_d4_open_compaction_holds_teardown_until_deadline() {
+        let (path, _dir) = mock_script("placeholder");
+        let script = r#"#!/usr/bin/env bash
+echo '{"type":"compaction_start","reason":"overflow"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"held"}]}]}'
+sleep 10
+"#;
+        std::fs::write(&path, script).unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let mut c = ctx("do the thing", None);
+        c.timeout = Some(Duration::from_millis(1200));
+
+        let start = Instant::now();
+        let out = runner.execute(c).expect("clean run must succeed");
+        let elapsed = start.elapsed();
+
+        assert!(
+            out.stdout.contains("held"),
+            "final text should be the agent_end text: {}",
+            out.stdout
+        );
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "the open-compaction hold should wait for the deadline (got {elapsed:?})"
+        );
+        assert!(
+            elapsed < Duration::from_millis(4000),
+            "teardown should be bounded by the deadline, not the 5s grace (got {elapsed:?})"
         );
     }
 

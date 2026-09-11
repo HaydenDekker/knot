@@ -237,6 +237,65 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             line.push_str(&format!(" aborted={aborted} attempt={attempt}"));
             line
         }
+        LoomEvent::CompactionInterrupted {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            reason,
+            attempt,
+            ..
+        } => format!(
+            "CompactionInterrupted loom={} knot={} strand={} session={} reason={reason} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
+        LoomEvent::ManualCompactionSucceeded {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            tokens_before,
+            attempt,
+            ..
+        } => format!(
+            "ManualCompactionSucceeded loom={} knot={} strand={} session={} tokens-before={tokens_before} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
+        LoomEvent::ManualCompactionFailed {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            error,
+            attempt,
+            ..
+        } => format!(
+            "ManualCompactionFailed loom={} knot={} strand={} session={} error={error} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
+        LoomEvent::SessionRestarted {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            attempt,
+            ..
+        } => format!(
+            "SessionRestarted loom={} knot={} strand={} session={} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
         LoomEvent::ContextWrapUpSteered {
             loom_id,
             knot_id,
@@ -701,6 +760,44 @@ mod tests {
         assert_eq!(
             render_loom_event_line(&e),
             "SessionResumed loom=review-loom knot=review strand=strands/prd.md session=sess-1 attempt=3"
+        );
+    }
+
+    // ── Plan 089: the interrupted-compact / manual-compact / restart events ──
+
+    #[test]
+    fn compaction_interrupted_line() {
+        let e = LoomEvent::CompactionInterrupted { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), reason: "overflow".into(), attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "CompactionInterrupted loom=review-loom knot=review strand=strands/prd.md session=sess-1 reason=overflow attempt=1"
+        );
+    }
+
+    #[test]
+    fn manual_compaction_succeeded_line() {
+        let e = LoomEvent::ManualCompactionSucceeded { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), tokens_before: 180_000, attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "ManualCompactionSucceeded loom=review-loom knot=review strand=strands/prd.md session=sess-1 tokens-before=180000 attempt=1"
+        );
+    }
+
+    #[test]
+    fn manual_compaction_failed_line() {
+        let e = LoomEvent::ManualCompactionFailed { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), error: "still too large".into(), attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "ManualCompactionFailed loom=review-loom knot=review strand=strands/prd.md session=sess-1 error=still too large attempt=1"
+        );
+    }
+
+    #[test]
+    fn session_restarted_line() {
+        let e = LoomEvent::SessionRestarted { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "SessionRestarted loom=review-loom knot=review strand=strands/prd.md session=sess-1 attempt=1"
         );
     }
 

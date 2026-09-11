@@ -98,7 +98,11 @@ fn loom_id_of(event: &LoomEvent) -> &LoomId {
         | LoomEvent::KnotParseWarning { loom_id, .. }
         | LoomEvent::DirectoryCreated { loom_id, .. }
         | LoomEvent::TasksIncomplete { loom_id, .. }
-        | LoomEvent::BatchIncomplete { loom_id, .. } => loom_id,
+        | LoomEvent::BatchIncomplete { loom_id, .. }
+        | LoomEvent::CompactionInterrupted { loom_id, .. }
+        | LoomEvent::ManualCompactionSucceeded { loom_id, .. }
+        | LoomEvent::ManualCompactionFailed { loom_id, .. }
+        | LoomEvent::SessionRestarted { loom_id, .. } => loom_id,
     }
 }
 

@@ -338,6 +338,11 @@ fn loom_event_name(e: &LoomEvent) -> &'static str {
         LoomEvent::AgentInactivity { .. } => "AgentInactivity",
         LoomEvent::TasksIncomplete { .. } => "TasksIncomplete",
         LoomEvent::BatchIncomplete { .. } => "BatchIncomplete",
+        LoomEvent::CompactionInterrupted { .. } => "CompactionInterrupted",
+        LoomEvent::ManualCompactionSucceeded { .. } => "ManualCompactionSucceeded",
+        LoomEvent::ManualCompactionFailed { .. } => "ManualCompactionFailed",
+        LoomEvent::SessionRestarted { .. } => "SessionRestarted",
+        _ => "Other",
     }
 }
 

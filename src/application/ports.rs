@@ -66,8 +66,43 @@ pub enum PortError {
     /// compact-and-retry could not recover it — the kept context
     /// itself cannot fit. Terminal: session-resume re-entry cannot
     /// help, so this is NOT resumable.
+    ///
+    /// Plan 089 refined this: an *interrupted* auto-compact (an `overflow`
+    /// `compaction_start` with no following `compaction_end` — the pi
+    /// process died mid-compaction) is NOT terminal; it is surfaced as
+    /// [`Self::CompactionInterrupted`] instead, because an out-of-band
+    /// manual compact can still shrink the context. This variant is
+    /// reserved for the completed-but-could-not-fit case (a `compaction_end`
+    /// exists) and the compaction-never-ran case (plan 080 fail-fast).
     ContextLimitReached {
         message: String,
+        session_id: Option<String>,
+    },
+    /// Plan 089: pi's in-process overflow recovery was interrupted — an
+    /// `overflow` `compaction_start` was observed but the process exited
+    /// before a `compaction_end`. Distinct from
+    /// [`Self::ContextLimitReached`] (terminal): here the compaction never
+    /// completed, so the context is not yet known to be over-full and an
+    /// out-of-band manual compact on the same session can still save it.
+    /// Resumable **only** when a `session_id` was captured (the manual
+    /// compact needs a session to open via `--session-id`).
+    CompactionInterrupted {
+        /// Human-readable description (Display / activity-log line text).
+        message: String,
+        /// pi's compaction reason (the interrupted start's reason —
+        /// always `"overflow"` for the resumable case).
+        reason: String,
+        /// The captured session id, when present.
+        session_id: Option<String>,
+    },
+    /// Plan 089: the out-of-band manual `compact` on an interrupted
+    /// session could not reduce the context below the window. Terminal:
+    /// the context is over-full even after an explicit compact, so a
+    /// re-entry would overflow again — NOT resumable.
+    ManualCompactionFailed {
+        /// Human-readable description (Display / activity-log line text).
+        message: String,
+        /// The session the manual compact was attempted on.
         session_id: Option<String>,
     },
     /// The agent session produced no output for the inactivity window —
@@ -167,6 +202,12 @@ impl std::fmt::Display for PortError {
             PortError::ContextLimitReached { message, .. } => {
                 write!(f, "context limit reached: {message}")
             }
+            PortError::CompactionInterrupted { message, .. } => {
+                write!(f, "compaction interrupted: {message}")
+            }
+            PortError::ManualCompactionFailed { message, .. } => {
+                write!(f, "manual compaction failed: {message}")
+            }
             PortError::AgentInactivity { message, .. } => {
                 write!(f, "inactivity: {message}")
             }
@@ -220,6 +261,8 @@ impl PortError {
             | PortError::AgentExecutionFailed { session_id, .. }
             | PortError::AgentNoResponse { session_id, .. }
             | PortError::ContextLimitReached { session_id, .. }
+            | PortError::CompactionInterrupted { session_id, .. }
+            | PortError::ManualCompactionFailed { session_id, .. }
             | PortError::AgentInactivity { session_id, .. }
             | PortError::WaterMarkStop { session_id, .. } => {
                 session_id.as_ref()
@@ -230,10 +273,18 @@ impl PortError {
 
     /// Classify error as resumable (session can be retried) or fatal.
     ///
-    /// `ContextLimitReached` is deliberately excluded: the context does
-    /// not fit the model window even after pi's own compact-and-retry,
-    /// so session-resume re-entry cannot help (plan 079).
+    /// `ContextLimitReached` and `ManualCompactionFailed` are deliberately
+    /// excluded: the context does not fit the model window (even after pi's
+    /// own compact-and-retry, or after an out-of-band manual compact), so
+    /// session-resume re-entry cannot help (plans 079 / 089).
+    ///
+    /// `CompactionInterrupted` (plan 089) is resumable **only** when a
+    /// session id was captured — the recovery (a manual compact + re-entry)
+    /// needs a session to open via `--session-id`.
     pub fn is_resumable(&self) -> bool {
+        if let PortError::CompactionInterrupted { session_id, .. } = self {
+            return session_id.is_some();
+        }
         matches!(
             self,
             PortError::Timeout { .. }
@@ -249,11 +300,13 @@ impl PortError {
 ///
 /// Returns `true` only when both conditions are met:
 /// 1. A `session_id` was captured from the agent invocation.
-/// 2. The error is resumable (`Timeout`, `AgentExecutionFailed`, or
-///    `AgentNoResponse`).
+/// 2. The error is resumable (`Timeout`, `AgentExecutionFailed`,
+///    `AgentNoResponse`, or — plan 089 — `CompactionInterrupted` with a
+///    session id).
 ///
 /// If either condition is not met (no session ID, or a fatal error like
-/// `CommandNotFound`), the invocation is not retryable via session resume.
+/// `CommandNotFound` / `ContextLimitReached` / `ManualCompactionFailed`),
+/// the invocation is not retryable via session resume.
 pub fn is_session_resumable(
     session_id: &Option<String>,
     error: &PortError,
@@ -678,6 +731,41 @@ pub trait AgentRunner: Send + Sync {
             knot_name,
             timeout,
         )
+    }
+
+    /// Manually compact an existing session out-of-band (plan 089).
+    ///
+    /// Drives pi's `compact` RPC command on the session identified by
+    /// `session_id` (opened via `--session-id`), reducing its context below
+    /// the model window. Returns the `CompactionRecord` on success, or
+    /// [`PortError::ManualCompactionFailed`] on failure (an error message,
+    /// a timeout, or an abort).
+    ///
+    /// This is the remedy for an interrupted auto-compact
+    /// ([`PortError::CompactionInterrupted`]): it runs a clean, top-level
+    /// compaction that always emits `compaction_end { reason: "manual" }`,
+    /// and its summarisation call sends only the *older* portion of the
+    /// context (well under the window) — so it fits where the in-flight
+    /// retry's context did not.
+    ///
+    /// `custom_instructions` is a fixed, operator-tunable instruction for
+    /// the summarisation (e.g. keep task state and open work items).
+    ///
+    /// Default: not supported. Only the `pi-rpc` adapter can drive the
+    /// `compact` RPC over a persistent channel; the one-shot JSON/stdio
+    /// runners return [`PortError::ManualCompactionFailed`].
+    fn manual_compact(
+        &self,
+        _ctx: &ExecutionContext,
+        session_id: &str,
+        _custom_instructions: &str,
+    ) -> Result<CompactionRecord, PortError> {
+        Err(PortError::ManualCompactionFailed {
+            message: format!(
+                "manual compact on session '{session_id}' requires the pi-rpc adapter"
+            ),
+            session_id: Some(session_id.to_string()),
+        })
     }
 }
 
@@ -1611,6 +1699,91 @@ mod tests {
         assert!(
             !is_session_resumable(&Some("sess-ctx".to_string()), &err),
             "is_session_resumable must be false for ContextLimitReached"
+        );
+    }
+
+    /// Plan 089: an interrupted auto-compact is resumable **when a session id
+    /// was captured** (the manual-compact recovery needs a session to open
+    /// via `--session-id`). It carries the session ID and displays with the
+    /// `compaction interrupted:` prefix.
+    #[test]
+    fn compaction_interrupted_is_resumable_with_session() {
+        let err = PortError::CompactionInterrupted {
+            message: "pi's in-process overflow compaction was interrupted".to_string(),
+            reason: "overflow".to_string(),
+            session_id: Some("sess-int".to_string()),
+        };
+
+        assert!(
+            err.is_resumable(),
+            "CompactionInterrupted with a session id is resumable"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-int"),
+            "session_id() should return the captured session ID"
+        );
+        assert!(
+            is_session_resumable(&Some("sess-int".to_string()), &err),
+            "is_session_resumable must be true for CompactionInterrupted with a session"
+        );
+        assert!(
+            err.to_string().contains("compaction interrupted"),
+            "Display should contain 'compaction interrupted', got: {}",
+            err
+        );
+    }
+
+    /// Plan 089: a `CompactionInterrupted` **without** a session id is not
+    /// resumable — the manual-compact recovery has no session to open, so
+    /// the strand fails immediately.
+    #[test]
+    fn compaction_interrupted_without_session_is_not_resumable() {
+        let err = PortError::CompactionInterrupted {
+            message: "pi's in-process overflow compaction was interrupted".to_string(),
+            reason: "overflow".to_string(),
+            session_id: None,
+        };
+
+        assert!(
+            !err.is_resumable(),
+            "CompactionInterrupted without a session id is not resumable"
+        );
+        assert!(err.session_id().is_none());
+        assert!(
+            !is_session_resumable(&None, &err),
+            "is_session_resumable must be false without a session ID"
+        );
+    }
+
+    /// Plan 089: a failed manual compact is terminal (NOT resumable) — the
+    /// context is over-full even after an explicit compact, so a re-entry
+    /// would overflow again. It carries the session ID and displays with the
+    /// `manual compaction failed:` prefix.
+    #[test]
+    fn manual_compaction_failed_is_terminal() {
+        let err = PortError::ManualCompactionFailed {
+            message: "manual compact could not reduce the context".to_string(),
+            session_id: Some("sess-manual".to_string()),
+        };
+
+        assert!(
+            !err.is_resumable(),
+            "ManualCompactionFailed must not be resumable — re-entry would overflow again"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-manual"),
+            "session_id() should return the captured session ID"
+        );
+        assert!(
+            !is_session_resumable(&Some("sess-manual".to_string()), &err),
+            "is_session_resumable must be false for ManualCompactionFailed"
+        );
+        assert!(
+            err.to_string().contains("manual compaction failed"),
+            "Display should contain 'manual compaction failed', got: {}",
+            err
         );
     }
 

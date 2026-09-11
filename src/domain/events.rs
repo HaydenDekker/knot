@@ -680,6 +680,71 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// Plan 089: pi's in-process auto-compaction started but the pi process
+    /// stopped before it completed (an `overflow` `compaction_start` with no
+    /// following `compaction_end`). The boundary of the recovery — Knot is
+    /// about to attempt an out-of-band manual compact on the same session.
+    /// Emitted by the usecase at the intervention boundary (not by the live
+    /// stream observer that emits `CompactionStarted`).
+    CompactionInterrupted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// The captured session id (always present — the recovery requires
+        /// a session to open via `--session-id`).
+        session_id: String,
+        /// pi's compaction reason (the interrupted start's reason).
+        reason: String,
+        /// The attempt the interruption was detected on.
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+    /// Plan 089: the out-of-band manual `compact` on an interrupted session
+    /// succeeded — the context was shrunk below the model window, and the
+    /// session is about to be re-entered (`SessionRestarted`).
+    ManualCompactionSucceeded {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// Context tokens before the compact
+        /// (`compaction_end.result.tokensBefore`).
+        tokens_before: u64,
+        /// The attempt the compact was run on.
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+    /// Plan 089: the out-of-band manual `compact` on an interrupted session
+    /// could not reduce the context — the session is over-full even after an
+    /// explicit compact, so the strand fails (no re-entry).
+    ManualCompactionFailed {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// The failure reason (pi's `errorMessage`, a timeout, or an abort).
+        error: String,
+        /// The attempt the compact was attempted on.
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+    /// Plan 089: the post-compact re-entry was attempted — the session was
+    /// re-opened via `--session-id` with a "please continue" prompt after a
+    /// successful manual compact. The run's own outcome (`KnotCompleted` /
+    /// `KnotFailed`) follows.
+    SessionRestarted {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// The attempt the re-entry was made on.
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
 }
 
 /// Serde default for [`LoomEvent::ContextWrapUpSteered::mechanism`]:

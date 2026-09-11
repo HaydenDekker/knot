@@ -1,5 +1,125 @@
 # Release Notes
 
+## v0.46.0 — 2026-09-11
+
+### Feature — Interrupted Overflow Compaction: Manual-Compact + Session-Restart Recovery (Plan 089)
+
+Plan 088 (v0.45.0) made compaction always-on and observable, but one overflow
+shape was still classified as **terminal** even though it is *resumable*: the
+in-process overflow compaction **started but never reported completion**
+(`compaction_start { reason: overflow }` with no `compaction_end`, and no
+terminal `errorMessage`). That is pi's overflow recovery dying *mid-turn* — a
+process kill, an inactivity stall, or a stream gap — leaving the context still
+over-full. Previously this fell into `ContextLimitReached` (terminal,
+"context limit reached") and the strand failed even though the session was
+still live and the context could be shrunk.
+
+**What changed — the shape is reclassified to a resumable `CompactionInterrupted`
+and Knot recovers it with an out-of-band manual compact:**
+
+1. **Classification (pi-json / pi-rpc)** — the overflow classifier now
+   distinguishes the *interrupted* shape (a `compaction_start` was observed
+   and no `compaction_end` completed the span, with no terminal
+   `errorMessage`) from the terminal shapes (recovered-then-failed, or
+   attempted-but-could-not-fit). It yields a new **resumable**
+   `PortError::CompactionInterrupted` that carries the live session id and pi's
+   reason — instead of the terminal `ContextLimitReached`. A
+   `compaction_end` with no matching `compaction_start` is a stray (not an
+   interruption).
+2. **Manual compact (pi-rpc)** — a new `AgentRunner::manual_compact(ctx,
+   session_id, custom_instructions)` re-opens the *same* session with
+   `--session <id>` and sends a `compact` RPC (with a fixed operator note as
+   `customInstructions`), bounded by the remaining budget. It returns a
+   `CompactionRecord` on success and `PortError::ManualCompactionFailed` on
+   timeout / error / abort. A manual compact is a first-class pi command that
+   **always** emits a `compaction_end` (success or failure), so the interrupted
+   span is closed and the context is actually reduced — the mid-turn
+   `agent_end`-gated path that originally failed is bypassed entirely.
+3. **Recovery (session-resume usecase)** — on a `CompactionInterrupted`, the
+   usecase runs **one** manual compact (bounded per failed execution), records
+   the boundary events, and — on success — re-enters the session with a restart
+   note ("your context was just compacted — continue from the compacted
+   state"). If the explicit compact itself cannot reduce the context the run is
+   terminal. A second interruption (if the re-entry overflows again) is left to
+   the normal retry machinery.
+4. **New events (loom log + service log)** — `CompactionInterrupted`,
+   `ManualCompactionSucceeded` (with `tokens_before`), `ManualCompactionFailed`
+   (with the error), and `SessionRestarted`. The good shape in the service log:
+   `CompactionInterrupted` → `ManualCompactionSucceeded` → `SessionRestarted`
+   → the strand continues.
+5. **Driver hold (pi-rpc)** — an in-flight `compaction_start` now **holds** the
+   teardown past `agent_end`: the driver waits for the matching
+   `compaction_end` (or a stray `compaction_end` is ignored) instead of tearing
+   down mid-compaction, which is what cut the span short in the first place.
+
+**Operator note:** the manual-compact `customInstructions` is a fixed operator
+note (default) — it tells the compact to preserve the durable task state, open
+work items, and checklist/state pointers so the next session continues without
+re-deriving context. No new per-strand knob; the `compaction.enabled` escape
+hatch is unchanged. See `docs/concepts.md` (Context Compaction) and
+`docs/troubleshooting.md` (`CompactionInterrupted`).
+
+## v0.45.1 — 2026-09-11
+
+### Fix — Overflow Classification: "Compaction Attempted but Could Not Fit" vs. "Compaction Did Not Run"
+
+Plan 088 (v0.45.0) added live compaction observation and always-on
+compaction, but the overflow **error message** kept a misleading branch. When
+an over-full context surfaced as a provider overflow error with an empty
+final response, the message was chosen by `terminal_overflow(...)`, which
+only matches the *recovered-then-failed* shape (a failing overflow record
+preceded by a successful one). Any other overflow failure fell through to a
+hardcoded "pi auto-compaction **did not run** … enable compaction with
+`.pi/settings.json`" message — even when compaction had actually run and
+simply could not shrink the context.
+
+**Observed incident:** a plan-author run whose single model output (~26.7k
+tokens) pushed the context from ~123k straight past the 150k window in one
+turn. pi's threshold compaction only runs *between* turns (at `agent_end`),
+so it could not prevent the mid-turn overflow; the overflow recovery **did**
+start (`CompactionStarted reason=overflow`) but its summarisation could not
+reduce a near-window context below the limit. Knot's message wrongly told the
+operator to "enable compaction," which was already on.
+
+**Fix — a single classifier
+(`PiJsonAgentRunner::classify_overflow_failure`) replaces the old
+`terminal_overflow(...).or(...)` fallthrough at both runner call sites
+(pi-json and pi-rpc), distinguishing three shapes:**
+
+1. **Recovered, then failed** (terminal) — unchanged: a failing overflow
+   record preceded by a successful one. Message is pi's recovery-failure
+   `errorMessage` (or a generic "cannot fit after compaction").
+2. **Compaction attempted but could not fit** — a provider overflow error
+   with an empty response **and** a compaction was attempted (a live
+   `compaction_start` was observed, or a `compaction_end` record exists).
+   Message: "pi **attempted** compaction (reason(s): …) but the context
+   still cannot fit … Compaction is **already enabled**; lower the model's
+   `maxTokens` … or use a larger-context model."
+3. **Compaction never ran** — a provider overflow error with an empty
+   response and **no** compaction event (compaction disabled in pi
+   settings). Message unchanged: "pi auto-compaction did not run … enable
+   compaction with `.pi/settings.json`."
+
+The distinction between 2 and 3 is observable because the live
+`compaction_start` (and any `compaction_end`) are recorded in
+`compaction_starts` / `compactions` even when the recovery produces no
+successful compaction.
+
+**Root-cause note for operators (the rig-side fix):** pi's threshold
+compaction runs *between* turns, at a context of `contextWindow −
+reserveTokens` (default `150000 − 16384 = 133616`). A single turn's output
+(up to the model's `maxTokens`) added to a just-below-threshold context can
+exceed the window — that is the incident. The invariant that prevents it is
+**`reserveTokens ≥ maxTokens`**: then a max-size output from a
+just-below-threshold context still lands under the window. The rig's model
+had `maxTokens: 32768 > reserveTokens: 16384`, so the invariant was violated.
+Fix: raise `compaction.reserveTokens` to ≥ the model's `maxTokens` (e.g.
+`32768`), or lower the model's `maxTokens` to ≤ `16384`, or use a
+larger-context model.
+
+**No document or format change** — profiles, knots and looms are unchanged;
+no migration required.
+
 ## v0.45.0 — 2026-09-11
 
 ### Extended — Compaction Assurance: Auto-Compaction Always On, Overflow Recovery Continues the Session (Plan 088)

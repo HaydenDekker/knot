@@ -19,7 +19,6 @@ use crate::application::ports::{
     AgentOutput, AgentRunner, CompactionObservation,
     LoomLogPort, PortError,
 };
-#[cfg(test)]
 use crate::application::ports::ExecutionContext;
 use crate::application::usecases::system_event_emitter::{
     EventScope, SystemEventEmitter,
@@ -82,6 +81,30 @@ pub const MAX_CONTINUATIONS: u32 = 10;
 /// greppable.
 const FINAL_RESPONSE_REQUEST: &str =
     "Please produce your final response, or continue if you have not finished.";
+
+/// Plan 089: the guidance passed to an out-of-band manual `compact` (pi's
+/// `customInstructions`) when an in-process overflow compaction was
+/// interrupted. A fixed operator note by default — the compact summarises
+/// the *older* portion of the context, so it must preserve the durable task
+/// state, open work items, and the checklist/state pointers that let the
+/// next session continue without re-deriving context. Kept single-sourced
+/// here (overridable from the agent config is a future extension, not a
+/// per-strand knob).
+const COMPACTION_CUSTOM_INSTRUCTIONS_DEFAULT: &str =
+    "Summarise the conversation, preserving the durable task state, open work \
+     items, and checklist/state pointers so the next session can continue \
+     without re-deriving the context.";
+
+/// Plan 089: the restart note appended to the prompt on the attempt that
+/// follows a successful out-of-band manual compact of an interrupted
+/// session. It tells the agent the context was just compacted (its earlier
+/// turns are now summarised) and to continue from the compacted state.
+/// Replaces [`FINAL_RESPONSE_REQUEST`] for that one attempt. User-facing
+/// agent text — keep it greppable.
+const COMPACTION_RESTART_NOTE: &str =
+    "Your session's context was just compacted (earlier turns are now \
+     summarised). Continue from the compacted state and produce your final \
+     response when done.";
 
 /// The inactivity restart note appended to the prompt on the attempt that
 /// follows an inactivity kill (plan 081). Replaces
@@ -454,6 +477,11 @@ fn execute_with_resume_internal(
     let mut pending_note: Option<String> = None;
     // Plan 081: count of inactivity kills (terminal exhaustion message).
     let mut inactivity_kills: u32 = 0;
+    // Plan 089 (D3): bounds the out-of-band manual compact to ONE per failed
+    // execution — the first `CompactionInterrupted` triggers it; a second
+    // interruption (if the re-entry overflows again) is left to the normal
+    // retry machinery (no further manual compacts).
+    let mut manual_compact_done = false;
 
     // --- First attempt (no session ID) ---
     // Delegate to execute_with_config_and_observer so the adapter
@@ -704,6 +732,166 @@ fn execute_with_resume_internal(
         // Update session_id from the error (in case it changed)
         if let Some(sid) = first_error.session_id() {
             *session_id = Some(sid.clone());
+        }
+
+        // Plan 089 (D3): an interrupted in-process overflow compaction is
+        // resumable, and the out-of-band manual compact is the remedy. This
+        // runs at the top of the loop (checking the most recent failure,
+        // `first_error`) so it catches a first-attempt interruption *before*
+        // re-executing — bounded to ONE manual compact per execution (a
+        // second interruption is left to the normal retry machinery).
+        let interrupted_reason = match &first_error {
+            PortError::CompactionInterrupted { reason, .. } => Some(reason.clone()),
+            _ => None,
+        };
+        if let (Some(reason), Some(sid)) = (
+            interrupted_reason,
+            session_id.clone().filter(|s| !s.is_empty()),
+        ) {
+            if manual_compact_done {
+                // Already ran the out-of-band manual compact on this
+                // execution and the re-entry still interrupted — no further
+                // remedy; let the normal retry machinery proceed (it will
+                // exhaust or fail on its own).
+            } else {
+                manual_compact_done = true;
+                // Boundary event: the in-flight auto-compact was interrupted;
+                // Knot is about to attempt the out-of-band manual compact.
+                let _ = loom_log.append(LoomEvent::CompactionInterrupted {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    session_id: sid.clone(),
+                    reason: reason.clone(),
+                    attempt,
+                    timestamp: format_timestamp(),
+                });
+                emit_system(
+                    emitter,
+                    loom_id,
+                    knot_id,
+                    strand_path,
+                    "CompactionInterrupted",
+                    &[
+                        ("session-id", Some(sid.clone())),
+                        ("reason", Some(reason.clone())),
+                        ("attempt", Some(attempt.to_string())),
+                    ],
+                    Some(format!(
+                        "Knot '{}' interrupted compaction (reason {reason}, attempt {attempt})",
+                        knot_id.0
+                    )),
+                );
+                // Run the out-of-band manual compact on the same session — a
+                // clean `--session` + `compact` that always emits a
+                // `compaction_end`. Use a clean config (the compact opens its
+                // own `--session`, so strip any retry `--session-id`).
+                let mut compact_config = agent_config.clone();
+                compact_config.extra_args.clear();
+                let compact_ctx = ExecutionContext {
+                    agent_config: compact_config,
+                    prompt: prompt.clone(),
+                    profile_prompt: profile_prompt.clone(),
+                    strand_path: strand_path.clone(),
+                    event_type: event_type.clone(),
+                    knot_name: knot_name.clone(),
+                    timeout: None,
+                };
+                match agent_runner
+                    .manual_compact(&compact_ctx, &sid, COMPACTION_CUSTOM_INSTRUCTIONS_DEFAULT)
+                {
+                    Ok(record) => {
+                        // The context was shrunk: record the success + the
+                        // upcoming re-entry, then re-enter with the restart
+                        // note (the loop consumes `pending_note` on the next
+                        // attempt).
+                        let _ = loom_log.append(
+                            LoomEvent::ManualCompactionSucceeded {
+                                loom_id: loom_id.clone(),
+                                knot_id: knot_id.clone(),
+                                strand_path: strand_path.clone(),
+                                session_id: sid.clone(),
+                                tokens_before: record.tokens_before.unwrap_or(0),
+                                attempt,
+                                timestamp: format_timestamp(),
+                            },
+                        );
+                        emit_system(
+                            emitter,
+                            loom_id,
+                            knot_id,
+                            strand_path,
+                            "ManualCompactionSucceeded",
+                            &[
+                                ("session-id", Some(sid.clone())),
+                                (
+                                    "tokens-before",
+                                    record.tokens_before.map(|t| t.to_string()),
+                                ),
+                                ("attempt", Some(attempt.to_string())),
+                            ],
+                            Some(format!(
+                                "Knot '{}' manual compact succeeded (attempt {attempt})",
+                                knot_id.0
+                            )),
+                        );
+                        let _ = loom_log.append(LoomEvent::SessionRestarted {
+                            loom_id: loom_id.clone(),
+                            knot_id: knot_id.clone(),
+                            strand_path: strand_path.clone(),
+                            session_id: sid.clone(),
+                            attempt,
+                            timestamp: format_timestamp(),
+                        });
+                        emit_system(
+                            emitter,
+                            loom_id,
+                            knot_id,
+                            strand_path,
+                            "SessionRestarted",
+                            &[
+                                ("session-id", Some(sid.clone())),
+                                ("attempt", Some(attempt.to_string())),
+                            ],
+                            Some(format!(
+                                "Knot '{}' re-entering session after manual compact (attempt {attempt})",
+                                knot_id.0
+                            )),
+                        );
+                        pending_note = Some(COMPACTION_RESTART_NOTE.to_string());
+                        continue;
+                    }
+                    Err(compact_failed) => {
+                        // The explicit compact could not reduce the context —
+                        // terminal (a re-entry would overflow again).
+                        let _ = loom_log.append(LoomEvent::ManualCompactionFailed {
+                            loom_id: loom_id.clone(),
+                            knot_id: knot_id.clone(),
+                            strand_path: strand_path.clone(),
+                            session_id: sid.clone(),
+                            error: compact_failed.to_string(),
+                            attempt,
+                            timestamp: format_timestamp(),
+                        });
+                        emit_system(
+                            emitter,
+                            loom_id,
+                            knot_id,
+                            strand_path,
+                            "ManualCompactionFailed",
+                            &[
+                                ("session-id", Some(sid.clone())),
+                                ("attempt", Some(attempt.to_string())),
+                            ],
+                            Some(format!(
+                                "Knot '{}' manual compact failed (attempt {attempt})",
+                                knot_id.0
+                            )),
+                        );
+                        return Err(compact_failed);
+                    }
+                }
+            }
         }
 
         // Prepare agent_config and prompt for retry
@@ -995,7 +1183,7 @@ fn execute_with_resume_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::AgentInvocationMetadata;
+    use crate::application::ports::{AgentInvocationMetadata, CompactionRecord};
     use crate::domain::value_objects::AgentConfig;
     use std::path::PathBuf;
     use std::collections::VecDeque;
@@ -1013,6 +1201,9 @@ mod tests {
         contexts: Arc<Mutex<Vec<ExecutionContext>>>,
         call_count: Arc<AtomicU32>,
         observations: Arc<Mutex<VecDeque<Vec<CompactionObservation>>>>,
+        // Plan 089: manual-compact response queue + call counter.
+        manual_responses: Arc<Mutex<VecDeque<Result<CompactionRecord, PortError>>>>,
+        manual_call_count: Arc<AtomicU32>,
     }
 
     impl TestAgentRunner {
@@ -1024,6 +1215,8 @@ mod tests {
                 contexts: Arc::new(Mutex::new(Vec::new())),
                 call_count: Arc::new(AtomicU32::new(0)),
                 observations: Arc::new(Mutex::new(VecDeque::new())),
+                manual_responses: Arc::new(Mutex::new(VecDeque::new())),
+                manual_call_count: Arc::new(AtomicU32::new(0)),
             }
         }
 
@@ -1039,6 +1232,24 @@ mod tests {
                 contexts: Arc::new(Mutex::new(Vec::new())),
                 call_count: Arc::new(AtomicU32::new(0)),
                 observations: Arc::new(Mutex::new(observations.into())),
+                manual_responses: Arc::new(Mutex::new(VecDeque::new())),
+                manual_call_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        /// Plan 089: responses plus a manual-compact response queue (popped
+        /// in order; an empty queue → the default ManualCompactionFailed).
+        fn new_with_manual_compact(
+            responses: Vec<Result<AgentOutput, PortError>>,
+            manual_responses: Vec<Result<CompactionRecord, PortError>>,
+        ) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses.into())),
+                contexts: Arc::new(Mutex::new(Vec::new())),
+                call_count: Arc::new(AtomicU32::new(0)),
+                observations: Arc::new(Mutex::new(VecDeque::new())),
+                manual_responses: Arc::new(Mutex::new(manual_responses.into())),
+                manual_call_count: Arc::new(AtomicU32::new(0)),
             }
         }
 
@@ -1048,6 +1259,11 @@ mod tests {
 
         fn call_count(&self) -> u32 {
             self.call_count.load(Ordering::SeqCst)
+        }
+
+        /// Plan 089: how many times `manual_compact` was called.
+        fn manual_call_count(&self) -> u32 {
+            self.manual_call_count.load(Ordering::SeqCst)
         }
     }
 
@@ -1107,6 +1323,29 @@ mod tests {
                 knot_name,
                 timeout,
             )
+        }
+
+        /// Plan 089: pops the next manual-compact response (default:
+        /// ManualCompactionFailed when the queue is empty).
+        fn manual_compact(
+            &self,
+            _ctx: &ExecutionContext,
+            session_id: &str,
+            _custom_instructions: &str,
+        ) -> Result<CompactionRecord, PortError> {
+            self.manual_call_count.fetch_add(1, Ordering::SeqCst);
+            self.manual_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(PortError::ManualCompactionFailed {
+                        message: format!(
+                            "manual compact on '{session_id}' (mock default)"
+                        ),
+                        session_id: Some(session_id.to_string()),
+                    })
+                })
         }
     }
 
@@ -1204,6 +1443,111 @@ mod tests {
 
     fn err_fatal() -> PortError {
         PortError::CommandNotFound("pi not found".to_string())
+    }
+
+    /// Plan 089: an interrupted in-process overflow compaction (resumable —
+    /// it carries the live session id).
+    fn err_compaction_interrupted(sid: &str, reason: &str) -> PortError {
+        PortError::CompactionInterrupted {
+            message: "compaction interrupted".to_string(),
+            session_id: Some(sid.to_string()),
+            reason: reason.to_string(),
+        }
+    }
+
+    /// Plan 089 (D3): an interrupted in-process overflow compaction triggers
+    /// ONE out-of-band manual compact; on success the run re-enters the
+    /// session and succeeds, and the `ManualCompactionSucceeded` +
+    /// `SessionRestarted` events are emitted.
+    #[test]
+    fn d3_interrupted_compaction_manual_compact_recovers() {
+        let runner = TestAgentRunner::new_with_manual_compact(
+            vec![
+                Err(err_compaction_interrupted("sess-compact", "overflow")),
+                Ok(ok_output("recovered after compact")),
+            ],
+            vec![Ok(CompactionRecord {
+                reason: "manual".to_string(),
+                tokens_before: Some(100_000),
+                will_retry: false,
+                error: None,
+                aborted: false,
+            })],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(
+            result.is_ok(),
+            "run should recover: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().stdout, "recovered after compact");
+        assert_eq!(runner.manual_call_count(), 1, "manual compact runs once");
+
+        let events = log.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::ManualCompactionSucceeded { .. })),
+            "expected a ManualCompactionSucceeded event"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionRestarted { .. })),
+            "expected a SessionRestarted event"
+        );
+        // The re-entry is also recorded (the loop consumes the restart note).
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "expected a SessionResumed for the re-entry"
+        );
+    }
+
+    /// Plan 089 (D3): when the out-of-band manual compact itself cannot
+    /// reduce the context (`ManualCompactionFailed`), the run is terminal —
+    /// the manual compact runs once, the `ManualCompactionFailed` event is
+    /// emitted, the failure propagates, and NO re-entry happens.
+    #[test]
+    fn d3_interrupted_compaction_manual_compact_failure_is_terminal() {
+        let runner = TestAgentRunner::new_with_manual_compact(
+            vec![Err(err_compaction_interrupted("sess-compact", "overflow"))],
+            vec![Err(PortError::ManualCompactionFailed {
+                message: "context still does not fit".to_string(),
+                session_id: Some("sess-compact".to_string()),
+            })],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+
+        assert!(result.is_err(), "run should be terminal");
+        assert_eq!(runner.manual_call_count(), 1, "manual compact runs once");
+        assert_eq!(
+            runner.call_count(),
+            1,
+            "no re-entry after a compact failure"
+        );
+        assert!(!result.unwrap_err().is_resumable());
+
+        let events = log.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::ManualCompactionFailed { .. })),
+            "expected a ManualCompactionFailed event"
+        );
+        // The re-entry events must NOT be emitted on the failure path.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionRestarted { .. })),
+            "no SessionRestarted on a failed manual compact"
+        );
     }
 
     /// Plan 079: build a compaction record for mock metadata.

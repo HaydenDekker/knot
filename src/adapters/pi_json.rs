@@ -153,6 +153,29 @@ impl Default for PiJsonAgentRunner {
     }
 }
 
+/// The classification of a context-overflow failure (plan 089 split the
+/// single terminal `ContextLimitReached` outcome into two).
+///
+/// - [`Self::CompactionInterrupted`] — the auto-compaction was
+///   interrupted (an `overflow` `compaction_start` with no following
+///   `compaction_end`; the pi process died mid-compaction). Resumable:
+///   an out-of-band manual compact can still shrink the context.
+/// - [`Self::ContextLimitReached`] — the compaction completed but the
+///   context still cannot fit, or compaction never ran. Terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OverflowFailure {
+    /// pi's in-process overflow recovery died mid-compaction (resumable —
+    /// the plan 089 manual-compact recovery applies).
+    CompactionInterrupted {
+        reason: String,
+    },
+    /// The context cannot fit the model window (terminal
+    /// `ContextLimitReached`).
+    ContextLimitReached {
+        message: String,
+    },
+}
+
 impl PiJsonAgentRunner {
     /// Create a new runner with the default 120-second timeout.
     pub fn new() -> Self {
@@ -587,6 +610,142 @@ impl PiJsonAgentRunner {
         }
     }
 
+    /// The interrupted overflow start's reason, when the **last** compaction
+    /// stream event is an `overflow` `compaction_start` that no
+    /// `compaction_end` followed (plan 089).
+    ///
+    /// `compactions` holds the `compaction_end` records (stream order) and
+    /// `compaction_starts` holds the `compaction_start` reasons (stream
+    /// order). An `overflow` start with no subsequent end means the process
+    /// died mid-compaction — the only shape where an out-of-band manual
+    /// compact can still recover the session.
+    ///
+    /// This is deliberately **not** a general start/end pairing (plan 088
+    /// D5's "no pairing assumption" still holds for the event log); it is a
+    /// targeted boundary check. Returns `Some("overflow")` only when the
+    /// starts outnumber the ends and the trailing unmatched start is
+    /// `overflow` (a `threshold`/`manual` start is not a resumable
+    /// interruption).
+    pub(crate) fn interrupted_overflow_compaction<'a>(
+        compactions: &'a [CompactionRecord],
+        compaction_starts: &'a [String],
+    ) -> Option<&'a str> {
+        // The last compaction event is an unmatched start only when the
+        // starts outnumber the ends. The trailing unmatched start is the
+        // most recent one recorded.
+        if compaction_starts.len() <= compactions.len() {
+            return None;
+        }
+        match compaction_starts.last()? {
+            reason if reason == "overflow" => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Classify a context-overflow failure (plan 089).
+    ///
+    /// Returns `Some(classification)` when the invocation should fail fast
+    /// (i.e. the response text is empty and the context cannot fit),
+    /// `None` otherwise. The caller must only invoke this when the response
+    /// text is empty.
+    ///
+    /// Four cases, most specific first:
+    ///
+    /// 0. **Interrupted** (resumable, plan 089) — [`Self::interrupted_
+    ///    overflow_compaction`] matches: an `overflow` `compaction_start`
+    ///    with no following `compaction_end` (the process died
+    ///    mid-compaction). Routed to
+    ///    [`Self::OverflowFailure::CompactionInterrupted`]. Checked first:
+    ///    it is identified by the starts/ends shape alone, independent of
+    ///    the provider error message.
+    /// 1. **Recovered, then failed** (terminal) — [`Self::terminal_overflow`]
+    ///    finds a failing overflow record preceded by a successful one: the
+    ///    context still cannot fit even after a successful compaction.
+    /// 2. **Compaction attempted but could not fit** — the provider overflow
+    ///    error is present and pi *attempted* a compaction that produced a
+    ///    `compaction_end` (or a start followed by an end) but none
+    ///    succeeded.
+    /// 3. **Compaction never ran** — the provider overflow error is present
+    ///    but no compaction event was observed at all (compaction disabled in
+    ///    pi settings). Fail fast: nudging an over-full session cannot help.
+    ///
+    /// Cases 1–3 route to [`Self::OverflowFailure::ContextLimitReached`].
+    pub(crate) fn classify_overflow_failure(
+        compactions: &[CompactionRecord],
+        compaction_starts: &[String],
+        error_message: Option<&str>,
+    ) -> Option<OverflowFailure> {
+        // Case 0 — interrupted auto-compact (resumable, plan 089). An
+        // `overflow` start with no following end: the process died
+        // mid-compaction. Identified by the starts/ends shape alone.
+        if let Some(reason) =
+            Self::interrupted_overflow_compaction(compactions, compaction_starts)
+        {
+            return Some(OverflowFailure::CompactionInterrupted {
+                reason: reason.to_string(),
+            });
+        }
+
+        // Case 1 — recovered, then failed (terminal).
+        if let Some(rec) = Self::terminal_overflow(compactions) {
+            return Some(OverflowFailure::ContextLimitReached {
+                message: rec
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| {
+                        "session context cannot fit the model window even after compaction".to_string()
+                    }),
+            });
+        }
+
+        // Cases 2 & 3 require a provider overflow error on the message.
+        let Some(err) = error_message else {
+            return None;
+        };
+        if !Self::is_context_overflow_message(err) {
+            return None;
+        }
+
+        // Did pi attempt a compaction? A `compaction_start` was observed
+        // (live) or a `compaction_end` record exists (post-hoc). (The
+        // "start, no end" overflow shape was already routed to case 0 above
+        // as an interruption.)
+        let attempted = !compaction_starts.is_empty() || !compactions.is_empty();
+        if !attempted {
+            // Case 3 — compaction never ran (disabled in pi settings).
+            return Some(OverflowFailure::ContextLimitReached {
+                message: format!(
+                    "context overflow, but pi auto-compaction did not run ({err}). Enable compaction for rig sessions with a project-level .pi/settings.json: {{\"compaction\": {{\"enabled\": true}}}}"
+                ),
+            });
+        }
+
+        // Case 2 — compaction was attempted (a `compaction_end` was produced
+        // or a start was followed by an end) but no successful compaction
+        // reduced the context below the window. Surface any captured
+        // compaction error, and point at the real remedies (compaction is
+        // already enabled): keep the context smaller (lower the model's
+        // maxTokens so a single turn cannot push the context past the window
+        // between compaction checkpoints) or use a larger-context model.
+        let reasons: String = if !compaction_starts.is_empty() {
+            compaction_starts.join(", ")
+        } else {
+            let rec_reasons: Vec<&str> = compactions.iter().map(|r| r.reason.as_str()).collect();
+            if rec_reasons.is_empty() {
+                "overflow".to_string()
+            } else {
+                rec_reasons.join(", ")
+            }
+        };
+        let detail = compactions.iter().find_map(|r| r.error.clone());
+        Some(OverflowFailure::ContextLimitReached {
+            message: format!(
+                "context overflow: pi attempted compaction (reason(s): {reasons}) but the context still cannot fit the model window after compaction — the recovery compaction could not reduce it below the limit{detail}. Compaction is already enabled; lower the model's maxTokens so a single turn cannot push the context past the window between compaction checkpoints, or use a larger-context model.",
+                detail = detail.map(|d| format!(" ({d})")).unwrap_or_default(),
+            ),
+        })
+    }
+
     /// Classify a provider error message as a context overflow.
     ///
     /// Plan 080: when pi's compaction never ran (disabled in pi
@@ -987,41 +1146,34 @@ impl PiJsonAgentRunner {
             });
         }
 
-        // Plan 079: terminal overflow — pi's own compact-and-retry
-        // ran and the context still does not fit, and no final
-        // response survived the stopReason filter. Session-resume
-        // re-entry cannot help; fail fast instead of clocking up
-        // the retries.
-        //
-        // Plan 080: overflow without compaction — when pi's
-        // compaction never ran (disabled in pi settings), the stream
-        // carries no compaction_end events at all: the only overflow
-        // signal is the provider's error message on the
-        // stopReason:"error" message. The same fail-fast applies —
-        // the nudge loop re-enters the same over-full session and
-        // cannot succeed (each nudge adds tokens).
+        // Plan 079/080/089: overflow — fail fast when the context cannot
+        // fit the model window. Four shapes (see `classify_overflow_failure`):
+        // an interrupted auto-compact (resumable — plan 089 routes it to
+        // `CompactionInterrupted`), recovered-then-failed, compaction
+        // attempted-but-could-not-fit, or compaction never ran. The terminal
+        // shapes cannot be helped by re-entry (it re-enters the same
+        // over-full session), so the strand fails instead of clocking up the
+        // nudge retries.
         if response_text.trim().is_empty() {
-            if let Some(rec) = Self::terminal_overflow(&compactions) {
-                return Err(PortError::ContextLimitReached {
-                    message: rec.error.clone().unwrap_or_else(|| {
-                        "session context cannot fit the model window even after compaction".to_string()
-                    }),
-                    session_id,
+            if let Some(failure) = Self::classify_overflow_failure(
+                &compactions,
+                &compaction_starts,
+                error_message.as_deref(),
+            ) {
+                return Err(match failure {
+                    OverflowFailure::CompactionInterrupted { reason } => {
+                        PortError::CompactionInterrupted {
+                            message: format!(
+                                "pi's in-process overflow compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
+                            ),
+                            reason,
+                            session_id,
+                        }
+                    }
+                    OverflowFailure::ContextLimitReached { message } => {
+                        PortError::ContextLimitReached { message, session_id }
+                    }
                 });
-            }
-            if let Some(ref err_msg) = error_message {
-                if Self::is_context_overflow_message(err_msg) {
-                    return Err(PortError::ContextLimitReached {
-                        message: format!(
-                            "context overflow, but pi auto-compaction did \
-                             not run ({err_msg}). Enable compaction for \
-                             rig sessions with a project-level \
-                             .pi/settings.json: \
-                             {{\"compaction\": {{\"enabled\": true}}}}",
-                        ),
-                        session_id,
-                    });
-                }
             }
         }
 
@@ -1670,6 +1822,215 @@ exit 0
         assert!(
             err.to_string().contains("Context overflow recovery failed"),
             "message should carry pi's errorMessage, got: {err}"
+        );
+    }
+
+    /// Plan 089: the exact shape of the pwa-todo-3 incident — an `overflow`
+    /// `compaction_start` observed but **no** `compaction_end` (the pi process
+    /// died mid-compaction before it could finish). This is now classified as
+    /// the resumable `PortError::CompactionInterrupted` (not the terminal
+    /// `ContextLimitReached`): the in-flight recovery never completed, so an
+    /// out-of-band manual compact can still shrink the context. Distinct from
+    /// "compaction did not run" (plan 080) and from the completed-but-could
+    /// -not-fit terminal case (see the test below).
+    #[test]
+    fn test_json_runner_overflow_compaction_attempted_but_could_not_fit() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-attempted"}'
+echo '{"type":"compaction_start","reason":"overflow"}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400 request (150001 tokens) exceeds the available context size (150000 tokens), try increasing it"}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_err(),
+            "interrupted overflow should fail, got: {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::CompactionInterrupted { .. }),
+            "expected CompactionInterrupted (interrupted auto-compact), got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-attempted"),
+            "error should carry the session ID"
+        );
+        // Resumable (a session was captured): the plan 089 manual-compact
+        // recovery applies.
+        assert!(err.is_resumable(), "interrupted compact with a session is resumable");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("interrupted"),
+            "message should state the compaction was interrupted, got: {err}"
+        );
+        assert!(
+            msg.contains("overflow"),
+            "message should carry the compaction reason, got: {err}"
+        );
+    }
+
+    /// Plan 089: a compaction that **completed** but could not fit — an
+    /// `overflow` `compaction_start` followed by a failing `compaction_end`
+    /// (`willRetry: false` with an error, no preceding success) — is still the
+    /// terminal `PortError::ContextLimitReached` (the recovery ran to
+    /// completion and the context genuinely cannot fit). This preserves the
+    /// plan 079/088 terminal path that plan 089 deliberately leaves
+    /// unchanged.
+    #[test]
+    fn test_json_runner_overflow_compaction_completed_but_could_not_fit() {
+        let script = r#"#!/usr/bin/env bash
+cat > /dev/null
+echo '{"type":"session","id":"sess-completed"}'
+echo '{"type":"compaction_start","reason":"overflow"}'
+echo '{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"Context overflow recovery failed after one compact-and-retry attempt. The session context is still too large."}'
+echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400 request (150001 tokens) exceeds the available context size (150000 tokens), try increasing it"}]}'
+exit 0
+"#;
+        let (runner, _dir) = make_json_emitting_runner(script);
+        let ctx = make_context(&[]);
+
+        let result = runner.execute(ctx);
+        assert!(
+            result.is_err(),
+            "completed-but-could-not-fit should fail, got: {result:?}"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PortError::ContextLimitReached { .. }),
+            "expected ContextLimitReached (completed recovery), got {err:?}"
+        );
+        assert_eq!(
+            err.session_id().map(String::as_str),
+            Some("sess-completed"),
+            "error should carry the session ID"
+        );
+        assert!(
+            !err.is_resumable(),
+            "a completed recovery that cannot fit is terminal (not resumable)"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("attempted compaction"),
+            "message should state compaction was attempted, got: {err}"
+        );
+        assert!(
+            msg.contains("reason(s): overflow"),
+            "message should carry the compaction reason, got: {err}"
+        );
+    }
+
+    // ── Plan 089 (D1): interrupted-overflow detection (pure, no process) ──
+
+    /// Plan 089 (D1): an `overflow` `compaction_start` with no following
+    /// `compaction_end` is an interruption (the process died mid-compaction).
+    #[test]
+    fn interrupted_when_overflow_start_has_no_end() {
+        let starts = vec!["overflow".to_string()];
+        let ends: Vec<CompactionRecord> = vec![];
+        assert_eq!(
+            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            Some("overflow")
+        );
+    }
+
+    /// Plan 089 (D1): a `compaction_end` following the overflow start is NOT
+    /// an interruption (the recovery completed — the terminal path owns it).
+    #[test]
+    fn not_interrupted_when_end_follows() {
+        let starts = vec!["overflow".to_string()];
+        let ends = vec![CompactionRecord {
+            reason: "overflow".to_string(),
+            tokens_before: Some(150_000),
+            will_retry: false,
+            error: Some("still too large".to_string()),
+            aborted: false,
+        }];
+        assert_eq!(
+            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            None
+        );
+    }
+
+    /// Plan 089 (D1): a successful overflow end followed by a failing one is
+    /// NOT an interruption (plan 079's terminal path owns it).
+    #[test]
+    fn not_interrupted_when_recovered_then_failed() {
+        let starts = vec!["overflow".to_string(), "overflow".to_string()];
+        let ends = vec![
+            CompactionRecord {
+                reason: "overflow".to_string(),
+                tokens_before: Some(150_000),
+                will_retry: true,
+                error: None,
+                aborted: false,
+            },
+            CompactionRecord {
+                reason: "overflow".to_string(),
+                tokens_before: None,
+                will_retry: false,
+                error: Some("still too large".to_string()),
+                aborted: false,
+            },
+        ];
+        assert_eq!(
+            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            None
+        );
+    }
+
+    /// Plan 089 (D1): a `threshold` start with no end is NOT a resumable
+    /// interruption (only `overflow` is).
+    #[test]
+    fn not_interrupted_on_threshold_only() {
+        let starts = vec!["threshold".to_string()];
+        let ends: Vec<CompactionRecord> = vec![];
+        assert_eq!(
+            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            None
+        );
+    }
+
+    /// Plan 089 (D1): `classify_overflow_failure` routes the interrupted case
+    /// to `CompactionInterrupted` (resumable) and the completed case to
+    /// `ContextLimitReached` (terminal).
+    #[test]
+    fn classify_interrupted_returns_resumable() {
+        // Interrupted: an overflow start with no end.
+        let starts = vec!["overflow".to_string()];
+        let ends: Vec<CompactionRecord> = vec![];
+        let c =
+            PiJsonAgentRunner::classify_overflow_failure(
+                &ends,
+                &starts,
+                Some("prompt is too long"),
+            );
+        assert!(
+            matches!(c, Some(OverflowFailure::CompactionInterrupted { .. })),
+            "interrupted -> CompactionInterrupted: {c:?}"
+        );
+
+        // Completed: a start followed by a failing end (no preceding success).
+        let starts2 = vec!["overflow".to_string()];
+        let ends2 = vec![CompactionRecord {
+            reason: "overflow".to_string(),
+            tokens_before: None,
+            will_retry: false,
+            error: Some("still too large".to_string()),
+            aborted: false,
+        }];
+        let c2 = PiJsonAgentRunner::classify_overflow_failure(
+            &ends2,
+            &starts2,
+            Some("prompt is too long"),
+        );
+        assert!(
+            matches!(c2, Some(OverflowFailure::ContextLimitReached { .. })),
+            "completed -> ContextLimitReached: {c2:?}"
         );
     }
 
