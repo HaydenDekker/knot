@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-10 (plan 087 complete — Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget, released in v0.44.0)
+> **Last Updated:** 2026-09-11 (plan 088 drafted — Compaction Assurance: always-on auto-compaction, overflow recovery continues the session)
 > **Prior:** 2026-09-08 (plan 086 complete — Graceful Task Handoff: checkpointed continuation chains for task-bearing knots, released in v0.43.0)
 
 ## How to Add a Plan
@@ -47,6 +47,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | 📝 Draft | 2026-09-11 |
 | 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
 | 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
 | 85 | [Event-Parse Log Flags and Anchored Rig `.gitignore` Entry](085-event-log-flags-and-anchored-gitignore/085-event-log-flags-and-anchored-gitignore-plan.md) | ✅ Complete (2026-09-07) — released in v0.41.1 | 2026-09-07 |
