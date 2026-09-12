@@ -296,6 +296,21 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             strand_path.0.display(),
             session_id
         ),
+        LoomEvent::TurnContinued {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            reason,
+            attempt,
+            ..
+        } => format!(
+            "TurnContinued loom={} knot={} strand={} session={} reason={reason} attempt={attempt}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
         LoomEvent::ContextWrapUpSteered {
             loom_id,
             knot_id,
@@ -789,6 +804,15 @@ mod tests {
         assert_eq!(
             render_loom_event_line(&e),
             "ManualCompactionFailed loom=review-loom knot=review strand=strands/prd.md session=sess-1 error=still too large attempt=1"
+        );
+    }
+
+    #[test]
+    fn turn_continued_line() {
+        let e = LoomEvent::TurnContinued { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), session_id: "sess-1".into(), reason: "threshold".into(), attempt: 1, timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "TurnContinued loom=review-loom knot=review strand=strands/prd.md session=sess-1 reason=threshold attempt=1"
         );
     }
 

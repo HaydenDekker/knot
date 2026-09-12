@@ -745,6 +745,24 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// Plan 089 (D6): Knot asked the compacted session to continue **in the
+    /// same process** — a `prompt` on the still-open `pi-rpc` channel, sent
+    /// when a compaction ended the turn with no final answer. The in-session
+    /// sibling of `SessionRestarted` (which starts a *new* process via
+    /// `--session-id`); it is the cheap path, so it is the one that runs on
+    /// a healthy threshold compaction.
+    TurnContinued {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        /// The compaction reason whose turn ended without an answer.
+        reason: String,
+        /// The attempt the continuation was sent on.
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
 }
 
 /// Serde default for [`LoomEvent::ContextWrapUpSteered::mechanism`]:

@@ -25,7 +25,7 @@ use crate::application::usecases::system_event_emitter::{
 };
 use crate::domain::entities::{KnotId, LoomId, StrandPath};
 use crate::domain::events::LoomEvent;
-use crate::domain::value_objects::AgentConfig;
+use crate::domain::value_objects::{AgentConfig, FINAL_RESPONSE_REQUEST};
 
 /// Emit a knot-scoped system event (plan 082), best-effort. A no-op when no
 /// emitter is wired; dispatch failures never affect the retry loop.
@@ -73,14 +73,9 @@ pub(crate) const MIN_REMAINING_SECS: u64 = 5;
 /// the dispatch and records `BatchIncomplete` (reason `caps`).
 pub const MAX_CONTINUATIONS: u32 = 10;
 
-/// The final-response request appended to the prompt on every session
-/// resume (plan 078). One message covers both failure shapes:
-/// "produce your final response" for the abrupt turn-end (empty
-/// response), "continue if you have not finished" for the mid-stream
-/// case (timeout, non-zero exit). User-facing agent text — keep it
-/// greppable.
-const FINAL_RESPONSE_REQUEST: &str =
-    "Please produce your final response, or continue if you have not finished.";
+// `FINAL_RESPONSE_REQUEST` (plan 078) now lives in `domain::value_objects`
+// so the `pi-rpc` adapter can send the same wording **in-session** after a
+// compaction (plan 089 D6) instead of through a resumed process.
 
 /// Plan 089: the guidance passed to an out-of-band manual `compact` (pi's
 /// `customInstructions`) when an in-process overflow compaction was
@@ -271,6 +266,39 @@ fn compaction_observer(
                         )),
                     );
                 }
+            }
+            // Plan 089 (D6): Knot asked the compacted session to continue on
+            // its own live channel — the cheap in-session sibling of
+            // `SessionRestarted` (new process). Normal and expected after a
+            // threshold compaction that ended the turn without an answer.
+            CompactionObservation::Continued {
+                session_id,
+                reason,
+            } => {
+                let _ = loom_log.append(LoomEvent::TurnContinued {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    session_id: session_id.clone().unwrap_or_default(),
+                    reason: reason.clone(),
+                    attempt,
+                    timestamp: format_timestamp(),
+                });
+                emit_system(
+                    emitter.as_ref(),
+                    &loom_id,
+                    &knot_id,
+                    &strand_path,
+                    "TurnContinued",
+                    &[
+                        ("session-id", session_id.clone()),
+                        ("attempt", Some(attempt.to_string())),
+                        ("reason", Some(reason.clone())),
+                    ],
+                    Some(format!(
+                        "Asked the compacted session to continue in place (reason={reason}, attempt {attempt})"
+                    )),
+                );
             }
         }
     })
@@ -1595,6 +1623,15 @@ mod tests {
         }
     }
 
+    /// Plan 089 (D6): an in-session continuation observation (the driver
+    /// asked the compacted session for its answer on the live channel).
+    fn comp_obs_continued(sid: &str, reason: &str) -> CompactionObservation {
+        CompactionObservation::Continued {
+            session_id: Some(sid.to_string()),
+            reason: reason.to_string(),
+        }
+    }
+
     /// Plan 079: successful output with compaction records in the
     /// metadata.
     fn ok_output_with_compactions(
@@ -2524,6 +2561,55 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, LoomEvent::ContextWrapUpSteered { .. })),
             "no ContextWrapUpSteered when the invocation has no wrap-up"
+        );
+    }
+
+    /// Plan 089 (D6): the driver's in-session continuation is logged as
+    /// `TurnContinued` — the in-session sibling of `SessionRestarted` — so
+    /// the compaction and the follow-up question read as one story in the
+    /// service log.
+    #[test]
+    fn turn_continued_observation_is_logged() {
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Ok(ok_output("done"))],
+            vec![vec![
+                comp_obs_started("sess-abc", "threshold"),
+                comp_obs_ended(
+                    "sess-abc",
+                    "threshold",
+                    Some(140_000),
+                    None,
+                    false,
+                ),
+                comp_obs_continued("sess-abc", "threshold"),
+            ]],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok(), "healthy run: {:?}", result.err());
+
+        let events = log.events();
+        match events.last() {
+            Some(LoomEvent::TurnContinued {
+                session_id,
+                reason,
+                attempt,
+                ..
+            }) => {
+                assert_eq!(session_id, "sess-abc");
+                assert_eq!(reason, "threshold");
+                assert_eq!(*attempt, 1, "the usecase numbers attempts from 1");
+            }
+            other => panic!("Expected TurnContinued, got {other:?}"),
+        }
+        // The span itself is still reported as usual (D6 adds, never
+        // replaces).
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::ContextCompacted { .. })),
+            "the span is still reported — D6 adds, never replaces"
         );
     }
 

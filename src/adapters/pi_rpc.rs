@@ -66,7 +66,7 @@ use crate::application::ports::{
     CompactionRecord, ExecutionContext, PortError, TokenUsage, WrapUpRecord,
 };
 use crate::domain::entities::StrandPath;
-use crate::domain::value_objects::AgentConfig;
+use crate::domain::value_objects::{AgentConfig, FINAL_RESPONSE_REQUEST};
 
 /// The steering message queued when the context crosses the wrap-up limit.
 ///
@@ -159,6 +159,90 @@ struct TurnState {
     /// `agent_settled` seen for the current turn — pi has finished the
     /// whole prompt, post-agent compaction included (plan 089 D5).
     settled: bool,
+    /// The current turn's `agent_end` carried no final answer (plan 089
+    /// D6: the shape that gets an in-session continuation once a compaction
+    /// span has completed).
+    text_empty: bool,
+    /// Ignore `agent_settled` until the next `agent_end` — set when Knot
+    /// sends the D6 continuation, because pi's settle for the turn it just
+    /// compacted can still be in flight and must not close the channel out
+    /// from under the continuation.
+    ignore_settle: bool,
+}
+
+/// The end-of-turn decision (plan 089 D5 + D6), taken after every stream
+/// line and on every quiet tick of the driver loop:
+///
+/// 1. if the turn is ready to tear down but answered nothing and a
+///    compaction span has completed, ask the **same** session to continue in
+///    place (D6) rather than closing the channel and paying for a new
+///    process plus a second summarisation; otherwise
+/// 2. when pi is done with the turn ([`teardown_due`]), close stdin and arm
+///    the teardown grace.
+///
+/// The order matters: closing first is what used to lose the answer, because
+/// pi exits on stdin EOF — the continuation has to go out while the pipe is
+/// still open. A continuation that pi never answers is bounded by ordinary
+/// liveness (the 081 inactivity watchdog, then the total budget): no new
+/// knob, and no hang when pi does answer.
+#[allow(clippy::too_many_arguments)] // one decision, taken in two places in the loop
+fn settle_turn_or_continue(
+    stdin: &mut Option<BufWriter<ChildStdin>>,
+    turn: &mut TurnState,
+    flags: &RpcFlags,
+    continuation_sent: &mut bool,
+    last_compaction_reason: &mut Option<String>,
+    observer: &Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
+    observe_state: &CompactionObserveState,
+) {
+    if stdin.is_none() {
+        return;
+    }
+    let ready = teardown_due(turn, flags.open_compaction.load(Ordering::Relaxed));
+    if !ready {
+        return;
+    }
+    // D6 — the answer-less turn after a compaction: one continuation.
+    if !*continuation_sent
+        && turn.agent_end
+        && turn.text_empty
+        && last_compaction_reason.is_some()
+    {
+        let reason = last_compaction_reason
+            .take()
+            .expect("checked by the is_some guard above");
+        let sent = send_rpc_line(
+            stdin,
+            &serde_json::json!({
+                "type": "prompt",
+                "message": FINAL_RESPONSE_REQUEST,
+            })
+            .to_string(),
+        );
+        // Whether or not the write worked, this attempt is used up: a failed
+        // send means the process is going away, and holding the teardown for
+        // it would only delay the inevitable.
+        *continuation_sent = true;
+        if sent {
+            // Wait for the continuation's own turn; pi's settle for the turn
+            // it compacted may still be in flight.
+            *turn = TurnState {
+                ignore_settle: true,
+                ..Default::default()
+            };
+            if let Some(observer) = observer {
+                observer(&CompactionObservation::Continued {
+                    session_id: observe_state.session_id(),
+                    reason,
+                });
+            }
+        }
+        return;
+    }
+    // D5 — nothing left to ask: close the pipe (pi exits on EOF) and arm the
+    // grace for the main loop.
+    *stdin = None;
+    flags.teardown_armed.store(true, Ordering::Relaxed);
 }
 
 /// The one teardown predicate (plan 089 D5): close stdin when pi is done
@@ -1037,19 +1121,31 @@ fn run_rpc_driver(
     // when pi goes silent after `agent_end` (the old-pi shape, where no
     // `agent_settled` ever arrives).
     let mut turn = TurnState::default();
+    // Plan 089 (D6): the in-session continuation, bounded to one per
+    // attempt (no new knob). `last_compaction_reason` is the reason of the
+    // most recent *completed* span, and is cleared when the continuation is
+    // sent so a compaction inside the continuation cannot chain a second
+    // prompt; a continuation that still ends empty falls through to the
+    // existing `--session-id` session-resume path.
+    let mut continuation_sent = false;
+    let mut last_compaction_reason: Option<String> = None;
 
     loop {
         let line = match line_rx.recv_timeout(SETTLE_WINDOW) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // No stream bytes for a tick: the settle window may have
-                // elapsed with the turn finished and no compaction open.
-                if stdin.is_some()
-                    && teardown_due(&turn, flags.open_compaction.load(Ordering::Relaxed))
-                {
-                    stdin = None;
-                    flags.teardown_armed.store(true, Ordering::Relaxed);
-                }
+                // elapsed with the turn finished and no compaction open, so
+                // the end-of-turn decision still gets made here.
+                settle_turn_or_continue(
+                    &mut stdin,
+                    &mut turn,
+                    &flags,
+                    &mut continuation_sent,
+                    &mut last_compaction_reason,
+                    &observer,
+                    &observe_state,
+                );
                 continue;
             }
             // The stdout reader hit EOF — the process exited.
@@ -1189,11 +1285,18 @@ fn run_rpc_driver(
                 flags.agent_end.store(true, Ordering::Relaxed);
                 turn.agent_end = true;
                 turn.agent_end_at = Some(Instant::now());
+                turn.text_empty =
+                    PiJsonAgentRunner::agent_end_response_text(&v).trim().is_empty();
+                // A turn of our own: its settle counts again (D6).
+                turn.ignore_settle = false;
             }
             // Plan 089 (D5): pi finished the whole prompt — post-agent
             // compaction included. This is the authoritative teardown
             // signal; the loop below closes stdin on it.
-            Some("agent_settled") => {
+            // A settle for a turn Knot already replaced (the D6 continuation
+            // went out just before pi emitted the settle of the turn it
+            // compacted) is not this turn's end — hence the guard.
+            Some("agent_settled") if !turn.ignore_settle => {
                 turn.settled = true;
             }
             // Plan 089 (D4): an in-flight compaction holds the teardown —
@@ -1207,20 +1310,30 @@ fn run_rpc_driver(
             }
             Some("compaction_end") => {
                 flags.open_compaction.store(false, Ordering::Relaxed);
+                // Plan 089 (D6): remember the reason of the completed span —
+                // it is what makes an answer-less settled turn continuable.
+                last_compaction_reason = Some(
+                    v.get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                );
             }
             _ => {}
         }
 
-        // Teardown check after every line: pi may settle (or end the turn,
-        // with no compaction open) on this very line.
-        if stdin.is_some()
-            && teardown_due(&turn, flags.open_compaction.load(Ordering::Relaxed))
-        {
-            // Dropping the writer closes the pipe — pi's rpc mode exits on
-            // EOF. The driver keeps draining until the channel disconnects.
-            stdin = None;
-            flags.teardown_armed.store(true, Ordering::Relaxed);
-        }
+        // End-of-turn decision after every line: pi may settle (or end the
+        // turn with no compaction open) on this very line, and an answer-less
+        // turn after a compaction gets its in-session continuation here.
+        settle_turn_or_continue(
+            &mut stdin,
+            &mut turn,
+            &flags,
+            &mut continuation_sent,
+            &mut last_compaction_reason,
+            &observer,
+            &observe_state,
+        );
     }
 }
 
@@ -1575,11 +1688,20 @@ done
     /// `result.tokensBefore` is reported as the pre-compact context size.
     #[test]
     fn rpc_manual_compact_success() {
-        let (path, _dir) = mock_script("placeholder");
+        let (path, dir) = mock_script("placeholder");
+        let log = dir.path().join("stdin.log");
+        // A compact-only run: every command is logged so the test can prove
+        // no `prompt` is ever sent (the D6 continuation belongs to a real
+        // run, never to a manual compact).
         let script = r#"#!/usr/bin/env bash
-read -r _
-echo '{"type":"compaction_end","reason":"manual","result":{"summary":"s","firstKeptEntryId":"x","tokensBefore":120000,"details":{}},"aborted":false,"willRetry":false}'
-"#;
+while IFS= read -r line; do
+  echo "$line" >> "__LOG__"
+  case "$line" in
+    *compact*) echo '{"type":"compaction_end","reason":"manual","result":{"summary":"s","firstKeptEntryId":"x","tokensBefore":120000,"details":{}},"aborted":false,"willRetry":false}' ;;
+  esac
+done
+"#
+        .replace("__LOG__", log.to_str().unwrap());
         std::fs::write(&path, script).unwrap();
         let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
         let result = runner.manual_compact(&ctx("do the thing", None), "sess-int", "keep task state");
@@ -1588,6 +1710,15 @@ echo '{"type":"compaction_end","reason":"manual","result":{"summary":"s","firstK
         assert_eq!(rec.tokens_before, Some(120_000));
         assert!(!rec.aborted, "a successful manual compact is not aborted");
         assert!(rec.error.is_none(), "a successful manual compact carries no error");
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            sent.contains("compact"),
+            "the compact command is sent: {sent}"
+        );
+        assert!(
+            !sent.contains("\"type\":\"prompt\""),
+            "a compact-only run sends no prompt: {sent}"
+        );
     }
 
     /// Plan 089 (D2): a manual `compact` that never completes (no
@@ -1773,11 +1904,27 @@ sleep 10
     /// which is why the plan-089 phase-4 tests passed while the defect stayed
     /// live (D5's "why the D4 tests missed this").
     fn pi_like_rpc_mock(log: &str, body: &str) -> String {
+        pi_like_rpc_mock_turns(log, body, "")
+    }
+
+    /// [`pi_like_rpc_mock`] with a second turn: `on_prompt` is emitted (by
+    /// the stdin reader, so it is properly interleaved) when the **second**
+    /// `prompt` command arrives — the plan 089 D6 in-session continuation.
+    /// An empty `on_prompt` means the mock never answers it (the run then
+    /// ends on its deadline, which is what the "continuation fires once"
+    /// shape needs).
+    fn pi_like_rpc_mock_turns(log: &str, body: &str, on_prompt: &str) -> String {
+        let on_prompt = if on_prompt.trim().is_empty() {
+            ":"
+        } else {
+            on_prompt
+        };
         // Built by substitution (not `format!`) so the bash braces and the
         // JSON braces need no escaping.
         let template = r#"#!/usr/bin/env bash
 log="__LOG__"
 : > "$log"
+prompts=0
 {
 __BODY__
 } &
@@ -1788,13 +1935,22 @@ while IFS= read -r line; do
     *get_state*)
       echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-d5","autoCompactionEnabled":true}}'
       ;;
+    *prompt*)
+      prompts=$((prompts + 1))
+      if [ "$prompts" = "2" ]; then
+        __ON_PROMPT__
+      fi
+      ;;
   esac
 done
 echo eof >> "$log"
 kill $writer 2>/dev/null
 exit 0
 "#;
-        template.replace("__LOG__", log).replace("__BODY__", body)
+        template
+            .replace("__LOG__", log)
+            .replace("__BODY__", body)
+            .replace("__ON_PROMPT__", on_prompt)
     }
 
     /// Run a pi-shaped mock and return the runner's result plus the elapsed
@@ -1819,20 +1975,35 @@ exit 0
     /// `compaction_end` is observed and the process exits cleanly instead of
     /// dying ~1 s into the summarisation. Under the pre-D5 code the mock
     /// exits at the `agent_end` close and never reaches `compaction_start`.
-    #[test]
-    fn rpc_agent_end_empty_then_threshold_compaction_completes() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("stdin.log");
-        let script = pi_like_rpc_mock(
-            log.to_str().unwrap(),
-            r#"echo '{"type":"agent_start"}'
+    /// pi's evidence-A shape (turn 1): an `agent_end` with **no** text, then
+    /// the post-`agent_end` threshold compaction, then the settle — in pi's
+    /// real order, with the span starting a tick after `agent_end`.
+    const THRESHOLD_TURN_WITHOUT_ANSWER: &str = r#"echo '{"type":"agent_start"}'
 echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[]}]}'
 sleep 0.05
 echo '{"type":"compaction_start","reason":"threshold"}'
 sleep 0.4
 echo '{"type":"compaction_end","reason":"threshold","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":140000,"details":{}},"aborted":false,"willRetry":false}'
 echo '{"type":"agent_settled"}'
-"#,
+"#;
+
+    /// The answer Knot asks for on the live channel (plan 089 D6): a normal
+    /// turn of its own, ending with text and a settle.
+    const CONTINUATION_ANSWER: &str = r#"echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"finished after the compaction"}]}]}'
+echo '{"type":"agent_settled"}'
+"#;
+
+    #[test]
+    fn rpc_agent_end_empty_then_threshold_compaction_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        // The continuation turn (plan 089 D6) answers the in-session prompt
+        // so the run finishes; this test is about the span surviving the
+        // teardown, so it only needs the compaction to be observed.
+        let script = pi_like_rpc_mock_turns(
+            log.to_str().unwrap(),
+            THRESHOLD_TURN_WITHOUT_ANSWER,
+            CONTINUATION_ANSWER,
         );
         let (result, elapsed) = run_pi_like(&script, Duration::from_secs(15));
         let out = result.expect("a compaction that completes must not fail the run");
@@ -1950,5 +2121,153 @@ echo '{"type":"compaction_end","reason":"overflow","result":{"summary":"s","firs
             std::fs::read_to_string(&log).unwrap().contains("eof"),
             "stdin is closed once the span closes"
         );
+    }
+
+    // ── Plan 089 (D6): the in-session continuation after a compaction ──
+
+    /// Run a pi-shaped mock with a live observation sink; returns the result,
+    /// the observations, the stdin log, and the elapsed time.
+    fn run_pi_like_observed(
+        script: &str,
+        log: &std::path::Path,
+        timeout: Duration,
+    ) -> (
+        Result<AgentOutput, PortError>,
+        Vec<CompactionObservation>,
+        String,
+        Duration,
+    ) {
+        let (path, _dir) = mock_script("placeholder");
+        std::fs::write(&path, script).unwrap();
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+        let mut c = ctx("do the thing", None);
+        c.timeout = Some(timeout);
+
+        let seen: Arc<Mutex<Vec<CompactionObservation>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let observer: Arc<dyn Fn(&CompactionObservation) + Send + Sync> =
+            Arc::new(move |o: &CompactionObservation| {
+                sink.lock().unwrap().push(o.clone());
+            });
+
+        let start = Instant::now();
+        let result = runner.execute_inner(c, Some(observer));
+        (
+            result,
+            seen.lock().unwrap().clone(),
+            std::fs::read_to_string(log).unwrap_or_default(),
+            start.elapsed(),
+        )
+    }
+
+    /// The number of `prompt` commands Knot put on the mock's stdin.
+    fn prompt_lines(stdin_log: &str) -> usize {
+        stdin_log
+            .lines()
+            .filter(|line| line.contains("\"type\":\"prompt\""))
+            .count()
+    }
+
+    /// Plan 089 (D6): a threshold compaction that ends the turn with no
+    /// answer is followed by **one `prompt` on the live channel** — the same
+    /// session answers, so no new process, no re-send of the prompt, no
+    /// second summarisation. The continuation's text is the run's response
+    /// and `TurnContinued` is what the operator sees.
+    #[test]
+    fn rpc_continues_in_session_after_threshold_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock_turns(
+            log.to_str().unwrap(),
+            THRESHOLD_TURN_WITHOUT_ANSWER,
+            CONTINUATION_ANSWER,
+        );
+        let (result, observations, sent, elapsed) =
+            run_pi_like_observed(&script, &log, Duration::from_secs(15));
+
+        let out = result.expect("the continuation answers in-session");
+        assert_eq!(
+            out.stdout,
+            "finished after the compaction",
+            "the continuation turn's text is the response (not the empty first turn)"
+        );
+        assert_eq!(
+            prompt_lines(&sent),
+            2,
+            "the original prompt plus exactly one in-session continuation: {sent}"
+        );
+        assert!(
+            observations.iter().any(|o| matches!(
+                o,
+                CompactionObservation::Continued { reason, session_id }
+                    if reason == "threshold"
+                        && session_id.as_deref() == Some("sess-d5")
+            )),
+            "a Continued observation carries the compaction reason: {observations:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the run ends on the continuation's settle (got {elapsed:?})"
+        );
+    }
+
+    /// Plan 089 (D6): the continuation is fire-once per attempt — a second
+    /// answer-less turn is not chased with another `prompt`. The run stays
+    /// an ordinary empty response, which is the shape the existing
+    /// `--session-id` session-resume path already handles (plan 078/089 D3),
+    /// so the process restart remains the backstop.
+    #[test]
+    fn rpc_continuation_fires_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        // No answer to the continuation prompt at all.
+        let script =
+            pi_like_rpc_mock_turns(log.to_str().unwrap(), THRESHOLD_TURN_WITHOUT_ANSWER, "");
+        let (result, _) = run_pi_like(&script, Duration::from_millis(1500));
+        assert!(
+            result.is_ok(),
+            "an unanswered continuation is still an ordinary empty response: {result:?}"
+        );
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            prompt_lines(&sent),
+            2,
+            "exactly one continuation, never a second: {sent}"
+        );
+    }
+
+    /// Plan 089 (D6): a continuation that also ends empty returns `Ok` with
+    /// empty text rather than failing — the usecase's empty-response resume
+    /// (the `SessionResumed` path, covered by the plan 078 usecase tests)
+    /// takes over and now resumes an already-compacted session.
+    #[test]
+    fn rpc_continuation_empty_answer_falls_through_to_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("stdin.log");
+        let script = pi_like_rpc_mock_turns(
+            log.to_str().unwrap(),
+            THRESHOLD_TURN_WITHOUT_ANSWER,
+            r#"echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[]}]}'
+echo '{"type":"agent_settled"}'
+"#,
+        );
+        let (result, observations, sent, _) =
+            run_pi_like_observed(&script, &log, Duration::from_secs(15));
+        let out = result.expect("an empty continuation is not a failure");
+        assert!(
+            out.stdout.trim().is_empty(),
+            "empty in, empty out — the resume path owns it: {:?}",
+            out.stdout
+        );
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|o| matches!(o, CompactionObservation::Continued { .. }))
+                .count(),
+            1,
+            "one continuation reported: {observations:?}"
+        );
+        assert_eq!(prompt_lines(&sent), 2, "one continuation sent: {sent}");
     }
 }

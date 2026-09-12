@@ -464,6 +464,18 @@ pub enum CompactionObservation {
         /// The parsed `compaction_end` record.
         record: CompactionRecord,
     },
+    /// Plan 089 (D6): Knot asked the **same** session to continue in place
+    /// after a compaction ended its turn with no final answer — one
+    /// `prompt` command on the still-open `pi-rpc` channel, no new process.
+    /// Carried on this enum because it is emitted from the same place the
+    /// compaction spans are observed (the runner's driver thread).
+    Continued {
+        /// Session id captured so far from the stream, if any.
+        session_id: Option<String>,
+        /// The reason of the compaction whose turn ended without an answer
+        /// (`"threshold"` in the normal case).
+        reason: String,
+    },
 }
 
 /// One context wrap-up steer observed in an invocation (plan 084).

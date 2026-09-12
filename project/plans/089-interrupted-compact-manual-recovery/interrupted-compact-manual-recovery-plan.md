@@ -733,9 +733,9 @@ change, so they land after the phases that change behaviour.
 ## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–13 pending)
 
 **Pending (added 2026-09-12 from the rig-run evidence table, target
-v0.47.0):** phase 9 — in-session continuation (D6); phase 10 — threshold
-interruptions (D7); phase 11 — compaction-aware inactivity window (D8);
-phase 12 — observability (D9); phase 13 — verify, docs, v0.47.0.
+v0.47.0):** phase 10 — threshold interruptions (D7); phase 11 —
+compaction-aware inactivity window (D8); phase 12 — observability (D9);
+phase 13 — verify, docs, v0.47.0.
 
 #### Follow-on phase log
 
@@ -773,6 +773,55 @@ phase 12 — observability (D9); phase 13 — verify, docs, v0.47.0.
 - `cargo test` (1063 lib + all integration) and `cargo clippy` — no new
   warnings from this phase (the driver's `too_many_arguments` line now
   carries an `allow`, as `live_output::spawn_watchdog` does).
+- **Negative control** (the tests must fail on the old behaviour, or they
+  prove nothing): with `teardown_due` reduced to the pre-D5
+  `agent_end`-immediately rule, 5 tests fail —
+  `rpc_agent_end_empty_then_threshold_compaction_completes`,
+  `rpc_fallback_settle_window_defers_for_compaction_start` and the three D6
+  tests (which depend on the pipe still being open). The patch was reverted
+  and the suite re-run green.
+
+**Phase 9 (D6) — complete.** `src/adapters/pi_rpc.rs`,
+`src/application/{ports,session_resume}.rs`, `src/domain/{events,value_objects}.rs`,
+`src/adapters/{service_log,pi_json}.rs`, `src/application/activity.rs`:
+
+- `settle_turn_or_continue(…)` is the driver's single end-of-turn decision,
+  called after every stream line **and** on every quiet tick: if the run is
+  ready to tear down but the turn answered nothing and a compaction span
+  completed, it sends **one** `{"type":"prompt","message":
+  FINAL_RESPONSE_REQUEST}` on the live channel (D6) instead of closing it;
+  otherwise it closes stdin and arms the grace (D5). Ordering is the point:
+  closing first is what used to lose the answer.
+- One continuation per attempt (`continuation_sent`, no new knob). After it
+  is sent the turn state resets with `ignore_settle`, because pi's settle
+  for the turn it compacted can still be in flight and would otherwise close
+  the channel out from under the continuation; the next `agent_end` clears
+  it and its `agent_settled` ends the run.
+- A continuation pi never answers is bounded by ordinary liveness (the 081
+  inactivity window, then the total budget) — deliberately no new timeout.
+- `CompactionObservation::Continued { session_id, reason }` (the driver's
+  observation channel) → `LoomEvent::TurnContinued` + service-log line
+  `TurnContinued loom=… knot=… strand=… session=… reason=… attempt=…` +
+  plan-082 system event + `activity.rs` arm. `SessionRestarted` keeps its
+  meaning (**new** process via `--session-id`); `TurnContinued` is the
+  in-session sibling.
+- `FINAL_RESPONSE_REQUEST` moved to `domain::value_objects` (next to
+  `HANDOFF_NOTE`) so the usecase and the adapter share the wording.
+- `PiJsonAgentRunner::agent_end_response_text` / `agent_end_error_message`
+  factored out of `parse_json_line`, so the driver's "did this turn answer?"
+  check cannot drift from what the post-hoc parse reports.
+- Tests: `rpc_continues_in_session_after_threshold_compaction` (the second
+  turn's text is the response, exactly 2 prompt lines, `Continued`
+  observed), `rpc_continuation_fires_once`,
+  `rpc_continuation_empty_answer_falls_through_to_resume` (`Ok` + empty →
+  the plan 078 resume path, which now resumes an already-compacted session),
+  `turn_continued_observation_is_logged` (usecase), `turn_continued_line`
+  (log rendering), and `rpc_manual_compact_success` extended to prove a
+  compact-only run **never** sends a prompt.
+- **Negative control:** with the continuation suppressed, exactly the three
+  D6 tests fail; with phase 8's predicate reverted they fail too. Reverted
+  and re-run green: 1068 lib tests + all integration tests, no new clippy
+  warnings.
 
 ### Shipped in v0.46.0 (phases 0–7)
 

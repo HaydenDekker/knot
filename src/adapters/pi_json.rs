@@ -405,65 +405,79 @@ impl PiJsonAgentRunner {
                     });
                 }
 
-                // Extract response text from messages array
-                // Format: messages[].content[].text
-                if let Some(messages) = value.get("messages") {
-                    if let Some(arr) = messages.as_array() {
-                        for msg in arr {
-                            if let Some(role) =
-                                msg.get("role").and_then(|r| r.as_str())
-                            {
-                                if role == "assistant" {
-                                    let stop_reason = msg.get("stopReason")
-                                        .and_then(|r| r.as_str());
-                                    // Plan 080: capture the provider error
-                                    // message of failed turns for overflow
-                                    // classification (see
-                                    // `is_context_overflow_message`). When
-                                    // pi's compaction never ran, this is
-                                    // the only overflow signal in the stream.
-                                    if stop_reason == Some("error") {
-                                        if let Some(err) = msg
-                                            .get("errorMessage")
-                                            .and_then(|e| e.as_str())
-                                        {
-                                            *error_message =
-                                                Some(err.to_string());
-                                        }
-                                    }
-                                    // Only include final responses, not intermediate
-                                    // tool-use messages (stopReason: "toolUse").
-                                    let is_final = matches!(
-                                        stop_reason,
-                                        Some("stop") | Some("length")
-                                    );
-                                    if is_final {
-                                        if let Some(content) = msg.get("content") {
-                                            if let Some(carr) = content.as_array() {
-                                                for item in carr {
-                                                    if let Some(text) =
-                                                        item.get("text").and_then(|t| t.as_str())
-                                                    {
-                                                        response_text.push_str(text);
-                                                    }
-                                                }
-                                            } else if let Some(text) =
-                                                content.as_str()
-                                            {
-                                                response_text.push_str(text);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Response text + provider error, both from the message
+                // array (shared with the `pi-rpc` driver's in-session
+                // continuation check — see `agent_end_response_text`).
+                if let Some(err) = Self::agent_end_error_message(&value) {
+                    *error_message = Some(err);
                 }
+                response_text.push_str(&Self::agent_end_response_text(&value));
             }
             _ => {}
         }
 
         true
+    }
+
+    /// The final-response text an `agent_end` event carries: the
+    /// `content[].text` of **assistant** messages whose `stopReason` is a
+    /// final one (`stop` / `length`); intermediate tool-use turns are
+    /// excluded (the plan 079/080 filter, factored out so the `pi-rpc`
+    /// driver's "did this turn answer?" check — plan 089 D6 — cannot drift
+    /// from what the post-hoc parse reports).
+    pub(crate) fn agent_end_response_text(value: &serde_json::Value) -> String {
+        let mut text = String::new();
+        let Some(messages) = value.get("messages").and_then(|m| m.as_array())
+        else {
+            return text;
+        };
+        for msg in messages {
+            if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+                continue;
+            }
+            // Only final responses, not intermediate tool-use messages
+            // (stopReason: "toolUse").
+            let is_final = matches!(
+                msg.get("stopReason").and_then(|r| r.as_str()),
+                Some("stop") | Some("length")
+            );
+            if !is_final {
+                continue;
+            }
+            let Some(content) = msg.get("content") else { continue };
+            if let Some(carr) = content.as_array() {
+                for item in carr {
+                    if let Some(t) = item.get("text").and_then(|t| t.as_str()) {
+                        text.push_str(t);
+                    }
+                }
+            } else if let Some(t) = content.as_str() {
+                text.push_str(t);
+            }
+        }
+        text
+    }
+
+    /// The provider error message of an `agent_end` value, when one of its
+    /// assistant messages ended with `stopReason: "error"` (plan 080 — when
+    /// pi's compaction never ran this is the only overflow signal in the
+    /// stream).
+    pub(crate) fn agent_end_error_message(
+        value: &serde_json::Value,
+    ) -> Option<String> {
+        let messages = value.get("messages")?.as_array()?;
+        for msg in messages {
+            if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+                continue;
+            }
+            if msg.get("stopReason").and_then(|r| r.as_str()) != Some("error") {
+                continue;
+            }
+            if let Some(err) = msg.get("errorMessage").and_then(|e| e.as_str()) {
+                return Some(err.to_string());
+            }
+        }
+        None
     }
 
     /// Parse JSON-L from raw stdout, extracting session_id, response,

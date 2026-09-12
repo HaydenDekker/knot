@@ -249,6 +249,16 @@ pub enum AgentAdapter {
 /// watchdog.
 pub const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 300;
 
+/// The final-response request (plan 078): appended to the prompt on every
+/// session resume, and reused verbatim as the **in-session continuation**
+/// message when a compaction ends a turn with no answer (plan 089 D6) —
+/// the same words, delivered on the live channel instead of a new process.
+/// User-facing agent text, so it is single-sourced here for both layers
+/// (the session-resume usecase and the `pi-rpc` adapter). Greppable const
+/// per the 078/084 convention.
+pub const FINAL_RESPONSE_REQUEST: &str =
+    "Please produce your final response, or continue if you have not finished.";
+
 /// Plan 086: the water-mark handoff note sent at `ctx-wrap-up-limit`
 /// (replacing 084's terminal `WRAP_UP_STEER` wind-down for every knot
 /// on a water-marked alias). Delivered as the `pi-rpc` steer payload
