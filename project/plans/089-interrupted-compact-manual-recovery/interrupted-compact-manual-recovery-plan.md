@@ -730,11 +730,10 @@ change, so they land after the phases that change behaviour.
   extend D1/D2/D3 to the threshold reason, and reuse the 088 observer for
   the 081 activity tick.
 
-## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–11 done, 12–13 pending)
+## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–12 done, 13 pending)
 
 **Pending (added 2026-09-12 from the rig-run evidence table, target
-v0.47.0):** phase 12 — observability (D9); phase 13 — verify, docs,
-v0.47.0.
+v0.47.0):** phase 13 — verify, docs, v0.47.0.
 
 #### Follow-on phase log
 
@@ -878,6 +877,49 @@ v0.47.0.
   `inactivity_is_held_while_a_compaction_span_is_open`. Reverted and re-run
   green: 1075 lib tests + all integration tests; clippy warnings 207 vs a
   212-warning baseline (`9773107`), i.e. none added by phases 8–11.
+
+**Phase 12 (D9) — complete.** `src/adapters/{pi_json,pi_rpc}.rs`,
+`src/application/session_resume.rs`, `src/domain/events.rs`,
+`src/adapters/service_log.rs`, `src/application/activity.rs`, `src/server.rs`:
+
+- **Known session id.** `resumed_session_id(&AgentConfig)` reads the id Knot
+  itself passed (`--session-id X` / `--session X` / `--session-id=X`), and
+  both runners seed `CompactionObserveState` with it before the child is
+  spawned. The RPC stream has no `session` header and its `get_state` answer
+  can land after the first compaction line — that, not a missing id, is why
+  all five `CompactionStarted` rows of the evidence table printed an empty
+  `session=`. The stream still wins when it speaks (same id).
+- **Honest empty response.** `compaction_context_note(metadata)` appends the
+  compaction the empty answer arrived in to the plan-082 system event at both
+  `KnotEmptyResponse` sites — "…(attempt 2) — threshold compaction completed
+  during the turn", or "… overflow compaction was still open when the process
+  stopped". `KnotEmptyResponse` itself is unchanged, and a turn with no
+  compaction keeps the old wording verbatim.
+- **Abandoned runs.** New `LoomEvent::RunAbandoned { loom_id, knot_id,
+  strand_path, session_id: Option<String>, timestamp }` + render arm (`session=`
+  omitted when unknown, which is every startup case — the id died with the
+  process) + `activity.rs` arm. `server::abandoned_runs(queue)` builds one per
+  restored queue entry and the startup path logs them right after
+  `[startup] loaded N persisted event(s)`. A queued event file is deleted only
+  when its knot finishes, so anything `load_persisted` returns is a run that
+  stopped mid-strand; the event says plainly that the strand is re-run **from
+  scratch** (Knot does not re-enter a dead session). The helper returns events
+  instead of logging so the shape is testable — the queue adapter has no
+  rig-log port.
+- Tests: `rpc_resumed_run_seeds_the_session_id_without_get_state` (a mock that
+  never answers `get_state`, so the seed is the only possible source),
+  `resumed_session_id_reads_the_resume_flag` (including `--session-dir` and a
+  valueless trailing flag), `compaction_context_note_describes_the_empty_answer`,
+  `run_abandoned_line_omits_the_unknown_session` / `…_with_session`,
+  `restored_queue_entries_are_reported_as_abandoned_runs`,
+  `empty_queue_reports_no_abandoned_runs`.
+- **Negative control:** with the seed call dropped, `rpc_resumed_run_seeds_…`
+  fails on `session=None`; restored and green: 1082 lib tests + all
+  integration tests, clippy 207 vs the 212 baseline.
+- **Not covered by a test:** the startup wiring itself (the two tests drive
+  `abandoned_runs` directly). A `tests/` integration test would need the
+  service binary to start and write into a scratch rig; the logged line's
+  shape is covered by the render tests.
 
 ### Shipped in v0.46.0 (phases 0–7)
 

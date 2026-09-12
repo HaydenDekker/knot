@@ -103,7 +103,8 @@ fn loom_id_of(event: &LoomEvent) -> &LoomId {
         | LoomEvent::ManualCompactionSucceeded { loom_id, .. }
         | LoomEvent::ManualCompactionFailed { loom_id, .. }
         | LoomEvent::SessionRestarted { loom_id, .. }
-        | LoomEvent::TurnContinued { loom_id, .. } => loom_id,
+        | LoomEvent::TurnContinued { loom_id, .. }
+        | LoomEvent::RunAbandoned { loom_id, .. } => loom_id,
     }
 }
 

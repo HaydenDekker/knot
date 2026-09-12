@@ -763,6 +763,25 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// Plan 089 (D9): a queue entry survived the service — the run that
+    /// picked it up never finished (Knot was stopped, crashed, or killed
+    /// mid-strand), so its work is **abandoned**, not paused. Startup
+    /// reports one of these per restored entry, before the queue is
+    /// drained. The strand is then processed **from scratch** (a fresh
+    /// `KnotProcessing` on a new session): Knot does not resume a dead
+    /// agent session, and an operator comparing the `RunAbandoned` time
+    /// with the next `KnotProcessing` should expect duplicated work, not
+    /// continuation. `session_id` is `None` because the abandoned session
+    /// id is never persisted — it died with the process.
+    RunAbandoned {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: Option<String>,
+        /// ISO 8601 timestamp (local time) — the restart time, not the
+        /// time the run died.
+        timestamp: String,
+    },
 }
 
 /// Serde default for [`LoomEvent::ContextWrapUpSteered::mechanism`]:

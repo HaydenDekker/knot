@@ -296,6 +296,27 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             strand_path.0.display(),
             session_id
         ),
+        // Plan 089 (D9): `session=` only appears when the abandoned run's
+        // session id is known (it never is at startup — the id died with the
+        // process), so the common line stays short.
+        LoomEvent::RunAbandoned {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            ..
+        } => {
+            let mut line = format!(
+                "RunAbandoned loom={} knot={} strand={}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display()
+            );
+            if let Some(sid) = session_id {
+                line.push_str(&format!(" session={sid}"));
+            }
+            line
+        }
         LoomEvent::TurnContinued {
             loom_id,
             knot_id,
@@ -804,6 +825,40 @@ mod tests {
         assert_eq!(
             render_loom_event_line(&e),
             "ManualCompactionFailed loom=review-loom knot=review strand=strands/prd.md session=sess-1 error=still too large attempt=1"
+        );
+    }
+
+    /// Plan 089 (D9): the restart-time record of a run that never finished.
+    /// No session id is known, so the field is omitted entirely.
+    #[test]
+    fn run_abandoned_line_omits_the_unknown_session() {
+        let e = LoomEvent::RunAbandoned {
+            loom_id: loom("review-loom"),
+            knot_id: knot("review"),
+            strand_path: strand("strands/prd.md"),
+            session_id: None,
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "RunAbandoned loom=review-loom knot=review strand=strands/prd.md"
+        );
+    }
+
+    /// Plan 089 (D9): when the session id *is* known (a future caller), the
+    /// field is carried.
+    #[test]
+    fn run_abandoned_line_with_session() {
+        let e = LoomEvent::RunAbandoned {
+            loom_id: loom("review-loom"),
+            knot_id: knot("review"),
+            strand_path: strand("strands/prd.md"),
+            session_id: Some("sess-dead".into()),
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "RunAbandoned loom=review-loom knot=review strand=strands/prd.md session=sess-dead"
         );
     }
 

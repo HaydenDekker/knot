@@ -425,6 +425,12 @@ pub fn start_event_pipeline(
     let loaded = debounce_queue.load_persisted();
     if loaded > 0 {
         eprintln!("[startup] loaded {} persisted event(s) from disk", loaded);
+        // Plan 089 (D9): a restored entry is a run that never finished. Say
+        // so once, at restart, instead of letting the next `KnotProcessing`
+        // look like a mysterious re-run of old work.
+        for event in abandoned_runs(&*debounce_queue) {
+            crate::adapters::service_log::log_loom_event_line(&event);
+        }
     }
 
     let debounce_queue = application::debounce::DebounceEngine::spawn_with_receiver_with_window_and_queue(
@@ -1653,7 +1659,113 @@ async fn step_head_event(
     }
 }
 
-// ── Composition Tests ──────────────────────────────────────────────────────
+// ── Abandoned runs at restart (plan 089 D9) ────────────────────────────────
+
+/// Plan 089 (D9): one [`LoomEvent::RunAbandoned`] per restored queue entry.
+///
+/// A queued event is deleted only once its knot finishes, so anything
+/// `load_persisted` brings back belongs to a run that stopped mid-strand —
+/// Knot stopped, a crash, an OOM kill. The event is *not* a pause: Knot never
+/// re-enters a dead agent session, so the strand is processed from scratch on
+/// a new session and the earlier work is repeated, not resumed. Reporting it
+/// at restart is what makes the (19:08 → 22:16) gaps in a service log
+/// readable: the `RunAbandoned` names the gap, the `KnotProcessing` after it
+/// is a re-run.
+///
+/// `session_id` is always `None` here — the id lived in the process that
+/// died. The signature returns events rather than logging them so the shape
+/// is testable; callers log.
+fn abandoned_runs(queue: &dyn StrandEventQueue) -> Vec<domain::events::LoomEvent> {
+    queue
+        .snapshot()
+        .into_iter()
+        .map(|event| domain::events::LoomEvent::RunAbandoned {
+            loom_id: domain::entities::LoomId(event.loom_id),
+            knot_id: domain::entities::KnotId(event.knot_id),
+            strand_path: domain::entities::StrandPath(std::path::PathBuf::from(
+                event.strand_path,
+            )),
+            session_id: None,
+            timestamp: crate::adapters::logging::format_timestamp(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod abandoned_run_tests {
+    use super::*;
+    use crate::domain::events::LoomEvent;
+    use crate::domain::pending_event::{PendingEvent, PendingEventId};
+
+    fn pending(loom: &str, knot: &str, path: &str) -> PendingEvent {
+        PendingEvent {
+            id: PendingEventId(format!("1700000000000-{knot}")),
+            kind: "Created".to_string(),
+            loom_id: loom.to_string(),
+            knot_id: knot.to_string(),
+            strand_path: format!("/rig/looms/{loom}-loom/strands/{path}"),
+            queued_at: "2026-09-11T19:08:00+08:00".to_string(),
+        }
+    }
+
+    /// Plan 089 (D9): the restored entries of a restarted service are
+    /// reported as abandoned runs — one event each, naming the loom, the
+    /// knot and the strand, with no session id (it died with the process).
+    #[test]
+    fn restored_queue_entries_are_reported_as_abandoned_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_dir = dir.path().join("events");
+
+        // First service: two runs queued and never finished.
+        {
+            let queue = DiskBackedEventQueue::new(events_dir.clone());
+            queue.push(pending("review", "review", "prd.md"));
+            queue.push(pending("build", "build", "spec.md"));
+        }
+
+        // Restart: load, then report.
+        let queue = DiskBackedEventQueue::new(events_dir);
+        assert_eq!(queue.load_persisted(), 2);
+        let events = abandoned_runs(&queue);
+
+        assert_eq!(events.len(), 2, "{events:?}");
+        for event in &events {
+            match event {
+                LoomEvent::RunAbandoned {
+                    loom_id,
+                    knot_id,
+                    strand_path,
+                    session_id,
+                    ..
+                } => {
+                    assert_eq!(loom_id.0, knot_id.0, "fixture pairs them");
+                    assert!(
+                        strand_path.0.display().to_string().ends_with(".md"),
+                        "{strand_path:?}"
+                    );
+                    assert_eq!(session_id, &None, "the id died with the run");
+                }
+                other => panic!("Expected RunAbandoned, got {other:?}"),
+            }
+        }
+        // The service-log line is the operator's only copy of this.
+        let line = crate::adapters::service_log::render_loom_event_line(&events[0]);
+        assert!(
+            line.starts_with("RunAbandoned loom="),
+            "unexpected line: {line}"
+        );
+        assert!(!line.contains("session="), "omitted when unknown: {line}");
+    }
+
+    /// An empty queue (the normal restart) reports nothing.
+    #[test]
+    fn empty_queue_reports_no_abandoned_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = DiskBackedEventQueue::new(dir.path().join("events"));
+        assert_eq!(queue.load_persisted(), 0);
+        assert!(abandoned_runs(&queue).is_empty());
+    }
+}
 
 #[cfg(test)]
 mod composition_tests {

@@ -29,6 +29,33 @@ use crate::domain::value_objects::{AgentConfig, FINAL_RESPONSE_REQUEST};
 
 /// Emit a knot-scoped system event (plan 082), best-effort. A no-op when no
 /// emitter is wired; dispatch failures never affect the retry loop.
+/// Plan 089 (D9): the compaction an empty answer arrived in, for the
+/// empty-response line.
+///
+/// An empty response means "the agent gave nothing", which is unfair when
+/// the turn spent itself summarising the session: on the 2026-09-11 rig an
+/// empty response after a threshold compaction was blamed on the agent. The
+/// note is built from the invocation metadata (what the stream reported for
+/// *this* attempt) and is `None` when no compaction was involved, so the
+/// legacy wording survives for a genuinely empty turn.
+fn compaction_context_note(
+    metadata: Option<&crate::application::ports::AgentInvocationMetadata>,
+) -> Option<String> {
+    let m = metadata?;
+    // A start with no matching end: the process stopped mid-summarisation.
+    if m.compaction_starts.len() > m.compactions.len() {
+        let reason = m.compaction_starts.last()?;
+        return Some(format!(
+            "{reason} compaction was still open when the process stopped"
+        ));
+    }
+    let last = m.compactions.last()?;
+    Some(format!(
+        "{} compaction completed during the turn",
+        last.reason
+    ))
+}
+
 fn emit_system(
     emitter: Option<&SystemEventEmitter>,
     loom_id: &LoomId,
@@ -552,6 +579,9 @@ fn execute_with_resume_internal(
                 timestamp: format_timestamp(),
             })?;
             // System event (plan 082) — empty response on attempt 1.
+            // Plan 089 (D9): name the compaction when one was in play, so
+            // the line never blames the agent for a turn it spent compacting.
+            let note = compaction_context_note(output.metadata.as_ref());
             emit_system(
                 emitter,
                 loom_id,
@@ -562,10 +592,16 @@ fn execute_with_resume_internal(
                     ("session-id", sid.clone()),
                     ("attempt", Some(1.to_string())),
                 ],
-                Some(format!(
-                    "Knot '{}' produced an empty response (attempt 1)",
-                    knot_id.0
-                )),
+                Some(match note {
+                    Some(note) => format!(
+                        "Knot '{}' produced an empty response (attempt 1) — {note}",
+                        knot_id.0
+                    ),
+                    None => format!(
+                        "Knot '{}' produced an empty response (attempt 1)",
+                        knot_id.0
+                    ),
+                }),
             );
             if sid.is_none() {
                 // No session ID (stdio adapter / unparseable output) —
@@ -1007,6 +1043,9 @@ fn execute_with_resume_internal(
                         timestamp: format_timestamp(),
                     });
                     // System event (plan 082) — empty response in loop.
+                    // Plan 089 (D9): compaction context when one was seen
+                    // (see the attempt-1 site above).
+                    let note = compaction_context_note(output.metadata.as_ref());
                     emit_system(
                         emitter,
                         loom_id,
@@ -1020,11 +1059,18 @@ fn execute_with_resume_internal(
                             ),
                             ("attempt", Some((attempt + 1).to_string())),
                         ],
-                        Some(format!(
-                            "Knot '{}' produced an empty response (attempt {})",
-                            knot_id.0,
-                            attempt + 1
-                        )),
+                        Some(match note {
+                            Some(note) => format!(
+                                "Knot '{}' produced an empty response (attempt {}) — {note}",
+                                knot_id.0,
+                                attempt + 1
+                            ),
+                            None => format!(
+                                "Knot '{}' produced an empty response (attempt {})",
+                                knot_id.0,
+                                attempt + 1
+                            ),
+                        }),
                     );
                     // Resumable error (not a timeout — no deadline was
                     // exceeded) — continue retry loop
@@ -2562,6 +2608,47 @@ mod tests {
                 .any(|e| matches!(e, LoomEvent::ContextWrapUpSteered { .. })),
             "no ContextWrapUpSteered when the invocation has no wrap-up"
         );
+    }
+
+    /// Plan 089 (D9): the empty-response line names the compaction the empty
+    /// answer arrived in — and stays silent (legacy wording) when no
+    /// compaction was involved.
+    #[test]
+    fn compaction_context_note_describes_the_empty_answer() {
+        let meta = |starts: &[&str], ends: &[&str]| {
+            Some(crate::application::ports::AgentInvocationMetadata {
+                session_id: Some("sess-1".to_string()),
+                token_usage: None,
+                compactions: ends
+                    .iter()
+                    .map(|r| crate::application::ports::CompactionRecord {
+                        reason: r.to_string(),
+                        tokens_before: None,
+                        will_retry: false,
+                        error: None,
+                        aborted: false,
+                    })
+                    .collect(),
+                compaction_starts: starts.iter().map(|s| s.to_string()).collect(),
+                wrap_up: None,
+            })
+        };
+
+        // Completed span: the turn compacted and still said nothing.
+        assert_eq!(
+            compaction_context_note(meta(&["threshold"], &["threshold"]).as_ref()).as_deref(),
+            Some("threshold compaction completed during the turn")
+        );
+
+        // Open span: the process stopped mid-summarisation.
+        assert_eq!(
+            compaction_context_note(meta(&["overflow"], &[]).as_ref()).as_deref(),
+            Some("overflow compaction was still open when the process stopped")
+        );
+
+        // No compaction at all: the wording an ordinary empty turn gets.
+        assert_eq!(compaction_context_note(meta(&[], &[]).as_ref()), None);
+        assert_eq!(compaction_context_note(None), None);
     }
 
     /// Plan 089 (D6): the driver's in-session continuation is logged as

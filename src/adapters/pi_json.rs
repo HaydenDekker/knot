@@ -913,6 +913,10 @@ impl PiJsonAgentRunner {
         // Plan 088: shared session-id state for live compaction
         // observation (seeded from the stream's `session` header line).
         let observe_state = Arc::new(CompactionObserveState::new());
+        // Plan 089 (D9): a resumed attempt already knows its session id —
+        // Knot put it in the arguments. Seed it so the first compaction
+        // event of the run carries it instead of an empty `session=`.
+        observe_state.set_session_id(resumed_session_id(&ctx.agent_config));
 
         // Plan 089 (D8): the open compaction span, maintained by the stdout
         // reader and consulted by the watchdog — a span is activity, and the
@@ -1266,25 +1270,38 @@ impl Default for CompactionObserveState {
     }
 }
 
-/// Observe one complete stream line for compaction events (plan 088),
-/// invoking the observer with the corresponding observation.
+/// Plan 089 (D9): the session id Knot is **resuming**, read from the CLI
+/// arguments (`--session-id <id>`, `--session <id>`, `--session-id=<id>`).
 ///
-/// Cheap prefix filter first — most stream lines are not compaction
-/// events — then parse the match.
-///
-/// # See also
-///
-/// [`note_compaction_span_line`] does the sibling job for the inactivity
-/// watchdog (plan 089 D8): it needs no observer, because a silent
-/// compaction must not look like a stall in any run. Observation is **best-effort**:
-/// malformed lines are ignored, a `None` observer is a no-op, and a
-/// callback failure is the observer's own concern (the loom-log append
-/// and system-event emission are best-effort no-ops).
-///
-/// The `session` header line is tracked so compaction observations
-/// carry the session id captured so far; compaction lines always follow
-/// the header in JSON mode, and in RPC mode the driver seeds the state
-/// from `get_state`.
+/// Both runners seed [`CompactionObserveState`] with it before the child is
+/// spawned. In JSON mode the stream's `session` header normally arrives
+/// first; the RPC stream has **no** such header and its `get_state` response
+/// can land after the first compaction line — which is why every
+/// `CompactionStarted` in the 2026-09-11 evidence printed an empty
+/// `session=` while the matching `ContextCompacted` printed the right id.
+/// The id is Knot's own to know on a resumed attempt, so the first event of
+/// the run carries it.
+pub(crate) fn resumed_session_id(config: &AgentConfig) -> Option<String> {
+    let mut next_is_id = false;
+    for arg in &config.extra_args {
+        if next_is_id {
+            return Some(arg.clone());
+        }
+        match arg.as_str() {
+            "--session-id" | "--session" => next_is_id = true,
+            a => {
+                if let Some(rest) = a.strip_prefix("--session-id=") {
+                    return Some(rest.to_string());
+                }
+                if let Some(rest) = a.strip_prefix("--session=") {
+                    return Some(rest.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Plan 089 (D8): maintain the "a compaction span is open" flag from one
 /// stream line, and stamp the inactivity watchdog when a span boundary is
 /// seen — pi emits nothing while its summarisation call runs, so "has it
@@ -1295,6 +1312,11 @@ impl Default for CompactionObserveState {
 /// no observer attached (the inactivity hold applies to every run, not only
 /// the observed ones). One helper serves both stream runners, so the JSON
 /// and RPC adapters cannot drift apart.
+///
+/// # See also
+///
+/// [`observe_compaction_line`] is the observer-facing sibling: it parses the
+/// same lines to emit the plan-088 compaction events.
 pub(crate) fn note_compaction_span_line(
     line: &str,
     open_compaction: &AtomicBool,
@@ -1309,6 +1331,22 @@ pub(crate) fn note_compaction_span_line(
     }
 }
 
+/// Observe one complete stream line for compaction events (plan 088),
+/// invoking the observer with the corresponding observation.
+///
+/// Cheap prefix filter first — most stream lines are not compaction
+/// events — then parse the match. Observation is **best-effort**: malformed
+/// lines are ignored, a `None` observer is a no-op, and a callback failure
+/// is the observer's own concern (the loom-log append and system-event
+/// emission are best-effort no-ops).
+///
+/// The `session` header line is tracked so compaction observations
+/// carry the session id captured so far; compaction lines always follow
+/// the header in JSON mode, and in RPC mode the driver seeds the state
+/// from `get_state` — and, since plan 089 D9, both runners seed it from the
+/// resumed `--session-id` before the child is spawned, so a resumed
+/// attempt's `CompactionStarted` carries the id instead of printing an empty
+/// one.
 pub(crate) fn observe_compaction_line(
     line: &str,
     state: &CompactionObserveState,
@@ -2081,6 +2119,41 @@ exit 0
             }
             other => panic!("threshold interruption -> CompactionInterrupted, got {other:?}"),
         }
+    }
+
+    /// Plan 089 (D9): the resume flag comes back in every spelling Knot
+    /// uses, and a fresh session yields `None` (so nothing is invented).
+    #[test]
+    fn resumed_session_id_reads_the_resume_flag() {
+        let config = |args: &[&str]| AgentConfig {
+            goal: "g".into(),
+            provider: "p".into(),
+            model: "m".into(),
+            tools: vec![],
+            extra_args: args.iter().map(|s| s.to_string()).collect(),
+            thinking_level: None,
+            ctx_wrap_up_limit: None,
+        };
+        assert_eq!(
+            resumed_session_id(&config(&["--session-id", "sess-1"])).as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(
+            resumed_session_id(&config(&["--session", "sess-2"])).as_deref(),
+            Some("sess-2")
+        );
+        assert_eq!(
+            resumed_session_id(&config(&["--session-id=sess-3"])).as_deref(),
+            Some("sess-3")
+        );
+        // Flags that merely start with the same letters are not the id.
+        assert_eq!(
+            resumed_session_id(&config(&["--session-dir", "/tmp"])).as_deref(),
+            None
+        );
+        assert_eq!(resumed_session_id(&config(&["--mode", "rpc"])), None);
+        // A trailing flag with no value: no id, no panic.
+        assert_eq!(resumed_session_id(&config(&["--session-id"])), None);
     }
 
     /// Plan 089 (D8): the span helper the watchdog depends on — opens on

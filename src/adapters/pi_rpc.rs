@@ -58,8 +58,9 @@ use crate::adapters::live_output::{
     spawn_line_reader, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
 };
 use crate::adapters::pi_json::{
-    note_compaction_span_line, observe_compaction_line, CompactionObserveState,
-    OverflowFailure, PiJsonAgentRunner,
+    note_compaction_span_line, observe_compaction_line,
+    resumed_session_id, CompactionObserveState, OverflowFailure,
+    PiJsonAgentRunner,
 };
 use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionObservation,
@@ -491,6 +492,12 @@ impl PiRpcAgentRunner {
         // Plan 088: shared session-id state for live compaction
         // observation (seeded from the `get_state` response).
         let observe_state = Arc::new(CompactionObserveState::new());
+        // Plan 089 (D9): seed the id Knot itself passed with `--session-id`.
+        // The RPC stream has no `session` header and `get_state` can answer
+        // after the first compaction line, so without this the opening event
+        // of a resumed attempt reports an empty `session=`.
+        observe_state
+            .set_session_id(resumed_session_id(&ctx.agent_config));
 
         let driver: JoinHandle<()> = thread::Builder::new()
             .name("rpc-driver".to_string())
@@ -1833,6 +1840,60 @@ sleep 10
             elapsed < Duration::from_millis(4000),
             "teardown should be bounded by the deadline, not the 5s grace (got {elapsed:?})"
         );
+    }
+
+    /// Plan 089 (D9): a **resumed** attempt names its session on the first
+    /// event of the run. This mock never answers `get_state` (the real race:
+    /// the response can land after the compaction lines, and the RPC stream
+    /// has no `session` header), so the only possible source of the id is the
+    /// `--session-id` Knot passed. Before D9 every `CompactionStarted` in the
+    /// 2026-09-11 evidence printed an empty `session=`.
+    #[test]
+    fn rpc_resumed_run_seeds_the_session_id_without_get_state() {
+        let script = r#"#!/usr/bin/env bash
+while IFS= read -r line; do
+  case "$line" in
+    *prompt*)
+      echo '{"type":"agent_start"}'
+      echo '{"type":"compaction_start","reason":"threshold"}'
+      echo '{"type":"compaction_end","reason":"threshold","result":{"summary":"s","firstKeptEntryId":"e","tokensBefore":140000,"details":{}},"aborted":false,"willRetry":false}'
+      echo '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"resumed answer"}]}]}'
+      echo '{"type":"agent_settled"}'
+      ;;
+  esac
+done
+"#;
+        let (path, _dir) = mock_script(script);
+        let runner = PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let seen: Arc<Mutex<Vec<CompactionObservation>>>
+            = Arc::new(Mutex::new(Vec::new()));
+        let seen_c = Arc::clone(&seen);
+        let observer: Arc<dyn Fn(&CompactionObservation) + Send + Sync> =
+            Arc::new(move |o: &CompactionObservation| {
+                seen_c.lock().unwrap().push(o.clone());
+            });
+
+        let mut c = ctx("do the thing", None);
+        c.agent_config.extra_args =
+            vec!["--session-id".to_string(), "sess-resume-seed".to_string()];
+        let out = runner.execute_inner(c, Some(observer)).unwrap();
+        assert_eq!(out.stdout, "resumed answer");
+
+        let observations = seen.lock().unwrap();
+        assert_eq!(observations.len(), 2, "span start + end: {observations:?}");
+        for obs in observations.iter() {
+            let session = match obs {
+                CompactionObservation::Started { session_id, .. } => session_id,
+                CompactionObservation::Ended { session_id, .. } => session_id,
+                other => panic!("unexpected observation: {other:?}"),
+            };
+            assert_eq!(
+                session.as_deref(),
+                Some("sess-resume-seed"),
+                "the id Knot passed reaches the first event of the run"
+            );
+        }
     }
 
     /// Plan 088 (D4 + D5): with the observer attached, the RPC driver
