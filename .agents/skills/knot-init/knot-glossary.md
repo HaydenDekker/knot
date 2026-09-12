@@ -16,7 +16,7 @@ The top-level container — an aggregation of one or more looms. A **rig** is th
 
 ### Final-Response Request
 
-The prompt suffix appended to the original prompt on every session-resume retry, asking the agent to produce its final response or continue if it has not finished: *“Please produce your final response, or continue if you have not finished.”* One message covers both resume causes — “produce your final response” for the abrupt turn-end (empty final response) and “continue if you have not finished” for the mid-stream case (timeout, non-zero exit). It is only sent on retry attempts — the initial invocation sends the full prompt normally.
+The prompt sent as the **entire retry prompt** on every in-session session-resume retry (Knot 0.48.0+), asking the agent to produce its final response or continue if it has not finished: *“Please produce your final response, or continue if you have not finished.”* One message covers both resume causes — “produce your final response” for the abrupt turn-end (empty final response) and “continue if you have not finished” for the mid-stream case (timeout, non-zero exit). It is the default note; a kill with its own cause-specific note (inactivity, water-mark handoff, compaction restart) replaces it for that one attempt. The original prompt and profile prompt are not re-sent on an in-session retry — the session already holds them; a fresh restart (no session ID) appends the note to the full prompt instead. It is only sent on retry attempts — the initial invocation sends the full prompt normally.
 
 ---
 
@@ -79,7 +79,7 @@ The profile's timeout value governs the total wall-clock time across all retry a
 
 ### Session Resume
 
-Automatic retry mechanism activated when an agent invocation fails with a resumable error — or ends its turn abruptly without a final response — and a session ID was captured (requires `json` invocation mode). Knot re-enters the same invocation using `--session-id <id>` to continue the Pi session from where it stopped. Each retry re-sends the original prompt with the **final-response request** appended, so the agent either resumes partial work or produces the final response. Retries are limited to 10 attempts or until the profile's overall timeout budget is exhausted, whichever comes first. A 10-second delay between retries allows transient errors to recover. On successful resume the strand completes normally (transparent to the user); on exhausted retries or budget expiry the strand is marked failed, and the terminal error reflects the last failure (empty response → `AgentNoResponse`, genuine timeout → `Timeout`).
+Automatic retry mechanism activated when an agent invocation fails with a resumable error — or ends its turn abruptly without a final response — and a session ID was captured (requires `json` invocation mode). Knot re-enters the same invocation using `--session-id <id>` to continue the Pi session from where it stopped. Each **in-session** retry sends only the cause-specific note (**final-response request** by default — the session already holds the original prompt; a fresh restart, with no session ID, sends the full prompt plus the note), so the agent either resumes partial work or produces the final response. Retries are limited to 10 attempts or until the profile's overall timeout budget is exhausted, whichever comes first. A 10-second delay between retries allows transient errors to recover. On successful resume the strand completes normally (transparent to the user); on exhausted retries or budget expiry the strand is marked failed, and the terminal error reflects the last failure (empty response → `AgentNoResponse`, genuine timeout → `Timeout`).
 
 ---
 
@@ -102,7 +102,7 @@ The mode is agent-specific — each adapter hardcodes its own binary path and CL
 
 ### Retry
 
-An individual attempt within the session resume loop. The first invocation is not counted as a retry — retries begin on the second attempt onward. Each retry re-enters the same Pi session using `--session-id`, appends the **final-response request** prompt, and checks the overall timeout budget before proceeding. Up to 10 retries are allowed.
+An individual attempt within the session resume loop. The first invocation is not counted as a retry — retries begin on the second attempt onward. Each in-session retry re-enters the same Pi session using `--session-id` and sends only the cause-specific note (**final-response request** by default — Knot 0.48.0+; the original prompt and profile prompt are not re-sent), and checks the overall timeout budget before proceeding. A fresh restart (no session ID) sends the full prompt plus the note. Up to 10 retries are allowed.
 
 ---
 

@@ -1,5 +1,36 @@
 # Release Notes
 
+## v0.48.0 — 2026-09-12
+
+### Improved — Concise In-Session Retry Prompts (Plan 090)
+
+A session-resume retry re-entering an existing pi session (`--session-id`) no
+longer re-sends the full original prompt (profile persona + knot/strand
+prompt + trigger line) plus the note. The re-entered session already holds
+all of that; each of the up to 10 retries was re-sending it — pure token
+overhead on every retry, and worst on exactly the attempts fired because
+context ran out (post-compaction restart, water-mark handoff,
+compaction-interrupt recovery), where the re-sent prompt could burn the
+budget the compaction just saved and trigger a second compaction of a
+context that was just shrunk.
+
+- **In-session retries are the note only.** The retry prompt is exactly the
+  cause-specific note — the final-response request (default), the
+  inactivity restart note, the compaction restart note, or the water-mark
+  handoff note — with an empty profile prompt (the `inject_event_request`
+  precedent). Notes no longer accumulate across attempts: each retry is
+  exactly its own note.
+- **Fresh restarts are unchanged.** The one retry that runs without a
+  session ID (an inactivity stall before the session ID was captured)
+  keeps the full composed prompt plus the note — a fresh process has no
+  history, and the full prompt is the only copy of the task instructions.
+- **The `@strand-file` attachment stays on every attempt**, so the agent
+  can still re-read the original task file if a compaction summarised the
+  original instructions away.
+- Bounds, budget math, events, and terminal-error classification are
+  unchanged; no project document format changes (no rig-document
+  migration required).
+
 ## v0.47.0 — 2026-09-12
 
 ### Feature — A Compaction No Longer Ends the Attempt (Plan 089, phases 8–13)

@@ -3,14 +3,18 @@
 //! When an agent invocation fails with a resumable error (timeout, mid-stream
 //! failure) — or ends its turn abruptly without a final response (plan 078) —
 //! and a session ID was captured, this module retries the invocation using
-//! `--session-id <id>` to continue the same Pi session. The retry prompt is
-//! the original prompt plus the final-response request
-//! ([`FINAL_RESPONSE_REQUEST`]). An inactivity kill (plan 081) is the one
-//! exception to the session-ID requirement: it restarts even without a
-//! captured session (fresh restart — knots are idempotent), and the retry
-//! prompt carries the blocking-call note ([`INACTIVITY_RESTART_NOTE`])
-//! instead. Retries are limited to 10 attempts or the profile's overall
-//! timeout budget, whichever comes first.
+//! `--session-id <id>` to continue the same Pi session. The in-session
+//! retry prompt is the cause-specific note only ([`FINAL_RESPONSE_REQUEST`],
+//! the blocking-call note ([`INACTIVITY_RESTART_NOTE`]) after an inactivity
+//! kill (plan 081), the compaction restart note after a manual compact
+//! (plan 089), or the handoff note (plan 086) — with an empty profile
+//! prompt: the session already holds the persona and the original prompt
+//! (plan 090). An inactivity kill is the one exception to the session-ID
+//! requirement: it restarts even without a captured session (fresh restart
+//! — knots are idempotent), and that fresh restart keeps the full composed
+//! prompt plus the note (a fresh process has no history). Retries are
+//! limited to 10 attempts or the profile's overall timeout budget,
+//! whichever comes first.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -958,12 +962,18 @@ fn execute_with_resume_internal(
             }
         }
 
-        // Prepare agent_config and prompt for retry
+        // Prepare agent_config and prompt for retry.
         // Append --session-id to extra_args (skipped for a fresh
-        // inactivity restart — no session was captured) and the
-        // cause-specific note to the prompt: the blocking-call note
-        // (plan 081) when the failure was an inactivity kill, the
-        // final-response request (plan 078) otherwise.
+        // inactivity restart — no session was captured). The retry prompt
+        // shape is keyed on session re-entry (plan 090): in-session, the
+        // conversation already holds the persona, original prompt, and
+        // trigger line — the cause-specific note (plan 081 blocking-call
+        // note / plan 078 final-response request / plan 086 handoff note /
+        // plan 089 compaction restart note) alone is the whole retry
+        // prompt, with an empty profile prompt (the
+        // `inject_event_request` precedent, plan 059). A fresh restart has
+        // no history: the full composed prompt is the only copy of the
+        // task instructions.
         if let Some(sid) = session_id {
             agent_config.extra_args.push("--session-id".to_string());
             agent_config.extra_args.push(sid.clone());
@@ -971,8 +981,14 @@ fn execute_with_resume_internal(
         let note = pending_note
             .take()
             .unwrap_or_else(|| FINAL_RESPONSE_REQUEST.to_string());
-        prompt.push_str("\n\n");
-        prompt.push_str(&note);
+        let (retry_prompt, retry_profile_prompt) = match session_id {
+            Some(_) => (note, String::new()),
+            None => {
+                prompt.push_str("\n\n");
+                prompt.push_str(&note);
+                (prompt.clone(), profile_prompt.clone())
+            }
+        };
 
         // Log SessionResumed event
         loom_log.append(LoomEvent::SessionResumed {
@@ -1024,8 +1040,8 @@ fn execute_with_resume_internal(
             &agent_config,
             strand_path.clone(),
             strand_file_ref.clone(),
-            prompt.clone(),
-            profile_prompt.clone(),
+            retry_prompt,
+            retry_profile_prompt,
             event_type.clone(),
             knot_name.clone(),
             timeout,
@@ -2056,11 +2072,134 @@ mod tests {
             "Review this document"
         );
 
-        // Retry: prompt includes the final-response request (plan 078)
-        assert!(
-            contexts[1].prompt.contains(FINAL_RESPONSE_REQUEST),
-            "Retry prompt should contain the final-response request, got: {}",
+        // Plan 090: in-session retry — the prompt is EXACTLY the note;
+        // the original prompt and profile prompt are not re-sent.
+        assert_eq!(
+            contexts[1].prompt, FINAL_RESPONSE_REQUEST,
+            "in-session retry prompt is exactly the note, got: {}",
             contexts[1].prompt
+        );
+        assert!(
+            !contexts[1].prompt.contains("Review this document"),
+            "in-session retry must not re-send the original prompt"
+        );
+        assert!(
+            contexts[1].profile_prompt.is_empty(),
+            "in-session retry must not re-send the profile prompt"
+        );
+    }
+
+    /// Plan 090: the full in-session retry contract — the first attempt
+    /// is unchanged (full composed prompt + profile prompt); the retry
+    /// carries the note only, an empty profile prompt, and
+    /// `--session-id`.
+    #[test]
+    fn retry_prompt_is_note_only_in_session() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("done")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+
+        // First attempt unchanged: full composed prompt + profile prompt.
+        assert_eq!(contexts[0].prompt, "Review this document");
+        assert_eq!(contexts[0].profile_prompt, "You are a reviewer.");
+
+        // In-session retry: exactly the note, nothing else.
+        let retry = &contexts[1];
+        assert_eq!(
+            retry.prompt, FINAL_RESPONSE_REQUEST,
+            "in-session retry prompt is exactly the note: {}",
+            retry.prompt
+        );
+        assert!(
+            !retry.prompt.contains("Review this document"),
+            "in-session retry must not re-send the original prompt"
+        );
+        assert!(
+            retry.profile_prompt.is_empty(),
+            "in-session retry must not re-send the profile prompt"
+        );
+        let extra_args = &retry.agent_config.extra_args;
+        assert!(
+            extra_args.contains(&"--session-id".to_string()),
+            "retry should carry --session-id: {extra_args:?}"
+        );
+        assert!(
+            extra_args.contains(&"sess-abc".to_string()),
+            "retry should carry the session ID: {extra_args:?}"
+        );
+    }
+
+    /// Plan 090: in-session retry prompts do not accumulate — each
+    /// retry is exactly its own note (today: the original prompt plus
+    /// every note so far).
+    #[test]
+    fn retry_prompts_do_not_accumulate() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("done")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 3);
+        assert_eq!(contexts[1].prompt, FINAL_RESPONSE_REQUEST);
+        assert_eq!(contexts[2].prompt, FINAL_RESPONSE_REQUEST);
+        assert!(
+            contexts[1].prompt == contexts[2].prompt,
+            "each in-session retry is exactly its note"
+        );
+    }
+
+    /// Plan 090: the fresh-restart path (pre-session inactivity stall,
+    /// no session ID) keeps the full composed prompt — original prompt,
+    /// profile prompt, and the note — since a fresh process has no
+    /// history.
+    #[test]
+    fn fresh_restart_keeps_full_prompt() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_inactivity(None)),
+            Ok(ok_output("done")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute_no_budget(&runner, &log);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+        let retry = &contexts[1];
+        assert!(
+            retry.prompt.starts_with("Review this document"),
+            "fresh restart keeps the original prompt: {}",
+            retry.prompt
+        );
+        assert!(
+            retry.prompt.contains("blocked for more than 300 seconds"),
+            "fresh restart keeps the inactivity note: {}",
+            retry.prompt
+        );
+        assert_eq!(
+            retry.profile_prompt, "You are a reviewer.",
+            "fresh restart keeps the profile prompt"
+        );
+        assert!(
+            !retry
+                .agent_config
+                .extra_args
+                .contains(&"--session-id".to_string()),
+            "fresh restart must not pass --session-id"
         );
     }
 
@@ -3325,6 +3464,16 @@ mod tests {
             !prompt.contains(FINAL_RESPONSE_REQUEST),
             "inactivity retry must not carry the bare 078 text: {prompt}"
         );
+        // Plan 090: in-session retry — note only; the original prompt
+        // and profile prompt are not re-sent.
+        assert!(
+            !prompt.contains("Review this document"),
+            "in-session inactivity retry must not re-send the original prompt: {prompt}"
+        );
+        assert!(
+            contexts[1].profile_prompt.is_empty(),
+            "in-session inactivity retry must not re-send the profile prompt"
+        );
 
         // Loom-log: AgentInactivity { attempt: 1 } + SessionResumed { attempt: 1 }
         let events = log.events();
@@ -3382,6 +3531,37 @@ mod tests {
             contexts[1].prompt.contains("blocked for more than 300 seconds"),
             "retry prompt should carry the inactivity note: {}",
             contexts[1].prompt
+        );
+    }
+
+    /// Plan 090: the in-session inactivity retry sends the built note
+    /// EXACTLY — no original prompt, empty profile prompt.
+    #[test]
+    fn inactivity_retry_prompt_is_note_only() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_inactivity(Some("sess-inact"))),
+            Ok(ok_output("done")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute_no_budget(&runner, &log);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let contexts = runner.contexts();
+        assert_eq!(contexts.len(), 2);
+        let expected = inactivity_restart_note(300, 300);
+        assert_eq!(
+            contexts[1].prompt, expected,
+            "in-session inactivity retry is exactly the note: {}",
+            contexts[1].prompt
+        );
+        assert!(
+            !contexts[1].prompt.contains("Review this document"),
+            "in-session inactivity retry must not re-send the original prompt"
+        );
+        assert!(
+            contexts[1].profile_prompt.is_empty(),
+            "in-session inactivity retry must not re-send the profile prompt"
         );
     }
 

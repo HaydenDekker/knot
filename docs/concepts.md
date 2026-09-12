@@ -139,11 +139,16 @@ If an agent invocation fails (timeout, network error, process crash)
 — or ends its turn abruptly without a final response — and a session ID
 was captured, Knot automatically re-enters the same session using
 `--session-id`, up to 10 retries with 10-second delays between attempts.
-Each retry re-sends the original prompt with the final-response request
-appended — *“Please produce your final response, or continue if you have
-not finished.”* — one nudge for all resumes: “continue if you have not
-finished” covers the mid-stream case, “produce your final response”
-covers the abrupt-stop case. The profile's overall timeout budget is
+Each **in-session** retry sends only the cause-specific note — by
+default the final-response request: *“Please produce your final response,
+or continue if you have not finished.”* — one nudge for all resumes:
+“continue if you have not finished” covers the mid-stream case, “produce
+your final response” covers the abrupt-stop case. The original prompt and
+profile prompt are not re-sent — the session already holds them (Knot
+0.48.0+); the `@strand-file` attachment stays available if the agent
+needs the original text again. A fresh restart (inactivity stall before
+the session ID was captured) keeps the full prompt plus the note. The
+profile's overall timeout budget is
 respected — retries stop when insufficient time remains. A successful
 resume completes the strand transparently, as if the first attempt had
 succeeded.
@@ -175,11 +180,12 @@ service log
 entry — attempt, silent seconds, window, captured session ID, and the
 **blocked call** named from the stream when derivable (e.g.
 `bash("npm run build")`) — and the retry re-enters the same session
-(fresh, when no session ID was captured) with a cause-specific note
-appended to the prompt: *“Your last call blocked for more than N
-seconds with no output…”* — telling the agent how to keep the session
-alive (run the task in the background and poll its output, or stream
-the output) instead of re-hanging. When the inactivity attempts are
+(fresh, when no session ID was captured) carrying a cause-specific note:
+*“Your last call blocked for more than N
+seconds with no output…”* — the whole prompt on an in-session re-entry,
+appended to the full prompt on a fresh restart — telling the agent how to
+keep the session alive (run the task in the background and poll its
+output, or stream the output) instead of re-hanging. When the inactivity attempts are
 exhausted the knot terminates with
 `inactivity: session resume exhausted 10 retries after N inactivity
 kills` — a `TimeoutExceeded` operational event (a deadline did fire) and
