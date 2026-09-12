@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
+> **Last Updated:** 2026-09-12 (plan 090 complete — concise in-session retry prompts: a `--session-id` re-entry sends the cause-specific note only, with no re-send of the original prompt, released in v0.48.0)
+> **Prior:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
 > **Prior:** 2026-09-12 (plan 089 reopened from the 2026-09-11/12 `pwa-todo-3` evidence — threshold compactions still ended the attempt and compaction stalls tripped the inactivity watchdog)
 > **Prior:** 2026-09-11 (plan 089 phases 0–7 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
 
@@ -48,6 +49,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 90 | [Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry](090-concise-in-session-retry/concise-in-session-retry-plan.md) | ✅ Complete (2026-09-12) — released in v0.48.0 | 2026-09-12 |
 | 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | ✅ Complete (2026-09-12) — phases 0–7 released in v0.46.0, phases 8–13 in v0.47.0 | 2026-09-11 |
 | 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | ✅ Complete (2026-09-11) — released in v0.45.0 | 2026-09-11 |
 | 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
@@ -79,6 +81,16 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 90. Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry
+
+**Status:** ✅ Complete (2026-09-12) — released in v0.48.0
+**Created:** 2026-09-12
+**Goal:** Key the session-resume retry prompt shape on session re-entry: an in-session retry (`--session-id`) sends the cause-specific note **only** — the final-response request by default, the inactivity restart note, the compaction restart note, or the water-mark handoff note — with an empty profile prompt and no cross-attempt accumulation (the session already holds the persona and the original prompt); a fresh restart (inactivity stall before the session ID was captured) keeps the full composed prompt plus the note, since a fresh process has no history.
+
+Completed in Knot 0.48.0: the retry loop in `src/application/session_resume.rs` keys the prompt shape on `session_id` (in-session → note + empty profile prompt; fresh → full prompt + note, byte-for-byte as before); the `@strand-file` attachment stays on every attempt; bounds, budget math, events, and terminal-error classification unchanged. Reverses plan 078's "why re-send the original prompt" decision now that the codebase has two proven concise in-session shapes (`inject_event_request`, the D6 live continuation). No rig-document migration (knot-update carries no entry).
+
+Full details in [090-concise-in-session-retry/concise-in-session-retry-plan.md](090-concise-in-session-retry/concise-in-session-retry-plan.md).
 
 ### 89. Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery
 
