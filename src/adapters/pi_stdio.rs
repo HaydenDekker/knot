@@ -267,6 +267,9 @@ impl AgentRunner for PiStdioAgentRunner {
             strand_desc.clone(),
             effective_timeout,
             self.inactivity_timeout,
+            // Plan 089 (D8): the one-shot stdio runner does not track
+            // compaction spans — nothing to hold the watchdog with.
+            None,
             &live,
             Arc::clone(&cancelled),
         )

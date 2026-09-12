@@ -20,6 +20,14 @@
 //! Detection is **byte-level**: any byte on the child's stdout/stderr
 //! resets the timer. No JSON parsing is involved in the timer itself;
 //! parsing happens only *after* a kill, on the accumulated buffer.
+//!
+//! **A compaction span counts as activity** (plan 089 D8, extending the
+//! plan-081 rule): pi emits no stream bytes while its summarisation call
+//! runs, so the event observers call [`touch_activity`] on the span
+//! boundaries and [`spawn_watchdog`] skips the inactivity test entirely
+//! while a span is open. The total budget is untouched — a wedged
+//! compaction is still killed, but on the deadline and reported as a
+//! `Timeout`, which is what actually happened.
 
 use std::io::{Read, Result as IoResult};
 use std::process::ExitStatus;
@@ -73,6 +81,11 @@ impl LiveOutput {
         Self::default()
     }
 
+    /// Record activity now (plan 089 D8 — see [`touch_activity`]).
+    pub fn touch(&self) {
+        touch_activity(&self.last_activity);
+    }
+
     /// The silence so far (`now - last_activity`).
     pub fn silence(&self) -> Duration {
         let now = now_unix_nanos();
@@ -81,8 +94,35 @@ impl LiveOutput {
     }
 }
 
+/// Stamp `last_activity` with now — an **explicit** activity signal for
+/// spans that are legitimately silent (plan 089 D8: pi emits no stream
+/// bytes while a compaction's summarisation call runs, and 300 s of
+/// silence is a normal compaction on a loaded workstation, not a stall).
+///
+/// Callers are the stream observers, i.e. the code that *parses* events —
+/// the byte-level timer in [`spawn_reader`] stays free of JSON parsing.
+pub fn touch_activity(last_activity: &AtomicU64) {
+    last_activity.store(now_unix_nanos(), Ordering::Relaxed);
+}
+
+/// Should the watchdog kill for **inactivity** on this tick? (plan 081,
+/// held by plan 089 D8)
+///
+/// `silent` is nanos since the last byte (or explicit
+/// [`touch_activity`](crate::adapters::live_output::touch_activity) stamp).
+/// A held span never fires: pi emits no stream bytes while a compaction's
+/// summarisation call runs, so inside a span the byte-level question is not
+/// the one worth asking — the total budget is.
+///
+/// Pure so the rule is testable; testing the watchdog itself would mean
+/// killing a real process group from a unit test.
+fn inactivity_due(inactivity_timeout: Option<Duration>, silent: u64, held: bool) -> bool {
+    !held
+        && inactivity_timeout.is_some_and(|window| silent > window.as_nanos() as u64)
+}
+
 /// Unix nanos of `SystemTime::now()` (0 if the clock is pre-epoch).
-fn now_unix_nanos() -> u64 {
+pub(crate) fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -266,6 +306,14 @@ fn record_kill(kill_reason: &Arc<Mutex<Option<KillReason>>>, reason: KillReason)
 /// fully silent session with equal windows) — it is the more specific
 /// diagnosis and carries the restart note. The total-budget warning
 /// line is the legacy text, unchanged.
+///
+/// `compaction_hold` (plan 089 D8) suspends the **inactivity** test while a
+/// compaction span is open: the stream is silent by design while pi
+/// summarises, so the honest answer to "has it written anything lately?"
+/// is *no* for the whole span. The total budget is **not** suspended — a
+/// wedged compaction still dies on the deadline, with a `Timeout` rather
+/// than a fabricated stall. Pass `None` for a runner that does not track
+/// spans (the one-shot stdio adapter).
 #[allow(clippy::too_many_arguments)] // flat parameter list keeps the two adapter call sites readable
 pub fn spawn_watchdog(
     thread_name: &str,
@@ -274,6 +322,7 @@ pub fn spawn_watchdog(
     strand_desc: String,
     total_timeout: Duration,
     inactivity_timeout: Option<Duration>,
+    compaction_hold: Option<Arc<AtomicBool>>,
     live: &LiveOutput,
     cancelled: Arc<AtomicBool>,
 ) -> IoResult<JoinHandle<()>> {
@@ -290,11 +339,20 @@ pub fn spawn_watchdog(
                 if cancelled.load(Ordering::Relaxed) {
                     return;
                 }
-                // Inactivity first: the more specific diagnosis wins.
-                if let Some(window) = inactivity_timeout {
-                    let silent =
-                        now_unix_nanos().saturating_sub(last_activity.load(Ordering::Relaxed));
-                    if silent > window.as_nanos() as u64 {
+                // Inactivity first: the more specific diagnosis wins —
+                // unless a compaction span is open (plan 089 D8), in which
+                // case the silence is expected and only the total budget
+                // applies (a wedged compaction is killed as `Timeout`, which
+                // is what actually happened, not as a fabricated stall).
+                let held = compaction_hold
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed));
+                let silent =
+                    now_unix_nanos().saturating_sub(last_activity.load(Ordering::Relaxed));
+                if inactivity_due(inactivity_timeout, silent, held) {
+                    let window = inactivity_timeout
+                        .expect("inactivity_due is false without a window");
+                    {
                         record_kill(&kill_reason, KillReason::Inactivity);
                         // Kill the entire process group (child +
                         // subprocesses).
@@ -377,4 +435,54 @@ pub fn join_all(
     let _ = stderr_reader.join();
 
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WINDOW: Duration = Duration::from_secs(300);
+
+    /// Plan 089 (D8) baseline: silence past the window is still a stall.
+    #[test]
+    fn inactivity_fires_past_the_window() {
+        assert!(inactivity_due(Some(WINDOW), WINDOW.as_nanos() as u64 + 1, false));
+    }
+
+    /// Plan 089 (D8): inside a compaction span the same silence is not a
+    /// stall — the span is activity.
+    #[test]
+    fn inactivity_is_held_while_a_compaction_span_is_open() {
+        assert!(!inactivity_due(Some(WINDOW), WINDOW.as_nanos() as u64 + 1, true));
+        // And it resumes the moment the span closes: the watchdog loop keeps
+        // measuring from the stamp the span boundary left behind.
+        assert!(inactivity_due(Some(WINDOW), WINDOW.as_nanos() as u64 + 1, false));
+    }
+
+    /// Silence inside the window never fires, held or not.
+    #[test]
+    fn silence_inside_the_window_is_not_a_stall() {
+        assert!(!inactivity_due(Some(WINDOW), WINDOW.as_nanos() as u64 - 1, false));
+        assert!(!inactivity_due(Some(WINDOW), WINDOW.as_nanos() as u64 - 1, true));
+    }
+
+    /// No window configured (the default) disables the test entirely.
+    #[test]
+    fn no_window_never_fires() {
+        assert!(!inactivity_due(None, u64::MAX, false));
+        assert!(!inactivity_due(None, u64::MAX, true));
+    }
+
+    /// [`LiveOutput::touch`] resets the measured silence — this is what the
+    /// span boundary stamps (D8) and what the 18-minute compaction needed.
+    #[test]
+    fn touch_resets_the_measured_silence() {
+        let live = LiveOutput::default();
+        // Pretend the last byte arrived 10 s ago.
+        live.last_activity
+            .store(now_unix_nanos() - 10_000_000_000, Ordering::Relaxed);
+        assert!(live.silence() >= Duration::from_secs(9));
+        live.touch();
+        assert!(live.silence() < Duration::from_secs(1), "{:?}", live.silence());
+    }
 }

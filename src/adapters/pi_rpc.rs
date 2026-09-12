@@ -48,7 +48,7 @@
 use std::io::{BufWriter, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{ChildStdin, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -58,8 +58,8 @@ use crate::adapters::live_output::{
     spawn_line_reader, spawn_reader, spawn_watchdog, KillReason, LiveOutput,
 };
 use crate::adapters::pi_json::{
-    observe_compaction_line, CompactionObserveState, OverflowFailure,
-    PiJsonAgentRunner,
+    note_compaction_span_line, observe_compaction_line, CompactionObserveState,
+    OverflowFailure, PiJsonAgentRunner,
 };
 use crate::application::ports::{
     AgentInvocationMetadata, AgentOutput, AgentRunner, CompactionObservation,
@@ -455,6 +455,12 @@ impl PiRpcAgentRunner {
             }
         })?;
 
+        // Plan 089: the run's flags. The driver maintains the compaction
+        // span from the parsed stream (D4/D5), the watchdog consults that
+        // span (D8), and the main loop reads the teardown flag — one owner,
+        // three readers. Created before the watchdog so it can be armed.
+        let flags = RpcFlags::default();
+
         // Watchdog: inactivity window first, then the total budget.
         let _watchdog = spawn_watchdog(
             "rpc-watchdog",
@@ -463,6 +469,9 @@ impl PiRpcAgentRunner {
             strand_desc.clone(),
             effective_timeout,
             self.inactivity_timeout,
+            // Plan 089 (D8): hold the inactivity test while a compaction
+            // span is open (the total budget still bounds it).
+            Some(Arc::clone(&flags.open_compaction)),
             &live,
             Arc::clone(&cancelled),
         )
@@ -479,11 +488,6 @@ impl PiRpcAgentRunner {
         let prompt_message =
             PiJsonAgentRunner::build_prompt_with_context(&ctx, &profile_prompt);
         let shared = Arc::new(Mutex::new(RpcShared::default()));
-        // Plan 089 (D4 + D5): the teardown flags. The driver decides when to
-        // close stdin ([`teardown_due`]) and arms the grace here; an open
-        // compaction span holds the close (and the force-kill) until the
-        // span closes, bounded by the total budget.
-        let flags = RpcFlags::default();
         // Plan 088: shared session-id state for live compaction
         // observation (seeded from the `get_state` response).
         let observe_state = Arc::new(CompactionObserveState::new());
@@ -495,6 +499,7 @@ impl PiRpcAgentRunner {
                 let flags = flags.clone();
                 let observer = observer.clone();
                 let observe_state = Arc::clone(&observe_state);
+                let last_activity = Arc::clone(&live.last_activity);
                 move || {
                     run_rpc_driver(
                         stdin,
@@ -505,6 +510,7 @@ impl PiRpcAgentRunner {
                         flags,
                         observer,
                         observe_state,
+                        last_activity,
                     );
                 }
             })
@@ -638,7 +644,7 @@ impl PiRpcAgentRunner {
                         OverflowFailure::CompactionInterrupted { reason } => {
                             PortError::CompactionInterrupted {
                                 message: format!(
-                                    "pi's in-process overflow compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
+                                    "pi's in-process auto-compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
                                 ),
                                 reason,
                                 session_id,
@@ -1102,6 +1108,9 @@ fn run_rpc_driver(
     flags: RpcFlags,
     observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
     observe_state: Arc<CompactionObserveState>,
+    // Plan 089 (D8): the inactivity timer, stamped at compaction span
+    // boundaries.
+    last_activity: Arc<AtomicU64>,
 ) {
     let mut stdin = Some(stdin);
 
@@ -1158,6 +1167,10 @@ fn run_rpc_driver(
         // line stream; the helper prefix-filters and no-ops when no
         // observer is attached.
         observe_compaction_line(&line, &observe_state, &observer);
+        // Plan 089 (D8): span bookkeeping + activity stamp — the same helper
+        // the JSON stream reader uses, so both runners hold the watchdog
+        // alike.
+        note_compaction_span_line(&line, &flags.open_compaction, &last_activity);
         let v: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue, // malformed line — pass through, ignore
@@ -1305,11 +1318,8 @@ fn run_rpc_driver(
             // span, the matching `compaction_end` closes it. pi runs
             // compactions sequentially, so a single flag is well-defined
             // across repeated spans.
-            Some("compaction_start") => {
-                flags.open_compaction.store(true, Ordering::Relaxed);
-            }
+            Some("compaction_start") => {}
             Some("compaction_end") => {
-                flags.open_compaction.store(false, Ordering::Relaxed);
                 // Plan 089 (D6): remember the reason of the completed span —
                 // it is what makes an answer-less settled turn continuable.
                 last_compaction_reason = Some(

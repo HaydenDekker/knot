@@ -11,7 +11,7 @@
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -624,23 +624,30 @@ impl PiJsonAgentRunner {
         }
     }
 
-    /// The interrupted overflow start's reason, when the **last** compaction
-    /// stream event is an `overflow` `compaction_start` that no
-    /// `compaction_end` followed (plan 089).
+    /// The interrupted compaction's reason, when the **last** compaction
+    /// stream event is a `compaction_start` that no `compaction_end`
+    /// followed (plan 089 D1, generalised by D7).
     ///
     /// `compactions` holds the `compaction_end` records (stream order) and
     /// `compaction_starts` holds the `compaction_start` reasons (stream
-    /// order). An `overflow` start with no subsequent end means the process
-    /// died mid-compaction — the only shape where an out-of-band manual
-    /// compact can still recover the session.
+    /// order). A start with no subsequent end means the process died
+    /// mid-compaction — the shape an out-of-band manual compact can still
+    /// recover.
     ///
-    /// This is deliberately **not** a general start/end pairing (plan 088
-    /// D5's "no pairing assumption" still holds for the event log); it is a
-    /// targeted boundary check. Returns `Some("overflow")` only when the
-    /// starts outnumber the ends and the trailing unmatched start is
-    /// `overflow` (a `threshold`/`manual` start is not a resumable
-    /// interruption).
-    pub(crate) fn interrupted_overflow_compaction<'a>(
+    /// **Any** reason counts (D7). 089's first cut matched `overflow` only,
+    /// which was right while Knot could itself kill the process it was
+    /// watching (the pre-D5 teardown closed stdin at `agent_end`, and pi
+    /// exited on the resulting EOF — so an unmatched `threshold` start could
+    /// mean "Knot stopped it", not "pi died"). With the settle-based
+    /// teardown Knot no longer does that, so the shape is unambiguous: a
+    /// trailing unmatched start of any reason is pi dying mid-summarisation,
+    /// and every occurrence of it on the 2026-09-11 rig was a `threshold`
+    /// one.
+    ///
+    /// This is still deliberately **not** a general start/end pairing (plan
+    /// 088 D5's "no pairing assumption" holds for the event log); it is a
+    /// targeted boundary check on the trailing event.
+    pub(crate) fn interrupted_compaction<'a>(
         compactions: &'a [CompactionRecord],
         compaction_starts: &'a [String],
     ) -> Option<&'a str> {
@@ -650,10 +657,7 @@ impl PiJsonAgentRunner {
         if compaction_starts.len() <= compactions.len() {
             return None;
         }
-        match compaction_starts.last()? {
-            reason if reason == "overflow" => Some(reason.as_str()),
-            _ => None,
-        }
+        Some(compaction_starts.last()?.as_str())
     }
 
     /// Classify a context-overflow failure (plan 089).
@@ -665,13 +669,13 @@ impl PiJsonAgentRunner {
     ///
     /// Four cases, most specific first:
     ///
-    /// 0. **Interrupted** (resumable, plan 089) — [`Self::interrupted_
-    ///    overflow_compaction`] matches: an `overflow` `compaction_start`
-    ///    with no following `compaction_end` (the process died
-    ///    mid-compaction). Routed to
+    /// 0. **Interrupted** (resumable, plan 089 D1 + D7) —
+    ///    [`Self::interrupted_compaction`] matches: a `compaction_start` of
+    ///    any reason with no following `compaction_end` (pi died
+    ///    mid-summarisation). Routed to
     ///    [`Self::OverflowFailure::CompactionInterrupted`]. Checked first:
     ///    it is identified by the starts/ends shape alone, independent of
-    ///    the provider error message.
+    ///    the provider error message (the threshold shape carries none).
     /// 1. **Recovered, then failed** (terminal) — [`Self::terminal_overflow`]
     ///    finds a failing overflow record preceded by a successful one: the
     ///    context still cannot fit even after a successful compaction.
@@ -689,11 +693,11 @@ impl PiJsonAgentRunner {
         compaction_starts: &[String],
         error_message: Option<&str>,
     ) -> Option<OverflowFailure> {
-        // Case 0 — interrupted auto-compact (resumable, plan 089). An
-        // `overflow` start with no following end: the process died
+        // Case 0 — interrupted auto-compact (resumable, plan 089 D1 + D7).
+        // A start with no following end, whatever the reason: pi died
         // mid-compaction. Identified by the starts/ends shape alone.
         if let Some(reason) =
-            Self::interrupted_overflow_compaction(compactions, compaction_starts)
+            Self::interrupted_compaction(compactions, compaction_starts)
         {
             return Some(OverflowFailure::CompactionInterrupted {
                 reason: reason.to_string(),
@@ -910,6 +914,11 @@ impl PiJsonAgentRunner {
         // observation (seeded from the stream's `session` header line).
         let observe_state = Arc::new(CompactionObserveState::new());
 
+        // Plan 089 (D8): the open compaction span, maintained by the stdout
+        // reader and consulted by the watchdog — a span is activity, and the
+        // silence inside one is not a stall.
+        let open_compaction = Arc::new(AtomicBool::new(false));
+
         // Reader threads drain stdout/stderr while the child runs —
         // any byte resets the inactivity timer (byte-level stall
         // detection, plan 081). The stdout reader also invokes the
@@ -924,7 +933,14 @@ impl PiJsonAgentRunner {
                 {
                     let observer = observer.clone();
                     let state = Arc::clone(&observe_state);
+                    let open_compaction = Arc::clone(&open_compaction);
+                    let last_activity = Arc::clone(&live.last_activity);
                     move |line: &str| {
+                        note_compaction_span_line(
+                            line,
+                            &open_compaction,
+                            &last_activity,
+                        );
                         observe_compaction_line(line, &state, &observer);
                     }
                 },
@@ -959,6 +975,9 @@ impl PiJsonAgentRunner {
             strand_desc.clone(),
             effective_timeout,
             self.inactivity_timeout,
+            // Plan 089 (D8): hold the inactivity test while a compaction
+            // span is open (the total budget still bounds it).
+            Some(Arc::clone(&open_compaction)),
             &live,
             Arc::clone(&cancelled),
         )
@@ -1178,7 +1197,7 @@ impl PiJsonAgentRunner {
                     OverflowFailure::CompactionInterrupted { reason } => {
                         PortError::CompactionInterrupted {
                             message: format!(
-                                "pi's in-process overflow compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
+                                "pi's in-process auto-compaction (reason: {reason}) was interrupted — the process stopped before it completed; an out-of-band manual compact may still recover the session"
                             ),
                             reason,
                             session_id,
@@ -1251,7 +1270,13 @@ impl Default for CompactionObserveState {
 /// invoking the observer with the corresponding observation.
 ///
 /// Cheap prefix filter first — most stream lines are not compaction
-/// events — then parse the match. Observation is **best-effort**:
+/// events — then parse the match.
+///
+/// # See also
+///
+/// [`note_compaction_span_line`] does the sibling job for the inactivity
+/// watchdog (plan 089 D8): it needs no observer, because a silent
+/// compaction must not look like a stall in any run. Observation is **best-effort**:
 /// malformed lines are ignored, a `None` observer is a no-op, and a
 /// callback failure is the observer's own concern (the loom-log append
 /// and system-event emission are best-effort no-ops).
@@ -1260,6 +1285,30 @@ impl Default for CompactionObserveState {
 /// carry the session id captured so far; compaction lines always follow
 /// the header in JSON mode, and in RPC mode the driver seeds the state
 /// from `get_state`.
+/// Plan 089 (D8): maintain the "a compaction span is open" flag from one
+/// stream line, and stamp the inactivity watchdog when a span boundary is
+/// seen — pi emits nothing while its summarisation call runs, so "has it
+/// written lately?" must not be the question that kills the run.
+///
+/// Deliberately a cheap substring test on the raw line rather than a parse:
+/// it runs on the reader thread for **every** line, and it has to work with
+/// no observer attached (the inactivity hold applies to every run, not only
+/// the observed ones). One helper serves both stream runners, so the JSON
+/// and RPC adapters cannot drift apart.
+pub(crate) fn note_compaction_span_line(
+    line: &str,
+    open_compaction: &AtomicBool,
+    last_activity: &AtomicU64,
+) {
+    if line.contains("\"compaction_start\"") {
+        open_compaction.store(true, Ordering::Relaxed);
+        crate::adapters::live_output::touch_activity(last_activity);
+    } else if line.contains("\"compaction_end\"") {
+        open_compaction.store(false, Ordering::Relaxed);
+        crate::adapters::live_output::touch_activity(last_activity);
+    }
+}
+
 pub(crate) fn observe_compaction_line(
     line: &str,
     state: &CompactionObserveState,
@@ -1947,7 +1996,7 @@ exit 0
         let starts = vec!["overflow".to_string()];
         let ends: Vec<CompactionRecord> = vec![];
         assert_eq!(
-            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            PiJsonAgentRunner::interrupted_compaction(&ends, &starts),
             Some("overflow")
         );
     }
@@ -1965,7 +2014,7 @@ exit 0
             aborted: false,
         }];
         assert_eq!(
-            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            PiJsonAgentRunner::interrupted_compaction(&ends, &starts),
             None
         );
     }
@@ -1992,21 +2041,83 @@ exit 0
             },
         ];
         assert_eq!(
-            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
+            PiJsonAgentRunner::interrupted_compaction(&ends, &starts),
             None
         );
     }
 
-    /// Plan 089 (D1): a `threshold` start with no end is NOT a resumable
-    /// interruption (only `overflow` is).
+    /// Plan 089 (D7): a `threshold` start with no end IS the same
+    /// interruption — with the settle-based teardown Knot no longer stops
+    /// the process it is watching, so an unmatched start means pi died
+    /// mid-summarisation whatever the reason. This reverses the original D1
+    /// assumption ("only `overflow` is resumable"), which was correct only
+    /// while Knot's own EOF-kill produced the shape (five `threshold`
+    /// occurrences on the 2026-09-11 rig).
     #[test]
-    fn not_interrupted_on_threshold_only() {
+    fn interrupted_when_threshold_start_has_no_end() {
         let starts = vec!["threshold".to_string()];
         let ends: Vec<CompactionRecord> = vec![];
         assert_eq!(
-            PiJsonAgentRunner::interrupted_overflow_compaction(&ends, &starts),
-            None
+            PiJsonAgentRunner::interrupted_compaction(&ends, &starts),
+            Some("threshold")
         );
+    }
+
+    /// Plan 089 (D7): the threshold interruption classifies as the resumable
+    /// `CompactionInterrupted` (so it gets the D2 manual compact + D3
+    /// restart), not as an empty response and not as terminal.
+    #[test]
+    fn classify_interrupted_threshold_is_resumable() {
+        let starts = vec!["threshold".to_string()];
+        let ends: Vec<CompactionRecord> = vec![];
+        let c = PiJsonAgentRunner::classify_overflow_failure(
+            &ends,
+            &starts,
+            None, // pi died before any provider error existed
+        );
+        match c {
+            Some(OverflowFailure::CompactionInterrupted { reason }) => {
+                assert_eq!(reason, "threshold");
+            }
+            other => panic!("threshold interruption -> CompactionInterrupted, got {other:?}"),
+        }
+    }
+
+    /// Plan 089 (D8): the span helper the watchdog depends on — opens on
+    /// `compaction_start`, closes on `compaction_end`, stamps the activity
+    /// timer on both, and leaves every other line (and every other event
+    /// type) alone.
+    #[test]
+    fn note_compaction_span_line_tracks_the_span() {
+        let open = AtomicBool::new(false);
+        // A stamp in the distant past: any real touch moves it forward.
+        let last = AtomicU64::new(1);
+
+        note_compaction_span_line(
+            r#"{"type":"compaction_start","reason":"threshold"}"#,
+            &open,
+            &last,
+        );
+        assert!(open.load(Ordering::Relaxed), "the span is open");
+        assert!(last.load(Ordering::Relaxed) > 1, "activity stamped");
+
+        // An unrelated event neither closes the span nor stamps it.
+        let before = last.load(Ordering::Relaxed);
+        note_compaction_span_line(r#"{"type":"message_update"}"#, &open, &last);
+        assert!(open.load(Ordering::Relaxed), "still open");
+        assert_eq!(last.load(Ordering::Relaxed), before);
+
+        note_compaction_span_line(
+            r#"{"type":"compaction_end","reason":"threshold"}"#,
+            &open,
+            &last,
+        );
+        assert!(!open.load(Ordering::Relaxed), "the span closed");
+
+        // A `turn_end` is not a span boundary, however tempting the naming.
+        open.store(true, Ordering::Relaxed);
+        note_compaction_span_line(r#"{"type":"turn_end"}"#, &open, &last);
+        assert!(open.load(Ordering::Relaxed));
     }
 
     /// Plan 089 (D1): `classify_overflow_failure` routes the interrupted case

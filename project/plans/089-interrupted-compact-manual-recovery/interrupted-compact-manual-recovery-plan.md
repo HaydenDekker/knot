@@ -730,12 +730,11 @@ change, so they land after the phases that change behaviour.
   extend D1/D2/D3 to the threshold reason, and reuse the 088 observer for
   the 081 activity tick.
 
-## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–13 pending)
+## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–11 done, 12–13 pending)
 
 **Pending (added 2026-09-12 from the rig-run evidence table, target
-v0.47.0):** phase 10 — threshold interruptions (D7); phase 11 —
-compaction-aware inactivity window (D8); phase 12 — observability (D9);
-phase 13 — verify, docs, v0.47.0.
+v0.47.0):** phase 12 — observability (D9); phase 13 — verify, docs,
+v0.47.0.
 
 #### Follow-on phase log
 
@@ -822,6 +821,63 @@ phase 13 — verify, docs, v0.47.0.
   D6 tests fail; with phase 8's predicate reverted they fail too. Reverted
   and re-run green: 1068 lib tests + all integration tests, no new clippy
   warnings.
+
+**Phase 10 (D7) — complete.** `src/adapters/pi_json.rs`:
+
+- `interrupted_overflow_compaction` → **`interrupted_compaction`**, now
+  reason-agnostic: a trailing `compaction_start` with no `compaction_end`
+  is an interruption whatever pi's reason was. The `overflow`-only match was
+  right while Knot could itself stop the process it watched (the pre-D5
+  teardown closed stdin, pi exited on the EOF, and the half-finished
+  `threshold` span was Knot's own doing); with the settle-based teardown a
+  trailing unmatched start means pi died mid-summarisation, and every such
+  occurrence on the 2026-09-11 rig was `threshold`. A threshold interruption
+  now gets the same recovery as an overflow one: `CompactionInterrupted`
+  (resumable) → D2 manual compact → D3 restart.
+- The operator-facing message says **auto-compaction** ("overflow
+  compaction" would have been a lie for `reason: threshold`).
+- Tests: `not_interrupted_on_threshold_only` inverted to
+  `interrupted_when_threshold_start_has_no_end`; new
+  `classify_interrupted_threshold_is_resumable` asserts the threshold shape
+  with **no** provider error message at all (pi dies before emitting one,
+  which is exactly why case 0 is matched on the starts/ends shape first).
+  The completed/recovered cases are untouched.
+- This **reverses an explicit D1 decision**; the reasoning lives in the
+  helper's doc comment so the next reader does not "fix" it back.
+- **Negative control:** restoring the `overflow`-only filter fails exactly
+  `interrupted_when_threshold_start_has_no_end` and
+  `classify_interrupted_threshold_is_resumable`. Reverted and re-run green.
+
+**Phase 11 (D8) — complete.** `src/adapters/live_output.rs`,
+`src/adapters/{pi_json,pi_rpc,pi_stdio}.rs`:
+
+- **A compaction span counts as activity.** `spawn_watchdog` takes
+  `compaction_hold: Option<Arc<AtomicBool>>` and skips the **inactivity**
+  test while it is set. The **total budget is not suspended**: a wedged
+  compaction is still killed on the deadline, and reported as `Timeout`
+  because that is what actually happened — not as a stall the run never had.
+- The decision is factored into a pure `inactivity_due(timeout, silent,
+  held)` so the rule is testable; testing the watchdog thread itself would
+  mean killing a real process group from a unit test.
+- `touch_activity(&AtomicU64)` / `LiveOutput::touch()` are the explicit
+  activity stamps. `note_compaction_span_line(line, &open, &last_activity)`
+  (in `pi_json`, next to its sibling `observe_compaction_line`) maintains
+  the span flag and stamps the timer from one cheap substring test — no
+  parse, no observer required, **one implementation for both runners** so
+  they cannot drift. The JSON adapter stamps it in the stdout reader
+  closure; the RPC driver calls it per line; `pi_stdio` (one-shot, no stream
+  observation) passes `None` and behaves exactly as before.
+- Tests: `inactivity_fires_past_the_window`,
+  `inactivity_is_held_while_a_compaction_span_is_open`,
+  `silence_inside_the_window_is_not_a_stall`, `no_window_never_fires`,
+  `touch_resets_the_measured_silence` (the first `live_output` unit tests —
+  the module had none), `note_compaction_span_line_tracks_the_span`
+  (`turn_end` is not a boundary; an unrelated line neither closes the span
+  nor stamps the timer).
+- **Negative control:** ignoring the hold (the pre-D8 rule) fails exactly
+  `inactivity_is_held_while_a_compaction_span_is_open`. Reverted and re-run
+  green: 1075 lib tests + all integration tests; clippy warnings 207 vs a
+  212-warning baseline (`9773107`), i.e. none added by phases 8–11.
 
 ### Shipped in v0.46.0 (phases 0–7)
 
