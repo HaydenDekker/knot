@@ -2651,6 +2651,58 @@ mod tests {
         assert_eq!(compaction_context_note(None), None);
     }
 
+    /// Plan 089 (phase 13): the healthy shape, end to end through the
+    /// usecase — one attempt, a threshold compaction, an in-session
+    /// continuation, an answer. Exactly what the 2026-09-11 rig should have
+    /// produced, and the shape the operator should see in the loom log:
+    /// `ContextCompacted` + `TurnContinued`, **no** `KnotEmptyResponse` and
+    /// **no** `SessionResumed` (no restart, no empty-response retry).
+    #[test]
+    fn healthy_compaction_and_continuation_is_one_clean_run() {
+        let runner = TestAgentRunner::new_with_observations(
+            vec![Ok(ok_output("the finished brief"))],
+            vec![vec![
+                comp_obs_started("sess-healthy", "threshold"),
+                comp_obs_ended("sess-healthy", "threshold", Some(140_000), None, false),
+                comp_obs_continued("sess-healthy", "threshold"),
+            ]],
+        );
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute(&runner, &log, 120)
+            .expect("a compacted, continued turn is a successful run");
+        assert_eq!(result.stdout, "the finished brief");
+
+        let events = log.events();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| match e {
+                LoomEvent::ContextCompacted { .. } => "ContextCompacted",
+                LoomEvent::TurnContinued { .. } => "TurnContinued",
+                LoomEvent::KnotEmptyResponse { .. } => "KnotEmptyResponse",
+                LoomEvent::SessionResumed { .. } => "SessionResumed",
+                LoomEvent::SessionRestarted { .. } => "SessionRestarted",
+                _ => "other",
+            })
+            .collect();
+        assert!(
+            kinds.contains(&"ContextCompacted"),
+            "the compaction is reported: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"TurnContinued"),
+            "the in-session continuation is reported: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"KnotEmptyResponse"),
+            "the continuation's answer means no empty response: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"SessionResumed") && !kinds.contains(&"SessionRestarted"),
+            "nothing restarted a process: {kinds:?}"
+        );
+    }
+
     /// Plan 089 (D6): the driver's in-session continuation is logged as
     /// `TurnContinued` — the in-session sibling of `SessionRestarted` — so
     /// the compaction and the follow-up question read as one story in the

@@ -730,10 +730,7 @@ change, so they land after the phases that change behaviour.
   extend D1/D2/D3 to the threshold reason, and reuse the 088 observer for
   the 081 activity tick.
 
-## Implementation Status: 🟡 In Progress (phases 0–7 shipped in v0.46.0; phases 8–12 done, 13 pending)
-
-**Pending (added 2026-09-12 from the rig-run evidence table, target
-v0.47.0):** phase 13 — verify, docs, v0.47.0.
+## Implementation Status: ✅ Complete (phases 0–7 shipped in v0.46.0; phases 8–13 shipped in v0.47.0)
 
 #### Follow-on phase log
 
@@ -920,6 +917,40 @@ v0.47.0):** phase 13 — verify, docs, v0.47.0.
   `abandoned_runs` directly). A `tests/` integration test would need the
   service binary to start and write into a scratch rig; the logged line's
   shape is covered by the render tests.
+
+**Phase 13 (verify, docs, version) — complete.**
+
+- `cargo test` green: **1083 lib tests + all integration suites, 0 failures**
+  (~1410 in total). `cargo clippy --all-targets`: **207 warnings against a
+  212-warning baseline** (`9773107`, before phase 8) — nothing added by
+  phases 8–13.
+- The 088 live-observer and 079/080 overflow suites pass unchanged; the only
+  reversed assertion in the whole plan is the phase 10 one
+  (`not_interrupted_on_threshold_only` →
+  `interrupted_when_threshold_start_has_no_end`), as anticipated.
+- **Mock-harness end-to-end:** `healthy_compaction_and_continuation_is_one_clean_run`
+  (usecase level — the observation chain `Started(threshold)` →
+  `Ended(success)` → `Continued(threshold)` with an answer yields
+  `ContextCompacted` + `TurnContinued` and **no** `KnotEmptyResponse`,
+  `SessionResumed` or `SessionRestarted`), on top of the adapter-level walk
+  `rpc_continues_in_session_after_threshold_compaction` (the real stream
+  shape: `agent_end`(empty) → `compaction_start` → `compaction_end` →
+  `agent_settled` → continuation `prompt` → `agent_end`(text) →
+  `agent_settled`, exactly 2 prompts, the second turn's text as the result).
+  No live rig runs in this repository (AGENTS.md).
+- **Docs:** `docs/release-notes.md` v0.47.0; `docs/concepts.md` — the
+  compaction story now covers the settle, the in-session continuation, the
+  span-as-activity rule, any-reason interruptions and abandoned runs;
+  `docs/troubleshooting.md` — `TurnContinued` and `RunAbandoned` rows, the
+  `CompactionInterrupted` row now says **any reason** and that Knot is no
+  longer a cause of the shape, and the stall section explains what the 0.47.0
+  hold does and does not suppress.
+- **`knot-update` skill:** one changelog entry covering **0.46.0 and
+  0.47.0** together (0.46.0 shipped without one) — *affected documents:
+  none*, no migration. Deployed to `~/.agents/skills-library/knot-update/`
+  and diff-verified.
+- Version bumped **0.46.0 → 0.47.0**; `cargo install --path .` reinstalled
+  (`knot --version` → 0.47.0). `master-plan.md` marks plan 089 complete.
 
 ### Shipped in v0.46.0 (phases 0–7)
 

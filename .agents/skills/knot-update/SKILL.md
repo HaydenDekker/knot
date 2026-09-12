@@ -59,6 +59,51 @@ date, and migration instructions for affected document types.
 
 ---
 
+### Interrupted / Threshold Compaction Recovery — Settle-Based Teardown, In-Session Continuation (Knot 0.46.0 + 0.47.0, 2026-09-11/12)
+
+**What changed:** plan 089 (both releases) — how Knot behaves when pi
+compacts the session mid-run. Covers **0.46.0**, which shipped no
+document-format change and had no entry here at the time, and **0.47.0**.
+
+1. **Teardown moved from `agent_end` to `agent_settled` (0.47.0, `pi-rpc`).**
+   Knot closes the child's stdin when pi *settles* the prompt (post-agent
+   compaction included), and holds it open for a whole compaction span. Before
+   this, Knot's own EOF could kill pi mid-summarisation — the shape that looks
+   like a pi crash in the logs.
+2. **In-session continuation (0.47.0, `pi-rpc`).** A turn that ended because
+   of a compaction gets **one** follow-up `prompt` on the live channel, so the
+   answer comes back in the same process.
+3. **Any-reason interruptions (0.47.0).** An unclosed compaction span is a
+   resumable `CompactionInterrupted` whatever pi's `reason` was (0.46.0 matched
+   `overflow` only), and is recovered by the 0.46.0 out-of-band
+   manual compact + session restart.
+4. **Compaction-aware liveness (0.47.0).** A compaction span counts as
+   activity: the inactivity watchdog stands down while one is open. The total
+   budget is unchanged.
+5. **New loom / service-log events** (0.46.0: `CompactionInterrupted`,
+   `ManualCompactionSucceeded`, `ManualCompactionFailed`, `SessionRestarted`;
+   0.47.0: `TurnContinued`, `RunAbandoned`). An empty-response line now names
+   the compaction it arrived in, and a resumed attempt's `CompactionStarted`
+   carries the session id from the first line.
+
+**Affected documents:** **none** — no rig document, profile, loom or knot file
+format changed in either version. Nothing to migrate on upgrade; restart the
+service to pick up the new binary.
+
+**New service-log shapes** (observability only):
+
+```
+[KNOT][EVENT] TurnContinued loom=<loom> knot=<knot> strand=<path> session=<id> reason=<reason> attempt=<n>
+[KNOT][EVENT] RunAbandoned loom=<loom> knot=<knot> strand=<path>[ session=<id>]
+[KNOT][EVENT] CompactionInterrupted … reason=<threshold|overflow|manual> …
+```
+
+(`RunAbandoned` is emitted at startup, once per queue entry restored from the
+previous service: that run stopped mid-strand and the strand is re-run from
+scratch — Knot does not re-enter a dead agent session.)
+
+---
+
 ### Compaction Assurance — Always-On Compaction, Live Compaction Spans (Knot 0.45.0, 2026-09-11)
 
 **What changed:** plan 088 — compaction is now guaranteed on for rig

@@ -1,7 +1,8 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-12 (plan 089 reopened — phases 0–7 shipped in v0.46.0 and proven on a live rig; follow-on phases 8–13 added from the 2026-09-11/12 `pwa-todo-3` evidence: threshold compactions still end the attempt, compaction stalls trip the inactivity watchdog)
-> **Prior:** 2026-09-11 (plan 089 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
+> **Last Updated:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
+> **Prior:** 2026-09-12 (plan 089 reopened from the 2026-09-11/12 `pwa-todo-3` evidence — threshold compactions still ended the attempt and compaction stalls tripped the inactivity watchdog)
+> **Prior:** 2026-09-11 (plan 089 phases 0–7 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
 
 ## How to Add a Plan
 
@@ -47,7 +48,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | 🟡 In Progress — phases 0–7 complete (v0.46.0); phases 8–13 pending (v0.47.0) | 2026-09-11 |
+| 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | ✅ Complete (2026-09-12) — phases 0–7 released in v0.46.0, phases 8–13 in v0.47.0 | 2026-09-11 |
 | 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | ✅ Complete (2026-09-11) — released in v0.45.0 | 2026-09-11 |
 | 87 | [Self-Continuation for Event-Source Knots + Queue-Wait-Exempt Budget](087-event-source-continuation-and-queue-budget/087-event-source-continuation-and-queue-budget-plan.md) | ✅ Complete (2026-09-10) — released in v0.44.0 | 2026-09-10 |
 | 86 | [Graceful Task Handoff — Checkpointed Continuation Chains for Task-Bearing Knots](086-graceful-task-handoff/graceful-task-handoff-plan.md) | ✅ Complete (2026-09-08) — released in v0.43.0 | 2026-09-08 |
@@ -81,7 +82,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 89. Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery
 
-**Status:** 🟡 In Progress — phases 0–7 complete (2026-09-11, v0.46.0); phases 8–13 pending (2026-09-12, target v0.47.0)
+**Status:** ✅ Complete (2026-09-12) — phases 0–7 released in v0.46.0, phases 8–13 in v0.47.0
 **Created:** 2026-09-11
 **Goal:** When pi's in-process overflow compact-and-retry dies mid-compaction (the process stops after `compaction_start` and before `compaction_end`), recover the session instead of failing it: detect the interrupted compaction, run a manual `compact` on the same session via the `pi-rpc` adapter, and re-enter with `--session-id` — logging each boundary (`CompactionInterrupted`, `ManualCompactionSucceeded` / `ManualCompactionFailed`, `SessionRestarted`) — and stop the adapter from killing a live in-flight compaction.
 

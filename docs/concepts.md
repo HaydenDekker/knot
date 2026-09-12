@@ -239,14 +239,43 @@ default).
   immediately with `context limit reached: …` — no session-resume
   retries, no clock-up, and no timeout operational event (no deadline was
   exceeded).
-- **Interrupted compaction is recovered, not fatal** (Knot 0.46.0+) — a
-  different overflow shape is *resumable*, not terminal: the in-process
-  overflow compaction **started but never reported completion**
-  (`compaction_start { reason: overflow }` with no `compaction_end`, and no
-  terminal `errorMessage`) — i.e. pi's overflow recovery died *mid-turn*
-  (process killed, inactivity, or a stream gap), leaving the context still
-  over-full. This is classified as `CompactionInterrupted` (resumable: it
-  carries the live session id) rather than the terminal `ContextLimitReached`.
+- **A run *settles*, it does not stop at the answer** (Knot 0.47.0+) —
+  `agent_end` means "the model's turn is over", but pi still runs its
+  post-agent work (auto-compaction) inside the same prompt and only then
+  emits `agent_settled`. Knot closes the child's stdin on the **settle**
+  (falling back to `agent_end` after a short settle window when no
+  compaction opened), and holds it open for the whole of a compaction span.
+  This matters because pi `pi-rpc` exits at stdin EOF: closing at
+  `agent_end` used to kill pi mid-summarisation, turning a routine
+  compaction into a lost turn.
+- **A compaction span counts as activity** (Knot 0.47.0+) — the inactivity
+  watchdog (below) asks "has the session written anything lately?", and
+  while pi summarises the honest answer is *no*. Knot now stamps the span
+  boundaries as activity and skips the inactivity test while a span is
+  open. The **total budget is never suspended**: a compaction that really
+  wedges is still killed at the deadline, and reported as a timeout — the
+  one thing it actually was.
+- **Knot asks the compacted session to continue** (Knot 0.47.0+) — a
+  compaction lands between the agent's last turn and its final answer, so
+  the settled turn can carry no text. Instead of charging that to the agent
+  as an empty response, Knot sends **one** follow-up `prompt` on the live
+  channel ("reply with your final answer now — do not start any new task")
+  and reads the answer from the same process, logged as `TurnContinued`.
+  It is the in-session sibling of `SessionRestarted`
+  (which needs a new process) and costs one short turn rather than a
+  re-prompt plus a second summarisation. If pi does not answer, the
+  ordinary empty-response path still applies.
+- **Interrupted compaction is recovered, not fatal** (Knot 0.46.0+; any
+  reason since 0.47.0) — a different shape is *resumable*, not terminal: a
+  compaction **started but never reported completion** (`compaction_start`
+  with no `compaction_end`, and no terminal `errorMessage`) — i.e. pi died
+  *mid-summarisation*, leaving the context unshrunk. Since 0.47.0 this
+  counts for **any** reason (`threshold` as well as `overflow`): with the
+  settle-based teardown above, Knot no longer stops the process it is
+  watching, so an unclosed span is a pi-side death and every one seen on a
+  real rig was a `threshold`. This is classified as `CompactionInterrupted`
+  (resumable: it carries the live session id) rather than the terminal
+  `ContextLimitReached`.
   Knot's remedy is an **out-of-band manual compact**: it re-opens the *same*
   session with `--session <id>` and sends a `compact` RPC (with a fixed
   operator note as `customInstructions`). Because a manual compact is a
@@ -259,6 +288,13 @@ default).
   re-entry would overflow again). The manual compact is bounded to **one** per
   failed execution (a second interruption is left to the normal retry
   machinery).
+- **A queue entry that outlives the service is an abandoned run**
+  (Knot 0.47.0+) — a queued event file is deleted only when its knot
+  finishes, so anything restored at startup belongs to a run that stopped
+  mid-strand. Startup logs one `RunAbandoned` per restored entry. It is a
+  report, not a resume: Knot never re-enters a dead agent session, so the
+  strand is processed **from scratch** on a new session and the abandoned
+  work is repeated rather than continued.
 - **The escape hatch** — `compaction.enabled` in `.pi/settings.json`
   (`true`/`false`) remains the only switch: pi has no
   "only-on-overflow" mode upstream, so the only way to turn compaction

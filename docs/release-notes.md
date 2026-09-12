@@ -1,5 +1,58 @@
 # Release Notes
 
+## v0.47.0 — 2026-09-12
+
+### Feature — A Compaction No Longer Ends the Attempt (Plan 089, phases 8–13)
+
+v0.46.0 recovered the *overflow* shape where pi's compaction died mid-turn.
+The 2026-09-11 rig run showed the same family of failures coming from
+**proactive** (`threshold`) compactions, and from three places Knot itself was
+cutting them short. A compaction on that rig cost a lost turn, a re-prompt and
+a second 30–47 s summarisation — or the whole attempt.
+
+**What changed — the run waits for the compaction, then asks for its answer:**
+
+1. **Settle-based teardown (pi-rpc)** — `agent_end` means the model's turn is
+   over, not the prompt: pi still runs its post-agent compaction inside the
+   same awaited prompt and emits `agent_settled` afterwards. Knot now closes
+   the child's stdin on the **settle**, falling back to `agent_end` only after
+   a short settle window with no compaction open. `pi-rpc` exits at stdin EOF,
+   so the previous `agent_end`-immediately rule was itself killing pi
+   mid-summarisation (five `threshold` interruptions on the rig — Knot's own
+   doing, not pi's).
+2. **In-session continuation** — when a settled turn carries no text because a
+   compaction just completed, Knot sends **one** follow-up `prompt` on the live
+   channel ("reply with your final answer now — do not start any new task")
+   and takes the answer from the same process, logged as **`TurnContinued`**.
+   The in-session sibling of `SessionRestarted`: no new process, no re-sent
+   strand, no second summarisation. Unanswered, the ordinary empty-response /
+   session-resume path still applies, bounded by the existing liveness rules
+   (no new timeout).
+3. **Interruptions for any reason** — an unclosed compaction span
+   (`compaction_start` with no `compaction_end`) is now an interruption
+   whatever pi's reason was, so a `threshold` death gets the v0.46.0 manual
+   compact + session restart. With (1) in place Knot no longer stops the
+   process it watches, which is what made the shape ambiguous before.
+4. **A compaction span counts as activity** — pi writes nothing while it
+   summarises, so the span boundaries now stamp the inactivity watchdog and
+   the inactivity test stands down while a span is open. The **total budget is
+   never suspended**: a wedged compaction is still killed on the deadline and
+   reported as a `Timeout`, which is what it was. Both stream runners share one
+   span-tracking helper.
+5. **Observability** — `CompactionStarted` on a resumed attempt carries the
+   session id from the first line (Knot seeds it from the `--session-id` it
+   passed; the RPC stream has no `session` header and `get_state` can answer
+   late, which is why the rig's rows printed an empty `session=`); an empty
+   response names the compaction it arrived in; and startup logs **
+   `RunAbandoned`** once per queue entry restored from the previous service — a
+   run that stopped mid-strand, re-run from scratch rather than resumed.
+
+**Operator-visible changes:** threshold compactions no longer end an attempt;
+`TurnContinued` and `RunAbandoned` appear in the service log and loom logs;
+`CompactionInterrupted` can now name `reason: threshold`; `AgentInactivity`
+cannot fire inside a compaction span. No document-format change — no migration
+(`knot-update`: nothing to do when upgrading).
+
 ## v0.46.0 — 2026-09-11
 
 ### Feature — Interrupted Overflow Compaction: Manual-Compact + Session-Restart Recovery (Plan 089)
