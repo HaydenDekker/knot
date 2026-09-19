@@ -49,6 +49,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 91 | [Per-Event Enforcement — Re-Ask When a Tie-Off Acknowledges Only Some Expected Events](091-per-event-enforcement/per-event-enforcement-plan.md) | 📝 Draft | 2026-09-20 |
 | 90 | [Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry](090-concise-in-session-retry/concise-in-session-retry-plan.md) | ✅ Complete (2026-09-12) — released in v0.48.0 | 2026-09-12 |
 | 89 | [Interrupted Overflow Compaction — Manual Compact and Session-Restart Recovery](089-interrupted-compact-manual-recovery/interrupted-compact-manual-recovery-plan.md) | ✅ Complete (2026-09-12) — phases 0–7 released in v0.46.0, phases 8–13 in v0.47.0 | 2026-09-11 |
 | 88 | [Compaction Assurance — Auto-Compaction Always On, Overflow Recovery Continues the Session](088-compaction-assurance/compaction-assurance-plan.md) | ✅ Complete (2026-09-11) — released in v0.45.0 | 2026-09-11 |
