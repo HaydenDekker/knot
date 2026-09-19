@@ -373,13 +373,15 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             knot_id,
             strand_path,
             expected_events,
+            missing_events,
             ..
         } => format!(
-            "KnotEventsMissing loom={} knot={} strand={} expected={}",
+            "KnotEventsMissing loom={} knot={} strand={} expected={} missing={}",
             loom_id.0,
             knot_id.0,
             strand_path.0.display(),
-            expected_events.join(",")
+            expected_events.join(","),
+            missing_events.join(",")
         ),
         LoomEvent::KnotParseWarning {
             loom_id,
@@ -932,10 +934,10 @@ mod tests {
 
     #[test]
     fn knot_events_missing_line() {
-        let e = LoomEvent::KnotEventsMissing { loom_id: loom("prd-loom"), knot_id: knot("author"), strand_path: strand("strands/spec.md"), expected_events: vec!["PlanCreated".into(), "PlanRejected".into()], timestamp: ts() };
+        let e = LoomEvent::KnotEventsMissing { loom_id: loom("prd-loom"), knot_id: knot("author"), strand_path: strand("strands/spec.md"), expected_events: vec!["PlanCreated".into(), "PlanRejected".into()], missing_events: vec!["PlanRejected".into()], timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
-            "KnotEventsMissing loom=prd-loom knot=author strand=strands/spec.md expected=PlanCreated,PlanRejected"
+            "KnotEventsMissing loom=prd-loom knot=author strand=strands/spec.md expected=PlanCreated,PlanRejected missing=PlanRejected"
         );
     }
 

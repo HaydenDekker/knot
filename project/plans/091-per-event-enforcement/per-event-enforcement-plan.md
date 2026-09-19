@@ -325,8 +325,10 @@ if !expected.is_empty() {
             // on Ok(response):
             //     followup_events = extract_agent_events(&response)
             //     dispatch (unchanged call; occurred filter inside the dispatcher)
-            //     still_missing = if followup_events.is_empty() { missing.clone() }
-            //                     else { missing_event_ids(&expected, &response) }
+            //     still_missing = missing_event_ids(&missing, &response)
+            //     — the follow-up was asked to emit blocks for the missing
+            //       set only, so the re-check diffs against that set (an
+            //       empty follow-up leaves everything missing)
             //     if !still_missing.is_empty() → second KnotEventsMissing
             //       { expected_events: expected, missing_events: still_missing }
         }
@@ -340,10 +342,13 @@ Notes:
   same trigger, same follow-up, plus an accurate `missing_events`.
 - Second-attempt semantics tighten slightly: today any non-empty
   follow-up suppresses the second log; now the second log fires when the
-  expected set is still not fully covered (a follow-up emitting only an
-  unrelated block no longer counts as an acknowledgement). This is the
-  point of the plan, and the dispatch of whatever the follow-up did
-  emit is unchanged.
+  follow-up's blocks do not cover what was missing (a follow-up emitting
+  only an unrelated block no longer counts as an acknowledgement). This
+  is the point of the plan, and the dispatch of whatever the follow-up
+  did emit is unchanged. The re-check diffs the follow-up against the
+  *missing* set (not the full expected set) — the follow-up prompt asks
+  for the missing blocks only, and blocks already delivered on the main
+  path are not re-required.
 - All existing call sites of `emit_system` for `KnotEventsMissing` move
   with the new shape; the first-attempt message text changes from "emitted
   no expected events" to "did not acknowledge all expected events

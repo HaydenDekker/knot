@@ -182,6 +182,12 @@ tie-offs/<rig>/<loom-id>/
 
 ---
 
+### Event Enforcement
+
+Knot enforces that a knot which was asked to emit subscriber events actually **acknowledged every one** — not merely that its tie-off contains at least one event block. After the agent completes, Knot computes the *missing set* (expected event IDs with no structured block in the tie-off) and re-asks in-session for exactly those blocks. An `occurred: false` block is an acknowledgement (confirmed-not-dispatched), `event: None` remains a blanket "nothing happened" acknowledgement, and the `TasksIncomplete` self-continuation entry is never enforced — it is a conditional signal, not a subscriber acknowledgement. Each unacknowledged set produces a `KnotEventsMissing` (with the full expected set and the missing set); one follow-up re-entry is attempted, and if events are still missing the second entry records the gap. Processing completes regardless — missing events are a recorded outcome, not a failure.
+
+---
+
 ### Service Log
 
 The service's single consolidated log (Knot 0.41.0+): one line per record on the service's stderr — `[KNOT][EVENT]` lines (one per domain event: loom lifecycle, strand processing, timeouts, queue idle) and `[KNOT][STATE]` lines (one per actual `state.json` write). The `knot-start` skill appends the service stderr to `tie-offs/<rig>/knot-service.log` in the runtime tree, making it the durable operational record across restarts. Run activity is in-memory per process — the pre-0.41.0 per-run JSONL files (`.loom-log` per loom, `.rig-log` at the rig level, both cleared at startup) are gone; nothing is cleared at startup anymore, and legacy files left by a 0.31.0 migration are inert.

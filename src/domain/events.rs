@@ -258,6 +258,9 @@ pub fn build_listener_context(
            additional fields specified in the event description above.\n\
          - When `occurred: false`, the event is not dispatched but still\n\
            counts as acknowledgement.\n\
+         - Mentioning an event in narrative text is not an acknowledgement —\n\
+           only structured ```markdown event blocks are parsed. Emit a block\n\
+           for every event listed above, even when `occurred: false`.\n\
          - If a pendening event satisfies the event that has just occured set occured: false to avoid duplicated events.\n\
          - You may conclude a pending event is already relevant but requires additonal context but do not edit the pending event and instead\n\
            emit a new event of the same type with additional context.\n\
@@ -587,13 +590,18 @@ pub enum LoomEvent {
         timestamp: String,
     },
     /// A knot completed successfully but was instructed to emit events
-    /// and produced none in its response.
+    /// and did not acknowledge all of them in its response.
     KnotEventsMissing {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
-        /// Description of what events were expected.
+        /// All events the agent was expected to acknowledge (the
+        /// injected subscriber list, minus the `TasksIncomplete`
+        /// self-continuation entry).
         expected_events: Vec<String>,
+        /// The subset with no structured block in the tie-off (plan
+        /// 091). Equals `expected_events` in the zero-block case.
+        missing_events: Vec<String>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
@@ -2269,6 +2277,7 @@ mod tests {
                     "PlanCreated".to_string(),
                     "ValidationFailed".to_string(),
                 ],
+                missing_events: vec!["ValidationFailed".to_string()],
                 timestamp: ts.clone(),
             },
         ];
@@ -2640,6 +2649,7 @@ mod tests {
                 "PlanCreated".to_string(),
                 "ValidationFailed".to_string(),
             ],
+            missing_events: vec!["ValidationFailed".to_string()],
             timestamp: ts.clone(),
         };
 
@@ -2665,6 +2675,7 @@ mod tests {
                 "PlanCreated".to_string(),
                 "ValidationFailed".to_string(),
             ],
+            missing_events: vec!["ValidationFailed".to_string()],
             timestamp: ts.clone(),
         };
 
@@ -2675,6 +2686,7 @@ mod tests {
                 knot_id: kid,
                 strand_path: sp,
                 expected_events,
+                missing_events,
                 timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
@@ -2683,6 +2695,10 @@ mod tests {
                 assert_eq!(expected_events.len(), 2);
                 assert_eq!(expected_events[0], "PlanCreated");
                 assert_eq!(expected_events[1], "ValidationFailed");
+                assert_eq!(
+                    missing_events,
+                    &vec!["ValidationFailed".to_string()]
+                );
                 assert_eq!(t, &ts);
             }
             _ => panic!("Expected KnotEventsMissing variant"),

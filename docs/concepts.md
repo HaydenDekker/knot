@@ -93,6 +93,34 @@ The directory a knot watches for strand events, configured as `strand-dir`
 in the knot's YAML frontmatter. It is resolved relative to the project
 root (the directory containing `rig/`).
 
+### Agent Events and Enforcement
+
+When downstream knots subscribe to a processing knot's events (via
+`event:` strand sources), Knot injects a `# Subscriber Events` block
+naming every subscribed event. The knot must emit **one structured
+event block per listed event** in its final response — each with an
+explicit `occurred: true` or `occurred: false`. Narrating the event in
+prose is not an acknowledgement: the structured block is the
+acknowledgement.
+
+- `occurred: false` blocks are **not dispatched**, but they count as
+  acknowledgements — the knot confirmed the event and asserted it did
+  not happen.
+- `event: None` remains a **blanket** "nothing happened"
+  acknowledgement that satisfies the whole list.
+- The `TasksIncomplete` self-continuation entry is **never enforced** —
+  it is a conditional signal, not a subscriber acknowledgement.
+
+**Event enforcement** runs after the agent completes: if the tie-off
+does not acknowledge *every* expected event (zero blocks included),
+Knot logs a `KnotEventsMissing` — naming the full expected set and the
+missing set — and re-enters the session once, asking the agent to emit
+blocks for exactly the missing events. Follow-up events are dispatched
+normally (subject to `occurred` filtering). A follow-up that still
+leaves events unacknowledged produces a second `KnotEventsMissing`;
+processing then completes and any missing events stay missing — a
+recorded gap, not a failure.
+
 ### Rig State
 
 `tie-offs/<rig>/state.json` is written **when the state actually changes** (the writer ticks every 5 seconds but skips no-op writes — an unchanged mtime means the rig is idle) and contains the

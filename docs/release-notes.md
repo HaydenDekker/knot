@@ -1,5 +1,54 @@
 # Release Notes
 
+## v0.49.0 — 2026-09-20
+
+### Fixed — Per-Event Enforcement (Plan 091)
+
+Event enforcement now checks **per-event completeness** instead of
+merely "does the tie-off contain at least one event block". The 0.48.x
+shape left a silent gap: a knot whose subscribers expected several
+`event:` sources could acknowledge some events — even only with
+`occurred: false` blocks — and the enforcement gate saw *an event block
+present* and passed it through. The remaining events simply were never
+delivered, and the consumer knots that subscribe to them never ran. A
+live rig (a `prd-config-check` knot narrating that it emitted
+`PlanRequested` without emitting the block) exposed exactly this: the
+tie-off carried three `occurred: false` acknowledgements, the
+enforcement gate passed it, and the subscriber waiting on
+`PlanRequested` sat silently.
+
+- **The missing set is computed per event.** The expected set comes
+  from the same subscriber context injected into the prompt
+  (`event:` sources of loom-level and knot-level subscribers, plus the
+  `TasksIncomplete` self-continuation entry). Every expected event ID
+  with no structured block in the tie-off — an `occurred: true` or
+  `occurred: false` block both count as present — is *missing*.
+  Narrative mentions are not acknowledgements; the structured block is.
+- **Zero blocks is the all-missing case.** A tie-off with no event
+  blocks at all now logs `KnotEventsMissing` with the full expected set
+  as the missing set — the old behaviour, preserved and generalised.
+- **`event: None` is a blanket acknowledgement.** As before, a
+  `None` block satisfies the whole list ("nothing happened"); it
+  never appears in a missing set.
+- **`TasksIncomplete` is never enforced.** It is a conditional
+  self-continuation signal, not a subscriber acknowledgement; when it
+  is the only expected entry, enforcement does not run at all.
+- **The re-ask names the missing events.** The follow-up prompt now
+  asks the agent to emit blocks for *exactly* the missing event IDs
+  instead of the zero-block wording. Follow-up events are dispatched
+  normally (subject to `occurred` filtering).
+- **`KnotEventsMissing` carries both sets.** The variant gains a
+  `missing_events` field alongside `expected_events` (the old field
+  now means the full expected set, not "what was missing"); the
+  service log renders `expected=…` and `missing=…`.
+- **One follow-up, then the gap stands.** As before, one re-entry is
+  attempted; a follow-up that still leaves events unacknowledged
+  produces a second `KnotEventsMissing` naming the still-missing set.
+  Processing completes regardless — missing events are a recorded
+  outcome, not a failure.
+- No rig document format changes; no project document migration
+  required.
+
 ## v0.48.0 — 2026-09-12
 
 ### Improved — Concise In-Session Retry Prompts (Plan 090)

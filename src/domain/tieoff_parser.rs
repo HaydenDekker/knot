@@ -206,6 +206,40 @@ pub fn has_no_events(content: &str) -> bool {
     true
 }
 
+/// Per-event completeness check (plan 091).
+///
+/// Returns the expected event IDs that have **no** corresponding
+/// structured event block in `content`, sorted.
+///
+/// - One-way subset check: blocks for events not in `expected` are
+///   ignored (a knot's own producer events that nobody subscribes to
+///   never block enforcement).
+/// - A parsed `event: None` block is a blanket acknowledgement
+///   (plan 059) — it satisfies the check regardless of anything else.
+/// - `occurred: false` blocks count as present: acknowledgement is the
+///   gate's concern; dispatch filters `occurred` itself.
+/// - Narrative (prose) mentions of an event do not count — only
+///   structured ```markdown blocks are parsed.
+pub fn missing_event_ids(expected: &[String], content: &str) -> Vec<String> {
+    let events = extract_agent_events(content);
+
+    // Blanket acknowledgement — explicit "no events" declaration.
+    if events.iter().any(|e| e.event_id == "None") {
+        return Vec::new();
+    }
+
+    let actual: std::collections::HashSet<&str> =
+        events.iter().map(|e| e.event_id.as_str()).collect();
+
+    let mut missing: Vec<String> = expected
+        .iter()
+        .filter(|id| !actual.contains(id.as_str()))
+        .cloned()
+        .collect();
+    missing.sort();
+    missing
+}
+
 /// Extract the content of ```markdown code blocks from text.
 ///
 /// Only blocks that start with exactly ```markdown (no other language tag)
@@ -1268,5 +1302,164 @@ mod tests {
             "```",
         );
         assert!(has_no_events(content));
+    }
+
+    // ── Plan 091: Per-Event Completeness (missing_event_ids) ──────────
+
+    /// Every expected event has a block → nothing missing.
+    #[test]
+    fn missing_event_ids_all_present_returns_empty() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "plan created\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanRejected\n",
+            "occurred: false\n",
+            "---\n",
+            "not rejected\n",
+            "```",
+        );
+        let expected = vec![
+            "PlanCreated".to_string(),
+            "PlanRejected".to_string(),
+        ];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
+    }
+
+    /// Partial acknowledgement → exactly the missing IDs (prose mentions
+    /// do not count — the rust-core-4 case).
+    #[test]
+    fn missing_event_ids_partial_returns_missing_sorted() {
+        let content = concat!(
+            "Plan was rejected as described above.\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "plan created\n",
+            "```",
+        );
+        let expected = vec![
+            "PlanCreated".to_string(),
+            "PlanRejected".to_string(),
+        ];
+        assert_eq!(
+            missing_event_ids(&expected, content),
+            vec!["PlanRejected".to_string()]
+        );
+    }
+
+    /// Zero blocks → all expected IDs, sorted.
+    #[test]
+    fn missing_event_ids_zero_blocks_returns_all_expected() {
+        let expected = vec!["Zeta".to_string(), "Alpha".to_string()];
+        assert_eq!(
+            missing_event_ids(&expected, "just a body, no events"),
+            vec!["Alpha".to_string(), "Zeta".to_string()]
+        );
+    }
+
+    /// `event: None` is a blanket acknowledgement (plan 059) → passes.
+    #[test]
+    fn missing_event_ids_event_none_is_blanket_ack() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: None\n",
+            "occurred: false\n",
+            "---\n",
+            "nothing happened\n",
+            "```",
+        );
+        let expected = vec!["PlanCreated".to_string(), "PlanRejected".to_string()];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
+    }
+
+    /// `event: None` alongside a partial set → the blanket ack wins.
+    #[test]
+    fn missing_event_ids_event_none_wins_over_partial() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: None\n",
+            "occurred: false\n",
+            "---\n",
+            "```",
+        );
+        let expected = vec!["PlanCreated".to_string(), "PlanRejected".to_string()];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
+    }
+
+    /// Blocks for events nobody subscribes to never block enforcement
+    /// (one-way subset check).
+    #[test]
+    fn missing_event_ids_extra_events_ignored() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: MyOwnEvent\n",
+            "occurred: true\n",
+            "---\n",
+            "```",
+        );
+        let expected = vec!["PlanCreated".to_string()];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
+    }
+
+    /// Duplicate blocks for the same event deduplicate.
+    #[test]
+    fn missing_event_ids_duplicates_deduped() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "```\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: false\n",
+            "---\n",
+            "```",
+        );
+        let expected = vec!["PlanCreated".to_string()];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
+    }
+
+    /// `occurred: false` counts as present — acknowledgement is the
+    /// gate's concern; dispatch filters `occurred` itself.
+    #[test]
+    fn missing_event_ids_occurred_false_counts_as_present() {
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: false\n",
+            "---\n",
+            "did not occur\n",
+            "```",
+        );
+        let expected = vec!["PlanCreated".to_string()];
+        assert_eq!(missing_event_ids(&expected, content), Vec::<String>::new());
     }
 }

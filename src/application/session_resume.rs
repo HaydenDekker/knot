@@ -392,10 +392,13 @@ fn log_wrap_up(
 
 /// Attempt to re-enter the session to request missing events.
 ///
-/// Called after successful strand processing when the agent was instructed
-/// to emit events but produced none. Re-enters the Pi session with a
-/// follow-up prompt that repeats the original listener context (the exact
-/// event emission instructions the agent was already given).
+/// Called after successful strand processing when the agent was
+/// instructed to emit events but did not acknowledge all of them in its
+/// response (plan 091: per-event completeness — including the
+/// zero-block case). Re-enters the Pi session with a follow-up prompt
+/// that names the missing event blocks and repeats the original
+/// listener context (the exact event emission instructions the agent
+/// was already given).
 ///
 /// Returns the agent's response text, which the caller parses for events.
 /// Returns `Err` if the session cannot be re-entered (e.g. no session ID,
@@ -409,6 +412,7 @@ pub fn inject_event_request(
     session_id: &Option<String>,
     mut agent_config: AgentConfig,
     listener_context: String,
+    missing_events: Vec<String>,
     event_type: String,
     knot_name: Option<String>,
     profile_timeout: Option<Duration>,
@@ -421,13 +425,17 @@ pub fn inject_event_request(
         }
     })?;
 
-    // Repeat the listener context — the agent already saw these instructions
-    // in the first turn but missed them. No profile prompt needed since the
-    // session already has the full conversation history.
+    // Name the missing blocks and repeat the listener context — the
+    // agent already saw these instructions in the first turn but missed
+    // them. No profile prompt needed since the session already has the
+    // full conversation history.
     let prompt = format!(
-        "Your previous response did not contain any agent event blocks.\n\n\
-         Please emit events as instructed below:\n\n\
+        "Your previous response did not acknowledge the following \
+         required event blocks: {}\n\n\n\
+         Please emit exactly one event block for each of them (occurred: \
+         true or false, as appropriate), in the format instructed below:\n\n\n\
          {}",
+        missing_events.join(", "),
         listener_context,
     );
 
@@ -3195,6 +3203,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "## Agent Events\n\nYou may emit: PlanCreated".to_string(),
+            vec!["PlanCreated".to_string()],
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -3227,6 +3236,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
+            vec!["PlanCreated".to_string()],
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -3257,6 +3267,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
+            vec!["PlanCreated".to_string()],
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -3296,6 +3307,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             listener,
+            vec!["PhaseReady".to_string(), "ImplementationNote".to_string()],
             "Modified".to_string(),
             Some("k1".to_string()),
             None,
@@ -3303,10 +3315,20 @@ mod tests {
 
         let contexts = runner.contexts();
         let prompt = &contexts[0].prompt;
-        // Prompt repeats the full listener context
+        // Prompt repeats the full listener context and names the
+        // missing events (plan 091 — the old zero-block preamble is
+        // gone).
         assert!(
-            prompt.contains("Your previous response did not contain any agent event blocks"),
-            "prompt should have preamble"
+            prompt.contains("PhaseReady"),
+            "prompt should name the missing PhaseReady"
+        );
+        assert!(
+            prompt.contains("ImplementationNote"),
+            "prompt should name the missing ImplementationNote"
+        );
+        assert!(
+            !prompt.contains("did not contain any agent event blocks"),
+            "old zero-block preamble should be gone"
         );
         assert!(
             prompt.contains("## Agent Events"),
@@ -3344,6 +3366,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
+            vec!["PhaseReady".to_string()],
             "Modified".to_string(),
             Some("k1".to_string()),
             None,
@@ -3380,6 +3403,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "listener context".to_string(),
+            vec!["PlanCreated".to_string()],
             "Created".to_string(),
             Some("k1".to_string()),
             None,
@@ -3397,6 +3421,128 @@ mod tests {
             extra_args.contains(&"sess-abc".to_string()),
             "extra_args should contain session ID: {:?}",
             extra_args
+        );
+    }
+
+    // ── Plan 091: Per-Event Enforcement — prompt names the missing ────
+
+    /// The follow-up prompt names the missing event IDs and no longer
+    /// claims the response contained *no* event blocks (the zero-block
+    /// wording is gone).
+    #[test]
+    fn inject_event_request_prompt_names_missing_events() {
+        let listener = concat!(
+            "## Agent Events\n",
+            "\n",
+            "Events you may emit:\n",
+            "- `PhaseReady` — phase complete, next phase ready\n",
+            "- `ImplementationNote` — implementation discovery",
+        )
+        .to_string();
+
+        let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let _result = inject_event_request(
+            &runner,
+            &*log,
+            &make_loom_id(),
+            &make_knot_id(),
+            &make_strand_path(),
+            &Some("sess-abc".to_string()),
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+                thinking_level: None,
+                ctx_wrap_up_limit: None,
+            },
+            listener.clone(),
+            vec!["ImplementationNote".to_string()],
+            "Modified".to_string(),
+            Some("k1".to_string()),
+            None,
+        );
+
+        let contexts = runner.contexts();
+        let prompt = &contexts[0].prompt;
+        assert!(
+            prompt.contains("ImplementationNote"),
+            "prompt should name the missing event: {}",
+            prompt
+        );
+        assert!(
+            !prompt.contains("did not contain any agent event blocks"),
+            "old zero-block preamble should be gone: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("## Agent Events"),
+            "prompt should repeat the listener context: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("`PhaseReady`"),
+            "listener context should list PhaseReady: {}",
+            prompt
+        );
+    }
+
+    /// Zero-block case: the missing list is the full expected set and
+    /// every ID is named in the prompt.
+    #[test]
+    fn inject_event_request_prompt_zero_block_case_lists_all() {
+        let listener = concat!(
+            "## Agent Events\n",
+            "\n",
+            "Events you may emit:\n",
+            "- `PhaseReady` — phase complete, next phase ready\n",
+            "- `ImplementationNote` — implementation discovery",
+        )
+        .to_string();
+
+        let runner = TestAgentRunner::new(vec![Ok(ok_output("response"))]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let _result = inject_event_request(
+            &runner,
+            &*log,
+            &make_loom_id(),
+            &make_knot_id(),
+            &make_strand_path(),
+            &Some("sess-abc".to_string()),
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+                thinking_level: None,
+                ctx_wrap_up_limit: None,
+            },
+            listener,
+            vec![
+                "PhaseReady".to_string(),
+                "ImplementationNote".to_string(),
+            ],
+            "Modified".to_string(),
+            Some("k1".to_string()),
+            None,
+        );
+
+        let contexts = runner.contexts();
+        let prompt = &contexts[0].prompt;
+        assert!(
+            prompt.contains("PhaseReady"),
+            "prompt should name PhaseReady: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("ImplementationNote"),
+            "prompt should name ImplementationNote: {}",
+            prompt
         );
     }
 

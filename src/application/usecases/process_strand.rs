@@ -7049,13 +7049,22 @@ mod event_enforcement_tests {
             "KnotEventsMissing should be logged when events are missing"
         );
 
-        // Verify the KnotEventsMissing carries expected event IDs
-        if let LoomEvent::KnotEventsMissing { expected_events, .. } =
-            missing_events[0]
+        // Verify the KnotEventsMissing carries expected event IDs and,
+        // in the zero-block case, missing = expected (plan 091).
+        if let LoomEvent::KnotEventsMissing {
+            expected_events,
+            missing_events,
+            ..
+        } = missing_events[0]
         {
             assert!(
                 expected_events.contains(&"PlanCreated".to_string()),
                 "expected_events should contain PlanCreated"
+            );
+            assert!(
+                missing_events.contains(&"PlanCreated".to_string()),
+                "missing_events should contain PlanCreated (zero-block case): {:?}",
+                missing_events
             );
         }
     }
@@ -7203,14 +7212,25 @@ mod event_enforcement_tests {
 
         // Two KnotEventsMissing entries (initial + follow-up still missing)
         let events = log_events.lock().unwrap();
-        let missing_count = events
+        let missing: Vec<&LoomEvent> = events
             .iter()
             .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
-            .count();
+            .collect();
         assert_eq!(
-            missing_count, 2,
+            missing.len(),
+            2,
             "two KnotEventsMissing when follow-up also produces no events"
         );
+
+        // Plan 091: the second entry still names the missing event.
+        if let LoomEvent::KnotEventsMissing { missing_events, .. } = missing[1] {
+            assert!(
+                missing_events.contains(&"PlanRejected".to_string())
+                    || missing_events.contains(&"PlanCreated".to_string()),
+                "second KnotEventsMissing should still name the missing event: {:?}",
+                missing_events
+            );
+        }
     }
 
     /// No session ID (stdio adapter) — KnotEventsMissing logged but
@@ -7278,6 +7298,401 @@ mod event_enforcement_tests {
         assert_eq!(
             dispatch_count, 0,
             "no EventsDispatched when no follow-up attempted"
+        );
+
+        // Plan 091: the logged variant carries the missing set.
+        if let LoomEvent::KnotEventsMissing { missing_events, .. } =
+            events
+                .iter()
+                .find(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+                .unwrap()
+        {
+            assert!(
+                missing_events.contains(&"PlanCreated".to_string()),
+                "missing_events should name PlanCreated: {:?}",
+                missing_events
+            );
+        }
+    }
+
+    // ── Plan 091: Per-Event Enforcement ──────────────────────────────
+
+    /// Tie-off acknowledges only some expected events (the missing one
+    /// is narrated in prose only — the rust-core-4 case): enforcement
+    /// fires with the missing set, the follow-up supplies the missing
+    /// block, exactly one KnotEventsMissing is logged.
+    #[test]
+    fn process_strand_enforcement_partial_missing_triggers_followup() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![
+                build_consumer_knot(
+                    "plan-watcher",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created.",
+                ),
+                build_consumer_knot(
+                    "rejected-watcher",
+                    "plan-creator",
+                    "PlanRejected",
+                    "When a plan is rejected.",
+                ),
+            ],
+        );
+
+        // First call: only PlanCreated acknowledged; PlanRejected is
+        // narrated in prose (no structured block).
+        let first_output = AgentOutput {
+            stdout: format!(
+                "Plan created. Plan rejected as noted.\n{}",
+                event_block("PlanCreated")
+            ),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        // Second call (follow-up): the missing PlanRejected block.
+        let followup_output = AgentOutput {
+            stdout: event_block("PlanRejected"),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, log_events, dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Exactly one follow-up (two runner executions total).
+        assert_eq!(
+            runner.get_captured_contexts().len(),
+            2,
+            "first execution + one enforcement follow-up"
+        );
+
+        // Both events dispatched: PlanCreated (main path) and
+        // PlanRejected (follow-up, to its own consumer).
+        let dispatched = dispatches.lock().unwrap();
+        assert!(
+            dispatched
+                .iter()
+                .any(|(e, _, _, _, _)| e.event_id == "PlanCreated"),
+            "main-path PlanCreated should be dispatched: {:?}",
+            dispatched.iter().map(|(e, _, _, _, _)| e.event_id.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            dispatched.iter().any(
+                |(e, consumer, _, _, _)| e.event_id == "PlanRejected" && consumer == "rejected-watcher"
+            ),
+            "follow-up PlanRejected should be dispatched to rejected-watcher"
+        );
+
+        // Exactly one KnotEventsMissing, naming the missing event.
+        let events = log_events.lock().unwrap();
+        let missing: Vec<&LoomEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .collect();
+        assert_eq!(missing.len(), 1, "exactly one KnotEventsMissing");
+        if let LoomEvent::KnotEventsMissing {
+            expected_events,
+            missing_events,
+            ..
+        } = missing[0]
+        {
+            assert!(
+                expected_events.contains(&"PlanCreated".to_string())
+                    && expected_events.contains(&"PlanRejected".to_string()),
+                "expected_events should carry the full set: {:?}",
+                expected_events
+            );
+            assert_eq!(
+                missing_events,
+                &vec!["PlanRejected".to_string()],
+                "missing_events should name exactly the missing event"
+            );
+        }
+    }
+
+    /// Follow-up still does not cover the expected set (it emits only an
+    /// unrelated block) → second KnotEventsMissing naming the
+    /// still-missing event; no third execution.
+    #[test]
+    fn process_strand_enforcement_followup_still_partial_logs_second() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![
+                build_consumer_knot(
+                    "plan-watcher",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created.",
+                ),
+                build_consumer_knot(
+                    "rejected-watcher",
+                    "plan-creator",
+                    "PlanRejected",
+                    "When a plan is rejected.",
+                ),
+            ],
+        );
+
+        let first_output = AgentOutput {
+            stdout: format!("{}", event_block("PlanCreated")),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        // Follow-up: an unrelated block only — still short of expected.
+        let followup_output = AgentOutput {
+            stdout: event_block("SomethingElse"),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Two executions only (no third follow-up).
+        assert_eq!(
+            runner.get_captured_contexts().len(),
+            2,
+            "first execution + one follow-up, no more"
+        );
+
+        // Two KnotEventsMissing; the second still names PlanRejected.
+        let events = log_events.lock().unwrap();
+        let missing: Vec<&LoomEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .collect();
+        assert_eq!(missing.len(), 2, "two KnotEventsMissing");
+        if let LoomEvent::KnotEventsMissing { missing_events, .. } = missing[1] {
+            assert_eq!(
+                missing_events,
+                &vec!["PlanRejected".to_string()],
+                "second entry should name the still-missing event"
+            );
+        }
+    }
+
+    /// `event: None` alone is a blanket acknowledgement (plan 059
+    /// contract) → no enforcement, no follow-up.
+    #[test]
+    fn process_strand_enforcement_event_none_blanket_ack_passes() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let output = AgentOutput {
+            stdout: concat!(
+                "```markdown\n",
+                "---\n",
+                "event: None\n",
+                "occurred: false\n",
+                "---\n",
+                "nothing happened\n",
+                "```",
+            )
+            .to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new(Ok(output)));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 0,
+            "event: None is a blanket acknowledgement — no enforcement"
+        );
+        assert_eq!(
+            runner.get_captured_contexts().len(),
+            1,
+            "no follow-up for a blanket ack"
+        );
+    }
+
+    /// Blocks for events nobody subscribes to never block enforcement
+    /// (one-way subset check).
+    #[test]
+    fn process_strand_enforcement_extra_events_beyond_expected_pass() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let output = AgentOutput {
+            stdout: format!(
+                "{}\n{}",
+                event_block("PlanCreated"),
+                event_block("MyOwnEvent")
+            ),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+            wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new(Ok(output)));
+
+        let (use_case, log_events, _dispatches, _store) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let events = log_events.lock().unwrap();
+        let missing_count = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .count();
+        assert_eq!(
+            missing_count, 0,
+            "extra non-subscribed blocks never block enforcement"
+        );
+        assert_eq!(
+            runner.get_captured_contexts().len(),
+            1,
+            "no follow-up"
         );
     }
 }

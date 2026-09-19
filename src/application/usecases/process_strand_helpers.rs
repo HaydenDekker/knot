@@ -624,139 +624,188 @@ pub fn handle_success(
     );
 
     // ── Event Enforcement ──────────────────────────────────────────
-    // If the agent was instructed to emit events but produced
-    // none, log a KnotEventsMissing and attempt one follow-up.
+    // If the agent was instructed to emit events but did not
+    // acknowledge all of them, log a KnotEventsMissing and attempt
+    // one follow-up (plan 091: per-event completeness; the
+    // zero-block case is missing = expected).
     let all_knot_ids: Vec<&str> = resolved
         .all_knots
         .iter()
         .map(|k| k.id.0.as_str())
         .collect();
     if !resolved.listener_context.is_empty() {
-        if let Some(ref content) = outcome.tie_off_content() {
-            if crate::domain::tieoff_parser::has_no_events(content)
-            {
-                let expected_events = extract_expected_event_ids(
-                    knot,
-                    loom_id,
-                    &resolved.all_knots,
-                );
-
-                // Log the first KnotEventsMissing
-                let _ = ps.log_port.append(
-                    LoomEvent::KnotEventsMissing {
-                        loom_id: loom_id.clone(),
-                        knot_id: knot_id.clone(),
-                        strand_path: strand_path.clone(),
-                        expected_events: expected_events.clone(),
-                        timestamp: format_timestamp(),
-                    },
-                );
-                ps.emit_system(
-                    &EventScope::knot(
-                        loom_id.clone(),
-                        knot_id.clone(),
-                        strand_path,
-                    ),
-                    "KnotEventsMissing",
-                    ProcessStrand::run_payload(strand_path, &[
-                        (
-                            "expected-events",
-                            Some(expected_events.join(", ")),
-                        ),
-                    ]),
-                    Some(format!(
-                        "Knot '{}' completed but emitted no expected events ({})",
-                        knot_id.0,
-                        expected_events.join(", ")
-                    )),
-                );
-
-                // Attempt follow-up re-entry (best-effort).
-                // Only possible if session_id is available.
-                if let Ok((followup_config, _, _)) =
-                    ps.resolve_agent_config(knot)
-                {
-                    let followup_result =
-                        session_resume::inject_event_request(
-                            &*ps.agent_runner,
-                            &*ps.log_port,
-                            loom_id,
-                            knot_id,
+        let expected_events = extract_expected_event_ids(
+            knot,
+            loom_id,
+            &resolved.all_knots,
+        );
+        // Empty expected set: only the TasksIncomplete
+        // self-continuation entry was injected — a conditional
+        // signal, never enforced (plan 091 D1).
+        if !expected_events.is_empty() {
+            if let Some(ref content) = outcome.tie_off_content() {
+                // Fast path: zero blocks → missing = expected (no
+                // full parse needed). Otherwise diff the parsed
+                // blocks against the expected set.
+                let missing_events =
+                    if crate::domain::tieoff_parser::has_no_events(content) {
+                        expected_events.clone()
+                    } else {
+                        crate::domain::tieoff_parser::missing_event_ids(
+                            &expected_events,
+                            content,
+                        )
+                    };
+                if !missing_events.is_empty() {
+                    // Log the first KnotEventsMissing
+                    let _ = ps.log_port.append(
+                        LoomEvent::KnotEventsMissing {
+                            loom_id: loom_id.clone(),
+                            knot_id: knot_id.clone(),
+                            strand_path: strand_path.clone(),
+                            expected_events: expected_events.clone(),
+                            missing_events: missing_events.clone(),
+                            timestamp: format_timestamp(),
+                        },
+                    );
+                    ps.emit_system(
+                        &EventScope::knot(
+                            loom_id.clone(),
+                            knot_id.clone(),
                             strand_path,
-                            &resolved.session_id,
-                            followup_config,
-                            resolved.listener_context.clone(),
-                            event_label.to_string(),
-                            Some(knot.id.0.clone()),
-                            resolved.profile_timeout.clone(),
-                        );
+                        ),
+                        "KnotEventsMissing",
+                        ProcessStrand::run_payload(strand_path, &[
+                            (
+                                "expected-events",
+                                Some(expected_events.join(", ")),
+                            ),
+                            (
+                                "missing-events",
+                                Some(missing_events.join(", ")),
+                            ),
+                        ]),
+                        Some(format!(
+                            "Knot '{}' completed but did not acknowledge all expected events (missing: {})",
+                            knot_id.0,
+                            missing_events.join(", ")
+                        )),
+                    );
 
-                    match followup_result {
-                    Ok(response) => {
-                        // Parse follow-up for events
-                        let followup_events =
-                            crate::domain::tieoff_parser::
-                                extract_agent_events(&response);
-
-                        if !followup_events.is_empty() {
-                            // Dispatch follow-up events
-                            // (dispatch failures are non-fatal).
-                            // `occurred: false` acknowledgements count
-                            // here (agent responded) but are filtered
-                            // inside dispatch_events_to_consumers.
-                            let _ = ps.dispatch_events_to_consumers(
-                                &followup_events,
-                                knot,
+                    // Attempt follow-up re-entry (best-effort).
+                    // Only possible if session_id is available.
+                    if let Ok((followup_config, _, _)) =
+                        ps.resolve_agent_config(knot)
+                    {
+                        let followup_result =
+                            session_resume::inject_event_request(
+                                &*ps.agent_runner,
+                                &*ps.log_port,
                                 loom_id,
-                                &all_knot_ids,
+                                knot_id,
+                                strand_path,
+                                &resolved.session_id,
+                                followup_config,
+                                resolved.listener_context.clone(),
+                                missing_events.clone(),
+                                event_label.to_string(),
+                                Some(knot.id.0.clone()),
+                                resolved.profile_timeout.clone(),
                             );
-                        } else {
-                            // Still no events — log again
-                            let _ = ps.log_port.append(
-                                LoomEvent::KnotEventsMissing {
-                                    loom_id: loom_id.clone(),
-                                    knot_id: knot_id.clone(),
-                                    strand_path: strand_path
-                                        .clone(),
-                                    expected_events: expected_events
-                                        .clone(),
-                                    timestamp: format_timestamp(),
-                                },
-                            );
-                            ps.emit_system(
-                                &EventScope::knot(
-                                    loom_id.clone(),
-                                    knot_id.clone(),
-                                    strand_path,
-                                ),
-                                "KnotEventsMissing",
-                                ProcessStrand::run_payload(
-                                    strand_path,
-                                    &[
-                                        (
-                                            "expected-events",
-                                            Some(expected_events.join(", ")),
+
+                        match followup_result {
+                            Ok(response) => {
+                                // Parse follow-up for events
+                                let followup_events =
+                                    crate::domain::tieoff_parser::
+                                        extract_agent_events(&response);
+
+                                // Dispatch whatever the follow-up emitted
+                                // (dispatch failures are non-fatal).
+                                // `occurred: false` acknowledgements count
+                                // here (agent responded) but are filtered
+                                // inside dispatch_events_to_consumers.
+                                if !followup_events.is_empty() {
+                                    let _ = ps.dispatch_events_to_consumers(
+                                        &followup_events,
+                                        knot,
+                                        loom_id,
+                                        &all_knot_ids,
+                                    );
+                                }
+
+                                // Recompute what is still missing: the
+                                // follow-up was asked to emit blocks for
+                                // the missing set only, so diff its blocks
+                                // against that set (an empty follow-up
+                                // leaves everything missing; a follow-up
+                                // with only unrelated blocks still leaves
+                                // the expected set uncovered — plan 091).
+                                let still_missing =
+                                    crate::domain::tieoff_parser::
+                                        missing_event_ids(
+                                            &missing_events,
+                                            &response,
+                                        );
+                                if !still_missing.is_empty() {
+                                    // Still missing after follow-up —
+                                    // log again (max one retry)
+                                    let _ = ps.log_port.append(
+                                        LoomEvent::KnotEventsMissing {
+                                            loom_id: loom_id.clone(),
+                                            knot_id: knot_id.clone(),
+                                            strand_path: strand_path
+                                                .clone(),
+                                            expected_events: expected_events
+                                                .clone(),
+                                            missing_events: still_missing
+                                                .clone(),
+                                            timestamp: format_timestamp(),
+                                        },
+                                    );
+                                    ps.emit_system(
+                                        &EventScope::knot(
+                                            loom_id.clone(),
+                                            knot_id.clone(),
+                                            strand_path,
                                         ),
-                                    ],
-                                ),
-                                Some(format!(
-                                    "Knot '{}' still emitted no events ({})",
+                                        "KnotEventsMissing",
+                                        ProcessStrand::run_payload(
+                                            strand_path,
+                                            &[
+                                                (
+                                                    "expected-events",
+                                                    Some(
+                                                        expected_events.join(", ")
+                                                    ),
+                                                ),
+                                                (
+                                                    "missing-events",
+                                                    Some(
+                                                        still_missing.join(", ")
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                        Some(format!(
+                                            "Knot '{}' still did not acknowledge all expected events after follow-up (missing: {})",
+                                            knot_id.0,
+                                            still_missing.join(", ")
+                                        )),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                // No session ID or runner error
+                                // — log gracefully, do not fail strand
+                                eprintln!(
+                                    "event enforcement follow-up failed (knot={}): {}",
                                     knot_id.0,
-                                    expected_events.join(", ")
-                                )),
-                            );
+                                    e
+                                );
+                            }
                         }
                     }
-                    Err(e) => {
-                        // No session ID or runner error
-                        // — log gracefully, do not fail strand
-                        eprintln!(
-                            "event enforcement follow-up failed (knot={}): {}",
-                            knot_id.0,
-                            e
-                        );
-                    }
-                }
                 }
             }
         }
