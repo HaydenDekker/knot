@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.22.0"
+  version: "1.23.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,45 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Static Engine Token for Rig-Scoped System Events — `event:knot:<EventId>` (Knot 0.50.0, 2026-09-21)
+
+**What changed:** plan 092 — the producer token for rig-scoped system
+events (currently `QueueIdle`) is now the **static engine token**
+`knot`: `event:knot:<EventId>`. The token no longer depends on the rig
+directory's basename, so subscriptions survive rig-directory renames
+and template reuse. The rig-name form `event:<rig-id>:<EventId>` is a
+**deprecated transitional alias** — still accepted in 0.50.0; removal
+is reserved for a later breaking release. A rig-scoped dispatch that
+matches zero consumers now logs a `[KNOT][SYSTEM]` service-log line
+(`event=<EventId> rig=<rig>` — naming near-miss subscriptions when a
+knot subscribes to the same event id with a non-matching producer
+token).
+
+**Affected documents:** knot files with a rig-scoped `event:` URI
+subscription (e.g. an orchestrator's `QueueIdle` subscription).
+
+**Migration (optional in 0.50.0 — both forms work):**
+
+1. Find rig-scoped subscriptions (the rig's directory basename as
+   producer token):
+   ```bash
+   grep -rn 'strand-dir: "event:' rig/ --include="*.md"
+   ```
+2. For each non-wildcard, non-knot/loom subscription, replace the rig
+   basename token with `knot`:
+   - Before: `strand-dir: "event:software-factory-rig:QueueIdle"`
+   - After: `strand-dir: "event:knot:QueueIdle"`
+3. Restart the service (subscription changes need watcher
+   re-registration). Verify on the next burst: the event file lands in
+   `tie-offs/<rig>/<consumer-loom>/QueueIdle/` and the consumer runs.
+
+**Fields unchanged:** knot- and loom-level tokens, the `*` wildcard,
+event IDs, and event-file content — the `target-knot:` frontmatter of a
+dispatched system event still carries the **actual rig id**,
+regardless of the subscription form.
 
 ---
 

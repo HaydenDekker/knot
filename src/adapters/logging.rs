@@ -52,6 +52,22 @@ pub fn log_knot_event(event: &str, loom_id: &str, knot_id: &str, detail: &str) {
     );
 }
 
+/// Log a system-event dispatch diagnostic.
+///
+/// Low volume: emitted only when a rig-scoped system event matched zero
+/// consumers (plan 092) — zero consumers is the normal state for
+/// knot- and loom-scoped events and is not logged.
+///
+/// `detail` names the near-miss subscriptions when a knot subscribes to
+/// the same event id with a non-matching producer token (the
+/// rename-mismatch signature).
+pub fn log_system_event(event_id: &str, rig_id: &str, detail: &str) {
+    eprintln!(
+        "[{}] [KNOT][SYSTEM] event={event_id} rig={rig_id} — {detail}",
+        format_timestamp()
+    );
+}
+
 /// Log a watch/unwatch operation.
 ///
 /// `extra` is an optional detail string appended inside the parens

@@ -17,7 +17,8 @@
 //!
 //! - [`EventScope::Knot`] — `resolve_for_producer` (knot / loom / `*`).
 //! - [`EventScope::Loom`] — `resolve_loom_event` (`<loom-id>` / `*`).
-//! - [`EventScope::Rig`] — `resolve_rig_event` (`<rig-id>` / `*`).
+//! - [`EventScope::Rig`] — `resolve_rig_event` (`knot` (canonical engine
+//!   token, plan 092) / `<rig-id>` (deprecated) / `*`).
 //!
 //! ## Loop safety
 //!
@@ -34,10 +35,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::adapters::logging;
 use crate::application::ports::{EventDispatcherPort, PortError};
 use crate::application::store::LoomStore;
 use crate::domain::entities::{Knot, KnotId, LoomId, StrandPath};
 use crate::domain::events::AgentEvent;
+use crate::domain::value_objects::StrandSource;
 
 /// One dispatch request handed to [`dispatch_grouped`].
 ///
@@ -229,6 +232,13 @@ impl SystemEventEmitter {
             .map(|k| k.id.0.as_str())
             .collect();
 
+        // Rig-scoped only (plan 092 D5): event URIs subscribed to this
+        // event id whose producer token did not resolve — the
+        // rename-mismatch signature reported when matches come back
+        // empty.
+        let is_rig_scope = matches!(scope, EventScope::Rig);
+        let mut rig_near_misses: Vec<String> = Vec::new();
+
         // (producer token, matched (consumer loom, consumer knot) pairs)
         let (producer, matches): (String, Vec<(&LoomId, &Knot)>) = match scope {
             EventScope::Knot { loom_id, knot_id, .. } => {
@@ -271,17 +281,54 @@ impl SystemEventEmitter {
                 let mut ms: Vec<(&LoomId, &Knot)> = Vec::new();
                 for loom in &all_looms {
                     for k in &loom.knots {
-                        if let Some(sub) =
-                            k.strand_source.resolve_rig_event(&rig)
-                            && sub.event_id() == event_id
-                        {
-                            ms.push((&loom.id, k));
+                        match k.strand_source.resolve_rig_event(&rig) {
+                            Some(sub) if sub.event_id() == event_id => {
+                                ms.push((&loom.id, k));
+                            }
+                            Some(_) => {}
+                            None => {
+                                // Near-miss (plan 092 D6): an event URI
+                                // subscribed to this very event id with a
+                                // non-matching producer token (e.g. the
+                                // rig directory was renamed after the
+                                // subscription was written).
+                                if let StrandSource::EventUri {
+                                    producer_knot,
+                                    event_id: sub_event,
+                                } = &k.strand_source
+                                    && sub_event.as_str() == event_id
+                                {
+                                    rig_near_misses.push(format!(
+                                        "{} (event:{}:{})",
+                                        k.id.0, producer_knot, sub_event
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
                 (rig, ms)
             }
         };
+
+        // Zero-consumer diagnostic (plan 092 D5/D6): rig-scoped emits
+        // only — zero consumers is the *normal* state for knot- and
+        // loom-scoped events (most rigs subscribe to none), so logging
+        // those would be per-run noise. Rig-scoped volume is bounded
+        // (one `QueueIdle` per burst) and the line appears only when
+        // something is wrong. Near-misses name the rename mismatch
+        // directly; a plain line covers the no-subscription case.
+        if is_rig_scope && matches.is_empty() {
+            let detail = if rig_near_misses.is_empty() {
+                "0 consumers matched".to_string()
+            } else {
+                format!(
+                    "0 consumers matched; near-miss subscription(s): {}",
+                    rig_near_misses.join("; ")
+                )
+            };
+            logging::log_system_event(event_id, &producer, &detail);
+        }
 
         let requests: Vec<DispatchRequest<'_>> = matches
             .into_iter()
@@ -560,6 +607,78 @@ mod tests {
         let c = calls.lock().unwrap();
         let call = c.iter().find(|c| c.2 == "wild").unwrap();
         assert_eq!(call.1, "dev-rig", "producer frontmatter is the rig id");
+    }
+
+    #[test]
+    fn rig_emit_static_engine_token_consumer() {
+        // Plan 092 D1: the canonical form `event:knot:QueueIdle` matches
+        // any rig — the token is the engine, not the rig basename. The
+        // deprecated rig-name form keeps dispatching alongside it (D2).
+        let (dispatcher, calls) = RecordingDispatcher::new();
+        let store = store_with(vec![loom("watch-loom", vec![
+            event_knot("static_consumer", "event:knot:QueueIdle"),
+            event_knot("dep_consumer", "event:dev-rig:QueueIdle"),
+        ])]);
+        let emitter =
+            SystemEventEmitter::new(store, Arc::new(dispatcher), rig_dir());
+        let result = emitter
+            .emit(&EventScope::Rig, "QueueIdle", HashMap::new(), None)
+            .unwrap();
+        assert_eq!(
+            result.len(),
+            2,
+            "both forms must dispatch: {:?}",
+            calls.lock().unwrap()
+        );
+        let names: Vec<String> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.2.clone())
+            .collect();
+        assert!(names.contains(&"static_consumer".to_string()));
+        assert!(names.contains(&"dep_consumer".to_string()));
+    }
+
+    #[test]
+    fn rig_emit_producer_token_is_rig_id_for_static_consumer() {
+        // Plan 092 D4: the event-file frontmatter keeps carrying the
+        // actual rig id regardless of the subscription form.
+        let (dispatcher, calls) = RecordingDispatcher::new();
+        let store = store_with(vec![loom("watch-loom", vec![
+            event_knot("static_consumer", "event:knot:QueueIdle"),
+        ])]);
+        let emitter =
+            SystemEventEmitter::new(store, Arc::new(dispatcher), rig_dir());
+        emitter
+            .emit(&EventScope::Rig, "QueueIdle", HashMap::new(), None)
+            .unwrap();
+        let c = calls.lock().unwrap();
+        let call = c.iter().find(|c| c.2 == "static_consumer").unwrap();
+        assert_eq!(
+            call.1, "dev-rig",
+            "producer frontmatter is the rig id, not the subscription token"
+        );
+    }
+
+    #[test]
+    fn rig_emit_near_miss_does_not_dispatch() {
+        // Plan 092 D6: a subscription with the right event id but a
+        // non-matching producer token (the rename-mismatch signature)
+        // matches nothing. The diagnostic is a stderr line (not
+        // observable here); the behaviour is the unchanged zero
+        // dispatch.
+        let (dispatcher, calls) = RecordingDispatcher::new();
+        let store = store_with(vec![loom("watch-loom", vec![
+            event_knot("stale", "event:old-rig-name:QueueIdle"),
+        ])]);
+        let emitter =
+            SystemEventEmitter::new(store, Arc::new(dispatcher), rig_dir());
+        let result = emitter
+            .emit(&EventScope::Rig, "QueueIdle", HashMap::new(), None)
+            .unwrap();
+        assert!(result.is_empty(), "near-miss must not dispatch");
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     // ── Grouping / seq ─────────────────────────────────────────────────

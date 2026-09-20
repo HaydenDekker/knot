@@ -4,7 +4,7 @@ description: "Analyse rig productivity and project progress at runtime. Read the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.7.0"
+  version: "1.8.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -108,6 +108,7 @@ Look for:
 | `StrandSkipped` with reason `"filtered temp file"` | Expected filesystem noise — a temp file from `sed -i` or similar tool triggered an event but was filtered before processing. Informational only — count to gauge noise, do not flag |
 | `StrandSkipped` with reason `"missing file (unknown pattern)"` | A file triggered a filesystem event but was deleted before processing. The event is persisted in `tie-offs/<rig>/events/*.json` and removed from the queue at the point of failure — it does not recur. If frequent for the same path, investigate what is creating/deleting files in the strand directory. |
 | `[KNOT][STATE]` lines | When the state last changed | A long gap since the last `[STATE]` line means the rig has been idle (the state file is now change-driven — mtime and log agree) |
+| `[KNOT][SYSTEM]` lines (0.50.0+) | A rig-scoped system event (e.g. `QueueIdle`) matched **zero consumers** | Check the `near-miss subscription(s):` detail — a knot subscribes to the same event id with a non-matching producer token (typically the rig was renamed after the subscription was written). The consumer never fires until the subscription is fixed |
 | Age of last entry | Compare to current time | If the last entry is hours or days old, the rig may have stalled or completed all work |
 
 **Cross-run signals** (still read from the same service log):

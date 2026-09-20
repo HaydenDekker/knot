@@ -428,8 +428,13 @@ producer-token positions on top of knot-level and loom-level:
 
 - **Wildcard** `event:*:<EventId>` — any knot in the rig (e.g. a
   `event:*:KnotFailed` monitor that reacts to any failure).
-- **Rig-level** `event:<rig-id>:<EventId>` — a rig-scoped event
-  (e.g. `event:<rig>:QueueIdle` when the queue drains after a burst).
+- **Rig-level** `event:knot:<EventId>` — a rig-scoped system event
+  produced by the engine (e.g. `event:knot:QueueIdle` when the queue
+  drains after a burst). The producer token is the static engine token
+  `knot`, not the rig's directory name — invariant under rig-directory
+  renames. The rig-name form `event:<rig-id>:<EventId>` is a deprecated
+  transitional alias (0.50.0): still accepted, removal reserved for a
+  later breaking release.
 
 Two rules to keep reactions safe: a system event is **never** dispatched
 back to the knot that produced it (so a knot's own failure does not

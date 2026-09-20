@@ -1,5 +1,42 @@
 # Release Notes
 
+## v0.50.0 — 2026-09-21
+
+### Changed — Static Engine Token for Rig-Scoped System Events (Plan 092)
+
+Rig-scoped system events (currently `QueueIdle`) now subscribe by a
+**static engine token** instead of the rig directory's basename. The
+rig-name token encoded a deployment detail — the name the rig directory
+happened to be called — so a rig built from a template under another
+name (or a renamed rig directory) silently lost every rig-scoped
+subscription: the event was logged, no event file was dispatched, no
+consumer fired, and nothing was logged about the gap. One process per
+rig makes the token redundant — the process boundary and the runtime
+root (`tie-offs/<rig>/…`) already scope every dispatch to the running
+rig.
+
+- **Canonical form: `event:knot:<EventId>`** (e.g.
+  `event:knot:QueueIdle`). The token is the Knot engine — invariant
+  under rig-directory renames and template reuse. Wildcard
+  (`event:*:QueueIdle`) is unchanged.
+- **The rig-name form is deprecated, not broken.**
+  `event:<rig-id>:<EventId>` keeps working in this release; removal is
+  reserved for a later breaking release. Existing rigs need no
+  migration.
+- **Event-file provenance unchanged.** The `target-knot:` frontmatter
+  of a dispatched system event still carries the *actual* rig id
+  regardless of the subscription form — only matching changed.
+- **Zero-consumer dispatch is no longer silent.** A rig-scoped emit
+  that matches no consumer logs one service-log line:
+  `[KNOT][SYSTEM] event=<EventId> rig=<rig> — 0 consumers matched`,
+  extended with `near-miss subscription(s): <knot>
+  (event:<token>:<EventId>)` when a knot subscribes to the same event
+  id with a non-matching producer token — the rename-mismatch
+  signature, named directly. Scoped to rig-scoped emits: zero
+  consumers is the normal state for knot- and loom-scoped events.
+- No rig document format changes; no project document migration
+  required (the new form is recommended for new subscriptions).
+
 ## v0.49.0 — 2026-09-20
 
 ### Fixed — Per-Event Enforcement (Plan 091)

@@ -987,6 +987,23 @@ pub struct StrandSourceError {
     pub message: String,
 }
 
+/// The reserved producer token for **rig-scoped system events** — the
+/// Knot engine itself (plan 092).
+///
+/// Rig-scoped dispatches (e.g. `QueueIdle`) are produced by the engine,
+/// not by a named knot, loom, or rig directory. The canonical
+/// subscription is `event:knot:<EventId>` (e.g.
+/// `event:knot:QueueIdle`): invariant under rig-directory renames and
+/// template reuse, since the one-process-per-rig model already scopes
+/// every dispatch to the running rig.
+///
+/// Matching is scope-local: `resolve_rig_event` is only ever consulted
+/// for rig-scoped dispatches, where `knot` means the engine. A knot
+/// actually named `knot` emitting agent events resolves through
+/// `resolve_for_producer`, where `event:knot:<EventId>` means "the knot
+/// named `knot`" — the two readings never cross.
+pub const RIG_EVENT_ENGINE_TOKEN: &str = "knot";
+
 /// The resolved subscription type for an event URI.
 ///
 /// Used during matching — not persisted or serialised.
@@ -1003,8 +1020,11 @@ pub enum EventSubscription {
     /// Matches knot-scoped, loom-scoped, and rig-scoped dispatches
     /// whose event ID is equal (plan 082).
     Wildcard { event_id: String },
-    /// Subscribe to rig-scoped dispatches from a specific rig
-    /// (`event:<rig-id>:<EventId>`, e.g. `QueueIdle`) (plan 082).
+    /// Subscribe to rig-scoped dispatches from the engine
+    /// (`event:knot:<EventId>`, e.g. `QueueIdle`) (plan 082, canonical
+    /// form per plan 092). The rig-name form
+    /// (`event:<rig-id>:<EventId>`) is a deprecated transitional alias
+    /// for the same subscription.
     RigLevel { producer_rig: String, event_id: String },
 }
 
@@ -1272,16 +1292,22 @@ impl StrandSource {
     }
 
     /// Resolve this event URI for a **rig-scoped** dispatch (producer is
-    /// the rig — e.g. `QueueIdle`) (plan 082).
+    /// the engine — e.g. `QueueIdle`) (plan 082, amended by plan 092).
     ///
     /// Returns:
     /// - `Some(EventSubscription::Wildcard)` if the target is `*`.
-    /// - `Some(EventSubscription::RigLevel)` if the target equals
-    ///   `rig_id` (the rig directory basename).
+    /// - `Some(EventSubscription::RigLevel)` if the target is the static
+    ///   engine token [`RIG_EVENT_ENGINE_TOKEN`] (`knot`) — the canonical
+    ///   form, invariant under rig-directory renames.
+    /// - `Some(EventSubscription::RigLevel)` if the target equals `rig_id`
+    ///   (the rig directory basename) — a **deprecated** transitional
+    ///   form, kept for compatibility; new subscriptions should use
+    ///   `event:knot:<EventId>`.
     /// - `None` otherwise.
     ///
-    /// Rig-scoped dispatches never consult knot ids, so a knot named after
-    /// the rig is harmless (documented, not guarded).
+    /// Rig-scoped dispatches never consult knot ids, so a knot named
+    /// `knot` is harmless: this resolver is only called for rig-scoped
+    /// dispatches, where `knot` means the engine.
     ///
     /// Returns `None` for [`Filesystem`] sources.
     pub fn resolve_rig_event(
@@ -1298,6 +1324,12 @@ impl StrandSource {
 
         if target == "*" {
             return Some(EventSubscription::Wildcard {
+                event_id: event_id.to_string(),
+            });
+        }
+        if target == RIG_EVENT_ENGINE_TOKEN {
+            return Some(EventSubscription::RigLevel {
+                producer_rig: target.to_string(),
                 event_id: event_id.to_string(),
             });
         }
@@ -3402,6 +3434,63 @@ mod tests {
         assert!(loom.resolve_rig_event("dev-rig").is_none());
         let fs = StrandSource::Filesystem(PathBuf::from("x"));
         assert!(fs.resolve_rig_event("dev-rig").is_none());
+    }
+
+    #[test]
+    fn resolve_rig_event_static_engine_token() {
+        // The canonical form (plan 092): `event:knot:<EventId>` matches
+        // any rig — the token is the engine, not the rig basename.
+        let sub = StrandSource::from_str("event:knot:QueueIdle").unwrap();
+        assert_eq!(
+            sub.resolve_rig_event("dev-rig"),
+            Some(EventSubscription::RigLevel {
+                producer_rig: "knot".to_string(),
+                event_id: "QueueIdle".to_string(),
+            })
+        );
+        assert_eq!(
+            sub.resolve_rig_event("rig"),
+            Some(EventSubscription::RigLevel {
+                producer_rig: "knot".to_string(),
+                event_id: "QueueIdle".to_string(),
+            })
+        );
+
+        // A rig whose basename is literally `knot`: static and rig-name
+        // forms coincide — still a single match.
+        let rig_named_knot =
+            StrandSource::from_str("event:knot:QueueIdle").unwrap();
+        assert!(rig_named_knot.resolve_rig_event("knot").is_some());
+    }
+
+    #[test]
+    fn engine_token_does_not_leak_into_knot_scoped_matching() {
+        // Cross-scope guard (plan 092 D1): a knot actually named `knot`
+        // emitting agent events resolves `event:knot:<EventId>` as
+        // knot-level via `resolve_for_producer` — the engine token only
+        // means the engine in the rig-scoped resolver.
+        let sub = StrandSource::from_str("event:knot:TaskCompleted").unwrap();
+        let resolved =
+            sub.resolve_for_producer("knot", "work-loom", &["knot"]);
+        assert_eq!(
+            resolved,
+            Some(EventSubscription::KnotLevel {
+                producer_knot: "knot".to_string(),
+                event_id: "TaskCompleted".to_string(),
+            })
+        );
+
+        // A different producer knot still matches: the knot named `knot`
+        // is an ordinary producer for other knots to subscribe to.
+        let other =
+            sub.resolve_for_producer("writer", "work-loom", &["knot"]);
+        assert!(
+            matches!(other, Some(EventSubscription::KnotLevel { .. })),
+            "got {other:?}"
+        );
+        let unrelated =
+            sub.resolve_for_producer("writer", "work-loom", &["writer"]);
+        assert!(unrelated.is_none());
     }
 
     #[test]

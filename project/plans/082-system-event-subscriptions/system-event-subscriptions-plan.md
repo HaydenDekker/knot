@@ -1,5 +1,14 @@
 # Plan 082: System Event Subscriptions — Strand Off Any Knot Event, with Wildcard Producers
 
+> **Amended by [Plan 092](../092-static-rig-event-token/static-rig-event-token-plan.md)**
+> (2026-09-21, Knot 0.50.0): the rig-level subscription form is now
+> `event:knot:<EventId>` — the static engine token, invariant under
+> rig-directory renames. The rig-name form
+> `event:<rig-id>:<EventId>` designed here is a deprecated transitional
+> alias (still accepted; removal reserved for a later breaking
+> release). Plan 092 also adds the zero-consumer diagnostic for
+> rig-scoped dispatches.
+
 ## Related Plans
 
 Builds on [045 Intent-Based Event Routing](../045-intent-based-event-routing/)

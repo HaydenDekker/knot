@@ -4,7 +4,7 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.8.0"
+  version: "5.9.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -380,7 +380,7 @@ Review the goals section of this PRD. Check that:
 |-------|----------|-------------|
 | `name` | **Yes** | Unique knot identifier (becomes the `KnotId`) |
 | `agent-profile-ref` | **Yes** | Name of the agent profile to use (must exist in `rig/profiles/{name}.md`) |
-| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`), loom-level (`"event:planning-loom:PlanCreated"`), wildcard (`"event:*:KnotFailed"`), and rig-level (`"event:<rig-id>:QueueIdle"`, 0.41.0+) subscriptions. Paths are resolved relative to the project root. See **System Events** for the subscribable system-event catalog. |
+| `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`), loom-level (`"event:planning-loom:PlanCreated"`), wildcard (`"event:*:KnotFailed"`), and rig-level (`"event:knot:QueueIdle"`, 0.41.0+) subscriptions. Paths are resolved relative to the project root. See **System Events** for the subscribable system-event catalog. |
 | `event-description` | No | Semantic description of the event, injected into the producer's prompt. Only meaningful when `strand-dir` is an `event:` URI. |
 | `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
 
@@ -430,9 +430,14 @@ to events from a *specific knot*. Example:
 - **Wildcard** (new in 0.41.0): `event:*:<EventId>` — subscribe to the
   event from *any knot in the rig*. The `*` target matches every
   producer. Example: `event:*:KnotFailed`.
-- **Rig-level** (new in 0.41.0, system events only): `event:<rig-id>:<EventId>`
-  — subscribe to a rig-scoped system event (e.g. `QueueIdle`) using the
-  rig's ID as the producer token. Example: `event:<rig>:QueueIdle`.
+- **Rig-level** (new in 0.41.0, system events only):
+  `event:knot:<EventId>` — subscribe to a rig-scoped system event
+  (e.g. `QueueIdle`). The producer token is the **static engine token**
+  `knot` (the Knot engine) — not the rig's directory name — so the
+  subscription survives rig-directory renames and template reuse.
+  Example: `event:knot:QueueIdle`. The rig-name form
+  `event:<rig-id>:<EventId>` is a **deprecated** transitional alias
+  (0.50.0+): still accepted, but new subscriptions must use `knot`.
 
 Loom-level subscriptions are useful when multiple knots in a loom can
 emit the same event type — the consumer subscribes once instead of
@@ -577,8 +582,8 @@ dispatched to subscriber knots — not just the agent-emitted events
 above. A system event is a terminal or lifecycle fact about a run
 (recorded whether or not the agent chose to emit it). Subscribe to one
 with the same `event:` URI grammar; the producer token is the emitting
-knot, the emitting loom, `*` (any knot), or the rig ID (rig-scoped
-only).
+knot, the emitting loom, `*` (any knot), or the static engine token
+`knot` (rig-scoped only).
 
 Run outcome and retry events carry `strand-path` (plus, where
 noted, a `session-id`). Config/lifecycle events carry no `strand-path`
@@ -630,14 +635,23 @@ several times. Consumers must be idempotent.
 | `KnotDeregistered` | A knot is deregistered from a loom |
 | `DirectoryCreated` | A knot's strand-source directory is created |
 
-**Rig lifecycle — rig-scoped** (producer = **rig ID**):
+**Rig lifecycle — rig-scoped** (producer = **the engine** — the static
+token `knot`):
 
 | Event ID | When |
 |---|---|
 | `QueueIdle` | The strand queue drained (all pending events processed) after a burst |
 
-Only `QueueIdle` is genuinely rig-scoped — subscribe with the rig's ID
-as the producer token (or `*`): `event:<rig-id>:QueueIdle`.
+Only `QueueIdle` is genuinely rig-scoped — subscribe with the static
+engine token (or `*`): `event:knot:QueueIdle`. The rig-name form
+`event:<rig-id>:QueueIdle` is a **deprecated** transitional alias
+(0.50.0+): still accepted, but new subscriptions must use `knot`.
+
+**Zero-consumer diagnostic (0.50.0+).** A rig-scoped dispatch that
+matches no consumer logs one `[KNOT][SYSTEM]` service-log line naming
+near-miss subscriptions (a knot subscribed to the same event id with a
+non-matching producer token — typically a rig renamed after the
+subscription was written).
 
 **Self-exclusion.** A system event is *never* dispatched back to the
 knot that produced it. If a knot subscribes to its own `KnotFailed` /
