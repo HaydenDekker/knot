@@ -24,8 +24,8 @@
       wide (loom/wildcard) subscription; version 1.2.0 → 1.3.0
 - [x] Regenerate `~/workspace/finance/budget-app-frontend/rig-graph.html`
 - [x] Re-deploy `knot-visualise` to `~/.agents/skills-library/` (diff verify)
-- [x] Version bump 0.53.0 → 0.54.0 (Cargo.toml + release notes), commit sha
-      recorded
+- [x] Version bump 0.53.0 → 0.54.0 (Cargo.toml + release notes), commit sha `858d1c4` recorded (single-commit task on
+      main, no branch per branch contract)
 
 ## Deviations
 <!-- Small single-commit change on main; no feature branch (branch contract:
