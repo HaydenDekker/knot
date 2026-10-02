@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rig Graph</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+  #chart { display: block; width: 100vw; height: 100vh; }
+  .node-label { font-size: 11px; pointer-events: none;
+                paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 3px; }
+  .edge-label { font-size: 9px; fill: #888; pointer-events: none;
+                paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 2.5px; }
+  .unresolved-edge { stroke-dasharray: 4 3; }
+  #tooltip { position: absolute; display: none; max-width: 320px;
+             padding: 8px 10px; font-size: 12px; line-height: 1.5;
+             background: #fff; color: #222; border: 1px solid #bbb;
+             border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+             pointer-events: none; }
+  #legend { position: absolute; top: 10px; left: 10px; padding: 8px 10px;
+            font-size: 11px; background: rgba(255,255,255,.9);
+            border: 1px solid #ccc; border-radius: 6px; }
+  #legend .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  #legend .swatch { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  #title { position: absolute; top: 10px; right: 14px; font-size: 13px;
+           color: #666; }
+</style>
+</head>
+<body>
+<svg id="chart"></svg>
+<div id="tooltip"></div>
+<div id="legend"></div>
+<div id="title">rig graph</div>
+<script>
+/*__D3__*/
+</script>
+<script>
+/*__GRAPH_JSON__*/
+const loom = (d) => d.loom || "";
+const svg = d3.select("#chart");
+const W = () => window.innerWidth, H = () => window.innerHeight;
+svg.attr("viewBox", [0, 0, W(), H()]);
+
+const g = svg.append("g");
+svg.call(d3.zoom().scaleExtent([0.2, 4])
+      .on("zoom", (ev) => g.attr("transform", ev.transform)));
+
+const defs = g.append("defs").append("marker")
+  .attr("id", "arrow").attr("viewBox", "0 -5 10 10")
+  .attr("refX", 22).attr("refY", 0)
+  .attr("markerWidth", 6).attr("markerHeight", 6)
+  .attr("orient", "auto");
+defs.append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#999");
+
+const looms = [...new Set(data.nodes.filter(n => n.kind === "knot").map(n => n.loom))];
+const loomColor = d3.scaleOrdinal(looms, d3.schemeTableau10);
+const kindColor = { input: "#aaa", system: "#e67e22", unresolved: "#c0392b" };
+const color = (n) => n.kind === "knot" ? loomColor(n.loom) : kindColor[n.kind];
+
+const nodes = data.nodes, links = data.edges;
+
+const link = g.append("g").selectAll("line").data(links).join("line")
+  .attr("stroke", (d) => d.unresolved ? "#c0392b" : "#999")
+  .attr("stroke-opacity", 0.6)
+  .attr("stroke-width", 1.5)
+  .attr("class", (d) => d.unresolved ? "unresolved-edge" : "edge")
+  .attr("marker-end", "url(#arrow)");
+
+const linkLabel = g.append("g").selectAll("text").data(links).join("text")
+  .attr("class", "edge-label").attr("text-anchor", "middle")
+  .text((d) => d.label);
+
+const node = g.append("g").selectAll("g").data(nodes).join("g");
+
+node.filter((d) => d.kind === "knot").append("circle")
+  .attr("r", 12).attr("fill", (d) => color(d)).attr("stroke", "#fff").attr("stroke-width", 2);
+node.filter((d) => d.kind === "input").append("rect")
+  .attr("x", -8).attr("y", -8).attr("width", 16).attr("height", 16)
+  .attr("transform", "rotate(45)").attr("fill", (d) => color(d))
+  .attr("stroke", "#fff").attr("stroke-width", 2);
+node.filter((d) => d.kind === "system").append("circle")
+  .attr("r", 16).attr("fill", (d) => color(d)).attr("stroke", "#fff").attr("stroke-width", 2);
+node.filter((d) => d.kind === "unresolved").append("circle")
+  .attr("r", 12).attr("fill", "none").attr("stroke", (d) => color(d))
+  .attr("stroke-width", 2).attr("stroke-dasharray", "4 3");
+
+node.append("text").attr("class", "node-label")
+  .attr("dy", (d) => (d.kind === "system" ? 28 : 26)).attr("text-anchor", "middle")
+  .text((d) => d.label);
+
+const tooltip = d3.select("#tooltip");
+node.on("mouseover", (ev, d) => {
+  const rows = [["kind", d.kind], ["loom", d.loom], ["profile", d.profile],
+                ["status", d.status], ["last event", d.last_event_at],
+                ["strand-dir", d.strand_dir]].filter(([, v]) => v);
+  tooltip.style("display", "block").html(
+    "<b>" + d.label + "</b><br>" + rows.map(([k, v]) => k + ": " + v).join("<br>"));
+}).on("mousemove", (ev) => {
+  tooltip.style("left", (ev.pageX + 14) + "px").style("top", (ev.pageY + 10) + "px");
+}).on("mouseout", () => tooltip.style("display", "none"));
+
+const sim = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id((d) => d.id).distance(130).strength(0.4))
+  .force("charge", d3.forceManyBody().strength(-400))
+  .force("center", d3.forceCenter(W() / 2, H() / 2))
+  .force("collide", d3.forceCollide(34))
+  .on("tick", () => {
+    link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
+    linkLabel.attr("x", (d) => (d.source.x + d.target.x) / 2)
+             .attr("y", (d) => (d.source.y + d.target.y) / 2);
+    node.attr("transform", (d) => "translate(" + d.x + "," + d.y + ")");
+  });
+
+const legend = d3.select("#legend");
+looms.forEach((l) => {
+  const row = legend.append("div").attr("class", "row");
+  row.append("span").attr("class", "swatch").style("background", loomColor(l));
+  row.append("span").text(l + " (loom)");
+});
+[["input", "input (strand-dir)"], ["system", "Knot (system)"],
+ ["unresolved", "unresolved target"]].forEach(([k, label]) => {
+  const row = legend.append("div").attr("class", "row");
+  row.append("span").attr("class", "swatch").style("background", kindColor[k]);
+  row.append("span").text(label);
+});
+</script>
+</body>
+</html>

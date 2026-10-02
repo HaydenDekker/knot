@@ -19,7 +19,9 @@ import re
 import sys
 
 TEMPLATE_NAME = "rig-graph-template.html"
-TEMPLATE_PLACEHOLDER = "/*__GRAPH_JSON__*/"
+D3_VENDOR_NAME = os.path.join("vendor", "d3.min.js")
+GRAPH_PLACEHOLDER = "/*__GRAPH_JSON__*/"
+D3_PLACEHOLDER = "/*__D3__*/"
 
 
 def parse_frontmatter(path):
@@ -195,16 +197,17 @@ def build_system_node(graph):
 
 
 def render_html(graph):
-    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                 TEMPLATE_NAME)
-    with open(template_path, encoding="utf-8") as f:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(script_dir, TEMPLATE_NAME), encoding="utf-8") as f:
         template = f.read()
-    if TEMPLATE_PLACEHOLDER not in template:
-        raise SystemExit("template missing %s placeholder" % TEMPLATE_PLACEHOLDER)
-    # Substitute the placeholder with the data script. The placeholder sits
-    # inside a <script> block: /*__GRAPH_JSON__*/\nconst data = {…stub…};
-    data_script = "const data = %s;\n" % json.dumps(graph, indent=2)
-    return template.replace(TEMPLATE_PLACEHOLDER, data_script.rstrip("\n"))
+    for marker in (GRAPH_PLACEHOLDER, D3_PLACEHOLDER):
+        if marker not in template:
+            raise SystemExit("template missing %s placeholder" % marker)
+    with open(os.path.join(script_dir, D3_VENDOR_NAME), encoding="utf-8") as f:
+        d3_src = f.read()
+    data_script = "const data = %s;" % json.dumps(graph, indent=2)
+    return (template.replace(D3_PLACEHOLDER, d3_src)
+                   .replace(GRAPH_PLACEHOLDER, data_script))
 
 
 def main(argv=None):

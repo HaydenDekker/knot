@@ -6,6 +6,7 @@ python3 scripts/test-rig-graph.py
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -226,6 +227,62 @@ class OutArgTest(unittest.TestCase):
         proc = subprocess.run([sys.executable, SCRIPT],
                               capture_output=True, text=True)
         self.assertNotEqual(proc.returncode, 0)
+
+
+class HtmlGenerationTest(unittest.TestCase):
+    """--out generation against the plain fixture rig (no state overlay)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="rig-graph-html-")
+        cls.out = os.path.join(cls.tmp, "nested", "dir", "graph.html")
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--out", cls.out, "--rig", "rig"],
+            cwd=os.path.join(FIXTURES, "plain"),
+            capture_output=True, text=True,
+        )
+        cls.rc, cls.stderr = proc.returncode, proc.stderr
+        if cls.rc == 0 and os.path.isfile(cls.out):
+            with open(cls.out, encoding="utf-8") as f:
+                cls.html = f.read()
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0, self.stderr)
+
+    def test_output_written_with_parent_dir_creation(self):
+        self.assertTrue(os.path.isfile(self.out))
+
+    def test_placeholders_substituted(self):
+        self.assertNotIn("/*__GRAPH_JSON__*/", self.html)
+        self.assertNotIn("/*__D3__*/", self.html)
+
+    def test_graph_json_embedded_exactly_once(self):
+        self.assertEqual(self.html.count("const data = "), 1)
+
+    def test_embedded_json_round_trips(self):
+        m = re.search(r"const data = (\{.*?\});\nconst loom", self.html, re.DOTALL)
+        self.assertIsNotNone(m, "embedded data script not found")
+        data = json.loads(m.group(1))
+        self.assertEqual(len(data["nodes"]), 5)   # 3 knots + 2 inputs
+        self.assertEqual(len(data["edges"]), 3)
+
+    def test_d3_inlined(self):
+        self.assertIn("d3js.org", self.html)
+        self.assertIn("forceSimulation", self.html)
+
+    def test_no_external_network_references(self):
+        # Offline guarantee: no src/href/link/@import/url() pointing at a
+        # network origin. The only literal URLs allowed are non-fetched
+        # namespace identifiers inside the vendored D3 (W3C DOM namespaces)
+        # and its copyright comment.
+        for pattern in (r'src="[\'\"]?https?://', r'href="[\'\"]?https?://',
+                        r"<link[ >]", r"@import\s+url", r"url\(\s*https?://"):
+            self.assertIsNone(re.search(pattern, self.html),
+                              "external reference pattern found: %s" % pattern)
+        allowed = ("http://www.w3.org/", "https://d3js.org")
+        for url in re.findall(r"https?://[^\'\"\) ]*", self.html):
+            self.assertTrue(url.startswith(allowed),
+                            "unexpected network URL: %s" % url)
 
 
 if __name__ == "__main__":
