@@ -1,5 +1,15 @@
 # Plan: Rig Graph Visualiser
 
+## Implementation Status: ✅ Complete (2026-10-02)
+
+## Notes
+- All 4 phases (0–3) implemented and verified (33/33 Python tests green)
+- Version bumped to 0.51.0
+- Design knowledge in `project/design/design-rig-graph-visualiser.md`
+- `knot-visualise` skill deployed to `~/.agents/skills-library/`; updated
+  `knot` master deployed to `~/.agents/skills/knot/` (diff-verified)
+- No rig-document migration (knot-update carries no 0.51.0 entry)
+
 ## Problem
 
 A rig's structure — which knots exist, which looms they belong to, and how

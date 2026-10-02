@@ -1,5 +1,30 @@
 # Release Notes
 
+## v0.51.0 — 2026-10-02
+
+### Added — Rig Graph Visualiser (Plan 093)
+
+New whole-rig topology visualiser: `scripts/rig-graph.py` extracts the
+rig's knot graph — knots (nodes) and their `event:` subscriptions /
+filesystem `strand-dir`s (edges) — and renders it into a
+**self-contained, offline-viewable D3 HTML file** at a user-specified
+`--out` path (D3 v7.9.0 is vendored and inlined; no network needed to
+view). The new `knot-visualise` sub-skill packages the workflow
+(`knot` master routes to it).
+
+- CLI: `--out <path.html>` (required) / `--rig <dir>` / `--no-state` /
+  `--json`. Stdlib-only Python 3; the Knot service need not be running.
+- Edges resolve all five `strand-dir` forms: knot-level, loom-level
+  (`event:<*-loom>:…`), wildcard (`event:*:…`), rig-level system events
+  (`event:knot:…` → a synthetic system node), and plain filesystem paths
+  (input nodes). Unresolved targets are flagged, not dropped.
+- Runtime state overlay (`status`, `last_event_at`) from
+  `tie-offs/<rig>/state.json` when present; duplicate knot ids across
+  looms get unique `<loom>:<knot>` node ids.
+- No Knot binary behaviour changes; no rig-document migration (no
+  knot-update entry).
+- Design knowledge: `project/design/design-rig-graph-visualiser.md`.
+
 ## v0.50.0 — 2026-09-21
 
 ### Changed — Static Engine Token for Rig-Scoped System Events (Plan 092)
