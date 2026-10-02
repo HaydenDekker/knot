@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 (loom highlight includes feeding nodes) in v0.53.0
+## Implementation Status: 🟡 In Progress — Phase 6 added 2026-10-02 (phases 0–5 complete: v0.51.0, v0.52.0, bugfix v0.52.1, v0.53.0)
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -239,6 +239,32 @@ arrows but not as named nodes.
   include their neighbour endpoints).
 - Skill docs updated (interaction contract notes the feeding nodes);
   wiring test marker added; generated artefacts regenerated.
+
+### Phase 6: Edge event labels on hover/highlight + wide-scope marker (added 2026-10-02)
+
+User asked which event `lifecycle-on-block` sends to `plan-implementer`
+and could not tell. Diagnosis: every edge label is drawn at all times —
+85 tiny 9 px grey labels overlapping — so no label can be attributed to
+its edge, and there is no edge-hover or edge-highlight label behaviour
+at all. Additionally, `event:<loom>:<Event>` subscriptions fan out to
+every knot of the loom and render as knot-specific arrows (e.g.
+`plan-implementer` subscribes `event:planning-loom:PlanReady`, which
+draws one arrow from *every* planning-loom knot), reading as if each knot
+individually sends the event.
+
+- **Labels hidden by default; revealed on hover and while highlighted**:
+  hovering an edge (wide 10 px hit line, identity-based label lookup —
+  D3 v7 listeners take no index) lights that label; any active highlight
+  (edge, node, or loom) lights the labels of the edges in the set via a
+  `lit` class.
+- **Wide-scope subscriptions are marked**: loom-level (`event:<loom>:…`)
+  and wildcard (`event:*:…`) fan-out edges carry `scope` (`"loom"` /
+  `"all"`), render dotted, and their labels are suffixed `· loom` /
+  `· all` — so "knot A sends to knot B" is never confused with
+  "knot B listens to the whole loom".
+- Skill docs updated (reading guide: hover/highlight reveal the event
+  name; dotted = wide subscription); wiring + extractor test markers
+  added; generated artefacts regenerated.
 
 ## Notes
 

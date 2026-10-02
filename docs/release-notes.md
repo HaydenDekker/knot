@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.54.0 — 2026-10-02
+
+### Added — Rig Graph Edge Labels on Hover/Highlight + Wide-Scope Marker (Plan 093, Phase 6)
+
+The rig graph was hard to read at scale: all 85 edge labels rendered at
+once in 9 px grey, so a label could not be attributed to its edge, and
+loom-wide subscriptions (`event:<loom>:<Event>`) drew one arrow from
+every knot of the loom — reading as knot-specific sends.
+
+- **Edge labels are hidden by default** and revealed on **hover** (wide
+  hit zone) or while **highlighted** (clicking an edge, node, or loom
+  lights the labels of the highlighted edges).
+- **Wide-scope subscriptions are marked**: loom-level and wildcard
+  fan-out edges are **dotted** and their labels suffixed `· loom` /
+  `· all` — the graph can no longer be misread as "knot A sends to knot
+  B" when it is really "knot B listens to the whole loom".
+- Regenerate your visualisation to pick the change up. `knot-visualise`
+  skill bumped to 1.3.0. No rig-document migration.
+
 ## v0.53.0 — 2026-10-02
 
 ### Added — Rig Graph Loom Highlight Shows Feeding Nodes (Plan 093, Phase 5)

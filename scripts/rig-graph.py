@@ -144,12 +144,15 @@ def build_graph(looms, state_overlay):
             if is_event_uri(sd):
                 target, event_id = event_parts(sd)
                 unresolved = False
+                scope = None
                 if target == "*":
                     producers = [uid(k) for k in all_knots]
+                    scope = "all"
                 elif target == "knot":
                     producers = [__SYSTEM_NODE__]
                 elif target in looms:
                     producers = [uid(k) for k in looms[target]]
+                    scope = "loom"
                 elif target in ids:
                     # A bare knot-id subscription matches every knot with
                     # that id (Knot matches on id alone) — may span looms.
@@ -163,6 +166,11 @@ def build_graph(looms, state_overlay):
                     producers = [target]
                 for p in producers:
                     edge = {"source": p, "target": uid(knot), "label": event_id}
+                    if scope:
+                        # Wide subscription: the edge is really "subscriber
+                        # listens to the whole loom / everything" — mark it
+                        # so it never reads as a knot-specific send.
+                        edge["scope"] = scope
                     if unresolved:
                         edge["unresolved"] = True
                     edges.append(edge)

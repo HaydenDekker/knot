@@ -89,20 +89,22 @@ class FullRigTest(unittest.TestCase):
             find_edges(self.graph, source="planner", target="coder",
                        label="PlanCreated"),
             [{"source": "planner", "target": "coder", "label": "PlanCreated"}],
-        )
+        )  # exact match: no "scope" key on knot-level edges
 
     def test_loom_level_edges(self):
         # event:planning-loom:PlanCreated fans out to every knot in the loom.
-        got = {e["source"] for e in
-               find_edges(self.graph, target="reviewer", label="PlanCreated")}
-        self.assertEqual(got, {"planner", "scout"})
+        got = find_edges(self.graph, target="reviewer", label="PlanCreated")
+        self.assertEqual({e["source"] for e in got}, {"planner", "scout"})
+        # The fan-out is a loom-wide subscription, not knot-specific sends.
+        self.assertTrue(all(e.get("scope") == "loom" for e in got))
 
     def test_wildcard_edges(self):
         # event:*:RunDone fans out to every knot in the rig.
-        got = {e["source"] for e in
-               find_edges(self.graph, target="archivist", label="RunDone")}
-        self.assertEqual(got, {"planner", "scout", "coder", "reviewer",
-                               "watchdog", "archivist"})
+        got = find_edges(self.graph, target="archivist", label="RunDone")
+        self.assertEqual({e["source"] for e in got},
+                         {"planner", "scout", "coder", "reviewer",
+                          "watchdog", "archivist"})
+        self.assertTrue(all(e.get("scope") == "all" for e in got))
 
     def test_rig_level_system_edge(self):
         self.assertEqual(
@@ -293,6 +295,13 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertIn(".data(looms).enter()", self.html)
         # Loom highlight includes the nodes feeding into the loom.
         self.assertIn("feeding node", self.html)
+        # Edge labels: hidden by default, lit on highlight / hover;
+        # wide-scope (loom/wildcard) fan-out edges are dotted and suffixed.
+        self.assertIn(".edge-label.lit, .edge-label.hover", self.html)
+        self.assertIn('linkHit', self.html)
+        self.assertIn('"mouseover"', self.html)
+        self.assertIn("scoped-edge", self.html)
+        self.assertIn('d.scope ? " · " + d.scope', self.html)
         # Filtering state: hidden looms hide knots and touching edges.
         self.assertIn("hiddenLooms", self.html)
         self.assertIn("knotVisible", self.html)

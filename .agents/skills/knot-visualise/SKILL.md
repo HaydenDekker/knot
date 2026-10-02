@@ -4,7 +4,7 @@ description: "Visualise the whole-rig producer→consumer topology as a self-con
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -50,8 +50,8 @@ looms are found.
 2. **Run** `python3 scripts/rig-graph.py --out <path>` from the project
    root. Confirm the `wrote <path> (N nodes, M edges)` line.
 3. **Tell the user** the path and what to expect (a force-directed graph;
-   drag to rearrange, scroll to zoom, hover a node for metadata — and the
-   interaction contract below).
+   drag to rearrange, scroll to zoom, hover a node for metadata, hover an
+   edge for its event name — and the interaction contract below).
 4. Only if debugging: `--json` prints the raw graph; `--no-state` gives a
    pure topology view without runtime status.
 
@@ -63,8 +63,9 @@ looms are found.
 |---------|--------|
 | Legend **checkbox** | **Filters** a loom — its knot nodes and every edge touching a hidden knot disappear. Input and system nodes stay. Re-check to restore. |
 | Legend **loom name** | **Highlights** the target loom and **all nodes feeding into it** — the loom's knots, every incident edge, and the source of each edge pointing at a loom knot (upstream one hop; knot, input, or system sources alike). Everything else fades. Click again (or the background) to clear. |
-| Click a **node** | Highlights the node, its incident edges, and its direct neighbours. Click again or the background to clear. |
-| Click an **edge** (wide invisible hit zone) | Highlights that edge and its two connected nodes. Click again or the background to clear. |
+| Click a **node** | Highlights the node, its incident edges, its direct neighbours, and the **labels** of the incident edges. Click again or the background to clear. |
+| Click an **edge** (wide invisible hit zone) | Highlights that edge, its two connected nodes, and its **label**. Click again or the background to clear. |
+| Hover an **edge** | Reveals its event-name label (labels are hidden by default; highlighting a node/loom/edge also reveals the highlighted edges' labels). |
 | Click the **background** | Clears any active highlight. |
 
 Filtering (checkboxes) and highlighting (clicks) are independent and
@@ -98,8 +99,14 @@ node ids become `<loom>:<knot>` (labels stay bare).
 | `event:knot:<Event>` | system node → this knot |
 | plain path | input node → this knot |
 
-Edges are labelled with the event name (or path). `unresolved` edges are
-dashed.
+Edges are labelled with the event name (or path), but labels are **hidden
+by default** — hover an edge or highlight it (edge/node/loom click) to
+reveal them. `unresolved` edges are dashed. **Dotted** edges are
+**wide-scope subscriptions**: `event:<loom>:<Event>` edges are suffixed
+`· loom` and `event:*:<Event>` edges `· all` — they mean *the target
+listens to the whole loom / everything*, so do **not** read a dotted
+arrow from knot A to knot B as "A individually sends to B"; it is the
+fan-out of B's own wide subscription.
 
 **State overlay** (only when `state.json` exists and `--no-state` is not
 given): each knot node carries `status` (`idle` / `processing` /

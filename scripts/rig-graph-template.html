@@ -11,8 +11,11 @@
   .node-label { font-size: 11px; pointer-events: none;
                 paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 3px; }
   .edge-label { font-size: 9px; fill: #888; pointer-events: none;
-                paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 2.5px; }
+                paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 2.5px;
+                opacity: 0; }
+  .edge-label.lit, .edge-label.hover { opacity: 1; font-size: 12px; fill: #222; }
   .unresolved-edge { stroke-dasharray: 4 3; }
+  .scoped-edge { stroke-dasharray: 2 3; }  /* wide loom/wildcard subscription */
   #tooltip { position: absolute; display: none; max-width: 320px;
              padding: 8px 10px; font-size: 12px; line-height: 1.5;
              background: #fff; color: #222; border: 1px solid #bbb;
@@ -69,17 +72,25 @@ const link = g.append("g").selectAll("line").data(links).join("line")
   .attr("stroke", (d) => d.unresolved ? "#c0392b" : "#999")
   .attr("stroke-opacity", 0.6)
   .attr("stroke-width", 1.5)
-  .attr("class", (d) => d.unresolved ? "unresolved-edge" : "edge")
+  .attr("class", (d) => "edge"
+      + (d.unresolved ? " unresolved-edge" : "")
+      + (d.scope ? " scoped-edge" : ""))
   .attr("marker-end", "url(#arrow)");
 
 const linkLabel = g.append("g").selectAll("text").data(links).join("text")
   .attr("class", "edge-label").attr("text-anchor", "middle")
-  .text((d) => d.label);
+  .text((d) => d.label + (d.scope ? " · " + d.scope : ""));
 
-// Wide invisible hit lines make thin edges clickable.
+// Wide invisible hit lines make thin edges clickable and hoverable.
 const linkHit = g.append("g").selectAll("line").data(links).join("line")
   .attr("stroke", "transparent").attr("stroke-width", 10)
-  .style("pointer-events", "stroke").style("cursor", "pointer");
+  .style("pointer-events", "stroke").style("cursor", "pointer")
+  // Hover reveals the (otherwise hidden) label — identity-based lookup,
+  // D3 v7 listeners take no index argument.
+  .on("mouseover", (ev, d) =>
+    linkLabel.filter((e) => e === d).classed("hover", true))
+  .on("mouseout", (ev, d) =>
+    linkLabel.filter((e) => e === d).classed("hover", false));
 
 const node = g.append("g").selectAll("g").data(nodes).join("g")
   .style("cursor", "pointer");
@@ -147,7 +158,7 @@ function highlight() {
   }
   node.style("opacity", (d) => !set || set.nodes.has(d.id) ? 1 : 0.15);
   link.style("opacity", (d) => !set ? 0.6 : (set.edges.has(d) ? 1 : 0.05));
-  linkLabel.style("opacity", (d) => !set ? 1 : (set.edges.has(d) ? 1 : 0.05));
+  linkLabel.classed("lit", (d) => !!set && set.edges.has(d));
   legend.selectAll("div.loom-row").classed("active", (l) => l === activeLoom);
 }
 
