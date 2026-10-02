@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Tests for scripts/rig-graph.py (stdlib only, run with unittest).
+
+python3 scripts/test-rig-graph.py
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCRIPT = os.path.join(HERE, "rig-graph.py")
+FIXTURES = os.path.join(os.path.dirname(HERE), "tests", "fixtures", "rig-graph")
+
+
+def run_graph(cwd, *extra):
+    """Run the script with --json in `cwd`; return (rc, parsed_json_or_None, stderr)."""
+    proc = subprocess.run(
+        [sys.executable, SCRIPT, "--json", *extra],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    data = None
+    if proc.returncode == 0:
+        data = json.loads(proc.stdout)
+    return proc.returncode, data, proc.stderr
+
+
+def nodes_by_id(graph):
+    return {n["id"]: n for n in graph["nodes"]}
+
+
+def edges(graph):
+    return graph["edges"]
+
+
+def find_edges(graph, **match):
+    return [e for e in edges(graph)
+            if all(e.get(k) == v for k, v in match.items())]
+
+
+class FullRigTest(unittest.TestCase):
+    """Fixture rig with all five strand-dir forms + state.json overlay."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rc, cls.graph, cls.err = run_graph(os.path.join(FIXTURES, "full"))
+        if cls.rc != 0:
+            raise unittest.SkipTest("script failed: %s" % cls.err)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0)
+
+    def test_knot_nodes(self):
+        nodes = nodes_by_id(self.graph)
+        for knot_id, loom in [("planner", "planning-loom"), ("scout", "planning-loom"),
+                              ("coder", "build-loom"), ("reviewer", "build-loom"),
+                              ("watchdog", "build-loom"), ("archivist", "build-loom")]:
+            self.assertIn(knot_id, nodes, "missing knot node %s" % knot_id)
+            self.assertEqual(nodes[knot_id]["kind"], "knot")
+            self.assertEqual(nodes[knot_id]["loom"], loom)
+
+    def test_input_node(self):
+        nodes = nodes_by_id(self.graph)
+        self.assertIn("input:project/briefs", nodes)
+        self.assertEqual(nodes["input:project/briefs"]["kind"], "input")
+
+    def test_system_node(self):
+        nodes = nodes_by_id(self.graph)
+        self.assertEqual(nodes["knot-system"]["kind"], "system")
+
+    def test_unresolved_node(self):
+        nodes = nodes_by_id(self.graph)
+        self.assertEqual(nodes["ghost-knot"]["kind"], "unresolved")
+
+    def test_plain_path_edge(self):
+        self.assertEqual(
+            find_edges(self.graph, source="input:project/briefs",
+                       target="planner", label="project/briefs"),
+            [{"source": "input:project/briefs", "target": "planner",
+              "label": "project/briefs"}],
+        )
+
+    def test_knot_level_edge(self):
+        self.assertEqual(
+            find_edges(self.graph, source="planner", target="coder",
+                       label="PlanCreated"),
+            [{"source": "planner", "target": "coder", "label": "PlanCreated"}],
+        )
+
+    def test_loom_level_edges(self):
+        # event:planning-loom:PlanCreated fans out to every knot in the loom.
+        got = {e["source"] for e in
+               find_edges(self.graph, target="reviewer", label="PlanCreated")}
+        self.assertEqual(got, {"planner", "scout"})
+
+    def test_wildcard_edges(self):
+        # event:*:RunDone fans out to every knot in the rig.
+        got = {e["source"] for e in
+               find_edges(self.graph, target="archivist", label="RunDone")}
+        self.assertEqual(got, {"planner", "scout", "coder", "reviewer",
+                               "watchdog", "archivist"})
+
+    def test_rig_level_system_edge(self):
+        self.assertEqual(
+            find_edges(self.graph, source="knot-system", target="watchdog",
+                       label="KnotFailed"),
+            [{"source": "knot-system", "target": "watchdog", "label": "KnotFailed"}],
+        )
+
+    def test_unresolved_edge_flagged(self):
+        got = find_edges(self.graph, source="ghost-knot", target="scout",
+                         label="GhostEvent")
+        self.assertEqual(len(got), 1)
+        self.assertTrue(got[0]["unresolved"])
+
+    def test_edge_count(self):
+        # 1 (plain) + 1 (knot-level) + 2 (loom-level) + 6 (wildcard)
+        # + 1 (system) + 1 (unresolved) = 12
+        self.assertEqual(len(edges(self.graph)), 12)
+
+    def test_state_overlay_applied(self):
+        nodes = nodes_by_id(self.graph)
+        self.assertEqual(nodes["planner"]["status"], "idle")
+        self.assertEqual(nodes["planner"]["last_event_at"],
+                         "2026-10-02T10:00:00+10:00")
+        self.assertEqual(nodes["coder"]["status"], "processing")
+
+    def test_no_state_flag(self):
+        rc, graph, _ = run_graph(os.path.join(FIXTURES, "full"), "--no-state")
+        self.assertEqual(rc, 0)
+        nodes = nodes_by_id(graph)
+        self.assertNotIn("status", nodes["planner"])
+
+
+class PlainRigTest(unittest.TestCase):
+    """Fixture rig with no state.json: overlay absent, lone knot unsubscribed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rc, cls.graph, cls.err = run_graph(os.path.join(FIXTURES, "plain"))
+        if cls.rc != 0:
+            raise unittest.SkipTest("script failed: %s" % cls.err)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0)
+
+    def test_no_state_overlay_without_state_json(self):
+        for node in self.graph["nodes"]:
+            self.assertNotIn("status", node,
+                             "unexpected state overlay on %s" % node["id"])
+
+    def test_no_system_or_unresolved_nodes(self):
+        kinds = {n["id"]: n["kind"] for n in self.graph["nodes"]}
+        self.assertNotIn("knot-system", kinds)
+        self.assertFalse(any(k == "unresolved" for k in kinds.values()))
+
+    def test_lone_knot_has_no_event_subscribers(self):
+        # Nothing subscribes to `lone`: its only incoming edge is its own
+        # input edge; no event edge targets it.
+        incoming = [e for e in edges(self.graph) if e["target"] == "lone"]
+        self.assertEqual(
+            incoming,
+            [{"source": "input:project/inbox", "target": "lone",
+              "label": "project/inbox"}],
+        )
+
+    def test_knot_level_edge(self):
+        self.assertEqual(
+            find_edges(self.graph, source="producer", target="consumer",
+                       label="Done"),
+            [{"source": "producer", "target": "consumer", "label": "Done"}],
+        )
+
+
+class ErrorCaseTest(unittest.TestCase):
+    def test_missing_rig_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, data, err = run_graph(tmp, "--rig", "does-not-exist")
+        self.assertEqual(rc, 2)
+        self.assertIsNone(data)
+        self.assertIn("not found", err)
+
+    def test_rig_with_no_looms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "rig", "notes"))
+            rc, data, err = run_graph(tmp)
+        self.assertEqual(rc, 2)
+        self.assertIsNone(data)
+        self.assertIn("no looms", err)
+
+
+class DupIdRigTest(unittest.TestCase):
+    """Knot ids duplicated across looms get unique (loom-prefixed) node ids,
+    and a bare knot-id subscription fans out to every knot with that id."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rc, cls.graph, cls.err = run_graph(os.path.join(FIXTURES, "dup"))
+        if cls.rc != 0:
+            raise unittest.SkipTest("script failed: %s" % cls.err)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0)
+
+    def test_node_ids_unique(self):
+        ids = [n["id"] for n in self.graph["nodes"]]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate node ids: %s" % ids)
+
+    def test_loom_prefixed_ids_with_labels_preserved(self):
+        nodes = nodes_by_id(self.graph)
+        for nid, label in [("alpha-loom:knot-x", "knot-x"), ("beta-loom:knot-x", "knot-x")]:
+            self.assertIn(nid, nodes)
+            self.assertEqual(nodes[nid]["label"], label)
+
+    def test_knot_level_subscription_fans_out_to_both_looms(self):
+        got = {e["source"] for e in
+               find_edges(self.graph, target="fan", label="Tick")}
+        self.assertEqual(got, {"alpha-loom:knot-x", "beta-loom:knot-x"})
+
+
+class OutArgTest(unittest.TestCase):
+    def test_out_required_without_json(self):
+        proc = subprocess.run([sys.executable, SCRIPT],
+                              capture_output=True, text=True)
+        self.assertNotEqual(proc.returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
