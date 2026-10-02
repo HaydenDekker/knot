@@ -309,6 +309,13 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertIn("pairCount", self.html)
         self.assertIn("arcGeom", self.html)
         self.assertIn('e._idx = pairCount[e._pair] || 0', self.html)
+        # Regression (v0.55.1): `pairCount[e._pair]++` on a missing property
+        # increments undefined → NaN (ToNumber semantics — both V8 and
+        # SpiderMonkey agree), so every edge rendered with a "QNaN,NaN"
+        # control point and the browser rejected the path data (no lines).
+        # The count must be built with an explicit undefined guard.
+        self.assertIn("pairCount[e._pair] = e._idx + 1", self.html)
+        self.assertNotIn("pairCount[e._pair]++", self.html)
         # Filtering state: hidden looms hide knots and touching edges.
         self.assertIn("hiddenLooms", self.html)
         self.assertIn("knotVisible", self.html)

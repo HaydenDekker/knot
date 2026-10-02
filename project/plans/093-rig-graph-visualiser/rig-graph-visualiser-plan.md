@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0 (bugfix v0.55.1)
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -44,6 +44,30 @@ legend row rendered, and clicking an edge produced no highlight.
   tracked by object identity (`activeEdge`, matched with `===`) instead of
   an index. Wiring tests updated: `activeEdge` present, `activeEdgeIndex`
   absent, `.data(looms).enter()` marker asserted. Released in v0.52.1.
+
+### Bugfix: Phase 7 arc counter stored NaN — no edges rendered (2026-10-02)
+
+User verification of the v0.55.0 output found the graph rendered no lines
+and no edge labels at all (nodes and the force layout were fine).
+
+- **What was wrong:** the pair counter used `pairCount[e._pair]++` on a
+  missing property. Contrary to the "undefined counts as 0" intuition,
+  `++` on `undefined` goes through `ToNumber` — `undefined → NaN` — so
+  every counter value stored `NaN` (confirmed identical on both V8 and
+  SpiderMonkey). `arcGeom` then took the arc branch for every edge
+  (`n === 1` is false for NaN) with a NaN control point, producing path
+  data like `M…QNaN,NaN …`; the browser rejects such path data, so no
+  edge path or label position rendered. The Python test suite could not
+  catch this — it verifies template markers, not JS semantics.
+- **How it was fixed:** the count is now built with an explicit
+  undefined guard — `pairCount[e._pair] = e._idx + 1` (where
+  `e._idx = pairCount[e._pair] || 0`) — which is engine-independent.
+  Regression test added: the guarded increment asserted present and the
+  raw `pairCount[e._pair]++` pattern asserted absent. Verified in
+  headless Chromium and Firefox: 85/85 edge paths valid, 0 NaN paths,
+  the 3 multi-edge pairs arc, single-edge pairs stay straight, legend
+  highlight and hover interactions intact, no console errors.
+  Released in v0.55.1.
 
 ## Problem
 

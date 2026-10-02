@@ -77,7 +77,7 @@ links.forEach((e) => {
   const a = e.source, b = e.target;  // still string ids (pre-simulation)
   e._pair = a < b ? a + "\u0000" + b : b + "\u0000" + a;
   e._idx = pairCount[e._pair] || 0;
-  pairCount[e._pair]++;
+  pairCount[e._pair] = e._idx + 1;  // explicit: `++` on a missing property reads undefined → NaN
 });
 function arcGeom(d) {
   const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;

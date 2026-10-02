@@ -1,5 +1,22 @@
 # Release Notes
 
+## v0.55.1 — 2026-10-02
+
+### Fixed — Rig Graph: no edges or labels rendered (Plan 093 bugfix)
+
+- **The generated visualisation showed no lines and no event labels**
+  (nodes and layout were fine). The Phase 7 pair counter used
+  `pairCount[e._pair]++` on a missing property; `++` on `undefined`
+  evaluates to `NaN` (ToNumber semantics — identical on V8 and
+  SpiderMonkey), so every arc control point was `NaN` and the browser
+  rejected the `QNaN,NaN` path data.
+- The counter is now built with an explicit undefined guard
+  (`pairCount[e._pair] = e._idx + 1`). Verified in headless Chromium and
+  Firefox: all edge paths valid, parallel pairs arc, interactions intact.
+- Regenerate your visualisation to pick the fix up:
+  `python3 scripts/rig-graph.py --out <path.html> --rig <rig>`. No rig-document
+  migration.
+
 ## v0.55.0 — 2026-10-02
 
 ### Added — Rig Graph Arced Parallel Edges + Dotted-Only Loom Marker (Plan 093, Phase 7)
