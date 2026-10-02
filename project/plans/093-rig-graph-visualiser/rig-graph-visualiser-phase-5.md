@@ -16,7 +16,7 @@
 - [ ] Regenerate `~/workspace/finance/budget-app-frontend/rig-graph.html`
 - [ ] Re-deploy `knot-visualise` to `~/.agents/skills-library/` (diff verify)
 - [ ] Version bump 0.52.1 → 0.53.0 (Cargo.toml + release notes), commit sha
-      recorded
+      recorded (commit sha `fa21de9` — single-commit task on main, no branch per branch contract)
 
 ## Deviations
 <!-- Small single-commit change on main; no feature branch (branch contract:
