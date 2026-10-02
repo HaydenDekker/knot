@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-09-21 (plan 092 complete — static engine token `event:knot:<EventId>` for rig-scoped system events, with zero-consumer diagnostics (`[KNOT][SYSTEM]`); the rig-name form is deprecated, released in v0.50.0)
+> **Last Updated:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
+> **Prior:** 2026-09-21 (plan 092 complete — static engine token `event:knot:<EventId>` for rig-scoped system events, with zero-consumer diagnostics (`[KNOT][SYSTEM]`); the rig-name form is deprecated, released in v0.50.0)
 > **Prior:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
 > **Prior:** 2026-09-12 (plan 089 reopened from the 2026-09-11/12 `pwa-todo-3` evidence — threshold compactions still ended the attempt and compaction stalls tripped the inactivity watchdog)
 > **Prior:** 2026-09-11 (plan 089 phases 0–7 complete — Interrupted Overflow Compaction: manual compact + session-restart recovery when pi's in-process recovery dies mid-compaction, released in v0.46.0)
@@ -49,6 +50,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 93 | [Rig Graph Visualiser](093-rig-graph-visualiser/rig-graph-visualiser-plan.md) | 📝 Draft | 2026-10-02 |
 | 92 | [Static Engine Token for Rig-Scoped System Events, with Zero-Consumer Diagnostics](092-static-rig-event-token/static-rig-event-token-plan.md) | ✅ Complete (2026-09-21) — released in v0.50.0 | 2026-09-21 |
 | 91 | [Per-Event Enforcement — Re-Ask When a Tie-Off Acknowledges Only Some Expected Events](091-per-event-enforcement/per-event-enforcement-plan.md) | ✅ Complete (2026-09-20) — released in v0.49.0 | 2026-09-20 |
 | 90 | [Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry](090-concise-in-session-retry/concise-in-session-retry-plan.md) | ✅ Complete (2026-09-12) — released in v0.48.0 | 2026-09-12 |
@@ -83,6 +85,14 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 93. Rig Graph Visualiser
+
+**Status:** 📝 Draft
+**Created:** 2026-10-02
+**Goal:** Extract the rig's knot/strand graph (knots as nodes, `event:` subscriptions and filesystem `strand-dir`s as edges) via a stdlib-only Python script and render it to a self-contained, offline-viewable D3 HTML file at a user-specified `--out` path, packaged as the `knot-visualise` sub-skill.
+
+Full details in [093-rig-graph-visualiser/rig-graph-visualiser-plan.md](093-rig-graph-visualiser/rig-graph-visualiser-plan.md).
 
 ### 90. Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry
 
