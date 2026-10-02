@@ -27,7 +27,7 @@
       diff verify `OK`
 - [x] Verification — `python3 scripts/test-rig-graph.py` green (34/34; the
       targeted scope — no Rust code touched, `cargo` gates unaffected);
-      commit sha `PENDING` recorded as this phase's external-verdict
+      commit sha `5b79dd6` recorded as this phase's external-verdict
       request.
 
 ## Deviations
