@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: 🟡 In Progress — Phase 5 added 2026-10-02 (phases 0–4 complete: v0.51.0, v0.52.0, bugfix v0.52.1)
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 (loom highlight includes feeding nodes) in v0.53.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -13,6 +13,10 @@
   filter checkboxes + loom highlight on click), node/edge click
   highlighting, background-click clear; skill 1.1.0 interaction contract;
   released in v0.52.0
+- Phase 5 (added 2026-10-02 at user request): loom legend highlight now
+  shows the target loom **and all nodes feeding into it** (source of each
+  edge pointing at a loom knot, one hop upstream); skill 1.2.0; released
+  in v0.53.0
 
 ### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
 

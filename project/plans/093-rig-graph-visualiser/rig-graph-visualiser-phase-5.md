@@ -3,19 +3,19 @@
 **Plan:** [Rig Graph Visualiser](rig-graph-visualiser-plan.md)
 
 ## Checklist
-- [ ] `scripts/rig-graph-template.html` — in `highlight()`'s loom branch:
+- [x] `scripts/rig-graph-template.html` — in `highlight()`'s loom branch:
       snapshot the loom's knot ids, then for every edge whose **target** is
       a loom knot, add the edge's **source** to the focused-node set (the
       feeding node — knot, input, or system); incident edges unchanged;
       node/edge highlight branches unchanged
-- [ ] `scripts/test-rig-graph.py` — wiring marker for the end-node
+- [x] `scripts/test-rig-graph.py` — wiring marker for the end-node
       extension (comment marker in the loom branch); existing suite green
-- [ ] `.agents/skills/knot-visualise/SKILL.md` — interaction contract:
+- [x] `.agents/skills/knot-visualise/SKILL.md` — interaction contract:
       loom highlight includes all nodes feeding into the loom (upstream
       one hop); version 1.1.0 → 1.2.0
-- [ ] Regenerate `~/workspace/finance/budget-app-frontend/rig-graph.html`
-- [ ] Re-deploy `knot-visualise` to `~/.agents/skills-library/` (diff verify)
-- [ ] Version bump 0.52.1 → 0.53.0 (Cargo.toml + release notes), commit sha
+- [x] Regenerate `~/workspace/finance/budget-app-frontend/rig-graph.html`
+- [x] Re-deploy `knot-visualise` to `~/.agents/skills-library/` (diff verify)
+- [x] Version bump 0.52.1 → 0.53.0 (Cargo.toml + release notes), commit sha
       recorded (commit sha `fa21de9` — single-commit task on main, no branch per branch contract)
 
 ## Deviations
@@ -26,4 +26,6 @@ single-commit tasks may skip). -->
 <!-- Record any new information found during implementation -->
 
 ## Notes
-<!-- Implementation notes, gotchas, lessons learned -->
+- The loom's knot ids are snapshotted *before* the edge pass so
+  feeding nodes added mid-pass cannot pull in further edges (strictly one
+  hop upstream).
