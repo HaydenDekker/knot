@@ -1,6 +1,6 @@
 ---
 name: knot
-description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, building software-factory rigs (the generic process layer), understanding Knot abstractions, and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, knot migration, software factory, factory rig, GProc, generic process. DO NOT USE FOR: project document lifecycle (use the project master)."
+description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, visualising the rig graph, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, building software-factory rigs (the generic process layer), understanding Knot abstractions, and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, rig graph, rig visualisation, rig topology, knot connections, knot migration, software factory, factory rig, GProc, generic process. DO NOT USE FOR: project document lifecycle (use the project master)."
 ---
 
 # Knot (master)
@@ -18,6 +18,7 @@ guess a sub-skill's workflow from this index.
 | Create / modify / delete looms, knots, profiles | `/home/hayden/.agents/skills-library/knot-create/SKILL.md` |
 | Trigger knots: strand files, events, `knot step` | `/home/hayden/.agents/skills-library/knot-dispatch/SKILL.md` |
 | Inspect rig state, looms, activity, profiles | `/home/hayden/.agents/skills-library/knot-inspect/SKILL.md` |
+| Visualise the rig graph (knots + event/strand edges) as HTML | `/home/hayden/.agents/skills-library/knot-visualise/SKILL.md` |
 | Review rig work: git history, tie-offs, producer→consumer comms | `/home/hayden/.agents/skills-library/knot-manage/SKILL.md` |
 | Analyse rig productivity, project progress, blockers | `/home/hayden/.agents/skills-library/knot-analyst/SKILL.md` |
 | Design looms and knots: idempotency, naming, loops | `/home/hayden/.agents/skills-library/knot-design/SKILL.md` |

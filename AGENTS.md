@@ -66,7 +66,7 @@ After updating a skill at project level, deploy it:
 ```bash
 # Sub-skills -> production library
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update
+              knot-manage knot-visualise knot-design knot-analyst knot-update
               knot-abstractions knot-software-factory; do
   mkdir -p ~/.agents/skills-library/$skill
   cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
@@ -85,7 +85,7 @@ cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 
 ```bash
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
-              knot-manage knot-design knot-analyst knot-update
+              knot-manage knot-visualise knot-design knot-analyst knot-update
               knot-abstractions knot-software-factory; do
   diff .agents/skills/$skill/SKILL.md \
        ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
@@ -131,6 +131,7 @@ production location (see Skill Installation above).
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
+- **knot-visualise** — Render the whole-rig producer→consumer topology (knots + event/strand edges) as a self-contained D3 HTML file at a user-specified `--out` path
 - **knot-start** — Start/stop/restart the service; append and read `tie-offs/<rig>/knot-service.log`
 - **knot-create** — Create, modify, delete looms, knots, and agent profiles
 - **knot-software-factory** — Design and build a software-factory rig: the generic process (GProc) layer, the GProc/GP/GA/SA layer model, and the interface documents (`project/arch.md`, `project/sa.md`)
