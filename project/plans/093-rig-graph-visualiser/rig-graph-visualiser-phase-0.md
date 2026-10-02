@@ -3,36 +3,41 @@
 **Plan:** [Rig Graph Visualiser](rig-graph-visualiser-plan.md)
 
 ## Checklist
-- [ ] Create `scripts/rig-graph.py` — stdlib-only Python 3:
-      - flat `key: value` frontmatter parser (split on `---`, strip quotes; no PyYAML)
-      - rig walk: looms = dirs ending `-loom` under `--rig` (default `rig/`); knots = `.md` files inside
-      - edge resolution for all five `strand-dir` forms (knot-level, loom-level `-loom` suffix, `*` wildcard, rig-level `knot` target, plain path)
-      - unresolved targets flagged `unresolved: true`, not dropped
-      - state overlay from `tie-offs/<rig-basename>/state.json` (status + last_event_at), absent file tolerated, `--no-state` disables
-      - graph JSON: `{"nodes": [...], "edges": [...]}`
-      - CLI: `--out` (required unless `--json`), `--rig`, `--no-state`, `--json` (print JSON, skip HTML)
-      - non-zero exit + clear message: missing rig dir, no looms found
-- [ ] Create fixtures `tests/fixtures/rig-graph/`:
-      - `rig/` with looms covering: knot-level subscription, loom-level subscription, wildcard subscription, rig-level (`event:knot:...`) subscription, plain-path `strand-dir`, an unresolved target, a knot with no subscribers
-      - `tie-offs/rig-graph/state.json` matching the fixture rig (status + last_event_at)
-      - a second fixture rig with no `state.json` (overlay-absent case)
-      - a broken case: a non-existent rig dir (error exit code)
-- [ ] Write `scripts/test-rig-graph.py` (unittest, stdlib only) with fixture-driven assertions:
-      - node set (knot/input/system nodes, attributes)
-      - edge set per subscription form, with event-name labels
-      - unresolved flags
-      - state overlay applied (with state.json) / omitted (absent + `--no-state`)
-      - missing-rig error exit code
-- [ ] Verification — `python3 scripts/test-rig-graph.py` green (the targeted scope for this
-      phase — no Rust code touched, so `cargo` gates are unaffected); commit sha
-      recorded as this phase's external-verdict request. The ON-COMMIT Rust suite is
-      not required by this item.
+- [x] Create `scripts/rig-graph.py` — stdlib-only Python 3 — done (frontmatter
+      parser, rig walk, edge resolution for all five forms, state overlay,
+      `--out`/`--rig`/`--no-state`/`--json` CLI, exit 2 on missing rig / no looms)
+- [x] Create fixtures `tests/fixtures/rig-graph/` — done: `full/` (all five
+      `strand-dir` forms, unresolved target, state.json overlay, twin rig via
+      `dup/`), `plain/` (no state.json, lone knot with no subscribers)
+- [x] Write `scripts/test-rig-graph.py` (unittest, stdlib only) — done, 26 tests
+      covering node set, edge set per form, unresolved flags, state overlay
+      applied/absent/`--no-state`, duplicate knot ids, error exit codes
+- [x] Verification — `python3 scripts/test-rig-graph.py` green (26/26; the
+      targeted scope for this phase — no Rust code touched, so `cargo` gates
+      are unaffected); commit sha `4585498` recorded as this phase's
+      external-verdict request. The ON-COMMIT Rust suite is not required by
+      this item.
 
 ## Deviations
-<!-- Record any deviations from the original plan -->
+- Plan said one fixture rig; a third fixture (`dup/`) was added because the
+  real rig in this repo already has duplicate knot names across looms (see
+  Discoveries).
 
 ## Discoveries
-<!-- Record any new information found during implementation -->
+- **Duplicate knot ids across looms are legal** (this repo's own rig has
+  `review-knot` in both `new-loom` and `workflow-loom`). Node ids are
+  therefore unique-ified: bare knot id when unique across the rig, else
+  `<loom>:<knot>` (label stays the bare name). The state overlay is keyed by
+  `(loom, knot)` from the nested `state.json` looms list for the same reason.
+- A bare knot-id subscription (`event:<knot>:<Event>`) matches **every**
+  knot with that id (Knot matches on id alone), so such a subscription fans
+  out across looms when the id is duplicated.
+- This repo has no `project/test/run-scope.md` and no `scripts/test-data/`
+  registration infra; verification items use the targeted Python test run as
+  the phase's ALWAYS-equivalent.
 
 ## Notes
-<!-- Implementation notes, gotchas, lessons learned -->
+- Frontmatter parser handles the `event:` URIs' embedded colons by splitting
+  on the first colon only.
+- The synthetic system node and unresolved-target nodes are added only when
+  referenced by at least one edge (no phantom nodes).
