@@ -336,5 +336,73 @@ class HtmlGenerationTest(unittest.TestCase):
                             "unexpected network URL: %s" % url)
 
 
+class StrandEventsTest(unittest.TestCase):
+    """--log strand-event counting (overactive-knot detector data)."""
+
+    LOG = os.path.join(FIXTURES, "full", "knot-service.log")
+
+    def test_counts_per_knot_deduped(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        # scout: event-1 (Created + Modified → one event) + event-2; coder:
+        # three. KnotModified (knot-definition change — no strand_path) and
+        # every other record kind are not strand events.
+        self.assertEqual(graph["strand_events"],
+                         [{"knot": "coder", "count": 3},
+                          {"knot": "scout", "count": 2}])
+
+    def test_no_log_flag_yields_empty_list(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(graph["strand_events"], [])
+
+    def test_missing_log_errors(self):
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--json", "--log", "/nonexistent/knot.log"],
+            cwd=os.path.join(FIXTURES, "full"), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("log file not found", proc.stderr)
+
+    def test_html_panel_wiring_with_log(self):
+        tmp = tempfile.mkdtemp(prefix="rig-graph-events-")
+        out = os.path.join(tmp, "graph.html")
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--out", out, "--log", self.LOG],
+            cwd=os.path.join(FIXTURES, "full"), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(out, encoding="utf-8") as f:
+            html = f.read()
+        m = re.search(r"const data = (\{.*?\});\nconst svg", html, re.DOTALL)
+        self.assertIsNotNone(m)
+        data = json.loads(m.group(1))
+        self.assertEqual(data["strand_events"],
+                         [{"knot": "coder", "count": 3},
+                          {"knot": "scout", "count": 2}])
+        # Panel markup + sort wiring; the panel renders only when data is
+        # present (runtime guard, so the static div is harmless).
+        self.assertIn('<div id="events-legend"></div>', html)
+        self.assertIn("data.strand_events && data.strand_events.length > 0",
+                      html)
+        self.assertIn('.attr("class", "event-row")', html)
+        self.assertIn("eventsSort", html)
+        self.assertIn('head.append("span").text("Knot")', html)
+        self.assertIn('head.append("span").text("Events")', html)
+
+    def test_html_panel_hidden_without_log(self):
+        tmp = tempfile.mkdtemp(prefix="rig-graph-events-")
+        out = os.path.join(tmp, "graph.html")
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--out", out],
+            cwd=os.path.join(FIXTURES, "full"), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(out, encoding="utf-8") as f:
+            html = f.read()
+        m = re.search(r"const data = (\{.*?\});\nconst svg", html, re.DOTALL)
+        self.assertEqual(json.loads(m.group(1))["strand_events"], [])
+        # The runtime guard is present — the panel stays display:none.
+        self.assertIn("data.strand_events && data.strand_events.length > 0",
+                      html)
+
+
 if __name__ == "__main__":
     unittest.main()

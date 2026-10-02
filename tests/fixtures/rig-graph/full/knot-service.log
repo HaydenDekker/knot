@@ -1,0 +1,13 @@
+WARNING: skipping invalid knot file /x/rig/gate-loom/README.md: knot file frontmatter is not valid YAML
+[2026-10-01T10:00:00+10:00] [KNOT][LOOM] discover loom=planning-loom — new loom found, 2 knots
+[2026-10-01T10:00:01+10:00] [KNOT][EVENT] KnotRegistered loom=planning-loom knot=planner
+[2026-10-01T10:00:02+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/planning-loom/PlanReady/event-1.md → Created { loom_id: LoomId("planning-loom"), knot_id: KnotId("scout"), strand_path: StrandPath("/x/rig/tie-offs/planning-loom/PlanReady/event-1.md") }
+[2026-10-01T10:00:03+10:00] [KNOT][NOTIFY] Modified /x/rig/tie-offs/planning-loom/PlanReady/event-1.md → Modified { loom_id: LoomId("planning-loom"), knot_id: KnotId("scout"), strand_path: StrandPath("/x/rig/tie-offs/planning-loom/PlanReady/event-1.md") }
+[2026-10-01T10:00:04+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/planning-loom/PlanReady/event-2.md → Created { loom_id: LoomId("planning-loom"), knot_id: KnotId("scout"), strand_path: StrandPath("/x/rig/tie-offs/planning-loom/PlanReady/event-2.md") }
+[2026-10-01T10:00:05+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/build-loom/ReviewDone/event-1.md → Created { loom_id: LoomId("build-loom"), knot_id: KnotId("coder"), strand_path: StrandPath("/x/rig/tie-offs/build-loom/ReviewDone/event-1.md") }
+[2026-10-01T10:00:06+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/build-loom/ReviewDone/event-2.md → Created { loom_id: LoomId("build-loom"), knot_id: KnotId("coder"), strand_path: StrandPath("/x/rig/tie-offs/build-loom/ReviewDone/event-2.md") }
+[2026-10-01T10:00:07+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/build-loom/ReviewDone/event-3.md → Created { loom_id: LoomId("build-loom"), knot_id: KnotId("coder"), strand_path: StrandPath("/x/rig/tie-offs/build-loom/ReviewDone/event-3.md") }
+[2026-10-01T10:00:08+10:00] [KNOT][STATE] change knot planning-loom/scout: status idle→processing strand=/x/project/prds/prd.md
+[2026-10-01T10:00:09+10:00] [KNOT][NOTIFY] KnotModified /x/rig/planning-loom/scout.md → KnotModified { loom_id: LoomId("planning-loom"), knot: Knot { id: KnotId("scout"), agent_profile_ref: "default", git_versioned: true } }
+
+[2026-10-01T10:00:10+10:00] [KNOT][EVENT] KnotProcessing loom=build-loom knot=coder

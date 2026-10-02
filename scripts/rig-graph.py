@@ -8,7 +8,7 @@ the D3 HTML template, writing the result to --out.
 Stdlib only. Does not require the Knot service to be running.
 
 Usage:
-  python3 scripts/rig-graph.py --out /path/to/graph.html [--rig rig] [--no-state]
+  python3 scripts/rig-graph.py --out /path/to/graph.html [--rig rig] [--no-state] [--log knot-service.log]
   python3 scripts/rig-graph.py --json [--rig rig]   # print graph JSON, skip HTML
 """
 
@@ -188,6 +188,36 @@ def build_graph(looms, state_overlay):
 
 __SYSTEM_NODE__ = "knot-system"
 
+# One strand-dir event notification: a Created/Modified watcher record with
+# the recipient knot and the event file path. KnotModified records (knot
+# definition changes — the payload is the knot's YAML, no strand_path) do not
+# match: the verb is anchored and the struct field is `id:`, not `knot_id:`.
+_NOTIFY_RE = re.compile(
+    r"\[KNOT\]\[NOTIFY\] (?:Created|Modified) .*"
+    r"knot_id: KnotId\(\"([^\"]*)\"\).*"
+    r"strand_path: StrandPath\(\"([^\"]*)\"\)")
+
+
+def parse_strand_events(log_path):
+    """Count distinct strand events per receiving knot from a service log.
+
+    A strand event is a file delivered to a knot's strand dir; the service
+    log records each notification as a `[KNOT][NOTIFY]` line. A delivery that
+    notifies `Created` then `Modified` is one event, so distinct
+    (knot, strand_path) pairs are counted, not raw lines.
+    Returns [{"knot": id, "count": n}, ...] sorted by knot name.
+    """
+    seen = set()
+    with open(log_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = _NOTIFY_RE.search(line)
+            if m:
+                seen.add((m.group(1), m.group(2)))
+    counts = {}
+    for knot, _path in seen:
+        counts[knot] = counts.get(knot, 0) + 1
+    return [{"knot": k, "count": n} for k, n in sorted(counts.items())]
+
 
 def build_system_node(graph):
     """Add the synthetic system node and any unresolved-target nodes."""
@@ -227,6 +257,10 @@ def main(argv=None):
                         help="omit the runtime state overlay")
     parser.add_argument("--json", action="store_true",
                         help="print graph JSON to stdout and skip HTML generation")
+    parser.add_argument("--log", metavar="PATH",
+                        help="knot service log to count strand events from "
+                             "(the [KNOT][NOTIFY] records); omit for no "
+                             "strand-events legend")
     args = parser.parse_args(argv)
 
     if not args.json and not args.out:
@@ -234,6 +268,10 @@ def main(argv=None):
 
     if not os.path.isdir(args.rig):
         print("error: rig directory not found: %s" % args.rig, file=sys.stderr)
+        return 2
+
+    if args.log and not os.path.isfile(args.log):
+        print("error: log file not found: %s" % args.log, file=sys.stderr)
         return 2
 
     looms = scan_rig(args.rig)
@@ -244,6 +282,7 @@ def main(argv=None):
 
     overlay = {} if args.no_state else load_state_overlay(os.getcwd(), args.rig)
     graph = build_system_node(build_graph(looms, overlay))
+    graph["strand_events"] = (parse_strand_events(args.log) if args.log else [])
 
     if args.json:
         print(json.dumps(graph, indent=2))
@@ -253,8 +292,9 @@ def main(argv=None):
         os.makedirs(parent, exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(html)
-        print("wrote %s (%d nodes, %d edges)"
-              % (args.out, len(graph["nodes"]), len(graph["edges"])))
+        print("wrote %s (%d nodes, %d edges, %d strand events)"
+              % (args.out, len(graph["nodes"]), len(graph["edges"]),
+                 sum(e["count"] for e in graph["strand_events"])))
     return 0
 
 

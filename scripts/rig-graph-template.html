@@ -34,12 +34,25 @@
   #legend .hint { color: #999; margin-top: 6px; font-size: 10px; line-height: 1.4; }
   #title { position: absolute; top: 10px; right: 14px; font-size: 13px;
            color: #666; }
+  #events-legend { position: absolute; top: 40px; right: 14px; padding: 8px 10px;
+                   font-size: 11px; background: rgba(255,255,255,.9);
+                   border: 1px solid #ccc; border-radius: 6px; width: 240px;
+                   max-height: 90vh; overflow-y: auto; display: none; }
+  #events-legend .head { display: flex; gap: 16px; margin-bottom: 2px;
+                         border-bottom: 1px solid #ddd; padding-bottom: 2px; }
+  #events-legend .head span { cursor: pointer; color: #999; }
+  #events-legend .head span.active { font-weight: 600; color: #222; }
+  #events-legend .event-row { display: flex; justify-content: space-between;
+                              gap: 12px; margin: 1px 0; }
+  #events-legend .event-row .count { font-variant-numeric: tabular-nums;
+                                     color: #666; }
 </style>
 </head>
 <body>
 <svg id="chart"></svg>
 <div id="tooltip"></div>
 <div id="legend"></div>
+<div id="events-legend"></div>
 <div id="title">rig graph</div>
 <script>
 /*__D3__*/
@@ -268,6 +281,46 @@ loomRows.on("click", (ev, l) => {
 legend.append("div").attr("class", "hint")
   .html("checkbox: filter loom &middot; name: highlight loom<br>" +
         "click node / edge: highlight &middot; background: clear");
+
+// ---- Strand events legend: overactive-knot detector -----------------------
+// Distinct strand events delivered per knot, counted from the service log
+// (--log). Rows are inert; the header labels toggle the sort (default: count
+// descending, so the top of the list is the busiest knot).
+if (data.strand_events && data.strand_events.length > 0) {
+  const eventsPanel = d3.select("#events-legend").style("display", "block");
+  let eventsSort = "count";
+  const head = eventsPanel.append("div").attr("class", "head");
+  const nameLabel = head.append("span").text("Knot");
+  const countLabel = head.append("span").text("Events");
+  const rows = eventsPanel.append("div").attr("class", "rows");
+
+  function eventsSorted() {
+    const list = data.strand_events.slice();
+    if (eventsSort === "name") list.sort((a, b) => a.knot < b.knot ? -1 : 1);
+    else list.sort((a, b) => b.count - a.count || (a.knot < b.knot ? -1 : 1));
+    return list;
+  }
+
+  function renderEvents() {
+    nameLabel.classed("active", eventsSort === "name");
+    countLabel.classed("active", eventsSort === "count");
+    rows.html("");
+    const row = rows.selectAll("div").data(eventsSorted()).enter().append("div")
+      .attr("class", "event-row");
+    row.append("span").attr("class", "knot").text((d) => d.knot);
+    row.append("span").attr("class", "count").text((d) => d.count);
+  }
+
+  nameLabel.on("click", () => {
+    eventsSort = eventsSort === "name" ? "count" : "name";
+    renderEvents();
+  });
+  countLabel.on("click", () => {
+    eventsSort = eventsSort === "count" ? "name" : "count";
+    renderEvents();
+  });
+  renderEvents();
+}
 </script>
 </body>
 </html>

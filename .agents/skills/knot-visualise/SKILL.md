@@ -1,10 +1,10 @@
 ---
 name: knot-visualise
-description: "Visualise the whole-rig producer→consumer topology as a self-contained HTML file. Runs the rig graph extractor (`scripts/rig-graph.py`), which pulls the rig's knots (nodes) and strand connections (edges — `event:` subscriptions and filesystem `strand-dir`s), merges the result into a D3 HTML template, and saves it to a user-specified `--out` location. USE FOR: visualise rig, rig graph, rig visualisation, rig topology, knot graph, graph rig, show rig structure, rig map, rig diagram, knot connections, who subscribes to what, event flow diagram, rig overview, visual rig, export rig graph, rig HTML. DO NOT USE FOR: inspecting raw rig state (use knot-inspect), creating looms or knots (use knot-create), triggering knots (use knot-dispatch), analysing rig productivity (use knot-analyst)."
+description: "Visualise the whole-rig producer→consumer topology as a self-contained HTML file. Runs the rig graph extractor (`scripts/rig-graph.py`), which pulls the rig's knots (nodes) and strand connections (edges — `event:` subscriptions and filesystem `strand-dir`s), merges the result into a D3 HTML template, and saves it to a user-specified `--out` location. Optionally counts distinct strand events delivered per knot from the knot service log (`--log`) — the overactive-knot detector, rendered as a sortable strand-events legend. USE FOR: visualise rig, rig graph, rig visualisation, rig topology, knot graph, graph rig, show rig structure, rig map, rig diagram, knot connections, who subscribes to what, event flow diagram, rig overview, visual rig, export rig graph, rig HTML, overactive knot, knot activity counts, strand events per knot, which knot is busiest. DO NOT USE FOR: inspecting raw rig state (use knot-inspect), creating looms or knots (use knot-create), triggering knots (use knot-dispatch), analysing rig productivity (use knot-analyst)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
+  version: "1.5.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -27,7 +27,7 @@ project root — in a Knot-managed project, `scripts/rig-graph.py` relative
 to the current working directory).
 
 ```
-python3 scripts/rig-graph.py --out <path.html> [--rig <dir>] [--no-state] [--json]
+python3 scripts/rig-graph.py --out <path.html> [--rig <dir>] [--no-state] [--log <knot-service.log>] [--json]
 ```
 
 | Flag | Meaning |
@@ -35,10 +35,11 @@ python3 scripts/rig-graph.py --out <path.html> [--rig <dir>] [--no-state] [--jso
 | `--out <path.html>` | **Required** (unless `--json`). Output HTML location — **ask the user** where they want it; parent directories are created if missing. |
 | `--rig <dir>` | Rig directory, relative to CWD. Default `rig`. |
 | `--no-state` | Omit the runtime state overlay (node status / last activity). By default the overlay is applied only when `tie-offs/<rig>/state.json` exists. |
+| `--log <path>` | Knot service log to count strand events from (the `[KNOT][NOTIFY]` records — `tie-offs/<rig>/knot-service.log` by default layout). Adds the strand-events legend (overactive-knot detector). Omit for the plain topology view. |
 | `--json` | Print the graph JSON to stdout and skip HTML — for inspecting the graph structure without rendering. |
 
-Exit code `2` with a message on stderr when the rig dir is missing or no
-looms are found.
+Exit code `2` with a message on stderr when the rig dir is missing, no
+looms are found, or the `--log` file does not exist.
 
 ---
 
@@ -47,12 +48,18 @@ looms are found.
 1. **Ask for the output location** (`--out`). Suggest a sensible default
    (e.g. `project/rig-graph.html`) if the user has no preference, but the
    path is theirs to choose.
-2. **Run** `python3 scripts/rig-graph.py --out <path>` from the project
-   root. Confirm the `wrote <path> (N nodes, M edges)` line.
-3. **Tell the user** the path and what to expect (a force-directed graph;
+2. **Offer the strand-events legend.** Ask whether the user wants the
+   overactive-knot view; if so, pass `--log tie-offs/<rig>/knot-service.log`
+   (the log path is the user's to specify). The panel then lists every
+   knot with the number of strand events delivered to it — read it
+   top-down (default sort = most events first) to find the busy knot.
+3. **Run** `python3 scripts/rig-graph.py --out <path>` from the project
+   root. Confirm the `wrote <path> (N nodes, M edges, K strand events)`
+   line.
+4. **Tell the user** the path and what to expect (a force-directed graph;
    drag to rearrange, scroll to zoom, hover a node for metadata, hover an
    edge for its event name — and the interaction contract below).
-4. Only if debugging: `--json` prints the raw graph; `--no-state` gives a
+5. Only if debugging: `--json` prints the raw graph; `--no-state` gives a
    pure topology view without runtime status.
 
 ---
@@ -67,6 +74,7 @@ looms are found.
 | Click an **edge** (wide invisible hit zone) | Highlights that edge, its two connected nodes, and its **label**. Click again or the background to clear. |
 | Hover an **edge** | Reveals its event-name label (labels are hidden by default; highlighting a node/loom/edge also reveals the highlighted edges' labels). |
 | Click the **background** | Clears any active highlight. |
+| Strand-events **header labels** (`Knot` / `Events`) | The strand-events legend (top-right; only when `--log` was given) is **sortable** — click a header label to sort by that column; the active sort is bold. Default: **Events descending** — the top row is the overactive knot. Click the other label (or the same one) to switch back. |
 
 Filtering (checkboxes) and highlighting (clicks) are independent and
 compose: a filtered-out loom simply has no visible members to highlight.
@@ -118,6 +126,22 @@ subscriptions that have been separated.
 given): each knot node carries `status` (`idle` / `processing` /
 `completed`) and `last_event_at`, shown in the hover tooltip.
 
+**Strand events** (only when `--log` is given): the second legend panel
+lists each knot that received strand events, with the count of **distinct
+strand events delivered to it** during the log's span. A strand event is a
+file delivered to a knot's strand dir; the service log records each
+notification as a `[KNOT][NOTIFY]` line. Counting rules: only `Created` /
+`Modified` notifications count (a `Created` + `Modified` pair on the same
+file is **one** event); `KnotModified` (knot-definition changes) and all
+other record kinds are excluded; the log is the append-only service log,
+so the span covers its whole history across restarts. Knots with no
+deliveries are absent — the panel shows consumers, not the whole rig.
+**Read it top-down to find the overactive knot**; a knot far above the
+rest is usually the bottleneck or a subscription that is too broad.
+(Related, different thing: the `[KNOT][EVENT]` records — knot *lifecycle*
+events such as `KnotProcessing` — are the knot's own activity, not what
+landed in its strand dirs, and are not what this panel counts.)
+
 ---
 
 ## Interpreting the graph
@@ -146,6 +170,8 @@ given): each knot node carries `status` (`idle` / `processing` /
 |---------|-------|
 | `error: rig directory not found` | Run from the project root, or pass `--rig`. |
 | `error: no looms found` | Loom dirs must end in `-loom` under the rig dir. |
+| `error: log file not found` | The `--log` path is wrong or the rig has no service log yet — the log is `tie-offs/<rig>/knot-service.log` (append-only; since Knot 0.41.0 there are no per-run logs). |
+| No strand-events panel | `--log` was not passed, or the log has no `[KNOT][NOTIFY]` records yet (rig never received a strand event). |
 | Graph looks empty | Try `--json` and inspect; confirm the knot `.md` files have `name` and `strand-dir` frontmatter. |
 | Node shows no status | Service not running (no `state.json`) or `--no-state` — expected, not an error. |
 | Duplicate-looking knot labels | Knot id exists in multiple looms — node ids are `<loom>:<knot>`; the tooltip shows the loom. |

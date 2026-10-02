@@ -1,5 +1,26 @@
 # Release Notes
 
+## v0.56.0 — 2026-10-02
+
+### Added — Rig Graph Strand-Events Legend (Plan 093, Phase 8)
+
+- New `--log <path>` flag on `scripts/rig-graph.py`: counts **distinct
+  strand events delivered per knot** from the knot service log's
+  `[KNOT][NOTIFY]` records (the strand-dir event history — not the
+  knot-lifecycle `[KNOT][EVENT]` records). A delivery that notifies
+  `Created` then `Modified` counts once (distinct `(knot, strand_path)`
+  pairs); `KnotModified` (knot-definition changes) is excluded.
+- Generated visualisations gain a second legend — **Strand events**
+  (top-right): one row per receiving knot with its event count,
+  **sortable by knot name or by count** via the clickable header labels;
+  defaults to count-descending, so the top of the list is the
+  overactive knot. The panel renders only when `--log` is given and the
+  log contains strand events; without `--log` the output is unchanged.
+- Missing `--log` path → error + non-zero exit (a silent empty legend
+  would be misleading).
+- `knot-visualise` skill 1.4.0 → 1.5.0 (CLI contract, workflow, and
+  interaction contract updated).
+
 ## v0.55.1 — 2026-10-02
 
 ### Fixed — Rig Graph: no edges or labels rendered (Plan 093 bugfix)
