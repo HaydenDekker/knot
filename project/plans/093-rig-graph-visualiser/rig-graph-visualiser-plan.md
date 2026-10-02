@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02)
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 (interactive legend + click highlighting) in v0.52.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -9,6 +9,10 @@
 - `knot-visualise` skill deployed to `~/.agents/skills-library/`; updated
   `knot` master deployed to `~/.agents/skills/knot/` (diff-verified)
 - No rig-document migration (knot-update carries no 0.51.0 entry)
+- Phase 4 (added 2026-10-02 at user request): interactive legend (loom
+  filter checkboxes + loom highlight on click), node/edge click
+  highlighting, background-click clear; skill 1.1.0 interaction contract;
+  released in v0.52.0
 
 ## Problem
 
@@ -175,6 +179,28 @@ with diff verification, exactly as the existing skills are deployed
   `knot` master to `~/.agents/skills/knot/`, with diff verification per
   AGENTS.md.
 - Mark the plan complete (via `project-plan-completion`).
+
+### Phase 4: Interactive legend and click highlighting (added 2026-10-02)
+
+Extend the D3 template so the graph is explorable by selection:
+
+- **Legend loom rows carry a checkbox** — unchecking a loom **filters** it
+  out: its knot nodes and every edge touching a hidden knot disappear
+  (input and system nodes stay visible; the simulation is untouched).
+- **Clicking a loom's name in the legend highlights** that loom: its knot
+  nodes and every edge incident to them stay at full opacity, everything
+  else fades. Click again (or click the background) to clear.
+- **Clicking an edge highlights** that edge plus its two connected nodes
+  (a wide invisible hit line makes thin edges clickable); clear by
+  clicking the background.
+- **Clicking a node highlights** the node, its incident edges, and its
+  direct neighbours; clear by clicking the background.
+- Selection modes are mutually exclusive — a new click replaces the
+  previous highlight; filtering (checkboxes) and highlighting (clicks)
+  are independent and compose.
+- Tests: generated-HTML wiring assertions (checkbox generation, hit
+  lines, highlight/filter functions, background clear) plus the existing
+  suite; skill docs updated with the interaction contract and re-deployed.
 
 ## Notes
 

@@ -4,7 +4,7 @@ description: "Visualise the whole-rig producer→consumer topology as a self-con
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
+  version: "1.1.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -50,9 +50,27 @@ looms are found.
 2. **Run** `python3 scripts/rig-graph.py --out <path>` from the project
    root. Confirm the `wrote <path> (N nodes, M edges)` line.
 3. **Tell the user** the path and what to expect (a force-directed graph;
-   drag to rearrange, scroll to zoom, hover a node for metadata).
+   drag to rearrange, scroll to zoom, hover a node for metadata — and the
+   interaction contract below).
 4. Only if debugging: `--json` prints the raw graph; `--no-state` gives a
    pure topology view without runtime status.
+
+---
+
+## Interaction contract (the generated HTML)
+
+| Gesture | Effect |
+|---------|--------|
+| Legend **checkbox** | **Filters** a loom — its knot nodes and every edge touching a hidden knot disappear. Input and system nodes stay. Re-check to restore. |
+| Legend **loom name** | **Highlights** the loom — its knots and every incident edge stay at full opacity, everything else fades. Click again (or the background) to clear. |
+| Click a **node** | Highlights the node, its incident edges, and its direct neighbours. Click again or the background to clear. |
+| Click an **edge** (wide invisible hit zone) | Highlights that edge and its two connected nodes. Click again or the background to clear. |
+| Click the **background** | Clears any active highlight. |
+
+Filtering (checkboxes) and highlighting (clicks) are independent and
+compose: a filtered-out loom simply has no visible members to highlight.
+Selection modes are mutually exclusive — a new click replaces the previous
+highlight.
 
 ---
 

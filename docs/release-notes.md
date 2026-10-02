@@ -1,5 +1,25 @@
 # Release Notes
 
+## v0.52.0 — 2026-10-02
+
+### Added — Rig Graph Interactive Legend and Click Highlighting (Plan 093, Phase 4)
+
+The rig graph HTML (`scripts/rig-graph.py --out …`) is now explorable by
+selection:
+
+- **Legend checkboxes filter by loom** — unchecking hides the loom's knot
+  nodes and every edge touching them (input/system nodes stay; the force
+  simulation is untouched).
+- **Click a loom name in the legend** to highlight it (its knots +
+  incident edges stay at full opacity, everything else fades).
+- **Click a node** to highlight it, its incident edges, and its direct
+  neighbours; **click an edge** (wide invisible hit zone) to highlight the
+  edge and its two connected nodes. **Click the background** to clear.
+- Filtering and highlighting are independent and compose; selection modes
+  are mutually exclusive.
+- No Knot binary behaviour changes; `knot-visualise` skill bumped to 1.1.0
+  with the interaction contract. No rig-document migration.
+
 ## v0.51.0 — 2026-10-02
 
 ### Added — Rig Graph Visualiser (Plan 093)

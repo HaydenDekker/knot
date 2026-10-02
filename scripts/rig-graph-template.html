@@ -20,9 +20,15 @@
              pointer-events: none; }
   #legend { position: absolute; top: 10px; left: 10px; padding: 8px 10px;
             font-size: 11px; background: rgba(255,255,255,.9);
-            border: 1px solid #ccc; border-radius: 6px; }
+            border: 1px solid #ccc; border-radius: 6px; max-height: 90vh;
+            overflow-y: auto; }
   #legend .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  #legend .row.loom-row { cursor: pointer; border-radius: 3px; }
+  #legend .row.loom-row:hover { background: rgba(0,0,0,.06); }
+  #legend .row.loom-row.active { background: rgba(0,0,0,.12); font-weight: 600; }
+  #legend .row input { margin: 0; cursor: pointer; }
   #legend .swatch { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  #legend .hint { color: #999; margin-top: 6px; font-size: 10px; line-height: 1.4; }
   #title { position: absolute; top: 10px; right: 14px; font-size: 13px;
            color: #666; }
 </style>
@@ -37,7 +43,6 @@
 </script>
 <script>
 /*__GRAPH_JSON__*/
-const loom = (d) => d.loom || "";
 const svg = d3.select("#chart");
 const W = () => window.innerWidth, H = () => window.innerHeight;
 svg.attr("viewBox", [0, 0, W(), H()]);
@@ -71,7 +76,13 @@ const linkLabel = g.append("g").selectAll("text").data(links).join("text")
   .attr("class", "edge-label").attr("text-anchor", "middle")
   .text((d) => d.label);
 
-const node = g.append("g").selectAll("g").data(nodes).join("g");
+// Wide invisible hit lines make thin edges clickable.
+const linkHit = g.append("g").selectAll("line").data(links).join("line")
+  .attr("stroke", "transparent").attr("stroke-width", 10)
+  .style("pointer-events", "stroke").style("cursor", "pointer");
+
+const node = g.append("g").selectAll("g").data(nodes).join("g")
+  .style("cursor", "pointer");
 
 node.filter((d) => d.kind === "knot").append("circle")
   .attr("r", 12).attr("fill", (d) => color(d)).attr("stroke", "#fff").attr("stroke-width", 2);
@@ -88,6 +99,78 @@ node.filter((d) => d.kind === "unresolved").append("circle")
 node.append("text").attr("class", "node-label")
   .attr("dy", (d) => (d.kind === "system" ? 28 : 26)).attr("text-anchor", "middle")
   .text((d) => d.label);
+
+// ---- Selection state -------------------------------------------------------
+// Filtering (legend checkboxes) hides; highlighting (clicks) fades.
+// They are independent and compose.
+const hiddenLooms = new Set();
+let activeLoom = null, activeNode = null, activeEdgeIndex = -1;
+
+const knotVisible = (d) => d.kind !== "knot" || !hiddenLooms.has(d.loom);
+const edgeVisible = (d) => knotVisible(d.source) && knotVisible(d.target);
+
+function clearSelection() {
+  activeLoom = null; activeNode = null; activeEdgeIndex = -1;
+  highlight();
+}
+
+function highlight() {
+  // Resolve the active selection into focused node ids + edge indices.
+  let set = null;
+  if (activeEdgeIndex >= 0) {
+    const e = links[activeEdgeIndex];
+    set = { nodes: new Set([e.source.id, e.target.id]),
+            edges: new Set([activeEdgeIndex]) };
+  } else if (activeNode !== null) {
+    const ns = new Set([activeNode]), es = new Set();
+    links.forEach((e, i) => {
+      if (e.source.id === activeNode || e.target.id === activeNode) {
+        es.add(i); ns.add(e.source.id); ns.add(e.target.id);
+      }
+    });
+    set = { nodes: ns, edges: es };
+  } else if (activeLoom !== null) {
+    const ns = new Set(nodes.filter(
+      (n) => n.kind === "knot" && n.loom === activeLoom).map((n) => n.id));
+    const es = new Set();
+    links.forEach((e, i) => {
+      if (ns.has(e.source.id) || ns.has(e.target.id)) es.add(i);
+    });
+    set = { nodes: ns, edges: es };
+  }
+  node.style("opacity", (d) => !set || set.nodes.has(d.id) ? 1 : 0.15);
+  link.style("opacity", (d, i) => !set ? 0.6 : (set.edges.has(i) ? 1 : 0.05));
+  linkLabel.style("opacity", (d, i) => !set ? 1 : (set.edges.has(i) ? 1 : 0.05));
+  legend.selectAll("div.loom-row").classed("active", (l) => l === activeLoom);
+}
+
+function visibility() {
+  node.style("display", (d) => knotVisible(d) ? null : "none");
+  link.style("display", (d) => edgeVisible(d) ? null : "none");
+  linkLabel.style("display", (d) => edgeVisible(d) ? null : "none");
+  linkHit.style("display", (d) => edgeVisible(d) ? null : "none");
+  // Drop a node highlight that the filter just hid.
+  if (activeNode !== null &&
+      !knotVisible(nodes.find((n) => n.id === activeNode))) {
+    activeNode = null;
+  }
+  highlight();
+}
+
+// Click handlers (stopPropagation keeps the background clear from firing).
+node.on("click", (ev, d) => {
+  ev.stopPropagation();
+  activeNode = activeNode === d.id ? null : d.id;
+  activeLoom = null; activeEdgeIndex = -1;
+  highlight();
+});
+linkHit.on("click", (ev, d, i) => {
+  ev.stopPropagation();
+  activeEdgeIndex = activeEdgeIndex === i ? -1 : i;
+  activeNode = null; activeLoom = null;
+  highlight();
+});
+svg.on("click.clear", clearSelection);
 
 const tooltip = d3.select("#tooltip");
 node.on("mouseover", (ev, d) => {
@@ -108,23 +191,42 @@ const sim = d3.forceSimulation(nodes)
   .on("tick", () => {
     link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
         .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
+    linkHit.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
+           .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
     linkLabel.attr("x", (d) => (d.source.x + d.target.x) / 2)
              .attr("y", (d) => (d.source.y + d.target.y) / 2);
     node.attr("transform", (d) => "translate(" + d.x + "," + d.y + ")");
   });
 
+// ---- Legend: checkbox = filter the loom, name click = highlight it --------
 const legend = d3.select("#legend");
-looms.forEach((l) => {
-  const row = legend.append("div").attr("class", "row");
-  row.append("span").attr("class", "swatch").style("background", loomColor(l));
-  row.append("span").text(l + " (loom)");
-});
-[["input", "input (strand-dir)"], ["system", "Knot (system)"],
- ["unresolved", "unresolved target"]].forEach(([k, label]) => {
-  const row = legend.append("div").attr("class", "row");
-  row.append("span").attr("class", "swatch").style("background", kindColor[k]);
-  row.append("span").text(label);
-});
+const loomRows = legend.append("div")
+  .attr("class", "row loom-row").data(looms);
+loomRows.append("input").attr("type", "checkbox")
+  .property("checked", true)
+  .on("change", function (ev, l) {
+    if (this.checked) hiddenLooms.delete(l); else hiddenLooms.add(l);
+    visibility();
+  });
+loomRows.append("span").attr("class", "swatch")
+  .style("background", (l) => loomColor(l));
+loomRows.append("span").text((l) => l);
+legend.append("div").attr("class", "hint")
+  .html("checkbox: filter loom &middot; name: highlight loom<br>" +
+        "click node / edge: highlight &middot; background: clear");
+
+// Row clicks handle the whole row (the checkbox's own change event still
+// fires and filters; the row handler ignores checkbox clicks).
+// (Bound via each() so `l` is the bound datum.)
+legend.selectAll("div.loom-row")
+  .each(function (l) {
+    d3.select(this).on("click", (ev) => {
+      if (ev.target && ev.target.tagName === "INPUT") return;
+      activeLoom = activeLoom === l ? null : l;
+      activeNode = null; activeEdgeIndex = -1;
+      highlight();
+    });
+  });
 </script>
 </body>
 </html>

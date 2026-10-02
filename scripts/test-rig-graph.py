@@ -260,7 +260,7 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertEqual(self.html.count("const data = "), 1)
 
     def test_embedded_json_round_trips(self):
-        m = re.search(r"const data = (\{.*?\});\nconst loom", self.html, re.DOTALL)
+        m = re.search(r"const data = (\{.*?\});\nconst svg", self.html, re.DOTALL)
         self.assertIsNotNone(m, "embedded data script not found")
         data = json.loads(m.group(1))
         self.assertEqual(len(data["nodes"]), 5)   # 3 knots + 2 inputs
@@ -269,6 +269,27 @@ class HtmlGenerationTest(unittest.TestCase):
     def test_d3_inlined(self):
         self.assertIn("d3js.org", self.html)
         self.assertIn("forceSimulation", self.html)
+
+    def test_interaction_wiring(self):
+        # Phase 4 interactions must be present in the generated HTML.
+        # Legend: checkboxes (filter) + loom rows (highlight on click).
+        # (The checkboxes are D3-generated at runtime — .attr(...), not markup.)
+        self.assertIn('.attr("type", "checkbox")', self.html)
+        self.assertIn("loom-row", self.html)
+        # Highlighting: node click, edge hit-lines, background clear.
+        self.assertIn("activeEdgeIndex", self.html)
+        self.assertIn("activeNode", self.html)
+        self.assertIn("activeLoom", self.html)
+        self.assertIn("function highlight()", self.html)
+        self.assertIn("function visibility()", self.html)
+        self.assertIn("function clearSelection()", self.html)
+        self.assertIn('svg.on("click.clear", clearSelection)', self.html)
+        self.assertIn('"pointer-events", "stroke"', self.html)  # edge hit lines
+        self.assertIn("ev.stopPropagation()", self.html)
+        # Filtering state: hidden looms hide knots and touching edges.
+        self.assertIn("hiddenLooms", self.html)
+        self.assertIn("knotVisible", self.html)
+        self.assertIn("edgeVisible", self.html)
 
     def test_no_external_network_references(self):
         # Offline guarantee: no src/href/link/@import/url() pointing at a
