@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: 🟡 In Progress — Phase 6 added 2026-10-02 (phases 0–5 complete: v0.51.0, v0.52.0, bugfix v0.52.1, v0.53.0)
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 (edge labels on hover/highlight + wide-scope marker) in v0.54.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -17,6 +17,11 @@
   shows the target loom **and all nodes feeding into it** (source of each
   edge pointing at a loom knot, one hop upstream); skill 1.2.0; released
   in v0.53.0
+- Phase 6 (added 2026-10-02 at user request): edge labels hidden by
+  default, revealed on hover/highlight; loom/wildcard wide-scope
+  subscriptions marked dotted with `· loom` / `· all` so fan-out arrows
+  cannot be misread as knot-specific sends; skill 1.3.0; released in
+  v0.54.0
 
 ### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
 
