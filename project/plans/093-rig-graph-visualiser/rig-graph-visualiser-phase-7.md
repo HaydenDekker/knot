@@ -18,8 +18,8 @@
       `· all` suffix = wildcard; version 1.3.0 → 1.4.0
 - [x] Regenerate `~/workspace/finance/budget-app-frontend/rig-graph.html`
 - [x] Re-deploy `knot-visualise` to `~/.agents/skills-library/` (diff verify)
-- [x] Version bump 0.54.0 → 0.55.0 (Cargo.toml + release notes), commit sha
-      recorded
+- [x] Version bump 0.54.0 → 0.55.0 (Cargo.toml + release notes), commit sha `03ade24` recorded (single-commit task on
+      main, no branch per branch contract)
 
 ## Deviations
 <!-- Small single-commit change on main; no feature branch (branch contract:
