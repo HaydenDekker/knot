@@ -277,7 +277,9 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertIn('.attr("type", "checkbox")', self.html)
         self.assertIn("loom-row", self.html)
         # Highlighting: node click, edge hit-lines, background clear.
-        self.assertIn("activeEdgeIndex", self.html)
+        # Selections matched by identity (D3 v7 listeners get (event, datum)).
+        self.assertIn("activeEdge", self.html)
+        self.assertNotIn("activeEdgeIndex", self.html)
         self.assertIn("activeNode", self.html)
         self.assertIn("activeLoom", self.html)
         self.assertIn("function highlight()", self.html)
@@ -286,6 +288,9 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertIn('svg.on("click.clear", clearSelection)', self.html)
         self.assertIn('"pointer-events", "stroke"', self.html)  # edge hit lines
         self.assertIn("ev.stopPropagation()", self.html)
+        # Legend rows are built with a real enter() selection — one row per
+        # loom (a single append would bind only the first datum).
+        self.assertIn(".data(looms).enter()", self.html)
         # Filtering state: hidden looms hide knots and touching edges.
         self.assertIn("hiddenLooms", self.html)
         self.assertIn("knotVisible", self.html)

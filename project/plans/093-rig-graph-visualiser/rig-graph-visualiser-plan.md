@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 (interactive legend + click highlighting) in v0.52.0
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 (interactive legend + click highlighting) in v0.52.0; Phase 4 defects fixed in v0.52.1
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -13,6 +13,23 @@
   filter checkboxes + loom highlight on click), node/edge click
   highlighting, background-click clear; skill 1.1.0 interaction contract;
   released in v0.52.0
+
+### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
+
+User verification of the v0.52.0 output found two Phase 4 defects: only one
+legend row rendered, and clicking an edge produced no highlight.
+
+- **What was wrong:** (1) the legend built its rows with
+  `legend.append("div").data(looms)` — `append` creates a *single* element,
+  so only the first loom's datum bound (one row). (2) the edge hit-line
+  listener used a d3 v5-era `(event, datum, index)` signature; D3 v7
+  listeners receive only `(event, datum)`, so the edge index was
+  `undefined` and the highlight state never engaged.
+- **How it was fixed:** rows built via `selectAll("div.loom-row").data(looms)
+  .enter().append("div")` (one row per loom), and the edge selection is now
+  tracked by object identity (`activeEdge`, matched with `===`) instead of
+  an index. Wiring tests updated: `activeEdge` present, `activeEdgeIndex`
+  absent, `.data(looms).enter()` marker asserted. Released in v0.52.1.
 
 ## Problem
 

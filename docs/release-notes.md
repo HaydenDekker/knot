@@ -1,5 +1,19 @@
 # Release Notes
 
+## v0.52.1 — 2026-10-02
+
+### Fixed — Rig Graph Phase 4 defects (Plan 093 bugfix)
+
+- **Legend showed only the first loom row.** Rows were built with
+  `append("div").data(looms)` (single element, first datum only); now built
+  with `selectAll(...).data(looms).enter().append(...)` — one row per loom.
+- **Clicking an edge did not highlight.** The hit-line listener assumed a
+  d3 v5-era index argument that D3 v7 does not pass; edge selection is now
+  tracked by object identity.
+- Regenerate your visualisation to pick the fix up:
+  `python3 scripts/rig-graph.py --out <path.html> --rig <rig>`. No rig-document
+  migration.
+
 ## v0.52.0 — 2026-10-02
 
 ### Added — Rig Graph Interactive Legend and Click Highlighting (Plan 093, Phase 4)

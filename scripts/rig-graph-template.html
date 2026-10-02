@@ -102,30 +102,31 @@ node.append("text").attr("class", "node-label")
 
 // ---- Selection state -------------------------------------------------------
 // Filtering (legend checkboxes) hides; highlighting (clicks) fades.
-// They are independent and compose.
+// They are independent and compose. Selections are matched by identity
+// (D3 v7 event listeners receive (event, datum) — no index argument).
 const hiddenLooms = new Set();
-let activeLoom = null, activeNode = null, activeEdgeIndex = -1;
+let activeLoom = null, activeNode = null, activeEdge = null;
 
 const knotVisible = (d) => d.kind !== "knot" || !hiddenLooms.has(d.loom);
 const edgeVisible = (d) => knotVisible(d.source) && knotVisible(d.target);
 
 function clearSelection() {
-  activeLoom = null; activeNode = null; activeEdgeIndex = -1;
+  activeLoom = null; activeNode = null; activeEdge = null;
   highlight();
 }
 
 function highlight() {
-  // Resolve the active selection into focused node ids + edge indices.
+  // Resolve the active selection into focused node ids + edge objects.
   let set = null;
-  if (activeEdgeIndex >= 0) {
-    const e = links[activeEdgeIndex];
+  if (activeEdge !== null) {
+    const e = activeEdge;
     set = { nodes: new Set([e.source.id, e.target.id]),
-            edges: new Set([activeEdgeIndex]) };
+            edges: new Set([e]) };
   } else if (activeNode !== null) {
     const ns = new Set([activeNode]), es = new Set();
-    links.forEach((e, i) => {
+    links.forEach((e) => {
       if (e.source.id === activeNode || e.target.id === activeNode) {
-        es.add(i); ns.add(e.source.id); ns.add(e.target.id);
+        es.add(e); ns.add(e.source.id); ns.add(e.target.id);
       }
     });
     set = { nodes: ns, edges: es };
@@ -133,14 +134,14 @@ function highlight() {
     const ns = new Set(nodes.filter(
       (n) => n.kind === "knot" && n.loom === activeLoom).map((n) => n.id));
     const es = new Set();
-    links.forEach((e, i) => {
-      if (ns.has(e.source.id) || ns.has(e.target.id)) es.add(i);
+    links.forEach((e) => {
+      if (ns.has(e.source.id) || ns.has(e.target.id)) es.add(e);
     });
     set = { nodes: ns, edges: es };
   }
   node.style("opacity", (d) => !set || set.nodes.has(d.id) ? 1 : 0.15);
-  link.style("opacity", (d, i) => !set ? 0.6 : (set.edges.has(i) ? 1 : 0.05));
-  linkLabel.style("opacity", (d, i) => !set ? 1 : (set.edges.has(i) ? 1 : 0.05));
+  link.style("opacity", (d) => !set ? 0.6 : (set.edges.has(d) ? 1 : 0.05));
+  linkLabel.style("opacity", (d) => !set ? 1 : (set.edges.has(d) ? 1 : 0.05));
   legend.selectAll("div.loom-row").classed("active", (l) => l === activeLoom);
 }
 
@@ -161,12 +162,12 @@ function visibility() {
 node.on("click", (ev, d) => {
   ev.stopPropagation();
   activeNode = activeNode === d.id ? null : d.id;
-  activeLoom = null; activeEdgeIndex = -1;
+  activeLoom = null; activeEdge = null;
   highlight();
 });
-linkHit.on("click", (ev, d, i) => {
+linkHit.on("click", (ev, d) => {
   ev.stopPropagation();
-  activeEdgeIndex = activeEdgeIndex === i ? -1 : i;
+  activeEdge = activeEdge === d ? null : d;
   activeNode = null; activeLoom = null;
   highlight();
 });
@@ -200,8 +201,8 @@ const sim = d3.forceSimulation(nodes)
 
 // ---- Legend: checkbox = filter the loom, name click = highlight it --------
 const legend = d3.select("#legend");
-const loomRows = legend.append("div")
-  .attr("class", "row loom-row").data(looms);
+const loomRows = legend.selectAll("div.loom-row").data(looms).enter()
+  .append("div").attr("class", "row loom-row");
 loomRows.append("input").attr("type", "checkbox")
   .property("checked", true)
   .on("change", function (ev, l) {
@@ -211,22 +212,16 @@ loomRows.append("input").attr("type", "checkbox")
 loomRows.append("span").attr("class", "swatch")
   .style("background", (l) => loomColor(l));
 loomRows.append("span").text((l) => l);
+// Row click highlights the loom; clicks on the checkbox itself only filter.
+loomRows.on("click", (ev, l) => {
+  if (ev.target && ev.target.tagName === "INPUT") return;
+  activeLoom = activeLoom === l ? null : l;
+  activeNode = null; activeEdge = null;
+  highlight();
+});
 legend.append("div").attr("class", "hint")
   .html("checkbox: filter loom &middot; name: highlight loom<br>" +
         "click node / edge: highlight &middot; background: clear");
-
-// Row clicks handle the whole row (the checkbox's own change event still
-// fires and filters; the row handler ignores checkbox clicks).
-// (Bound via each() so `l` is the bound datum.)
-legend.selectAll("div.loom-row")
-  .each(function (l) {
-    d3.select(this).on("click", (ev) => {
-      if (ev.target && ev.target.tagName === "INPUT") return;
-      activeLoom = activeLoom === l ? null : l;
-      activeNode = null; activeEdgeIndex = -1;
-      highlight();
-    });
-  });
 </script>
 </body>
 </html>
