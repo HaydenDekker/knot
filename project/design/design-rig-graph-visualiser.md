@@ -64,8 +64,9 @@ python3 scripts/rig-graph.py --out <path.html> [--rig <dir>] [--no-state] [--log
 
 `--out` required unless `--json` (JSON to stdout, no HTML). Exit 2 with a
 stderr message for a missing rig dir, no looms found, or a missing `--log`
-file. The graph JSON gains a `"strand_events"` field (empty list without
-`--log`, key present either way so the template branches on length).
+file. The graph JSON gains a `"strand_events"` field and an
+`"event_types"` field (both empty lists without `--log`, keys present
+either way so the template branches on length).
 
 ## Interaction model (the generated HTML)
 
@@ -97,10 +98,14 @@ are mutually exclusive (a new click replaces the previous highlight):
   `forceLink` rewrites `source`/`target` from strings to node objects,
   and uses raw string ids.
 
-## Strand events + minutes panel (`--log`)
+## Activity panels (`--log`): strand events + minutes, event types
 
-A second legend (top-right; rendered only when `--log` was given and the
-log has strand events) — the overactive-knot detector:
+Two right-side legends (rendered only when `--log` was given and the log
+has data; a flex-column container stacks them without overlapping):
+the overactive-knot detector (strand events, v0.56.0, minutes column
+v0.57.0) and the communication view (event types, v0.58.0).
+
+### Strand events + minutes
 
 - **Events column**: distinct `(knot_id, strand_path)` pairs from
   `[KNOT][NOTIFY]` `Created`/`Modified` records — a `Created` +
@@ -129,6 +134,31 @@ Reading it two ways: top-down by **Events** finds the trigger magnet
 (too-broad subscription); by **Minutes** finds the time sink (slow or
 long-running knot — often a different knot).
 
+### Event types (the communication view)
+
+Per **event type**: **Inv** (distinct trigger filenames delivered — a
+fan-out event delivered to several knots is *one* invocation), **Knots**
+(distinct consumer knots), **Min** (the closed sessions the type caused,
+attributed via each `→processing` start record's `strand=` file — same
+unclosed/restart exclusions as the Minutes column).
+
+- **Type key**: the event dir name for rig event files (paths under a
+  `tie-offs/` tree, e.g. `PlanComplete` — covers both `event-*` files
+  and foreign-named gate signals); the file name for project input
+  files (e.g. `prd-ui-views.md`). Keyed by **bare name** — the same
+  event name in several looms merges (the user's mental model is the
+  event name).
+- **Fan-out dedup**: when several knots subscribe to one event, the
+  event file lands in each consumer's event dir under the **same
+  filename** — distinct filenames, not paths, count invocations.
+- **Sortable**: `Type` / `Inv` / `Knots` / `Min` header labels toggle
+  the sort (default: **Min desc** — the communication-cost view; name
+  tie-break); the active sort is bold. Rows are inert.
+
+Reading it: a type with many **Inv** × many **Knots** × many **Min** is
+the communication to optimise (e.g. a fan-out event that triggers many
+knots, each consuming minutes).
+
 ## Gotchas (D3 v7 + the template)
 
 - **`++` on a missing property is NaN** (spec behaviour, not an engine
@@ -144,7 +174,13 @@ long-running knot — often a different knot).
 - **Legend rows use the join shape** `selectAll("div.loom-row").data(...)
   .enter().append("div")` — a single `append("div").data(looms)` binds
   only the first datum, so the legend rendered one row (the v0.52.1
-  bug). Same rule applies to the events panel's rows.
+  bug). Same rule applies to the activity panels' rows.
+- **Event-type attribution rides on `strand=`** — every
+  `→processing` start record (389/389 in the demo log, including
+  `failed→processing` retries) carries `strand=<triggering file>`;
+  the session's duration is billed to that file's event type. A start
+  without it (defensive) still counts in the knot's minutes but is
+  attributed to no type.
 
 ## Test strategy
 
@@ -152,16 +188,20 @@ Subprocess-driven `unittest` against three fixture rigs
 (`tests/fixtures/rig-graph/`): `full` exercises every `strand-dir` form
 plus the state overlay and an unresolved target, and carries a fixture
 service log (`knot-service.log`) with strand-event records (Created +
-Modified dedup, KnotModified exclusion, warning/blank noise), STATE
-records (closed sessions, multi-session sums, `processing→failed`,
+Modified dedup, KnotModified exclusion, warning/blank noise, a
+fan-out event delivered to two knots under the same filename, a
+project input file), STATE records (every start carries `strand=`;
+closed sessions, multi-session sums, `processing→failed`,
 `completed→processing` restart, an unclosed session, a `queue+` noise
-line), and a knot with events but no sessions; `plain` covers the
+line, an open session dropped at an `initial snapshot` run marker), and
+a knot with events but no sessions; `plain` covers the
 no-`state.json` path and a knot with no subscribers; `dup` covers
 duplicate knot ids across looms. HTML generation tests cover placeholder
 substitution, parent-dir creation, embedded-JSON round-trip, the offline
 guarantee, the interaction wiring (filter/highlight/sort markers in the
-emitted JS), the `++`→NaN regression guard, and the strand-events panel
-wiring. No Rust code is touched, so the Rust suite is unaffected
+emitted JS), the `++`→NaN regression guard, and the activity-panels
+wiring (strand events + event types: both panels in the container, the
+guards, the sort toggles, the exact fixture-derived row data — 44 tests). No Rust code is touched, so the Rust suite is unaffected
 (targeted Python run is the phase's verification scope). Runtime
 behaviour of the generated HTML is verified in headless Chromium and
 Firefox (Playwright) when a rig project with the browsers available is at

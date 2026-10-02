@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0 (bugfix v0.55.1); phase 8 (strand-events legend / overactive-knot detector) in v0.56.0; phase 9 (processing-minutes column) in v0.57.0 (bugfix v0.57.1)
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0 (bugfix v0.55.1); phase 8 (strand-events legend / overactive-knot detector) in v0.56.0; phase 9 (processing-minutes column) in v0.57.0 (bugfix v0.57.1); phase 10 (event-types panel / communication view) in v0.58.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -38,6 +38,12 @@
   timestamps, summing closed `X→processing` … `processing→X` sessions
   (unclosed sessions excluded; failed sessions count); sortable via the
   `Min` header label; skill 1.6.0; released in v0.57.0
+- Phase 10 (added 2026-10-02 at user request): **event-types panel** —
+  the communication view: per event type, invocations (distinct trigger
+  filenames; a fan-out event counts once), distinct consumer knots, and
+  minutes of closed sessions the type caused (via the start record's
+  `strand=` file); second right-side panel, default sort Min descending;
+  skill 1.7.0; released in v0.58.0
 
 ### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
 

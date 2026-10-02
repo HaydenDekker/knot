@@ -11,14 +11,24 @@ WARNING: skipping invalid knot file /x/rig/gate-loom/README.md: knot file frontm
 [2026-10-01T10:00:09+10:00] [KNOT][NOTIFY] KnotModified /x/rig/planning-loom/scout.md → KnotModified { loom_id: LoomId("planning-loom"), knot: Knot { id: KnotId("scout"), agent_profile_ref: "default", git_versioned: true } }
 
 [2026-10-01T10:00:10+10:00] [KNOT][EVENT] KnotProcessing loom=build-loom knot=coder
-[2026-10-01T10:01:00+10:00] [KNOT][STATE] change knot planning-loom/scout: status idle→processing strand=/x/project/prds/prd.md event-at=2026-10-01T10:00:59+10:00
-[2026-10-01T10:02:00+10:00] [KNOT][STATE] change knot build-loom/coder: status idle→processing strand=/x/project/src/main.rs event-at=2026-10-01T10:01:59+10:00
+[2026-10-01T10:01:00+10:00] [KNOT][STATE] change knot planning-loom/scout: status idle→processing strand=/x/rig/tie-offs/planning-loom/PlanReady/event-1.md event-at=2026-10-01T10:00:59+10:00
+[2026-10-01T10:02:00+10:00] [KNOT][STATE] change knot build-loom/coder: status idle→processing strand=/x/rig/tie-offs/build-loom/ReviewDone/event-1.md event-at=2026-10-01T10:01:59+10:00
 [2026-10-01T10:03:30+10:00] [KNOT][STATE] change knot planning-loom/scout: status processing→completed tie-off=/x/rig/tie-offs/scout.md event-at=2026-10-01T10:03:30+10:00
 [2026-10-01T10:04:00+10:00] [KNOT][STATE] change knot build-loom/coder: status processing→failed tie-off=/x/rig/tie-offs/coder.md event-at=2026-10-01T10:04:00+10:00
 [2026-10-01T10:05:00+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/planning-loom/PlanReady/event-3.md → Created { loom_id: LoomId("planning-loom"), knot_id: KnotId("planner"), strand_path: StrandPath("/x/rig/tie-offs/planning-loom/PlanReady/event-3.md") }
-[2026-10-01T10:09:00+10:00] [KNOT][STATE] change knot planning-loom/scout: status completed→processing strand=/x/project/prds/prd.md event-at=2026-10-01T10:08:59+10:00
-[2026-10-01T10:10:00+10:00] [KNOT][STATE] change knot build-loom/coder: status completed→processing strand=/x/project/src/main.rs event-at=2026-10-01T10:09:59+10:00
+[2026-10-01T10:06:00+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/build-loom/PlanCreated/event-4.md → Created { loom_id: LoomId("build-loom"), knot_id: KnotId("reviewer"), strand_path: StrandPath("/x/rig/tie-offs/build-loom/PlanCreated/event-4.md") }
+[2026-10-01T10:07:00+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/build-loom/ReviewDone/event-7.md → Created { loom_id: LoomId("build-loom"), knot_id: KnotId("coder"), strand_path: StrandPath("/x/rig/tie-offs/build-loom/ReviewDone/event-7.md") }
+[2026-10-01T10:07:01+10:00] [KNOT][NOTIFY] Created /x/rig/tie-offs/planning-loom/ReviewDone/event-7.md → Created { loom_id: LoomId("planning-loom"), knot_id: KnotId("planner"), strand_path: StrandPath("/x/rig/tie-offs/planning-loom/ReviewDone/event-7.md") }
+[2026-10-01T10:08:00+10:00] [KNOT][NOTIFY] Created /x/project/briefs/brief.md → Created { loom_id: LoomId("planning-loom"), knot_id: KnotId("planner"), strand_path: StrandPath("/x/project/briefs/brief.md") }
+[2026-10-01T10:10:00+10:00] [KNOT][STATE] change knot build-loom/coder: status completed→processing strand=/x/rig/tie-offs/build-loom/ReviewDone/event-3.md event-at=2026-10-01T10:09:59+10:00
 [2026-10-01T10:10:30+10:00] [KNOT][STATE] change knot build-loom/coder: status processing→completed tie-off=/x/rig/tie-offs/coder.md event-at=2026-10-01T10:10:30+10:00
-[2026-10-01T10:11:00+10:00] [KNOT][STATE] change knot build-loom/watchdog: status idle→processing strand=/x/watchdog.md event-at=2026-10-01T10:10:59+10:00
+[2026-10-01T10:11:00+10:00] [KNOT][STATE] change knot build-loom/watchdog: status idle→processing strand=/x/rig/tie-offs/build-loom/ReviewDone/event-2.md event-at=2026-10-01T10:10:59+10:00
 [2026-10-01T10:15:00+10:00] [KNOT][STATE] initial snapshot looms=2 knots=5 profiles=1 queue=0
 [2026-10-01T10:16:00+10:00] [KNOT][STATE] change knot build-loom/watchdog: status processing→completed tie-off=/x/rig/tie-offs/watchdog.md event-at=2026-10-01T10:16:00+10:00
+[2026-10-01T10:20:00+10:00] [KNOT][STATE] change knot planning-loom/planner: status idle→processing strand=/x/rig/tie-offs/planning-loom/ReviewDone/event-7.md event-at=2026-10-01T10:19:59+10:00
+[2026-10-01T10:20:30+10:00] [KNOT][STATE] change knot build-loom/coder: status completed→processing strand=/x/rig/tie-offs/build-loom/ReviewDone/event-7.md event-at=2026-10-01T10:20:29+10:00
+[2026-10-01T10:21:00+10:00] [KNOT][STATE] change knot planning-loom/planner: status processing→completed tie-off=/x/rig/tie-offs/planner.md event-at=2026-10-01T10:21:00+10:00
+[2026-10-01T10:22:00+10:00] [KNOT][STATE] change knot build-loom/coder: status processing→completed tie-off=/x/rig/tie-offs/coder.md event-at=2026-10-01T10:22:00+10:00
+[2026-10-01T10:23:00+10:00] [KNOT][STATE] change knot planning-loom/planner: status completed→processing strand=/x/project/briefs/brief.md event-at=2026-10-01T10:22:59+10:00
+[2026-10-01T10:24:00+10:00] [KNOT][STATE] change knot planning-loom/planner: status processing→completed tie-off=/x/rig/tie-offs/planner.md event-at=2026-10-01T10:24:00+10:00
+[2026-10-01T10:25:00+10:00] [KNOT][STATE] change knot planning-loom/scout: status completed→processing strand=/x/rig/tie-offs/planning-loom/PlanReady/event-2.md event-at=2026-10-01T10:24:59+10:00

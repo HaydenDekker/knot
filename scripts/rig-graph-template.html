@@ -34,26 +34,28 @@
   #legend .hint { color: #999; margin-top: 6px; font-size: 10px; line-height: 1.4; }
   #title { position: absolute; top: 10px; right: 14px; font-size: 13px;
            color: #666; }
-  #events-legend { position: absolute; top: 40px; right: 14px; padding: 8px 10px;
-                   font-size: 11px; background: rgba(255,255,255,.9);
-                   border: 1px solid #ccc; border-radius: 6px; width: 280px;
-                   max-height: 90vh; overflow-y: auto; display: none; }
-  #events-legend .head { display: flex; gap: 8px; margin-bottom: 2px;
-                         border-bottom: 1px solid #ddd; padding-bottom: 2px; }
-  #events-legend .head span { cursor: pointer; color: #999; }
-  #events-legend .head span.active { font-weight: 600; color: #222; }
-  #events-legend .event-row { display: flex; justify-content: space-between;
-                              gap: 8px; margin: 1px 0; }
-  #events-legend .event-row .knot { flex: 1; }
-  #events-legend .event-row .count { font-variant-numeric: tabular-nums;
-                                     color: #666; }
+  #side-panels { position: absolute; top: 40px; right: 14px; width: 300px;
+                 max-height: 90vh; overflow-y: auto; display: none;
+                 flex-direction: column; gap: 8px; }
+  #side-panels > div { background: rgba(255,255,255,.9);
+                       border: 1px solid #ccc; border-radius: 6px;
+                       padding: 8px 10px; font-size: 11px; }
+  #side-panels .head { display: flex; gap: 8px; margin-bottom: 2px;
+                       border-bottom: 1px solid #ddd; padding-bottom: 2px; }
+  #side-panels .head span { cursor: pointer; color: #999; }
+  #side-panels .head span.active { font-weight: 600; color: #222; }
+  #side-panels .event-row { display: flex; justify-content: space-between;
+                            gap: 8px; margin: 1px 0; }
+  #side-panels .event-row .knot { flex: 1; }
+  #side-panels .event-row .count { font-variant-numeric: tabular-nums;
+                                   color: #666; }
 </style>
 </head>
 <body>
 <svg id="chart"></svg>
 <div id="tooltip"></div>
 <div id="legend"></div>
-<div id="events-legend"></div>
+<div id="side-panels"><div id="events-legend"></div><div id="event-types"></div></div>
 <div id="title">rig graph</div>
 <script>
 /*__D3__*/
@@ -283,13 +285,20 @@ legend.append("div").attr("class", "hint")
   .html("checkbox: filter loom &middot; name: highlight loom<br>" +
         "click node / edge: highlight &middot; background: clear");
 
-// ---- Strand events legend: overactive-knot detector -----------------------
+// ---- Right-side panels (only when --log was given) ---------------------
+const showStrandEvents = data.strand_events && data.strand_events.length > 0;
+const showEventTypes = data.event_types && data.event_types.length > 0;
+if (showStrandEvents || showEventTypes) {
+  d3.select("#side-panels").style("display", "flex");
+}
+
+// Strand events legend: overactive-knot detector -----------------------
 // Distinct strand events delivered per knot, and total busy minutes per
-// knot (closed X→processing … processing→X sessions), from the service log
-// (--log). Rows are inert; the header labels toggle the sort (default: count
+// knot (closed X→processing … processing→X sessions), from the service
+// log. Rows are inert; the header labels toggle the sort (default: count
 // descending, so the top of the list is the busiest knot).
-if (data.strand_events && data.strand_events.length > 0) {
-  const eventsPanel = d3.select("#events-legend").style("display", "block");
+if (showStrandEvents) {
+  const eventsPanel = d3.select("#events-legend");
   let eventsSort = "count";
   const head = eventsPanel.append("div").attr("class", "head");
   const nameLabel = head.append("span").text("Knot");
@@ -331,6 +340,67 @@ if (data.strand_events && data.strand_events.length > 0) {
     renderEvents();
   });
   renderEvents();
+}
+
+// Event types legend: the communication view ---------------------------
+// Per event type (parent dir under a tie-offs tree, or the file name for
+// input files): distinct trigger filenames delivered (a fan-out event is
+// delivered as same-named copies to each consumer — counted once),
+// distinct consuming knots, and the minutes of closed sessions the type
+// caused. Rows are inert; the header labels toggle the sort (default:
+// Min descending — the communication-cost view).
+if (showEventTypes) {
+  const typesPanel = d3.select("#event-types");
+  let typesSort = "minutes";
+  const head = typesPanel.append("div").attr("class", "head");
+  const typeLabel = head.append("span").text("Type");
+  const invLabel = head.append("span").text("Inv");
+  const knotsLabel = head.append("span").text("Knots");
+  const minLabel = head.append("span").text("Min");
+  const rows = typesPanel.append("div").attr("class", "rows");
+
+  function typesSorted() {
+    const list = data.event_types.slice();
+    if (typesSort === "type") list.sort((a, b) => a.type < b.type ? -1 : 1);
+    else if (typesSort === "invocations")
+      list.sort((a, b) => b.invocations - a.invocations || (a.type < b.type ? -1 : 1));
+    else if (typesSort === "consumers")
+      list.sort((a, b) => b.consumers - a.consumers || (a.type < b.type ? -1 : 1));
+    else list.sort((a, b) => b.minutes - a.minutes || (a.type < b.type ? -1 : 1));
+    return list;
+  }
+
+  function renderTypes() {
+    typeLabel.classed("active", typesSort === "type");
+    invLabel.classed("active", typesSort === "invocations");
+    knotsLabel.classed("active", typesSort === "consumers");
+    minLabel.classed("active", typesSort === "minutes");
+    rows.html("");
+    const row = rows.selectAll("div").data(typesSorted()).enter().append("div")
+      .attr("class", "event-row");
+    row.append("span").attr("class", "knot").text((d) => d.type);
+    row.append("span").attr("class", "count").text((d) => d.invocations);
+    row.append("span").attr("class", "count").text((d) => d.consumers);
+    row.append("span").attr("class", "count").text((d) => d.minutes.toFixed(1));
+  }
+
+  typeLabel.on("click", () => {
+    typesSort = typesSort === "type" ? "minutes" : "type";
+    renderTypes();
+  });
+  invLabel.on("click", () => {
+    typesSort = typesSort === "invocations" ? "minutes" : "invocations";
+    renderTypes();
+  });
+  knotsLabel.on("click", () => {
+    typesSort = typesSort === "consumers" ? "minutes" : "consumers";
+    renderTypes();
+  });
+  minLabel.on("click", () => {
+    typesSort = typesSort === "minutes" ? "invocations" : "minutes";
+    renderTypes();
+  });
+  renderTypes();
 }
 </script>
 </body>

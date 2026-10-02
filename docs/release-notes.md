@@ -1,5 +1,31 @@
 # Release Notes
 
+## v0.58.0 — 2026-10-02
+
+### Added — Rig Graph Event Types Panel (Plan 093, Phase 10)
+
+- The rig-graph visualiser's second right-side panel — **event types**,
+  the communication view. Per event type: **Inv** (distinct trigger
+  filenames delivered — a fan-out event delivered to several knots is
+  one invocation), **Knots** (distinct consumer knots), **Min** (closed
+  processing sessions the type caused, attributed via each `→processing`
+  start record's `strand=` file). Default sort: **Min descending** —
+  the top row is the communication to optimise; re-sort by `Inv` /
+  `Knots` for the other perspectives.
+- Event type = the event dir name for rig event files (under a
+  `tie-offs/` tree, e.g. `PlanComplete` — keyed by bare name, so the
+  same event name in several looms merges); project input files are
+  their own type by file name. Same session rules as the Minutes column
+  (failed sessions count; unclosed sessions excluded; sessions never
+  span a service restart).
+- Demo rig (v0.58.0 extraction): 24 event types — `PlanReady` tops the
+  cost view (29 invocations × 2 knots = 693.3 min); `PlanComplete`
+  (18 × 3) is the top fan-out at 429.6 min.
+- `--json` now emits the `event_types` field. 44/44 tests green (new:
+  type counts, fan-out dedup, unclosed/restart exclusion at type level);
+  headless Chromium + Firefox verified (panel rendering, all sorts,
+  stacking, existing interactions intact).
+
 ## v0.57.1 — 2026-10-02
 
 ### Fixed — Minutes Billed Across Service Restarts (Plan 093, Phase 9 bugfix)

@@ -206,31 +206,65 @@ _STATE_RE = re.compile(
     r"\[KNOT\]\[STATE\] change knot (?P<ref>[^:]+): "
     r"status (?P<from>[a-z]+)→(?P<to>[a-z]+)")
 
+# The trigger file on a busy-start record: `strand=<path>`.
+_STRAND_REF_RE = re.compile(r"strand=(\S+)")
+
+
+def _event_type_of(path):
+    """Event type of a strand/trigger path.
+
+    Rig event dirs live under a `tie-offs/` tree (e.g.
+    `…/tie-offs/<rig>/<loom>/PlanComplete/event-….md`) — the type is the
+    parent dir name, whether the file is a rig-generated `event-*` file
+    or a foreign-named gate signal. Project input files (e.g.
+    `project/prds/prd-ui-views.md`) are their own trigger — the type is
+    the file name. Types are keyed by bare name (the same event name may
+    exist in several looms; the counts merge).
+    """
+    name = os.path.basename(path)
+    if "/tie-offs/" in path:
+        parent = os.path.basename(os.path.dirname(path))
+        return parent or name
+    return name
+
 
 def parse_strand_events(log_path):
-    """Count distinct strand events and total busy minutes per knot.
+    """Count strand events per knot and per event type, with busy minutes.
 
-    A strand event is a file delivered to a knot's strand dir; the service
-    log records each notification as a `[KNOT][NOTIFY]` line. A delivery
-    that notifies `Created` then `Modified` is one event, so distinct
-    (knot, strand_path) pairs are counted, not raw lines.
+    Knot rows (strand_events): a strand event is a file delivered to a
+    knot's strand dir; the service log records each notification as a
+    `[KNOT][NOTIFY]` line. A delivery that notifies `Created` then
+    `Modified` is one event, so distinct (knot, strand_path) pairs are
+    counted, not raw lines. Minutes sum a knot's closed
+    `X→processing` … `processing→X` sessions (line-leading timestamps).
 
-    Busy minutes sum a knot's closed `X→processing` … `processing→X`
-    sessions (timestamps are the line-leading ones). Unclosed sessions —
-    a knot still processing at the log tail — are excluded: the figure is
-    completed work, not a number that grows while the log grows. A busy
-    session cannot span a service restart: `initial snapshot` marks the
-    start of each run, and open sessions are dropped there (Knot is a
-    single process — a `→processing` in one run was never closed by the
-    next run's `processing→X`, and pairing them would bill the whole
-    shutdown to the knot). Knots are keyed by bare knot id (the last
-    `/`-segment of the `loom/knot` ref in STATE records).
-    Returns [{"knot", "count", "minutes"}, ...] — the union of knots with
-    events and knots with minutes — sorted by knot name.
+    Type rows (event_types): the communication view — per event type
+    (parent dir under a `tie-offs/` tree, or the file name for input
+    files): distinct trigger filenames delivered (invocations — a
+    fan-out event is delivered as same-named copies to each consumer,
+    counted once), distinct consuming knots, and the minutes of closed
+    sessions the type caused (via the start record's `strand=` file).
+
+    Session rules (both row kinds): unclosed sessions — a knot still
+    processing at the log tail — are excluded: the figure is completed
+    work, not a number that grows while the log grows. A busy session
+    cannot span a service restart: `initial snapshot` marks the start
+    of each run, and open sessions are dropped there (Knot is a single
+    process — pairing a run's open session with the next run's close
+    would bill the whole shutdown to the knot). Keys are bare knot ids
+    (the last `/`-segment of the `loom/knot` ref in STATE records). A
+    start without `strand=` is counted in knot minutes but attributed to
+    no type.
+    Returns (knot_rows, type_rows): [{"knot", "count", "minutes"}]
+    sorted by knot name, and [{"type", "invocations", "consumers",
+    "minutes"}] sorted by type name.
     """
     seen = set()
-    busy_start = {}    # knot -> datetime
-    busy_seconds = {}  # knot -> total closed-session seconds
+    busy_start = {}      # knot -> (datetime, event_type_or_None)
+    busy_seconds = {}    # knot -> total closed-session seconds
+    type_files = {}      # type -> set of delivered filenames
+    type_consumers = {}  # type -> set of knot ids
+    type_seconds = {}    # type -> total caused closed-session seconds
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             if "[KNOT][STATE] initial snapshot" in line:
@@ -238,7 +272,11 @@ def parse_strand_events(log_path):
                 continue
             m = _NOTIFY_RE.search(line)
             if m:
-                seen.add((m.group(1), m.group(2)))
+                knot, path = m.group(1), m.group(2)
+                seen.add((knot, path))
+                t = _event_type_of(path)
+                type_files.setdefault(t, set()).add(os.path.basename(path))
+                type_consumers.setdefault(t, set()).add(knot)
                 continue
             m = _STATE_RE.match(line)
             if m and "processing" in (m["from"], m["to"]):
@@ -249,20 +287,32 @@ def parse_strand_events(log_path):
                 knot = m["ref"].rsplit("/", 1)[-1]
                 if m["to"] == "processing":
                     if knot not in busy_start:  # one session per knot
-                        busy_start[knot] = ts
+                        ref = _STRAND_REF_RE.search(line)
+                        busy_start[knot] = (
+                            ts, _event_type_of(ref.group(1)) if ref else None)
                 else:  # processing -> X (completed or failed; both count)
                     start = busy_start.pop(knot, None)
                     if start is not None:
+                        t0, trigger = start
+                        dur = (ts - t0).total_seconds()
                         busy_seconds[knot] = (
-                            busy_seconds.get(knot, 0.0)
-                            + (ts - start).total_seconds())
+                            busy_seconds.get(knot, 0.0) + dur)
+                        if trigger is not None:
+                            type_seconds[trigger] = (
+                                type_seconds.get(trigger, 0.0) + dur)
     counts = {}
     for knot, _path in seen:
         counts[knot] = counts.get(knot, 0) + 1
-    return [{"knot": k,
-             "count": counts.get(k, 0),
-             "minutes": round(busy_seconds.get(k, 0.0) / 60.0, 1)}
-            for k in sorted(set(counts) | set(busy_seconds))]
+    knot_rows = [{"knot": k,
+                  "count": counts.get(k, 0),
+                  "minutes": round(busy_seconds.get(k, 0.0) / 60.0, 1)}
+                 for k in sorted(set(counts) | set(busy_seconds))]
+    type_rows = [{"type": t,
+                  "invocations": len(type_files.get(t, ())),
+                  "consumers": len(type_consumers.get(t, ())),
+                  "minutes": round(type_seconds.get(t, 0.0) / 60.0, 1)}
+                 for t in sorted(set(type_files) | set(type_seconds))]
+    return knot_rows, type_rows
 
 
 def build_system_node(graph):
@@ -328,7 +378,12 @@ def main(argv=None):
 
     overlay = {} if args.no_state else load_state_overlay(os.getcwd(), args.rig)
     graph = build_system_node(build_graph(looms, overlay))
-    graph["strand_events"] = (parse_strand_events(args.log) if args.log else [])
+    if args.log:
+        graph["strand_events"], graph["event_types"] = \
+            parse_strand_events(args.log)
+    else:
+        graph["strand_events"] = []
+        graph["event_types"] = []
 
     if args.json:
         print(json.dumps(graph, indent=2))

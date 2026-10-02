@@ -344,32 +344,37 @@ class StrandEventsTest(unittest.TestCase):
     def test_counts_per_knot_deduped(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
         self.assertEqual(rc, 0, err)
-        # scout: event-1 (Created + Modified → one event) + event-2; coder:
-        # three; planner: one. KnotModified (knot-definition change — no
-        # strand_path) and every other record kind are not strand events.
+        # scout: PlanReady event-1 (Created + Modified → one event) +
+        # event-2; coder: ReviewDone event-1/2/3 + event-7; planner:
+        # PlanReady event-3 + ReviewDone event-7 (fan-out copy) + the
+        # input file brief.md; reviewer: PlanCreated event-4. KnotModified
+        # (knot-definition change — no strand_path) and every other
+        # record kind are not strand events.
         self.assertEqual(graph["strand_events"],
-                         [{"knot": "coder", "count": 3, "minutes": 2.5},
-                          {"knot": "planner", "count": 1, "minutes": 0.0},
+                         [{"knot": "coder", "count": 4, "minutes": 4.0},
+                          {"knot": "planner", "count": 3, "minutes": 2.0},
+                          {"knot": "reviewer", "count": 1, "minutes": 0.0},
                           {"knot": "scout", "count": 2, "minutes": 2.5}])
 
     def test_minutes_closed_sessions_only(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
         self.assertEqual(rc, 0, err)
         minutes = {r["knot"]: r["minutes"] for r in graph["strand_events"]}
-        # scout: 10:01:00→10:03:30 closed (2.5); the 10:09:00 start is
-        # unclosed at the log tail → excluded.
+        # scout: 10:01:00→10:03:30 closed (2.5); the 10:25:00 start (log
+        # tail) is unclosed → excluded.
         self.assertEqual(minutes["scout"], 2.5)
         # coder: 10:02:00→10:04:00 `processing→failed` (2.0, a failed
         # session still consumed time) + 10:10:00 `completed→processing`
-        # restart → 10:10:30 (0.5) = 2.5.
-        self.assertEqual(minutes["coder"], 2.5)
+        # restart → 10:10:30 (0.5) + 10:20:30→10:22:00 (1.5) = 4.0.
+        self.assertEqual(minutes["coder"], 4.0)
 
     def test_knot_with_events_but_no_sessions_gets_zero_minutes(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
         self.assertEqual(rc, 0, err)
-        planner = [r for r in graph["strand_events"] if r["knot"] == "planner"]
-        self.assertEqual(planner, [{"knot": "planner", "count": 1,
-                                    "minutes": 0.0}])
+        reviewer = [r for r in graph["strand_events"]
+                    if r["knot"] == "reviewer"]
+        self.assertEqual(reviewer, [{"knot": "reviewer", "count": 1,
+                                     "minutes": 0.0}])
 
     def test_open_session_dropped_at_service_restart(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
@@ -384,13 +389,49 @@ class StrandEventsTest(unittest.TestCase):
         self.assertNotIn("watchdog", knots)
         # The other knots' minutes are unaffected by the restart line.
         minutes = {r["knot"]: r["minutes"] for r in graph["strand_events"]}
-        self.assertEqual(minutes, {"coder": 2.5, "planner": 0.0,
-                                   "scout": 2.5})
+        self.assertEqual(minutes, {"coder": 4.0, "planner": 2.0,
+                                   "reviewer": 0.0, "scout": 2.5})
 
-    def test_no_log_flag_yields_empty_list(self):
+    def test_event_types_counts(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        # Types: rig event dirs → parent dir name (PlanCreated, PlanReady,
+        # ReviewDone); project input files → the file name (brief.md).
+        # Invocations are distinct trigger filenames: the ReviewDone
+        # event-7 fan-out is delivered to coder AND planner under the
+        # same filename — one invocation, two consumers. Minutes are the
+        # closed sessions the type caused (via the start record's
+        # strand=): ReviewDone = coder's event-1 (2.0) + event-3 (0.5)
+        # + the fan-out sessions (planner 1.0 + coder 1.5) = 5.0.
+        self.assertEqual(graph["event_types"],
+                         [{"type": "PlanCreated", "invocations": 1,
+                           "consumers": 1, "minutes": 0.0},
+                          {"type": "PlanReady", "invocations": 3,
+                           "consumers": 2, "minutes": 2.5},
+                          {"type": "ReviewDone", "invocations": 4,
+                           "consumers": 2, "minutes": 5.0},
+                          {"type": "brief.md", "invocations": 1,
+                           "consumers": 1, "minutes": 1.0}])
+
+    def test_event_types_exclude_unclosed_and_restart_sessions(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        types = {r["type"]: r for r in graph["event_types"]}
+        # scout's unclosed session (PlanReady event-2, 10:25:00 start)
+        # bills no minutes: PlanReady is 2.5 (the closed event-1
+        # session only).
+        self.assertEqual(types["PlanReady"]["minutes"], 2.5)
+        # watchdog's restart-dropped session (ReviewDone event-2) bills
+        # no minutes: ReviewDone is exactly the four closed sessions
+        # (2.0 + 0.5 + 1.0 + 1.5).
+        self.assertEqual(types["ReviewDone"]["minutes"], 5.0)
+        self.assertEqual(types["ReviewDone"]["consumers"], 2)
+
+    def test_no_log_flag_yields_empty_lists(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"))
         self.assertEqual(rc, 0, err)
         self.assertEqual(graph["strand_events"], [])
+        self.assertEqual(graph["event_types"], [])
 
     def test_missing_log_errors(self):
         proc = subprocess.run(
@@ -412,20 +453,30 @@ class StrandEventsTest(unittest.TestCase):
         self.assertIsNotNone(m)
         data = json.loads(m.group(1))
         self.assertEqual(data["strand_events"],
-                         [{"knot": "coder", "count": 3, "minutes": 2.5},
-                          {"knot": "planner", "count": 1, "minutes": 0.0},
+                         [{"knot": "coder", "count": 4, "minutes": 4.0},
+                          {"knot": "planner", "count": 3, "minutes": 2.0},
+                          {"knot": "reviewer", "count": 1, "minutes": 0.0},
                           {"knot": "scout", "count": 2, "minutes": 2.5}])
-        # Panel markup + sort wiring; the panel renders only when data is
-        # present (runtime guard, so the static div is harmless).
+        self.assertEqual(len(data["event_types"]), 4)
+        # Panel markup + sort wiring; the panels render only when data is
+        # present (runtime guard, so the static divs are harmless).
+        self.assertIn('<div id="side-panels">', html)
         self.assertIn('<div id="events-legend"></div>', html)
+        self.assertIn('<div id="event-types"></div>', html)
         self.assertIn("data.strand_events && data.strand_events.length > 0",
+                      html)
+        self.assertIn("data.event_types && data.event_types.length > 0",
                       html)
         self.assertIn('.attr("class", "event-row")', html)
         self.assertIn("eventsSort", html)
+        self.assertIn("typesSort", html)
         self.assertIn('head.append("span").text("Knot")', html)
-        self.assertIn('head.append("span").text("Events")', html)
+        self.assertIn('head.append("span").text("Inv")', html)
+        self.assertIn('head.append("span").text("Knots")', html)
         self.assertIn('head.append("span").text("Min")', html)
         self.assertIn('eventsSort === "minutes"', html)
+        self.assertIn('typesSort === "minutes" ? "invocations" : "minutes"',
+                      html)
 
     def test_html_panel_hidden_without_log(self):
         tmp = tempfile.mkdtemp(prefix="rig-graph-events-")
@@ -438,7 +489,8 @@ class StrandEventsTest(unittest.TestCase):
             html = f.read()
         m = re.search(r"const data = (\{.*?\});\nconst svg", html, re.DOTALL)
         self.assertEqual(json.loads(m.group(1))["strand_events"], [])
-        # The runtime guard is present — the panel stays display:none.
+        self.assertEqual(json.loads(m.group(1))["event_types"], [])
+        # The runtime guard is present — the panels stay display:none.
         self.assertIn("data.strand_events && data.strand_events.length > 0",
                       html)
 

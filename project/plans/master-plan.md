@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-02 (plan 093 bugfix v0.57.1 — minutes no longer billed across service restarts: open sessions are dropped at each `initial snapshot` run marker)
+> **Last Updated:** 2026-10-02 (plan 093 phase 10 — event-types panel: invocations / consumers / minutes caused per event type, the communication view — v0.58.0)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
 > **Prior:** 2026-09-21 (plan 092 complete — static engine token `event:knot:<EventId>` for rig-scoped system events, with zero-consumer diagnostics (`[KNOT][SYSTEM]`); the rig-name form is deprecated, released in v0.50.0)
 > **Prior:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
@@ -51,7 +51,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 93 | [Rig Graph Visualiser](093-rig-graph-visualiser/rig-graph-visualiser-plan.md) | ✅ Complete (2026-10-02) — v0.51.0–v0.57.0 (phases 0–9) | 2026-10-02 |
+| 93 | [Rig Graph Visualiser](093-rig-graph-visualiser/rig-graph-visualiser-plan.md) | ✅ Complete (2026-10-02) — v0.51.0–v0.58.0 (phases 0–10) | 2026-10-02 |
 | 92 | [Static Engine Token for Rig-Scoped System Events, with Zero-Consumer Diagnostics](092-static-rig-event-token/static-rig-event-token-plan.md) | ✅ Complete (2026-09-21) — released in v0.50.0 | 2026-09-21 |
 | 91 | [Per-Event Enforcement — Re-Ask When a Tie-Off Acknowledges Only Some Expected Events](091-per-event-enforcement/per-event-enforcement-plan.md) | ✅ Complete (2026-09-20) — released in v0.49.0 | 2026-09-20 |
 | 90 | [Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry](090-concise-in-session-retry/concise-in-session-retry-plan.md) | ✅ Complete (2026-09-12) — released in v0.48.0 | 2026-09-12 |
