@@ -1,10 +1,10 @@
 ---
 name: knot-visualise
-description: "Visualise the whole-rig producer→consumer topology as a self-contained HTML file. Runs the rig graph extractor (`scripts/rig-graph.py`), which pulls the rig's knots (nodes) and strand connections (edges — `event:` subscriptions and filesystem `strand-dir`s), merges the result into a D3 HTML template, and saves it to a user-specified `--out` location. Optionally counts distinct strand events delivered per knot from the knot service log (`--log`) — the overactive-knot detector, rendered as a sortable strand-events legend. USE FOR: visualise rig, rig graph, rig visualisation, rig topology, knot graph, graph rig, show rig structure, rig map, rig diagram, knot connections, who subscribes to what, event flow diagram, rig overview, visual rig, export rig graph, rig HTML, overactive knot, knot activity counts, strand events per knot, which knot is busiest. DO NOT USE FOR: inspecting raw rig state (use knot-inspect), creating looms or knots (use knot-create), triggering knots (use knot-dispatch), analysing rig productivity (use knot-analyst)."
+description: "Visualise the whole-rig producer→consumer topology as a self-contained HTML file. Runs the rig graph extractor (`scripts/rig-graph.py`), which pulls the rig's knots (nodes) and strand connections (edges — `event:` subscriptions and filesystem `strand-dir`s), merges the result into a D3 HTML template, and saves it to a user-specified `--out` location. Optionally counts distinct strand events delivered per knot and total busy minutes per knot from the knot service log (`--log`) — the overactive-knot detector, rendered as a sortable strand-events legend. USE FOR: visualise rig, rig graph, rig visualisation, rig topology, knot graph, graph rig, show rig structure, rig map, rig diagram, knot connections, who subscribes to what, event flow diagram, rig overview, visual rig, export rig graph, rig HTML, overactive knot, knot activity counts, strand events per knot, which knot is busiest, knot processing time, busy minutes, how long a knot processed, knot took so long. DO NOT USE FOR: inspecting raw rig state (use knot-inspect), creating looms or knots (use knot-create), triggering knots (use knot-dispatch), analysing rig productivity (use knot-analyst)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.6.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -35,7 +35,7 @@ python3 scripts/rig-graph.py --out <path.html> [--rig <dir>] [--no-state] [--log
 | `--out <path.html>` | **Required** (unless `--json`). Output HTML location — **ask the user** where they want it; parent directories are created if missing. |
 | `--rig <dir>` | Rig directory, relative to CWD. Default `rig`. |
 | `--no-state` | Omit the runtime state overlay (node status / last activity). By default the overlay is applied only when `tie-offs/<rig>/state.json` exists. |
-| `--log <path>` | Knot service log to count strand events from (the `[KNOT][NOTIFY]` records — `tie-offs/<rig>/knot-service.log` by default layout). Adds the strand-events legend (overactive-knot detector). Omit for the plain topology view. |
+| `--log <path>` | Knot service log to count strand events and busy minutes from (the `[KNOT][NOTIFY]` records plus the `[KNOT][STATE]` status transitions — `tie-offs/<rig>/knot-service.log` by default layout). Adds the strand-events legend (overactive-knot detector). Omit for the plain topology view. |
 | `--json` | Print the graph JSON to stdout and skip HTML — for inspecting the graph structure without rendering. |
 
 Exit code `2` with a message on stderr when the rig dir is missing, no
@@ -51,11 +51,13 @@ looms are found, or the `--log` file does not exist.
 2. **Offer the strand-events legend.** Ask whether the user wants the
    overactive-knot view; if so, pass `--log tie-offs/<rig>/knot-service.log`
    (the log path is the user's to specify). The panel then lists every
-   knot with the number of strand events delivered to it — read it
-   top-down (default sort = most events first) to find the busy knot.
+   knot with the number of strand events delivered to it **and the total
+   minutes it spent processing** — read it top-down (default sort = most
+   events first) to find the busy knot; re-sort by `Min` to find the knot
+   that *consumes the most time* (a different kind of overactive).
 3. **Run** `python3 scripts/rig-graph.py --out <path>` from the project
-   root. Confirm the `wrote <path> (N nodes, M edges, K strand events)`
-   line.
+   root. Confirm the `wrote <path> (N nodes, M edges, K strand events,
+   T min processing)` line.
 4. **Tell the user** the path and what to expect (a force-directed graph;
    drag to rearrange, scroll to zoom, hover a node for metadata, hover an
    edge for its event name — and the interaction contract below).
@@ -74,7 +76,7 @@ looms are found, or the `--log` file does not exist.
 | Click an **edge** (wide invisible hit zone) | Highlights that edge, its two connected nodes, and its **label**. Click again or the background to clear. |
 | Hover an **edge** | Reveals its event-name label (labels are hidden by default; highlighting a node/loom/edge also reveals the highlighted edges' labels). |
 | Click the **background** | Clears any active highlight. |
-| Strand-events **header labels** (`Knot` / `Events`) | The strand-events legend (top-right; only when `--log` was given) is **sortable** — click a header label to sort by that column; the active sort is bold. Default: **Events descending** — the top row is the overactive knot. Click the other label (or the same one) to switch back. |
+| Strand-events **header labels** (`Knot` / `Events` / `Min`) | The strand-events legend (top-right; only when `--log` was given) is **sortable** — click a header label to sort by that column; the active sort is bold. Default: **Events descending** — the top row is the overactive knot. `Min` is the knot's total busy minutes (descending); the other labels switch between the sorts. |
 
 Filtering (checkboxes) and highlighting (clicks) are independent and
 compose: a filtered-out loom simply has no visible members to highlight.
@@ -128,19 +130,32 @@ given): each knot node carries `status` (`idle` / `processing` /
 
 **Strand events** (only when `--log` is given): the second legend panel
 lists each knot that received strand events, with the count of **distinct
-strand events delivered to it** during the log's span. A strand event is a
-file delivered to a knot's strand dir; the service log records each
-notification as a `[KNOT][NOTIFY]` line. Counting rules: only `Created` /
-`Modified` notifications count (a `Created` + `Modified` pair on the same
-file is **one** event); `KnotModified` (knot-definition changes) and all
-other record kinds are excluded; the log is the append-only service log,
-so the span covers its whole history across restarts. Knots with no
-deliveries are absent — the panel shows consumers, not the whole rig.
-**Read it top-down to find the overactive knot**; a knot far above the
-rest is usually the bottleneck or a subscription that is too broad.
-(Related, different thing: the `[KNOT][EVENT]` records — knot *lifecycle*
-events such as `KnotProcessing` — are the knot's own activity, not what
-landed in its strand dirs, and are not what this panel counts.)
+strand events delivered to it** during the log's span, and its **total
+busy minutes**. A strand event is a file delivered to a knot's strand
+dir; the service log records each notification as a `[KNOT][NOTIFY]`
+line. Counting rules: only `Created` / `Modified` notifications count (a
+`Created` + `Modified` pair on the same file is **one** event);
+`KnotModified` (knot-definition changes) and all other record kinds are
+excluded; the log is the append-only service log, so the span covers its
+whole history across restarts. Knots with no deliveries are absent —
+the panel shows consumers, not the whole rig.
+
+**Busy minutes** (same records' neighbours): a busy session is bracketed
+by the `[KNOT][STATE]` status transitions — any `→processing` (idle,
+completed, or a failed restart) starts one, the same knot's next
+`processing→` transition (completed or **failed** — a failed session
+still consumed time) ends it; durations come from the line-leading
+timestamps. **Unclosed sessions — a knot still processing at the log
+tail — are excluded**, so the figure is completed work; re-run the
+extraction after the session ends for a final number.
+
+**Read it two ways**: top-down by **Events** to find the knot that gets
+the most triggers (a too-broad subscription); re-sort by **Min** to find
+the knot that *consumes the most wall time* (a slow or long-running
+knot — often a completely different knot). (Related, different thing: the
+`[KNOT][EVENT]` records — knot *lifecycle* events such as `KnotProcessing`
+— are the knot's own activity, not what landed in its strand dirs, and
+are not what the Events column counts.)
 
 ---
 

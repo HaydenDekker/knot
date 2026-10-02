@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.57.0 — 2026-10-02
+
+### Added — Rig Graph Strand-Events Legend: Minutes Column (Plan 093, Phase 9)
+
+- The strand-events legend (v0.56.0) gains a **Minutes** column beside
+  the event count: each knot's **total busy time** during the log's span,
+  from the service log's line-leading RFC 3339 timestamps.
+- A busy session is bracketed by the `[KNOT][STATE]` status-change
+  records: any `→processing` (idle, completed, or failed restart) starts
+  one, the same knot's next `processing→` transition (completed **or**
+  failed) ends it. **Unclosed sessions — a knot still processing at the
+  log tail — are excluded**: the figure is completed work, not a number
+  that grows while the log grows (re-run after the session ends for a
+  final figure).
+- Sortable via the new `Min` header label (desc, name tie-break), same
+  click-to-toggle behaviour as `Knot` / `Events`; the default sort
+  (Events desc) is unchanged.
+- `knot-visualise` skill 1.5.0 → 1.6.0.
+
 ## v0.56.0 — 2026-10-02
 
 ### Added — Rig Graph Strand-Events Legend (Plan 093, Phase 8)

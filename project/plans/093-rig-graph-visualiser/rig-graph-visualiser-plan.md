@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0 (bugfix v0.55.1); phase 8 (strand-events legend / overactive-knot detector) in v0.56.0
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0 (bugfix v0.55.1); phase 8 (strand-events legend / overactive-knot detector) in v0.56.0; phase 9 (processing-minutes column) in v0.57.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -33,6 +33,11 @@
   log (`--log <path>`), sortable by knot name or event count, defaulting
   to count-descending so the top of the list is the overactive knot;
   skill 1.5.0; released in v0.56.0
+- Phase 9 (added 2026-10-02 at user request): **Minutes** column beside
+  the event count — total busy time per knot from the log's line-leading
+  timestamps, summing closed `X→processing` … `processing→X` sessions
+  (unclosed sessions excluded; failed sessions count); sortable via the
+  `Min` header label; skill 1.6.0; released in v0.57.0
 
 ### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
 

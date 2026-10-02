@@ -345,11 +345,31 @@ class StrandEventsTest(unittest.TestCase):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
         self.assertEqual(rc, 0, err)
         # scout: event-1 (Created + Modified → one event) + event-2; coder:
-        # three. KnotModified (knot-definition change — no strand_path) and
-        # every other record kind are not strand events.
+        # three; planner: one. KnotModified (knot-definition change — no
+        # strand_path) and every other record kind are not strand events.
         self.assertEqual(graph["strand_events"],
-                         [{"knot": "coder", "count": 3},
-                          {"knot": "scout", "count": 2}])
+                         [{"knot": "coder", "count": 3, "minutes": 2.5},
+                          {"knot": "planner", "count": 1, "minutes": 0.0},
+                          {"knot": "scout", "count": 2, "minutes": 2.5}])
+
+    def test_minutes_closed_sessions_only(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        minutes = {r["knot"]: r["minutes"] for r in graph["strand_events"]}
+        # scout: 10:01:00→10:03:30 closed (2.5); the 10:09:00 start is
+        # unclosed at the log tail → excluded.
+        self.assertEqual(minutes["scout"], 2.5)
+        # coder: 10:02:00→10:04:00 `processing→failed` (2.0, a failed
+        # session still consumed time) + 10:10:00 `completed→processing`
+        # restart → 10:10:30 (0.5) = 2.5.
+        self.assertEqual(minutes["coder"], 2.5)
+
+    def test_knot_with_events_but_no_sessions_gets_zero_minutes(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        planner = [r for r in graph["strand_events"] if r["knot"] == "planner"]
+        self.assertEqual(planner, [{"knot": "planner", "count": 1,
+                                    "minutes": 0.0}])
 
     def test_no_log_flag_yields_empty_list(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"))
@@ -376,8 +396,9 @@ class StrandEventsTest(unittest.TestCase):
         self.assertIsNotNone(m)
         data = json.loads(m.group(1))
         self.assertEqual(data["strand_events"],
-                         [{"knot": "coder", "count": 3},
-                          {"knot": "scout", "count": 2}])
+                         [{"knot": "coder", "count": 3, "minutes": 2.5},
+                          {"knot": "planner", "count": 1, "minutes": 0.0},
+                          {"knot": "scout", "count": 2, "minutes": 2.5}])
         # Panel markup + sort wiring; the panel renders only when data is
         # present (runtime guard, so the static div is harmless).
         self.assertIn('<div id="events-legend"></div>', html)
@@ -387,6 +408,8 @@ class StrandEventsTest(unittest.TestCase):
         self.assertIn("eventsSort", html)
         self.assertIn('head.append("span").text("Knot")', html)
         self.assertIn('head.append("span").text("Events")', html)
+        self.assertIn('head.append("span").text("Min")', html)
+        self.assertIn('eventsSort === "minutes"', html)
 
     def test_html_panel_hidden_without_log(self):
         tmp = tempfile.mkdtemp(prefix="rig-graph-events-")

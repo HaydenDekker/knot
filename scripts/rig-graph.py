@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -197,26 +198,64 @@ _NOTIFY_RE = re.compile(
     r"knot_id: KnotId\(\"([^\"]*)\"\).*"
     r"strand_path: StrandPath\(\"([^\"]*)\"\)")
 
+# A knot status change: `change knot <loom>/<knot>: status <from>→<to>`,
+# with the line-leading RFC 3339 timestamp. Any `→processing` is a busy
+# start (idle/completed/failed), any `processing→X` a busy end.
+_STATE_RE = re.compile(
+    r"^\[(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2})?)\] "
+    r"\[KNOT\]\[STATE\] change knot (?P<ref>[^:]+): "
+    r"status (?P<from>[a-z]+)→(?P<to>[a-z]+)")
+
 
 def parse_strand_events(log_path):
-    """Count distinct strand events per receiving knot from a service log.
+    """Count distinct strand events and total busy minutes per knot.
 
     A strand event is a file delivered to a knot's strand dir; the service
-    log records each notification as a `[KNOT][NOTIFY]` line. A delivery that
-    notifies `Created` then `Modified` is one event, so distinct
+    log records each notification as a `[KNOT][NOTIFY]` line. A delivery
+    that notifies `Created` then `Modified` is one event, so distinct
     (knot, strand_path) pairs are counted, not raw lines.
-    Returns [{"knot": id, "count": n}, ...] sorted by knot name.
+
+    Busy minutes sum a knot's closed `X→processing` … `processing→X`
+    sessions (timestamps are the line-leading ones). Unclosed sessions —
+    a knot still processing at the log tail — are excluded: the figure is
+    completed work, not a number that grows while the log grows. Knots are
+    keyed by bare knot id (the last `/`-segment of the `loom/knot` ref in
+    STATE records).
+    Returns [{"knot", "count", "minutes"}, ...] — the union of knots with
+    events and knots with minutes — sorted by knot name.
     """
     seen = set()
+    busy_start = {}    # knot -> datetime
+    busy_seconds = {}  # knot -> total closed-session seconds
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             m = _NOTIFY_RE.search(line)
             if m:
                 seen.add((m.group(1), m.group(2)))
+                continue
+            m = _STATE_RE.match(line)
+            if m and "processing" in (m["from"], m["to"]):
+                try:
+                    ts = datetime.datetime.fromisoformat(m["ts"])
+                except ValueError:
+                    continue
+                knot = m["ref"].rsplit("/", 1)[-1]
+                if m["to"] == "processing":
+                    if knot not in busy_start:  # one session per knot
+                        busy_start[knot] = ts
+                else:  # processing -> X (completed or failed; both count)
+                    start = busy_start.pop(knot, None)
+                    if start is not None:
+                        busy_seconds[knot] = (
+                            busy_seconds.get(knot, 0.0)
+                            + (ts - start).total_seconds())
     counts = {}
     for knot, _path in seen:
         counts[knot] = counts.get(knot, 0) + 1
-    return [{"knot": k, "count": n} for k, n in sorted(counts.items())]
+    return [{"knot": k,
+             "count": counts.get(k, 0),
+             "minutes": round(busy_seconds.get(k, 0.0) / 60.0, 1)}
+            for k in sorted(set(counts) | set(busy_seconds))]
 
 
 def build_system_node(graph):
@@ -292,9 +331,10 @@ def main(argv=None):
         os.makedirs(parent, exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(html)
-        print("wrote %s (%d nodes, %d edges, %d strand events)"
+        total_min = round(sum(e["minutes"] for e in graph["strand_events"]), 1)
+        print("wrote %s (%d nodes, %d edges, %d strand events, %s min processing)"
               % (args.out, len(graph["nodes"]), len(graph["edges"]),
-                 sum(e["count"] for e in graph["strand_events"])))
+                 sum(e["count"] for e in graph["strand_events"]), total_min))
     return 0
 
 
