@@ -114,9 +114,13 @@ log has strand events) — the overactive-knot detector:
   one, the same knot's next `processing→` transition ends it (failed
   sessions count). **Unclosed sessions — a knot still processing at the
   log tail — are excluded**: the figure is completed work, not a number
-  that grows while the log grows. Knots are keyed by the bare id (last
-  `/`-segment of the `loom/knot` ref); rows are the union of knots with
-  events and knots with minutes.
+  that grows while the log grows. **A session cannot span a service
+  restart** — the append-only log carries multiple runs (each starts
+  with an `initial snapshot` line), and pairing an open session from one
+  run with a later run's close bills the whole shutdown to the knot
+  (the v0.57.1 bug); open sessions are dropped at each run marker.
+  Knots are keyed by the bare id (last `/`-segment of the `loom/knot`
+  ref); rows are the union of knots with events and knots with minutes.
 - **Sortable**: `Knot` / `Events` / `Min` header labels toggle the sort
   (default: Events desc, name tie-break; Min desc); the active sort is
   bold. Rows are inert.

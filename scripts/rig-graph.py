@@ -218,9 +218,13 @@ def parse_strand_events(log_path):
     Busy minutes sum a knot's closed `X→processing` … `processing→X`
     sessions (timestamps are the line-leading ones). Unclosed sessions —
     a knot still processing at the log tail — are excluded: the figure is
-    completed work, not a number that grows while the log grows. Knots are
-    keyed by bare knot id (the last `/`-segment of the `loom/knot` ref in
-    STATE records).
+    completed work, not a number that grows while the log grows. A busy
+    session cannot span a service restart: `initial snapshot` marks the
+    start of each run, and open sessions are dropped there (Knot is a
+    single process — a `→processing` in one run was never closed by the
+    next run's `processing→X`, and pairing them would bill the whole
+    shutdown to the knot). Knots are keyed by bare knot id (the last
+    `/`-segment of the `loom/knot` ref in STATE records).
     Returns [{"knot", "count", "minutes"}, ...] — the union of knots with
     events and knots with minutes — sorted by knot name.
     """
@@ -229,6 +233,9 @@ def parse_strand_events(log_path):
     busy_seconds = {}  # knot -> total closed-session seconds
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:
+            if "[KNOT][STATE] initial snapshot" in line:
+                busy_start.clear()  # new service run; sessions don't span it
+                continue
             m = _NOTIFY_RE.search(line)
             if m:
                 seen.add((m.group(1), m.group(2)))

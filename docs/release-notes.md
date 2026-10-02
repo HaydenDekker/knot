@@ -1,5 +1,20 @@
 # Release Notes
 
+## v0.57.1 — 2026-10-02
+
+### Fixed — Minutes Billed Across Service Restarts (Plan 093, Phase 9 bugfix)
+
+- The strand-events legend's Minutes column paired a knot's open
+  `→processing` session with the *next* `processing→` transition — even
+  when that was in a **later service run** (the append-only log spans
+  restarts). The whole shutdown period was billed to the knot: on the
+  demo rig, `lifecycle-on-delivery` showed 5671.8 min for 24 events
+  (≈ 6 h/session) when the raw log shows 2–9-min sessions (now
+  122.2 min); the rig total corrected from 13177.9 to 3950.6 min.
+- Fix: `initial snapshot` marks the start of each service run; open
+  sessions are dropped there. A busy session lives inside one run.
+  Regression test pins the boundary behaviour.
+
 ## v0.57.0 — 2026-10-02
 
 ### Added — Rig Graph Strand-Events Legend: Minutes Column (Plan 093, Phase 9)

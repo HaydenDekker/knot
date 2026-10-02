@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-02 (plan 093 phase 9 complete — strand-events legend gains a Minutes column: total per-knot busy time from the service log's line-leading timestamps, closed `→processing` sessions only, released in v0.57.0)
+> **Last Updated:** 2026-10-02 (plan 093 bugfix v0.57.1 — minutes no longer billed across service restarts: open sessions are dropped at each `initial snapshot` run marker)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
 > **Prior:** 2026-09-21 (plan 092 complete — static engine token `event:knot:<EventId>` for rig-scoped system events, with zero-consumer diagnostics (`[KNOT][SYSTEM]`); the rig-name form is deprecated, released in v0.50.0)
 > **Prior:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)

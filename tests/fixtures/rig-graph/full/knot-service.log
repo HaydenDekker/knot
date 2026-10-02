@@ -19,3 +19,6 @@ WARNING: skipping invalid knot file /x/rig/gate-loom/README.md: knot file frontm
 [2026-10-01T10:09:00+10:00] [KNOT][STATE] change knot planning-loom/scout: status completed→processing strand=/x/project/prds/prd.md event-at=2026-10-01T10:08:59+10:00
 [2026-10-01T10:10:00+10:00] [KNOT][STATE] change knot build-loom/coder: status completed→processing strand=/x/project/src/main.rs event-at=2026-10-01T10:09:59+10:00
 [2026-10-01T10:10:30+10:00] [KNOT][STATE] change knot build-loom/coder: status processing→completed tie-off=/x/rig/tie-offs/coder.md event-at=2026-10-01T10:10:30+10:00
+[2026-10-01T10:11:00+10:00] [KNOT][STATE] change knot build-loom/watchdog: status idle→processing strand=/x/watchdog.md event-at=2026-10-01T10:10:59+10:00
+[2026-10-01T10:15:00+10:00] [KNOT][STATE] initial snapshot looms=2 knots=5 profiles=1 queue=0
+[2026-10-01T10:16:00+10:00] [KNOT][STATE] change knot build-loom/watchdog: status processing→completed tie-off=/x/rig/tie-offs/watchdog.md event-at=2026-10-01T10:16:00+10:00

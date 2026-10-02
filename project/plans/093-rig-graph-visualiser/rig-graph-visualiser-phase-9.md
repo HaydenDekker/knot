@@ -134,3 +134,33 @@ unchanged (still `[]`).
   interactions intact, zero console errors.
 - [x] Version bump 0.56.0 → 0.57.0 (Cargo.toml + release notes); plan and
   master index updated.
+
+### Bugfix (v0.57.1, 2026-10-02)
+
+**Open sessions spanned service restarts.** The per-knot state machine
+paired a `→processing` in one service run with the next `processing→X`
+in a *later* run (the append-only log carries no per-run marker in the
+session pairing), billing the whole shutdown period to the knot. Demo:
+`lifecycle-on-delivery` showed **5671.8 min for 24 events** — the raw
+log shows 23–24 short sessions of 2–9 min each, plus one start
+(`2026-09-27T19:07:51 completed→processing`) whose run ended before the
+next `initial snapshot` (`2026-10-01T15:37:26`). The phantom interval
+(≈ 5554 min across the ~4-day gap) — plus similar, smaller ones on
+other knots (total 13177.9 → **3950.6** once corrected) — came from this
+one rule. Found by the user inspecting the 24 × 5671 min figure.
+
+Fix: `[KNOT][STATE] initial snapshot` marks the start of each service
+run (one per run — 7 in the demo log); `parse_strand_events` now drops
+all open sessions at that boundary. A busy session lives inside one run.
+
+- [x] Fixture log extended: a `watchdog` open session, an `initial
+  snapshot`, then an orphaned close — pinned by
+  `test_open_session_dropped_at_service_restart` (watchdog absent;
+  other knots' minutes unchanged). 42/42 green.
+- [x] Demo regenerated: `lifecycle-on-delivery` now **122.2 min / 24
+  events** (≈ 5 min/session, matching the raw log); total 3950.6 min,
+  matches an independent ground-truth walk with the same rule (3950.7,
+  per-row rounding). Headless Chromium re-verified (32 rows, correct
+  row values, zero console errors).
+- [x] Design doc updated (sessions cannot span a restart); release notes
+  + Cargo.toml → 0.57.1.

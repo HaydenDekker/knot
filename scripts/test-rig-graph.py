@@ -371,6 +371,22 @@ class StrandEventsTest(unittest.TestCase):
         self.assertEqual(planner, [{"knot": "planner", "count": 1,
                                     "minutes": 0.0}])
 
+    def test_open_session_dropped_at_service_restart(self):
+        rc, graph, err = run_graph(os.path.join(FIXTURES, "full"), "--log", self.LOG)
+        self.assertEqual(rc, 0, err)
+        # watchdog: idle→processing at 10:11:00, then an `initial
+        # snapshot` (a new service run) at 10:15:00, then
+        # processing→completed at 10:16:00. A busy session cannot span
+        # the restart, so the open session is dropped and the close has
+        # no matching start: watchdog must not appear (0 events, 0
+        # closed minutes) — the 5-minute shutdown gap is not billed.
+        knots = [r["knot"] for r in graph["strand_events"]]
+        self.assertNotIn("watchdog", knots)
+        # The other knots' minutes are unaffected by the restart line.
+        minutes = {r["knot"]: r["minutes"] for r in graph["strand_events"]}
+        self.assertEqual(minutes, {"coder": 2.5, "planner": 0.0,
+                                   "scout": 2.5})
+
     def test_no_log_flag_yields_empty_list(self):
         rc, graph, err = run_graph(os.path.join(FIXTURES, "full"))
         self.assertEqual(rc, 0, err)
