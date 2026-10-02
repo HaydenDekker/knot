@@ -4,7 +4,7 @@ description: "Visualise the whole-rig producer→consumer topology as a self-con
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
+  version: "1.4.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -101,12 +101,18 @@ node ids become `<loom>:<knot>` (labels stay bare).
 
 Edges are labelled with the event name (or path), but labels are **hidden
 by default** — hover an edge or highlight it (edge/node/loom click) to
-reveal them. `unresolved` edges are dashed. **Dotted** edges are
-**wide-scope subscriptions**: `event:<loom>:<Event>` edges are suffixed
-`· loom` and `event:*:<Event>` edges `· all` — they mean *the target
-listens to the whole loom / everything*, so do **not** read a dotted
-arrow from knot A to knot B as "A individually sends to B"; it is the
-fan-out of B's own wide subscription.
+reveal them. `unresolved` edges are dashed red. **Dotted** (grey) edges
+are **wide-scope subscriptions** — `event:<loom>:<Event>` (loom-wide,
+no label suffix) and `event:*:<Event>` (wildcard, label suffixed
+`· all`) — meaning *the target listens to the whole loom / everything*,
+so do **not** read a dotted arrow from knot A to knot B as "A
+individually sends to B"; it is the fan-out of B's own wide
+subscription. Solid edges are knot-specific or input-dir edges.
+
+**Parallel edges arc**: when two or more edges connect the same pair of
+nodes (e.g. a bidirectional pair), they are spread into perpendicular
+arcs, one lane each — a double-headed "edge" is always two overlapping
+subscriptions that have been separated.
 
 **State overlay** (only when `state.json` exists and `--no-state` is not
 given): each knot node carries `status` (`idle` / `processing` /

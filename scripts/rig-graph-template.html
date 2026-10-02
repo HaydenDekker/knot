@@ -15,7 +15,7 @@
                 opacity: 0; }
   .edge-label.lit, .edge-label.hover { opacity: 1; font-size: 12px; fill: #222; }
   .unresolved-edge { stroke-dasharray: 4 3; }
-  .scoped-edge { stroke-dasharray: 2 3; }  /* wide loom/wildcard subscription */
+  .scoped-edge { stroke-dasharray: 2 3; }  /* loom-wide / wildcard subscription */
   #tooltip { position: absolute; display: none; max-width: 320px;
              padding: 8px 10px; font-size: 12px; line-height: 1.5;
              background: #fff; color: #222; border: 1px solid #bbb;
@@ -68,7 +68,37 @@ const color = (n) => n.kind === "knot" ? loomColor(n.loom) : kindColor[n.kind];
 
 const nodes = data.nodes, links = data.edges;
 
-const link = g.append("g").selectAll("line").data(links).join("line")
+// Parallel edges between the same node pair overlap as straight lines
+// (a bidirectional pair draws as one line with an arrowhead at each end,
+// and clicks hit whichever is topmost). Count them per unordered pair and
+// spread each into its own perpendicular arc.
+const pairCount = {};
+links.forEach((e) => {
+  const a = e.source, b = e.target;  // still string ids (pre-simulation)
+  e._pair = a < b ? a + "\u0000" + b : b + "\u0000" + a;
+  e._idx = pairCount[e._pair] || 0;
+  pairCount[e._pair]++;
+});
+function arcGeom(d) {
+  const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+  const n = pairCount[d._pair];
+  if (n === 1) {  // lone edge: straight
+    return { path: "M" + sx + "," + sy + "L" + tx + "," + ty,
+             mx: (sx + tx) / 2, my: (sy + ty) / 2 };
+  }
+  const dx = tx - sx, dy = ty - sy;
+  const len = Math.hypot(dx, dy) || 1;
+  const off = (d._idx - (n - 1) / 2) * 46;  // perpendicular spread
+  const cx = (sx + tx) / 2 - (dy / len) * off;
+  const cy = (sy + ty) / 2 + (dx / len) * off;
+  // Midpoint of the quadratic at t = 0.5 (label position).
+  return { path: "M" + sx + "," + sy + "Q" + cx + "," + cy + " " + tx + "," + ty,
+           mx: 0.25 * sx + 0.5 * cx + 0.25 * tx,
+           my: 0.25 * sy + 0.5 * cy + 0.25 * ty };
+}
+
+const link = g.append("g").selectAll("path").data(links).join("path")
+  .attr("fill", "none")
   .attr("stroke", (d) => d.unresolved ? "#c0392b" : "#999")
   .attr("stroke-opacity", 0.6)
   .attr("stroke-width", 1.5)
@@ -79,10 +109,11 @@ const link = g.append("g").selectAll("line").data(links).join("line")
 
 const linkLabel = g.append("g").selectAll("text").data(links).join("text")
   .attr("class", "edge-label").attr("text-anchor", "middle")
-  .text((d) => d.label + (d.scope ? " · " + d.scope : ""));
+  .text((d) => d.label + (d.scope === "all" ? " · all" : ""));
 
-// Wide invisible hit lines make thin edges clickable and hoverable.
-const linkHit = g.append("g").selectAll("line").data(links).join("line")
+// Wide invisible hit paths make thin edges clickable and hoverable.
+const linkHit = g.append("g").selectAll("path").data(links).join("path")
+  .attr("fill", "none")
   .attr("stroke", "transparent").attr("stroke-width", 10)
   .style("pointer-events", "stroke").style("cursor", "pointer")
   // Hover reveals the (otherwise hidden) label — identity-based lookup,
@@ -207,12 +238,10 @@ const sim = d3.forceSimulation(nodes)
   .force("center", d3.forceCenter(W() / 2, H() / 2))
   .force("collide", d3.forceCollide(34))
   .on("tick", () => {
-    link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
-        .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
-    linkHit.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
-           .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
-    linkLabel.attr("x", (d) => (d.source.x + d.target.x) / 2)
-             .attr("y", (d) => (d.source.y + d.target.y) / 2);
+    link.attr("d", (d) => arcGeom(d).path);
+    linkHit.attr("d", (d) => arcGeom(d).path);
+    linkLabel.attr("x", (d) => arcGeom(d).mx)
+             .attr("y", (d) => arcGeom(d).my);
     node.attr("transform", (d) => "translate(" + d.x + "," + d.y + ")");
   });
 

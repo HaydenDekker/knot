@@ -301,7 +301,14 @@ class HtmlGenerationTest(unittest.TestCase):
         self.assertIn('linkHit', self.html)
         self.assertIn('"mouseover"', self.html)
         self.assertIn("scoped-edge", self.html)
-        self.assertIn('d.scope ? " · " + d.scope', self.html)
+        # Loom-wide scope is carried by the dotted style alone; only the
+        # wildcard ("all") scope keeps a label suffix.
+        self.assertIn('d.scope === "all" ? " · all"', self.html)
+        # Parallel edges between a node pair are spread into perpendicular
+        # arcs (straight-line pairs would overlap and hide each other).
+        self.assertIn("pairCount", self.html)
+        self.assertIn("arcGeom", self.html)
+        self.assertIn('e._idx = pairCount[e._pair] || 0', self.html)
         # Filtering state: hidden looms hide knots and touching edges.
         self.assertIn("hiddenLooms", self.html)
         self.assertIn("knotVisible", self.html)

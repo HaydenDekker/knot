@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.55.0 — 2026-10-02
+
+### Added — Rig Graph Arced Parallel Edges + Dotted-Only Loom Marker (Plan 093, Phase 7)
+
+Bidirectional knot pairs (e.g. `lifecycle-on-delivery` ↔
+`plan-implementer`) drew two straight edges perfectly on top of each
+other — reading as one double-headed edge whose "missing" arrowhead was
+actually the *other* edge fading on click. And the `· loom` label
+suffix repeated what the dotted style already says.
+
+- **Parallel edges between a node pair are spread into perpendicular
+  arcs** (one lane each; lone edges stay straight). Clicks, hover,
+  highlighting, and filtering operate on the separated edges.
+- **The `· loom` label suffix is dropped** — the dotted style alone
+  marks a loom-wide subscription; only wildcard (`event:*:`) edges keep
+  a `· all` suffix.
+- Regenerate your visualisation to pick the changes up. `knot-visualise`
+  skill bumped to 1.4.0. No rig-document migration.
+
 ## v0.54.0 — 2026-10-02
 
 ### Added — Rig Graph Edge Labels on Hover/Highlight + Wide-Scope Marker (Plan 093, Phase 6)

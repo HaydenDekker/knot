@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 (edge labels on hover/highlight + wide-scope marker) in v0.54.0
+## Implementation Status: 🟡 In Progress — Phase 7 added 2026-10-02 (phases 0–6 complete: v0.51.0–v0.54.0, bugfix v0.52.1)
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -270,6 +270,29 @@ individually sends the event.
 - Skill docs updated (reading guide: hover/highlight reveal the event
   name; dotted = wide subscription); wiring + extractor test markers
   added; generated artefacts regenerated.
+
+### Phase 7: Arced parallel edges (added 2026-10-02)
+
+User saw an "edge with arrowheads at both ends" between
+`lifecycle-on-delivery` and `plan-implementer`, whose arrowhead at one
+end vanished when clicked. Diagnosis: two **parallel edges in opposite
+directions** (the `PlanReady` and `ImplementationNote` loom fan-outs)
+drew as straight lines between the same two points — perfectly
+overlapping, so the pair read as one double-headed edge, clicks hit
+whichever was topmost, and the loser's arrowhead faded out of view.
+
+- **Edges between a node pair with more than one edge are spread into
+  perpendicular quadratic arcs** (each edge its own lane, ~46 px apart
+  per lane); lone edges stay straight. Edges are now `path` elements
+  (lines can't arc); hit zones and labels follow the same arcs, labels
+  at the arc midpoint.
+- **Clicks, hover, highlighting, and filtering all operate on the
+  separated edges.**
+- **The redundant `· loom` label suffix is dropped** (user request):
+  the dotted style alone marks a loom-wide subscription; only the
+  wildcard scope keeps a label suffix (`· all`).
+- Skill docs updated (parallel edges arc; dotted = loom-wide, `· all` =
+  wildcard); wiring test markers added; generated artefacts regenerated.
 
 ## Notes
 
