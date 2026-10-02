@@ -1,5 +1,18 @@
 # Release Notes
 
+## v0.53.0 — 2026-10-02
+
+### Added — Rig Graph Loom Highlight Shows Feeding Nodes (Plan 093, Phase 5)
+
+Clicking a loom's name in the rig graph legend now highlights **the
+loom and everything feeding into it**: the loom's own knots, every
+incident edge, and the source node of each edge pointing at a loom knot
+(upstream one hop — knot, input, or system sources alike). Before, only
+the loom's own knots stayed lit, so the loom's inputs were visible as
+arrows but not as named nodes. Regenerate your visualisation to pick the
+change up. `knot-visualise` skill bumped to 1.2.0. No rig-document
+migration.
+
 ## v0.52.1 — 2026-10-02
 
 ### Fixed — Rig Graph Phase 4 defects (Plan 093 bugfix)

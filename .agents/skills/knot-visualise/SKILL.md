@@ -4,7 +4,7 @@ description: "Visualise the whole-rig producer→consumer topology as a self-con
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
+  version: "1.2.0"
   compatibility: "Knot 0.41.0+ (reads rig files and state.json; service need not be running)"
 ---
 
@@ -62,7 +62,7 @@ looms are found.
 | Gesture | Effect |
 |---------|--------|
 | Legend **checkbox** | **Filters** a loom — its knot nodes and every edge touching a hidden knot disappear. Input and system nodes stay. Re-check to restore. |
-| Legend **loom name** | **Highlights** the loom — its knots and every incident edge stay at full opacity, everything else fades. Click again (or the background) to clear. |
+| Legend **loom name** | **Highlights** the target loom and **all nodes feeding into it** — the loom's knots, every incident edge, and the source of each edge pointing at a loom knot (upstream one hop; knot, input, or system sources alike). Everything else fades. Click again (or the background) to clear. |
 | Click a **node** | Highlights the node, its incident edges, and its direct neighbours. Click again or the background to clear. |
 | Click an **edge** (wide invisible hit zone) | Highlights that edge and its two connected nodes. Click again or the background to clear. |
 | Click the **background** | Clears any active highlight. |

@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-02 (plan 093 bugfix v0.52.1 — Phase 4 legend rows (single `append` bound one datum) and edge-click highlighting (d3 v7 listeners take no index) fixed)
+> **Last Updated:** 2026-10-02 (plan 093 reopened — Phase 5: loom highlight includes the one-hop end node of every highlighted edge)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
 > **Prior:** 2026-09-21 (plan 092 complete — static engine token `event:knot:<EventId>` for rig-scoped system events, with zero-consumer diagnostics (`[KNOT][SYSTEM]`); the rig-name form is deprecated, released in v0.50.0)
 > **Prior:** 2026-09-12 (plan 089 complete — follow-on phases 8–13 shipped in v0.47.0: settle-based teardown, in-session continuation after a compaction, any-reason interruptions, compaction-aware inactivity window, `TurnContinued` / `RunAbandoned`)
@@ -51,7 +51,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 93 | [Rig Graph Visualiser](093-rig-graph-visualiser/rig-graph-visualiser-plan.md) | ✅ Complete (2026-10-02) — v0.51.0 + phase 4 v0.52.0, bugfix v0.52.1 | 2026-10-02 |
+| 93 | [Rig Graph Visualiser](093-rig-graph-visualiser/rig-graph-visualiser-plan.md) | 🟡 In Progress — Phase 5 | 2026-10-02 |
 | 92 | [Static Engine Token for Rig-Scoped System Events, with Zero-Consumer Diagnostics](092-static-rig-event-token/static-rig-event-token-plan.md) | ✅ Complete (2026-09-21) — released in v0.50.0 | 2026-09-21 |
 | 91 | [Per-Event Enforcement — Re-Ask When a Tie-Off Acknowledges Only Some Expected Events](091-per-event-enforcement/per-event-enforcement-plan.md) | ✅ Complete (2026-09-20) — released in v0.49.0 | 2026-09-20 |
 | 90 | [Concise In-Session Retry — Stop Re-Sending the Original Prompt on Session Re-Entry](090-concise-in-session-retry/concise-in-session-retry-plan.md) | ✅ Complete (2026-09-12) — released in v0.48.0 | 2026-09-12 |
@@ -89,7 +89,7 @@ _Overview sections for active and recently completed plans go here._
 
 ### 93. Rig Graph Visualiser
 
-**Status:** ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0, phase 4 in v0.52.0, Phase 4 defects fixed in v0.52.1
+**Status:** 🟡 In Progress — Phase 5 (one-hop end nodes in loom highlight); phases 0–4 complete (v0.51.0, v0.52.0, bugfix v0.52.1)
 **Created:** 2026-10-02
 **Completed:** 2026-10-02
 **Completed:** 2026-10-02

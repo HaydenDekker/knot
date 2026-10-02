@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 (interactive legend + click highlighting) in v0.52.0; Phase 4 defects fixed in v0.52.1
+## Implementation Status: 🟡 In Progress — Phase 5 added 2026-10-02 (phases 0–4 complete: v0.51.0, v0.52.0, bugfix v0.52.1)
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -218,6 +218,23 @@ Extend the D3 template so the graph is explorable by selection:
 - Tests: generated-HTML wiring assertions (checkbox generation, hit
   lines, highlight/filter functions, background clear) plus the existing
   suite; skill docs updated with the interaction contract and re-deployed.
+
+### Phase 5: Loom highlight includes all feeding nodes (added 2026-10-02)
+
+When a loom is highlighted (legend name click), only the loom's own knots
+stayed at full opacity; the nodes **feeding into** the loom (the sources of
+edges pointing at its knots) faded, so the loom's inputs were visible as
+arrows but not as named nodes.
+
+- **Loom highlighting now shows the target loom and all nodes feeding
+  into it**: the loom's own knots, every incident edge, and the **source
+  node of every edge whose target is a knot of the loom** (one hop
+  upstream, following edge direction backwards) — knot, input, or system
+  sources alike. No downstream targets, no further expansion.
+- Node-click and edge-click highlighting are unchanged (both already
+  include their neighbour endpoints).
+- Skill docs updated (interaction contract notes the feeding nodes);
+  wiring test marker added; generated artefacts regenerated.
 
 ## Notes
 

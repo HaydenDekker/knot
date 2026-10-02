@@ -131,11 +131,17 @@ function highlight() {
     });
     set = { nodes: ns, edges: es };
   } else if (activeLoom !== null) {
-    const ns = new Set(nodes.filter(
+    // Target loom + every node feeding into it: for each edge pointing at
+    // a loom knot, the edge's source (knot, input, or system) joins the
+    // focused set — one hop upstream, no downstream, no further expansion.
+    const loomIds = new Set(nodes.filter(
       (n) => n.kind === "knot" && n.loom === activeLoom).map((n) => n.id));
-    const es = new Set();
+    const ns = new Set(loomIds), es = new Set();
     links.forEach((e) => {
-      if (ns.has(e.source.id) || ns.has(e.target.id)) es.add(e);
+      if (loomIds.has(e.source.id) || loomIds.has(e.target.id)) {
+        es.add(e);
+        if (loomIds.has(e.target.id)) ns.add(e.source.id); // feeding node
+      }
     });
     set = { nodes: ns, edges: es };
   }

@@ -291,6 +291,8 @@ class HtmlGenerationTest(unittest.TestCase):
         # Legend rows are built with a real enter() selection — one row per
         # loom (a single append would bind only the first datum).
         self.assertIn(".data(looms).enter()", self.html)
+        # Loom highlight includes the nodes feeding into the loom.
+        self.assertIn("feeding node", self.html)
         # Filtering state: hidden looms hide knots and touching edges.
         self.assertIn("hiddenLooms", self.html)
         self.assertIn("knotVisible", self.html)
