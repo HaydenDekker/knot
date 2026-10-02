@@ -1,6 +1,6 @@
 # Plan: Rig Graph Visualiser
 
-## Implementation Status: 🟡 In Progress — Phase 7 added 2026-10-02 (phases 0–6 complete: v0.51.0–v0.54.0, bugfix v0.52.1)
+## Implementation Status: ✅ Complete (2026-10-02) — phases 0–3 in v0.51.0; phase 4 in v0.52.0 (bugfix v0.52.1); phase 5 in v0.53.0; phase 6 in v0.54.0; phase 7 (arced parallel edges + dotted-only loom marker) in v0.55.0
 
 ## Notes
 - All 4 phases (0–3) implemented and verified (33/33 Python tests green)
@@ -22,6 +22,11 @@
   subscriptions marked dotted with `· loom` / `· all` so fan-out arrows
   cannot be misread as knot-specific sends; skill 1.3.0; released in
   v0.54.0
+- Phase 7 (added 2026-10-02 at user request): parallel edges between a
+  node pair spread into perpendicular arcs (bidirectional pairs no longer
+  overlap as one double-headed edge); the `· loom` label suffix dropped
+  in favour of the dotted style alone (`· all` kept for wildcards);
+  skill 1.4.0; released in v0.55.0
 
 ### Bugfix: Phase 4 legend rows and edge-click highlighting (2026-10-02)
 
