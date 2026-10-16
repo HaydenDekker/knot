@@ -17,7 +17,9 @@ use crate::domain::entities::{
 use crate::domain::entities::EventMetadata;
 #[cfg(test)]
 use crate::domain::value_objects::StrandSource;
-use crate::domain::events::{AgentEvent, LoomEvent, StrandEvent, StrandQueueAccessor};
+use crate::domain::events::{
+    AgentEvent, LoomEvent, PromptInstructionSource, StrandEvent, StrandQueueAccessor,
+};
 use crate::domain::pending_event::{PendingEvent, PendingEventId};
 use crate::domain::knot_file::derive_tieoff_path;
 use crate::domain::value_objects::{
@@ -72,6 +74,13 @@ pub struct ProcessStrand {
     /// [`ProcessStrand::with_system_emitter`] so run outcomes and failure
     /// classes are also dispatched to subscribers.
     pub(crate) system_emitter: Option<Arc<SystemEventEmitter>>,
+    /// Per-session instruction source (the `knot-tie-off` and
+    /// `knot-event-content` skills). `None` in unit tests — the embedded
+    /// default instructions are used. Set in production via
+    /// [`ProcessStrand::with_instruction_source`]. Fetched fresh on
+    /// every context build: the skill is pulled each new session, never
+    /// cached.
+    pub(crate) instruction_source: Option<Arc<dyn PromptInstructionSource>>,
 }
 
 impl ProcessStrand {
@@ -106,6 +115,7 @@ impl ProcessStrand {
             event_dispatcher,
             strand_queue,
             system_emitter: None,
+            instruction_source: None,
         }
     }
 
@@ -117,6 +127,19 @@ impl ProcessStrand {
         emitter: Arc<SystemEventEmitter>,
     ) -> Self {
         self.system_emitter = Some(emitter);
+        self
+    }
+
+    /// Attach the per-session instruction source (the `knot-tie-off` and
+    /// `knot-event-content` skills). Returns `self` for chaining. When
+    /// unset, the embedded default instructions are used (unit tests).
+    /// The source is consulted fresh on every context build — the skill
+    /// is pulled each new session, never cached.
+    pub fn with_instruction_source(
+        mut self,
+        source: Arc<dyn PromptInstructionSource>,
+    ) -> Self {
+        self.instruction_source = Some(source);
         self
     }
 
@@ -6754,6 +6777,7 @@ mod event_enforcement_tests {
         Arc<Mutex<Vec<LoomEvent>>>,
         Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
+        Arc<Mutex<Vec<crate::domain::entities::TieOff>>>,
     ) {
         let store = LoomStore::new();
         for loom in looms {
@@ -6761,7 +6785,7 @@ mod event_enforcement_tests {
         }
 
         let (log_port, log_events) = MockLoomLogPort::new();
-        let (tie_off_sink, _, _) =
+        let (tie_off_sink, tie_off_appends, _) =
             crate::application::usecases::test_fixtures::TrackingTieOffSink::new();
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let (event_dispatcher, dispatches) = MockEventDispatcher::new();
@@ -6789,7 +6813,7 @@ mod event_enforcement_tests {
             None,
         );
 
-        (use_case, log_events, dispatches, store)
+        (use_case, log_events, dispatches, store, tie_off_appends)
     }
 
     fn ok_output_with_sid(stdout: &str, sid: &str) -> AgentOutput {
@@ -6841,7 +6865,7 @@ mod event_enforcement_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(vec![producer_loom], runner);
 
         let event = StrandEvent::Created {
@@ -6904,7 +6928,7 @@ mod event_enforcement_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -6957,7 +6981,7 @@ mod event_enforcement_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -7023,7 +7047,7 @@ mod event_enforcement_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output.clone()));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -7121,7 +7145,7 @@ mod event_enforcement_tests {
             Ok(followup_output),
         ]));
 
-        let (use_case, log_events, dispatches, _store) =
+        let (use_case, log_events, dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -7195,7 +7219,7 @@ mod event_enforcement_tests {
         };
         let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -7264,7 +7288,7 @@ mod event_enforcement_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner,
@@ -7384,7 +7408,7 @@ mod event_enforcement_tests {
             Ok(followup_output),
         ]));
 
-        let (use_case, log_events, dispatches, _store) =
+        let (use_case, log_events, dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),
@@ -7511,7 +7535,7 @@ mod event_enforcement_tests {
             Ok(followup_output),
         ]));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),
@@ -7547,6 +7571,354 @@ mod event_enforcement_tests {
                 "second entry should name the still-missing event"
             );
         }
+    }
+
+    // ── Enforcement follow-up tie-off persistence ──────────────────
+
+    /// The enforcement follow-up's response is appended as a second
+    /// section to the same tie-off file: two appends, the second carries
+    /// the follow-up content, the `event-enforcement follow-up` label,
+    /// the same session ID, and `Produced` status.
+    #[test]
+    fn process_strand_enforcement_followup_writes_second_tieoff_section() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // First call: malformed tie-off — no event block at all.
+        let first_output = AgentOutput {
+            stdout: "Plan created as noted.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        // Follow-up: supplies the missing block.
+        let followup_output = AgentOutput {
+            stdout: event_block("PlanCreated"),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, _log_events, _dispatches, _store, tie_off_appends) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(
+            appends.len(),
+            2,
+            "first section + follow-up section"
+        );
+        assert_eq!(
+            appends[0].path, appends[1].path,
+            "both sections go to the same tie-off file"
+        );
+        assert_eq!(appends[0].knot_name.as_deref(), Some("plan-creator"));
+        assert!(
+            !appends[0].event_type.as_deref().unwrap_or("")
+                .contains("follow-up"),
+            "first section keeps the plain trigger label: {:?}",
+            appends[0].event_type
+        );
+        // Second section: the follow-up turn, labelled as such.
+        assert!(
+            appends[1]
+                .content
+                .contains("event: PlanCreated"),
+            "second section carries the follow-up content: {}",
+            appends[1].content
+        );
+        assert_eq!(
+            appends[1].event_type.as_deref(),
+            Some("Created (event-enforcement follow-up)"),
+        );
+        assert_eq!(
+            appends[1].status,
+            crate::domain::entities::TieOffStatus::Produced,
+        );
+        assert_eq!(
+            appends[1].session_id.as_deref(),
+            Some("sess-test"),
+            "follow-up re-enters the same session"
+        );
+        assert_eq!(appends[1].knot_name.as_deref(), Some("plan-creator"));
+    }
+
+    /// Follow-up still short of the expected set → the second section is
+    /// still appended (the story stays complete) alongside the second
+    /// `KnotEventsMissing`.
+    #[test]
+    fn process_strand_enforcement_followup_still_partial_appends_section() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let first_output = AgentOutput {
+            stdout: "Plan created as noted.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        // Follow-up emits only an unrelated block.
+        let followup_output = AgentOutput {
+            stdout: event_block("SomethingElse"),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, log_events, _dispatches, _store, tie_off_appends) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // Second section appended despite the still-missing set.
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 2, "both turns recorded");
+        assert!(
+            appends[1].content.contains("event: SomethingElse"),
+            "second section carries the follow-up as-is: {}",
+            appends[1].content
+        );
+
+        // … and the second KnotEventsMissing is still logged.
+        let events = log_events.lock().unwrap();
+        let missing: Vec<&LoomEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .collect();
+        assert_eq!(missing.len(), 2, "two KnotEventsMissing");
+    }
+
+    /// Follow-up returns an empty response → a marker section is
+    /// appended (the second `KnotEventsMissing` is always paired with a
+    /// visible section) and the missing set is the full expected set.
+    #[test]
+    fn process_strand_enforcement_followup_empty_response_appends_marker() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        let first_output = AgentOutput {
+            stdout: "Plan created as noted.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        let followup_output = AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: Some(AgentInvocationMetadata {
+                session_id: Some("sess-test".to_string()),
+                token_usage: None,
+                compactions: vec![],
+                compaction_starts: vec![],
+                wrap_up: None,
+            }),
+        };
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(first_output),
+            Ok(followup_output),
+        ]));
+
+        let (use_case, log_events, _dispatches, _store, tie_off_appends) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(appends.len(), 2, "marker section appended");
+        assert!(
+            appends[1]
+                .content
+                .contains("(event-enforcement follow-up produced no response)"),
+            "second section is the marker: {}",
+            appends[1].content
+        );
+
+        let events = log_events.lock().unwrap();
+        let missing: Vec<&LoomEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoomEvent::KnotEventsMissing { .. }))
+            .collect();
+        assert_eq!(missing.len(), 2, "two KnotEventsMissing");
+        if let LoomEvent::KnotEventsMissing {
+            missing_events: still,
+            ..
+        } = missing[1]
+        {
+            assert_eq!(
+                still, &vec!["PlanCreated".to_string()],
+                "empty follow-up leaves everything missing"
+            );
+        }
+    }
+
+    /// No session ID → the follow-up cannot be attempted; only the first
+    /// tie-off section is written (existing behaviour preserved).
+    #[test]
+    fn process_strand_enforcement_followup_error_no_second_tieoff() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // No session ID (stdio adapter) — re-entry impossible.
+        let output = Ok(AgentOutput {
+            stdout: "Just normal output, no events.".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+
+        let (use_case, _log_events, _dispatches, _store, tie_off_appends) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner,
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        let appends = tie_off_appends.lock().unwrap();
+        assert_eq!(
+            appends.len(),
+            1,
+            "no follow-up → no second section"
+        );
     }
 
     /// `event: None` alone is a blanket acknowledgement (plan 059
@@ -7594,7 +7966,7 @@ mod event_enforcement_tests {
         };
         let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),
@@ -7665,7 +8037,7 @@ mod event_enforcement_tests {
         };
         let runner = Arc::new(MockAgentRunner::new(Ok(output)));
 
-        let (use_case, log_events, _dispatches, _store) =
+        let (use_case, log_events, _dispatches, _store, _tie_off_appends) =
             build_enforcement_strand(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),

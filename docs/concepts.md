@@ -111,12 +111,32 @@ acknowledgement.
 - The `TasksIncomplete` self-continuation entry is **never enforced** —
   it is a conditional signal, not a subscriber acknowledgement.
 
+The instructions themselves (the tie-off contract and the event-content
+guide in that block) have a **hard-coded default** compiled into the
+binary (Knot 0.59.0+) and a per-rig override: naming a file via
+`tie-off-instruction-file` / `event-content-instruction-file` in
+`.workspace-agent-config.yaml` makes its **full content** replace the
+corresponding default for that rig (local path, `~/...`, or `file://`
+URL — `http(s)` is refused). The config and the linked file are pulled
+fresh on **every new session** — never cached — so an edit takes effect
+on the next strand without a restart; a missing or unreadable link
+falls back to the hard-coded default. The `knot-template` skill (the
+Knot skills library) ships the two templates and the procedure for
+adding a project override (it copies them into `rig/knot-template/`
+and sets the links); the service never writes instruction files into
+the rig — see [configuration — rig
+structure](configuration/rig-structure.md).
+
 **Event enforcement** runs after the agent completes: if the tie-off
 does not acknowledge *every* expected event (zero blocks included),
 Knot logs a `KnotEventsMissing` — naming the full expected set and the
 missing set — and re-enters the session once, asking the agent to emit
 blocks for exactly the missing events. Follow-up events are dispatched
-normally (subject to `occurred` filtering). A follow-up that still
+normally (subject to `occurred` filtering). The follow-up's response is
+appended to the **same tie-off file** as a second section (header
+`… (event-enforcement follow-up)`), so both turns are visible in the
+tie-off document; an empty follow-up response is recorded as a short
+marker section. A follow-up that still
 leaves events unacknowledged produces a second `KnotEventsMissing`;
 processing then completes and any missing events stay missing — a
 recorded gap, not a failure.

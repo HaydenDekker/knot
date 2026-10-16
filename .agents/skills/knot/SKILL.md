@@ -1,6 +1,6 @@
 ---
 name: knot
-description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, visualising the rig graph, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, building software-factory rigs (the generic process layer), understanding Knot abstractions, and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, rig graph, rig visualisation, rig topology, knot connections, knot migration, software factory, factory rig, GProc, generic process. DO NOT USE FOR: project document lifecycle (use the project master)."
+description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, visualising the rig graph, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, building software-factory rigs (the generic process layer), understanding Knot abstractions, customising the prompt instructions (tie-off / event-content templates), and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, rig graph, rig visualisation, rig topology, knot connections, knot migration, knot template, tie-off instruction, event content instruction, software factory, factory rig, GProc, generic process. DO NOT USE FOR: project document lifecycle (use the project master)."
 ---
 
 # Knot (master)
@@ -24,6 +24,7 @@ guess a sub-skill's workflow from this index.
 | Design looms and knots: idempotency, naming, loops | `/home/hayden/.agents/skills-library/knot-design/SKILL.md` |
 | Build/design a software-factory rig: GProc layer, interfaces | `/home/hayden/.agents/skills-library/knot-software-factory/SKILL.md` |
 | Understand Knot's layered architecture and abstractions | `/home/hayden/.agents/skills-library/knot-abstractions/SKILL.md` |
+| Customise the prompt instructions (tie-off / event-content templates) | `/home/hayden/.agents/skills-library/knot-template/SKILL.md` |
 | Migrate project documents across Knot binary versions | `/home/hayden/.agents/skills-library/knot-update/SKILL.md` |
 
 ## Typical flows

@@ -298,6 +298,27 @@ pub struct RigAgentConfig {
         default = "default_inactivity_timeout_secs"
     )]
     pub inactivity_timeout_secs: u64,
+    /// Optional link for the `knot-tie-off` instruction: a file
+    /// reference (absolute path, relative to the rig directory, `~/...`,
+    /// or a `file://` URL) whose full content replaces the hard-coded
+    /// default tie-off instruction in the producer's prompt. `None` →
+    /// the hard-coded default (the `knot-template` skill's template
+    /// text). `http(s)://` is refused (local-first). Pulled fresh per
+    /// session — never cached. The `knot-template` skill is the
+    /// procedure for creating these files.
+    #[serde(
+        rename = "tie-off-instruction-file",
+        default = "default_none_string"
+    )]
+    pub tie_off_instruction_file: Option<String>,
+    /// Optional link for the `knot-event-content` instruction: same
+    /// semantics as `tie_off_instruction_file` (full replacement of the
+    /// hard-coded default event-content guide; pulled fresh per session).
+    #[serde(
+        rename = "event-content-instruction-file",
+        default = "default_none_string"
+    )]
+    pub event_content_instruction_file: Option<String>,
 }
 
 fn default_agent_adapter() -> AgentAdapter {
@@ -308,6 +329,10 @@ fn default_inactivity_timeout_secs() -> u64 {
     DEFAULT_INACTIVITY_TIMEOUT_SECS
 }
 
+fn default_none_string() -> Option<String> {
+    None
+}
+
 impl RigAgentConfig {
     /// Create a default workspace config (`agent_adapter = PiJson`,
     /// inactivity window 300s).
@@ -315,6 +340,8 @@ impl RigAgentConfig {
         Self {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: DEFAULT_INACTIVITY_TIMEOUT_SECS,
+            tie_off_instruction_file: None,
+            event_content_instruction_file: None,
         }
     }
 
@@ -1665,6 +1692,8 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 300,
+            tie_off_instruction_file: None,
+            event_content_instruction_file: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
@@ -1723,6 +1752,8 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 45,
+            tie_off_instruction_file: None,
+            event_content_instruction_file: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("inactivity-timeout-seconds: 45"));
@@ -1735,11 +1766,37 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiStdio,
             inactivity_timeout_secs: 0,
+            tie_off_instruction_file: None,
+            event_content_instruction_file: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"inactivity-timeout-seconds\":0"));
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn rig_agent_config_instruction_file_yaml_keys() {
+        // Both override keys parse (kebab-case) and round-trip.
+        let yaml = "tie-off-instruction-file: my-tieoff.md\n\
+                    event-content-instruction-file: file:///abs/path.md";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.tie_off_instruction_file.as_deref(),
+            Some("my-tieoff.md")
+        );
+        assert_eq!(
+            config.event_content_instruction_file.as_deref(),
+            Some("file:///abs/path.md")
+        );
+        let reserialized = serde_yaml::to_string(&config).unwrap();
+        assert!(reserialized.contains("tie-off-instruction-file: my-tieoff.md"));
+
+        // Absent keys → None (old config files keep working).
+        let config: RigAgentConfig =
+            serde_yaml::from_str("agent-adapter: pi-json").unwrap();
+        assert!(config.tie_off_instruction_file.is_none());
+        assert!(config.event_content_instruction_file.is_none());
     }
 
     // ── AgentProfile Tests ──────────────────────────────────────────────────
@@ -2986,6 +3043,8 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 300,
+            tie_off_instruction_file: None,
+            event_content_instruction_file: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();

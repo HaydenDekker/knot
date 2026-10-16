@@ -1,5 +1,63 @@
 # Release Notes
 
+## v0.59.0 — 2026-10-16
+
+### Fixed — Event-enforcement follow-up response now lands in the tie-off
+
+When event enforcement re-enters the session because the agent's
+tie-off did not acknowledge every subscribed event, the follow-up
+response is now appended to the **same tie-off file** as a second
+section (header `… (event-enforcement follow-up)`) — previously it was
+dispatched as events but never persisted, so the second turn was
+invisible in the tie-off document (and to any knot or agent that reads
+it). An empty follow-up response is recorded as a short marker section.
+A follow-up that **errors** appends nothing — there is no response to
+record (the second `KnotEventsMissing` log line is unchanged).
+
+### Added — `knot-template` skill + per-rig instruction links
+
+The tie-off contract and the event-content guide injected into
+producer knots' `# Subscriber Events` block now have a hard-coded
+default compiled into the binary, with a per-rig override:
+
+- **The `knot-template` skill** (Knot skills library) — a pi skill that
+  explains the instruction mechanism and ships the two templates
+  (`knot-tie-off.md`, `knot-event-content.md`). Invoking it adds a
+  per-project override: it copies the templates into
+  `rig/knot-template/` and sets the config links. The template files
+  are the **single source of truth** for the hard-coded default
+  (compiled in via `include_str!`), so the shipped default and the
+  skill's templates can never drift. The default text also fixes the
+  typos in the previous hard-coded text (`acknolowedge`, `occured`, …)
+  and the stray raw-newline line in the example block.
+- **Per-rig instruction links**: `tie-off-instruction-file` /
+  `event-content-instruction-file` in `.workspace-agent-config.yaml`
+  name a file whose **entire content** replaces the corresponding
+  hard-coded default (absolute path, relative to the rig dir, `~/...`,
+  or `file://` URL; `http(s)://` is refused with a warning). A missing
+  or unreadable file falls back to the hard-coded default, with a
+  `[KNOT][EVENT] type=CONFIG` log line. The auto-created config
+  template documents both keys (commented out).
+- **Pulled per session, never cached**: a new `PromptInstructionSource`
+  port (domain) + `FileSystemPromptInstructionSource` (adapter)
+  re-reads the config and the linked file on **every new session**, so
+  edits take effect on the next strand without a restart.
+- **No rig writes**: the service never creates instruction files in the
+  rig — invoking the `knot-template` skill (the agent) is the only
+  writer. Rigs that ran a pre-rollout 0.59.0 build may have inert
+  `rig/skills/knot-*.md` files from the abandoned seeding design —
+  safe to delete.
+- **Parser hardening**: `extract_emitted_event_ids` now anchors on the
+  subscriber list (the contiguous `- \`EventId\`` run after the marker
+  line) instead of scanning the whole block — backticked bullets inside
+  the event-content guide (or a custom file) can no longer leak in as
+  event IDs. The subscriber bullet format is unchanged.
+
+Docs: [concepts — Agent Events and
+Enforcement](concepts.md#agent-events-and-enforcement) (skill-backed
+instructions + follow-up tie-off section) and [configuration — rig
+structure](configuration/rig-structure.md) (the two new config keys).
+
 ## v0.58.0 — 2026-10-02
 
 ### Added — Rig Graph Event Types Panel (Plan 093, Phase 10)

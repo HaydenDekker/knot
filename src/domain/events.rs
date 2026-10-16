@@ -82,6 +82,26 @@ pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
     fn delete(&self, id: &crate::domain::pending_event::PendingEventId) -> bool;
 }
 
+/// Trait for reading per-session prompt instruction content (the
+/// tie-off and event-content instructions — the `knot-template` skill's
+/// templates).
+///
+/// Every call is a fresh read — the instruction is pulled each new
+/// session (never cached from startup or a previous run). A `None`
+/// result means "no per-rig link available": the caller falls back to
+/// the hard-coded embedded default
+/// ([`DEFAULT_TIE_OFF_INSTRUCTION`] /
+/// [`DEFAULT_EVENT_CONTENT_INSTRUCTION`]).
+pub trait PromptInstructionSource: Send + Sync + std::fmt::Debug {
+    /// The tie-off instruction for a new session (the file linked in the
+    /// rig config, or `None` for the hard-coded default).
+    fn read_tie_off_instruction(&self) -> Option<String>;
+
+    /// The event-content instruction for a new session (the file linked
+    /// in the rig config, or `None` for the hard-coded default).
+    fn read_event_content_instruction(&self) -> Option<String>;
+}
+
 /// Data required to build dynamic prompt context segments.
 ///
 /// Carries the knot being invoked, the loom it belongs to, all registered
@@ -109,6 +129,12 @@ pub struct BuildContext {
     /// note can fire, so the format must be known before it can).
     /// `None` for non-water-marked aliases (the block is unchanged).
     pub self_continuation_desc: Option<String>,
+    /// Per-session instruction source (the tie-off / event-content
+    /// instructions — the `knot-template` skill's templates). `None` when
+    /// not wired (unit tests) — the hard-coded embedded defaults are
+    /// used. Fetched fresh on every build: pulled each new session,
+    /// never cached.
+    pub instruction_source: Option<Arc<dyn PromptInstructionSource>>,
 }
 
 /// A provider that builds dynamic prompt context segments.
@@ -127,13 +153,71 @@ pub trait ContextProvider {
 
 // ── Context Injection ──────────────────────────────────────────────────────
 
+/// The default tie-off instruction (the `knot-tie-off` template).
+///
+/// Single source of the tie-off contract injected into a producer
+/// knot's prompt (`# Subscriber Events` block). The text lives in this
+/// repository at `.agents/skills/knot-template/knot-tie-off.md` — the
+/// `knot-template` skill's template, deployed alongside it to
+/// `~/.agents/skills-library/knot-template/` — and is compiled in here:
+/// this constant is the **hard-coded default**, always available.
+/// `FileSystemPromptInstructionSource` resolves the per-session text
+/// fresh (never cached; the service never writes into the rig): a
+/// per-rig link named in `.workspace-agent-config.yaml`
+/// (`tie-off-instruction-file`) wins if readable, otherwise this
+/// embedded text is injected. The `knot-template` skill is the
+/// agent-readable procedure for creating that per-rig override.
+///
+/// User-facing agent text — keep it greppable. The template file is the
+/// source of truth; edit it there.
+pub const DEFAULT_TIE_OFF_INSTRUCTION: &str =
+    include_str!("../../.agents/skills/knot-template/knot-tie-off.md");
+
+/// The default event-content instruction (the `knot-event-content`
+/// template).
+///
+/// How to fill in an event block: the `description` field, the
+/// narrative body, and the extra fields a subscriber declares in its
+/// `event_description`. Same source-of-truth / hard-coded-default /
+/// per-rig-link semantics as [`DEFAULT_TIE_OFF_INSTRUCTION`] (the link
+/// key is `event-content-instruction-file`, the template file is
+/// `knot-template/knot-event-content.md`).
+///
+/// User-facing agent text — keep it greppable. The template file is the
+/// source of truth; edit it there.
+pub const DEFAULT_EVENT_CONTENT_INSTRUCTION: &str =
+    include_str!("../../.agents/skills/knot-template/knot-event-content.md");
+
 /// Build the listener context block to inject at the start of a target
 /// knot's prompt.
 ///
+/// Delegates to [`build_listener_context_with_instructions`] with the
+/// embedded default instructions (no per-session source).
+pub fn build_listener_context(
+    knot: &Knot,
+    loom_id: &LoomId,
+    all_knots: &[Knot],
+    self_continuation_desc: Option<&str>,
+) -> String {
+    build_listener_context_with_instructions(
+        knot,
+        loom_id,
+        all_knots,
+        self_continuation_desc,
+        None,
+        None,
+    )
+}
+
+/// Same as [`build_listener_context`], but the tie-off and event-content
+/// instruction blocks are taken from `tie_off_instruction` /
+/// `event_content_instruction` when `Some` — skill content pulled fresh
+/// for this session — with the embedded defaults as the `None` fallback.
+///
 /// Scans all knots' `strand_source` entries for `EventUri` subscriptions
 /// where the current knot is the producer. Groups by `event-id` — if
-/// multiple consumers listen for the same event from the same knot,
-/// they are merged into one event block (not duplicated).
+/// multiple consumers listen for the same event from the same knot, they
+/// are merged into one event block (not duplicated).
 ///
 /// Uses the `event_description` from the first consumer knot declaring
 /// each event. When `event_description` is absent, a generic message
@@ -144,19 +228,13 @@ pub trait ContextProvider {
 ///
 /// The returned markdown is designed to be prepended to the knot's
 /// instructions before execution.
-///
-/// ## Multi-event format
-///
-/// A producer must emit **one event block per subscriber event** in its
-/// tie-off. Each block carries `event`, `occurred`, `description`, and
-/// `timestamp` (when occurred) as frontmatter. Events with `occurred: false`
-/// are not dispatched but still count as acknowledgement.
-///
-pub fn build_listener_context(
+pub fn build_listener_context_with_instructions(
     knot: &Knot,
     loom_id: &LoomId,
     all_knots: &[Knot],
     self_continuation_desc: Option<&str>,
+    tie_off_instruction: Option<&str>,
+    event_content_instruction: Option<&str>,
 ) -> String {
     use crate::domain::value_objects::StrandSource;
 
@@ -215,9 +293,6 @@ pub fn build_listener_context(
 
     let mut output = String::from(
         "# Subscriber Events\n\n\
-         You have a number of subscribers that have requested to be notified if certain events occur during this session. You\n\
-         must acknolowedge each event in the your tie-off (final response). Subscribers can't begin there work until your events are delivered to\n\
-         them via your tie-off.\n\n\
          The following event/s have been declared by subscribers:\n\n",
     );
 
@@ -228,46 +303,28 @@ pub fn build_listener_context(
         ));
     }
 
-    // Concrete example with real values
-    let first_event_id = seen_ids.keys().next().map(|s| s.as_str()).unwrap_or("EventId");
-    output.push_str(
-        "\n## Event Format\n\n\
-         Emit one ```markdown block **per subscriber event** listed above.\n\
-         Each block must have `---` frontmatter delimiters:\n\n",
-    );
-    output.push_str("```markdown\n");
-    output.push_str("---\n");
-    output.push_str(&format!("event: {}\n", first_event_id));
-    output.push_str("occurred: true\n");
-    output.push_str("description: Short summary of what happened\n");
-    output.push_str("timestamp: 2026-08-06T14:30:00\n");
-    output.push_str("
-         <optional fields if specified in the event description above>\n");
+    // Skill-sourced instruction blocks (pulled fresh per session by the
+    // application layer and passed in): the tie-off contract and the
+    // event-content guide. `None` → the embedded default (the same text
+    // the default skill file is seeded with).
+    let tie_off_instruction = tie_off_instruction
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| DEFAULT_TIE_OFF_INSTRUCTION.to_string());
+    let event_content_instruction = event_content_instruction
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| DEFAULT_EVENT_CONTENT_INSTRUCTION.to_string());
 
+    output.push('\n');
+    output.push_str(&tie_off_instruction);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push('\n');
+    output.push_str(&event_content_instruction);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
     output.push_str("---\n\n");
-    output.push_str("Freeform narrative context about the event.\n");
-    output.push_str("```\n");
-
-    output.push_str(
-        "\n## Rules\n\n\
-         - Emit exactly one event block per subscriber event listed above.\n\
-         - The `event` and `occurred` fields are required in every block.\n\
-         - The `description` field must explain why the event was or wasn't\n\
-           triggered, plus any additional requested information.\n\
-         - When `occurred: true`, include the `timestamp` field and any\n\
-           additional fields specified in the event description above.\n\
-         - When `occurred: false`, the event is not dispatched but still\n\
-           counts as acknowledgement.\n\
-         - Mentioning an event in narrative text is not an acknowledgement —\n\
-           only structured ```markdown event blocks are parsed. Emit a block\n\
-           for every event listed above, even when `occurred: false`.\n\
-         - If a pendening event satisfies the event that has just occured set occured: false to avoid duplicated events.\n\
-         - You may conclude a pending event is already relevant but requires additonal context but do not edit the pending event and instead\n\
-           emit a new event of the same type with additional context.\n\
-         - Never write or read directly from `tie-offs/` files — tie-offs are managed by the infrastructure service; deliver your output as your final response and emit event blocks there.\n\n\
-         ---\n\n",
-    );
-
 
     output
 }
@@ -1129,7 +1186,7 @@ mod tests {
         let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
         assert!(
             context.contains(
-                "Never write or read directly from `tie-offs/` files"
+                "never write or read directly from `tie-offs/` files"
             ),
             "tie-off directions should forbid direct tie-offs/ access: {}",
             context
@@ -1139,6 +1196,105 @@ mod tests {
             "tie-off directions should state tie-offs are infrastructure-managed: {}",
             context
         );
+    }
+
+    /// Skill-sourced instructions (pulled per session) replace the
+    /// embedded defaults block-for-block; a `None` side keeps its
+    /// default.
+    #[test]
+    fn listener_context_with_instructions_uses_supplied_text() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &[consumer],
+            None,
+            Some("CUSTOM TIE-OFF INSTRUCTION"),
+            Some("CUSTOM EVENT-CONTENT INSTRUCTION"),
+        );
+        assert!(
+            context.contains("CUSTOM TIE-OFF INSTRUCTION"),
+            "custom tie-off instruction must be injected: {}",
+            context
+        );
+        assert!(
+            context.contains("CUSTOM EVENT-CONTENT INSTRUCTION"),
+            "custom event-content instruction must be injected: {}",
+            context
+        );
+        assert!(
+            !context.contains("## Tie-Off Contract"),
+            "default tie-off block must be replaced, not appended: {}",
+            context
+        );
+        assert!(
+            !context.contains("## Event Content Guide"),
+            "default event-content block must be replaced, not appended: {}",
+            context
+        );
+        // The subscriber bullets are untouched.
+        assert!(context.contains("# Subscriber Events"));
+        assert!(context.contains("`PlanCreated`"));
+    }
+
+    /// `None` on either side falls back to that side's embedded default
+    /// (typos fixed relative to the old hard-coded text).
+    #[test]
+    fn listener_context_with_instructions_none_uses_defaults() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &[consumer],
+            None,
+            None,
+            None,
+        );
+        assert!(context.contains("## Tie-Off Contract"));
+        assert!(context.contains("## Event Content Guide"));
+        assert!(context.contains("acknowledge each event"));
+        assert!(!context.contains("acknolowedge"));
+    }
+
+    /// The wrapper (source-less entry point) is byte-identical to the
+    /// with-instructions variant on `None`/`None`.
+    #[test]
+    fn listener_context_wrapper_matches_none_none_variant() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let knots = [consumer];
+        let via_wrapper = build_listener_context(
+            &producer,
+            &default_loom_id(),
+            &knots,
+            None,
+        );
+        let via_variant = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &knots,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(via_wrapper, via_variant);
     }
 
     /// Consumers for a different producer knot do not affect output.
@@ -2809,6 +2965,7 @@ mod tests {
             rig_dir: rig_dir.clone(),
             strand_queue: None,
         self_continuation_desc: None,
+        instruction_source: None,
         };
 
         assert_eq!(ctx.knot, knot);
@@ -2831,6 +2988,7 @@ mod tests {
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
         self_continuation_desc: None,
+        instruction_source: None,
         };
 
         assert_eq!(ctx.all_knots.len(), 2);
@@ -2857,6 +3015,7 @@ mod tests {
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
         self_continuation_desc: None,
+        instruction_source: None,
         };
 
         let result = provider.build_context(&ctx);
@@ -2887,6 +3046,7 @@ mod tests {
             rig_dir: PathBuf::from("/tmp/rig"),
             strand_queue: None,
         self_continuation_desc: None,
+        instruction_source: None,
         };
 
         let combined: String = providers

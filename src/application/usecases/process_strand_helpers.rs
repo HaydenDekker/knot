@@ -322,6 +322,7 @@ pub fn resolve_config_and_build(
         rig_dir: ps.rig_dir.clone(),
         strand_queue: ps.strand_queue.clone(),
         self_continuation_desc,
+        instruction_source: ps.instruction_source.clone(),
     };
     let listener_context =
         AgentEventsContextProvider.build_context(&build_ctx);
@@ -715,6 +716,42 @@ pub fn handle_success(
 
                         match followup_result {
                             Ok(response) => {
+                                // Persist the follow-up turn: append it as
+                                // a second section to the same tie-off file
+                                // (best-effort — observability, mirroring
+                                // `write_tie_off`). Without this the
+                                // enforcement follow-up is visible only in
+                                // the service log; the tie-off document
+                                // shows the first malformed section only.
+                                let followup_content =
+                                    if response.trim().is_empty() {
+                                        "(event-enforcement follow-up produced no response)".to_string()
+                                    } else {
+                                        response.clone()
+                                    };
+                                let followup_tie_off = TieOff {
+                                    content: followup_content,
+                                    path: tie_off_path.clone(),
+                                    status: crate::domain::entities::TieOffStatus::Produced,
+                                    knot_name: Some(knot.id.0.clone()),
+                                    event_type: Some(format!(
+                                        "{event_label} (event-enforcement follow-up)"
+                                    )),
+                                    strand_path: Some(
+                                        strand_path.0.display().to_string(),
+                                    ),
+                                    timestamp: None,
+                                    agent_events: Vec::new(),
+                                    event_metadata: extract_event_metadata(
+                                        strand_path,
+                                    )
+                                    .unwrap_or_default(),
+                                    session_id: resolved.session_id.clone(),
+                                };
+                                let _ = ps
+                                    .tie_off_sink
+                                    .append(followup_tie_off);
+
                                 // Parse follow-up for events
                                 let followup_events =
                                     crate::domain::tieoff_parser::

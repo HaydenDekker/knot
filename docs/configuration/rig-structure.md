@@ -12,7 +12,7 @@ project's git history.
 ```
 project-root/
 ├── rig/                               ← Rig source — its own git repo (user commits)
-│   ├── .workspace-agent-config.yaml   ← Agent adapter selection
+│   ├── .workspace-agent-config.yaml   ← Agent adapter + instruction links
 │   ├── profiles/                      ← Shared agent profiles
 │   │   ├── default.md
 │   │   ├── reviewer.md
@@ -187,6 +187,31 @@ Resume](../concepts.md#session-resume)). Defaults to **300** when
 absent; `0` disables the watchdog. Both settings are loaded at
 startup — restart Knot after editing the file.
 
+**Instruction links** (Knot 0.59.0+): the tie-off contract and the
+event-content guide injected into producer knots' `# Subscriber Events`
+block have a **hard-coded default** compiled into the binary. To
+replace one (or both) for this rig, name a file in this config — the
+file's **full content** replaces the corresponding default:
+
+```yaml
+# Full file replaces the hard-coded tie-off instruction
+# (absolute path, relative to rig/, ~/..., or a file:// URL)
+tie-off-instruction-file: knot-template/knot-tie-off.md
+# Same for the event-content guide
+event-content-instruction-file: knot-template/knot-event-content.md
+```
+
+The `knot-template` skill (the Knot skills library) is the procedure
+for this: it ships the two templates and copies them into
+`rig/knot-template/` when invoked, so the links above point at
+project-owned, git-versioned files you can edit. The config and the
+linked file are re-read on **every new session** — never cached — so an
+edit takes effect on the next strand without a restart. A missing or
+unreadable file falls back to the hard-coded default (with a
+`[KNOT][EVENT] type=CONFIG` log line); `http(s)://` values are refused
+— Knot only reads local files. The service never writes instruction
+files into the rig.
+
 **`ctx-wrap-up-limit`** (Knot 0.42.0+) is a per-model-alias token count
 set in `rig/models.yml` (not in this file). It is meaningful only on
 `pi-rpc` runs: when the session's context tokens cross the limit, the
@@ -199,8 +224,9 @@ reserve-aware limit) — so the steer lands before pi would auto-compact.
 runner logs a one-shot warning).
 
 If the file does not exist, Knot creates it with sensible defaults
-(`agent-adapter: pi-json` since 0.40.0) on first boot. Existing rigs
-with an explicit `agent-adapter` keep their setting.
+(`agent-adapter: pi-json` since 0.40.0, plus commented-out examples of
+the two instruction-link keys since 0.59.0) on first boot. Existing
+rigs with an explicit `agent-adapter` keep their setting.
 
 ## Rig Switching and Sharing
 

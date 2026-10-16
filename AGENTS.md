@@ -67,10 +67,13 @@ After updating a skill at project level, deploy it:
 # Sub-skills -> production library
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-visualise knot-design knot-analyst knot-update
-              knot-abstractions knot-software-factory; do
+              knot-abstractions knot-software-factory knot-template; do
   mkdir -p ~/.agents/skills-library/$skill
   cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
+# (knot-template's whole-dir copy carries its two companion template
+#  files — knot-tie-off.md / knot-event-content.md — the source of the
+#  binary's hard-coded instruction defaults)
 # Copy non-SKILL.md files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
   cp .agents/skills/knot-init/knot-glossary.md \
@@ -86,10 +89,16 @@ cp -r .agents/skills/knot/. ~/.agents/skills/knot/
 ```bash
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-visualise knot-design knot-analyst knot-update
-              knot-abstractions knot-software-factory; do
+              knot-abstractions knot-software-factory knot-template; do
   diff .agents/skills/$skill/SKILL.md \
        ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
+done
+# knot-template's companion template files (the source of the binary's
+# hard-coded instruction defaults — verify them too)
+for f in knot-tie-off.md knot-event-content.md; do
+  diff .agents/skills/knot-template/$f ~/.agents/skills-library/knot-template/$f \
+    > /dev/null 2>&1 && echo "knot-template/$f: OK" || echo "knot-template/$f: FAILED"
 done
 diff .agents/skills/knot/SKILL.md \
      ~/.agents/skills/knot/SKILL.md > /dev/null 2>&1 && \
@@ -131,6 +140,11 @@ production location (see Skill Installation above).
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
+- **knot-template** — Customise the prompt instructions (tie-off /
+  event-content): ships the two templates (the source of the binary's
+  hard-coded default) and the procedure to add a per-project override
+  (`rig/knot-template/` + the config links in
+  `rig/.workspace-agent-config.yaml`)
 - **knot-visualise** — Render the whole-rig producer→consumer topology (knots + event/strand edges) as a self-contained D3 HTML file at a user-specified `--out` path
 - **knot-start** — Start/stop/restart the service; append and read `tie-offs/<rig>/knot-service.log`
 - **knot-create** — Create, modify, delete looms, knots, and agent profiles

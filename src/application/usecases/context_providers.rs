@@ -9,7 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::domain::entities::Knot;
-use crate::domain::events::{build_listener_context, BuildContext, StrandQueueAccessor};
+use crate::domain::events::{
+    build_listener_context_with_instructions, BuildContext,
+    StrandQueueAccessor,
+};
 use crate::domain::knot_file::derive_runtime_root;
 pub use crate::domain::events::ContextProvider;
 
@@ -52,12 +55,28 @@ impl AgentEventsContextProvider {
     /// exist but no pending events are found, returns only the emission
     /// instructions.
     fn build_full_context(&self, input: &BuildContext) -> String {
+        // Pull the per-session instructions fresh here (never cached):
+        // the skills are re-read on every new session, so user edits to
+        // the default skill files (or the configured overrides) take
+        // effect immediately. `None` (source not wired, or the source
+        // found nothing) → the embedded default instructions.
+        let tie_off_instruction = input
+            .instruction_source
+            .as_ref()
+            .and_then(|s| s.read_tie_off_instruction());
+        let event_content_instruction = input
+            .instruction_source
+            .as_ref()
+            .and_then(|s| s.read_event_content_instruction());
+
         let emission_instructions =
-            build_listener_context(
+            build_listener_context_with_instructions(
                 &input.knot,
                 &input.loom_id,
                 &input.all_knots,
                 input.self_continuation_desc.as_deref(),
+                tie_off_instruction.as_deref(),
+                event_content_instruction.as_deref(),
             );
 
         // No listeners — no injection needed at all.
@@ -278,16 +297,34 @@ fn frontmatter_get<'a>(
 /// Event IDs appear as bullet points in the format: `- \`EventId\` — ...`
 fn extract_emitted_event_ids(instructions: &str) -> HashSet<String> {
     let mut event_ids = HashSet::new();
+    let lines: Vec<&str> = instructions.lines().collect();
 
-    for line in instructions.lines() {
+    // The subscriber bullets are the contiguous run of
+    // `- \`EventId\`` lines directly after the marker line. Scanning only
+    // that run (and stopping at the first non-bullet line) keeps the
+    // parser safe against later instruction sections that happen to use
+    // backticked bullet lists (e.g. the event-content guide).
+    let Some(marker) = lines.iter().position(|l| {
+        l.contains("The following event/s have been declared by subscribers:")
+    }) else {
+        return event_ids;
+    };
+    let mut i = marker + 1;
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+    for line in &lines[i..] {
         let trimmed = line.trim();
-        // Match lines like: `- \`PlanCreated\` — description`
-        if let Some(rest) = trimmed.strip_prefix("- `") {
-            if let Some(event_id) = rest.split('`').next() {
-                if !event_id.is_empty() {
-                    event_ids.insert(event_id.to_string());
-                }
-            }
+        // Match lines like: `- \`PlanCreated\` — description`. The first
+        // line that is not such a bullet ends the subscriber list.
+        let Some(rest) = trimmed.strip_prefix("- `") else {
+            break;
+        };
+        let Some(event_id) = rest.split('`').next() else {
+            break;
+        };
+        if !event_id.is_empty() {
+            event_ids.insert(event_id.to_string());
         }
     }
 
@@ -367,7 +404,107 @@ mod tests {
             rig_dir,
             strand_queue: None,
             self_continuation_desc: None,
+            instruction_source: None,
         }
+    }
+
+    /// Test double for the per-session instruction source: fixed
+    /// content, `None` to emulate "skill file missing → default".
+    #[derive(Debug, Default)]
+    struct FixedInstructions {
+        tie_off: Option<String>,
+        event_content: Option<String>,
+    }
+
+    impl crate::domain::events::PromptInstructionSource for FixedInstructions {
+        fn read_tie_off_instruction(&self) -> Option<String> {
+            self.tie_off.clone()
+        }
+        fn read_event_content_instruction(&self) -> Option<String> {
+            self.event_content.clone()
+        }
+    }
+
+    /// A wired instruction source replaces the default blocks in the
+    /// built context; a `None` side keeps its embedded default.
+    #[test]
+    fn provider_pulls_instructions_from_source_per_session() {
+        let provider = AgentEventsContextProvider;
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let mut ctx = make_build_context(
+            producer,
+            default_loom_id(),
+            vec![consumer],
+            PathBuf::from("/tmp/nonexistent"),
+        );
+        ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
+            tie_off: Some("SKILL-SOURCED TIE-OFF TEXT".to_string()),
+            event_content: None,
+        }));
+
+        let result = provider.build_context(&ctx);
+        assert!(
+            result.contains("SKILL-SOURCED TIE-OFF TEXT"),
+            "skill-sourced tie-off text must appear: {}",
+            result
+        );
+        assert!(
+            !result.contains("## Tie-Off Contract"),
+            "the default tie-off block must be replaced: {}",
+            result
+        );
+        assert!(
+            result.contains("## Event Content Guide"),
+            "the default event-content guide still applies for the None side: {}",
+            result
+        );
+
+        // "Pulled per session": a second build with a different source
+        // content reflects the new content (nothing is cached).
+        ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
+            tie_off: Some("UPDATED SKILL TEXT".to_string()),
+            event_content: None,
+        }));
+        let again = provider.build_context(&ctx);
+        assert!(again.contains("UPDATED SKILL TEXT"));
+        assert!(!again.contains("SKILL-SOURCED TIE-OFF TEXT"));
+    }
+
+    /// `extract_emitted_event_ids` parses the subscriber bullets only —
+    /// backticked bullets inside the default event-content guide (or a
+    /// custom skill file) must not leak in as event IDs.
+    #[test]
+    fn extract_emitted_event_ids_ignores_guide_bullets() {
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_build_context(
+            producer,
+            default_loom_id(),
+            vec![consumer],
+            PathBuf::from("/tmp/nonexistent"),
+        );
+        // Default instructions include the event-content guide, whose
+        // bullets use backticked field names (`description`,
+        // `timestamp`) — none of which are subscriber event IDs.
+        let instructions = crate::domain::events::build_listener_context(
+            &ctx.knot,
+            &ctx.loom_id,
+            &ctx.all_knots,
+            None,
+        );
+        let ids = extract_emitted_event_ids(&instructions);
+        assert_eq!(ids, std::collections::HashSet::from(["PlanCreated".to_string()]));
     }
 
     // Helper: create a temp rig dir with dispatched event files.

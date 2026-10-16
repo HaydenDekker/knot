@@ -3,7 +3,9 @@
 //! Wires all hexagonal layers together and manages the server lifecycle
 //! (startup, event pipeline, graceful shutdown).
 
-use crate::adapters::outbound::{DiskBackedEventQueue, FileSystemStateWriter};
+use crate::adapters::outbound::{
+    DiskBackedEventQueue, FileSystemPromptInstructionSource, FileSystemStateWriter,
+};
 use crate::adapters::pi_json::PiJsonAgentRunner;
 use crate::adapters::pi_rpc::PiRpcAgentRunner;
 use crate::adapters::pi_stdio::PiStdioAgentRunner;
@@ -12,7 +14,7 @@ use crate::application::ports::{GitVersioningPort, StateWriterPort, StrandEventQ
 use crate::domain;
 use crate::domain::entities::Loom;
 use crate::domain::knot_file::derive_runtime_root;
-use crate::domain::events::{ConfigEvent, StrandEvent};
+use crate::domain::events::{ConfigEvent, PromptInstructionSource, StrandEvent};
 use crate::adapters::outbound::event_source::WatchType;
 use crate::domain::value_objects::{AgentAdapter, RigAgentConfig};
 
@@ -73,6 +75,12 @@ pub struct AppContext {
     /// subscribed consumers. Shared by `ProcessStrand`, the config pipeline,
     /// the loom use cases, and the pipeline loop (`QueueIdle`).
     pub system_emitter: Arc<application::usecases::SystemEventEmitter>,
+    /// Per-session instruction source (the tie-off / event-content
+    /// instructions — the `knot-template` skill's templates) — a per-rig
+    /// config link wins if readable, otherwise the hard-coded embedded
+    /// default. Resolved fresh on every new session, never cached.
+    /// Shared with `ProcessStrand`.
+    pub instruction_source: Arc<dyn PromptInstructionSource>,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -345,9 +353,18 @@ pub fn build_app_context(
         ),
     );
 
+    // Per-session instruction source (the tie-off / event-content
+    // instructions): reads the rig config + the linked file fresh on
+    // every new session so user edits take effect immediately (no
+    // restart needed). Nothing is written into the rig.
+    let instruction_source: Arc<dyn PromptInstructionSource> = Arc::new(
+        FileSystemPromptInstructionSource::new(config.rig_dir.clone()),
+    );
+
     (
         AppContext {
             system_emitter,
+            instruction_source,
             store,
             loom_repo,
             loom_log_port,
@@ -483,7 +500,8 @@ pub fn build_process_strand(
             ),
             Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
         )
-        .with_system_emitter(Arc::clone(&ctx.system_emitter)),
+        .with_system_emitter(Arc::clone(&ctx.system_emitter))
+        .with_instruction_source(Arc::clone(&ctx.instruction_source)),
     )
 }
 
@@ -983,6 +1001,17 @@ pub fn run_startup(
 #   pi-rpc   — JSON command/response (RPC); the only adapter that samples
 #              session context and can steer mid-session (required for the
 #              per-model `ctx-wrap-up-limit` wrap-up feature)
+#
+# Instruction links (optional): full replacement for the tie-off /
+# event-content instructions injected into producer knots' prompts.
+# Each key names a file (absolute path, relative to this rig directory,
+# ~/..., or a file:// URL — http(s) is refused) whose full content
+# replaces the corresponding hard-coded default, pulled fresh on every
+# new session. The `knot-template` skill (the Knot skills library) is
+# the procedure for creating these files from the shipped templates.
+#
+# tie-off-instruction-file: knot-template/knot-tie-off.md
+# event-content-instruction-file: knot-template/knot-event-content.md
 #
 agent-adapter: pi-json
 "#;

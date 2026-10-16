@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.23.0"
+  version: "1.25.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,67 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### `knot-template` Skill + Per-Rig Instruction Links + Enforcement Follow-Up Tie-Off (Knot 0.59.0, 2026-10-16)
+
+**What changed:** two changes (instruction customisation + bugfix):
+
+1. **Hard-coded default + the `knot-template` skill.** The tie-off
+   contract and the event-content guide injected into producer knots'
+   `# Subscriber Events` block are compiled into the binary as the
+   hard-coded default (single source of truth: the template files
+   `.agents/skills/knot-template/knot-tie-off.md` /
+   `knot-event-content.md` in the Knot repo, via `include_str!`). The
+   new **`knot-template` skill** (deployed with the other knot
+   sub-skills to `~/.agents/skills-library/knot-template/`, routed from
+   the `knot` master) ships those templates and the procedure: invoking
+   it copies the templates into the project at
+   `rig/knot-template/` and sets the config links, so the project then
+   overrides the default with its own git-versioned files. Per-rig
+   links: `tie-off-instruction-file` / `event-content-instruction-file`
+   in `.workspace-agent-config.yaml` — absolute path, relative to the
+   rig dir, `~/...`, or `file://` URL; the linked file's **full
+   content** replaces the corresponding default. `http(s)://` is
+   refused; a missing/unreadable link falls back to the hard-coded
+   default with a `[KNOT][EVENT] type=CONFIG source=prompt-instructions`
+   service-log line. The config + linked file are pulled fresh on
+   **every new session** (never cached — no restart needed). The
+   service never writes instruction files into the rig. The default
+   text also fixes the typos in the previous hard-coded text
+   (`acknolowedge`, `occured`, …) and the stray raw-newline line in the
+   example block.
+2. **Enforcement follow-up persisted.** When event enforcement
+   re-enters the session (the tie-off did not acknowledge every
+   subscribed event), the follow-up response is now **appended to the
+   same tie-off file** as a second section (header
+   `… (event-enforcement follow-up)`) — previously it was dispatched and
+   logged but never persisted, so the second turn was invisible in the
+   tie-off document. An empty follow-up is recorded as a short marker
+   section.
+
+**Affected documents:** `.workspace-agent-config.yaml` (two new
+**optional** keys — old files parse unchanged; the auto-created template
+now documents them commented-out); new `rig/knot-template/` directory
+**only when the `knot-template` skill is invoked** (the service does not
+create it).
+
+**Migration:** **none** — no existing document format changed. Restart
+the service to pick up the new binary. Rigs that ran a pre-rollout
+0.59.0 build may have inert `rig/skills/knot-*.md` files from the
+abandoned seeding design — **safe to delete** (never read at runtime).
+Tie-off readers: a producer's tie-off file may now end with an
+additional `## … (event-enforcement follow-up)` section — the existing
+append-per-event convention is unchanged.
+
+**New service-log shapes** (observability only):
+
+```
+[KNOT][EVENT] type=CONFIG source=prompt-instructions detail=<key> ('<value>') missing or unreadable at <path> (<err>) — using the hard-coded default
+[KNOT][EVENT] type=CONFIG source=prompt-instructions detail=<key> '<value>' uses http(s) — only local paths and file:// URLs are supported; ignoring the link
+[KNOT][EVENT] type=CONFIG source=prompt-instructions detail=<key> '<value>' uses ~/ but $HOME is not set; ignoring the link
+```
 
 ---
 
