@@ -1,10 +1,10 @@
 ---
 name: knot-software-factory
-description: "Defines how to use Knot to build a software factory. The generic process (GProc) is the rig itself — the factory's workflow — and a factory rig should define a generic, technology-neutral process rather than a specific one; this skill is the blueprint for building such a rig. Covers the factory's layer model (GProc / GP / GA / SA) and the dependency rules between them, the interface abstractions (project/arch.md, project/sa.md) that bind the generic process to a chosen architecture and a specific application, the generic factory shape (concern looms, worker profiles, event backbone, completion record, orchestrator loop-break), and where technology knowledge lives so the process stays reusable across stacks and projects. USE FOR: software factory, factory rig, factory design, GProc, generic process, generic product, generic application, specific application, build a factory, factory layers, factory reusability, factory workflow. DO NOT USE FOR: writing loom/knot/profile files (use knot-create), starting or stopping the service (use knot-start), inspecting rig state (use knot-inspect), technology-stack content (use the product skills, e.g. architectures), knot-level idempotency and loop design (use knot-design)."
+description: "Defines how to use Knot to build a software factory. The generic process (GProc) is the rig itself — the factory's workflow — and a factory rig should define a generic, technology-neutral process rather than a specific one; this skill is the blueprint for building such a rig. Covers the factory's layer model (GProc / GP / GA / SA) and the dependency rules between them, the interface abstractions (project/arch.md, project/sa.md) that bind the generic process to a chosen architecture and a specific application — the arch interface must carry the **binding invariants** (the operative per-plan non-negotiables, each with a pointer for the why), not just pointers —, the generic factory shape (concern looms, worker profiles, event backbone, completion record, orchestrator loop-break), and where technology knowledge lives so the process stays reusable across stacks and projects. USE FOR: software factory, factory rig, factory design, GProc, generic process, generic product, generic application, specific application, build a factory, factory layers, factory reusability, factory workflow, binding invariants, arch.md contract. DO NOT USE FOR: writing loom/knot/profile files (use knot-create), starting or stopping the service (use knot-start), inspecting rig state (use knot-inspect), technology-stack content (use the product skills, e.g. architectures), knot-level idempotency and loop design (use knot-design)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
+  version: "1.2.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -115,10 +115,13 @@ the interfaces.
    orchestrator-agnostic and project-agnostic (per the
    `knot-abstractions` layering).
 5. **The interfaces are the only seam.** `project/arch.md` and
-   `project/sa.md` are the *ports* the process compiles against. They
-   are thin — pointers, not content — and their names are part of the
-   GProc contract: stable across projects, so one factory rig can be
-   instantiated against any project that provides them.
+   `project/sa.md` are the *ports* the process compiles against. They are
+   **thin on content** — pointers into the reference, never a restatement of
+   its stack detail — but **operative on binding**: `project/arch.md` carries
+   the per-plan non-negotiables the process must apply (see the interface
+   contract below). Their names are part of the GProc contract: stable across
+   projects, so one factory rig can be instantiated against any project that
+   provides them.
 
 **Why this holds:** each layer has one reason to change. A stack change
 touches GP/GA (and possibly the SA); a product change touches the SA and
@@ -137,8 +140,18 @@ Specifies *which architecture* the process works with:
   PWA references).
 - A **pointer to the project's full system-architecture document** (the
   SAD), where one exists — referenced, never summarised.
-- The **cross-cutting constraints** the process must respect (e.g. "the
-  architecture is fixed; new decisions go through ADR review").
+- The **binding invariants** — the operative, per-plan/per-phase
+  non-negotiables distilled from the bound reference's declarative invariants
+  (e.g. "the bound stack's component-model contract is non-negotiable for every
+  plan/phase — every standard control uses the bound stack's web components";
+  "the service port is the single host boundary; views branch on the error code,
+  never the message"). These are stated **in the interface** so a profile reads
+  them without chasing the reference, each with a pointer for the *why*. The
+  interface *binds*; it does not restate the reference's full content (the
+  taxonomy, the ADRs, the system map). A worker that needs detail follows the
+  pointer; a worker that needs to *apply* the rule reads it here.
+- The **process constraints** the process must respect (e.g. "the architecture
+  is fixed; new decisions go through ADR review").
 
 ### `project/sa.md` — the specific application
 
@@ -151,9 +164,14 @@ Specifies *what this project builds*:
 
 ### The contract
 
-- **Thin and pointer-heavy.** The interface documents name what to read;
-  they do not duplicate what is read. A worker that needs stack detail
-  follows the pointer into the GP/GA skill or the SAD.
+- **Thin on content, operative on binding.** The interface documents name what
+  to read (pointers into the GP/GA skill or the SAD — the reference's detail is
+  *never restated*) **and** carry the binding invariants — the operative
+  per-plan non-negotiables a profile must apply, each with a pointer for the
+  *why*. A worker that needs stack detail follows the pointer; a worker that
+  needs to *apply* a rule reads it in the interface. *A `project/arch.md` that
+  only points and carries no operative invariants is an incomplete interface* —
+  the binding is the document's reason to exist; the pointers are its hygiene.
 - **Stable names, evolving content.** The names are the GProc contract;
   the content changes as the project evolves.
 - **Process-neutral.** Every profile in the rig can read both
@@ -287,8 +305,12 @@ stack-specific build-and-verify step):
 ## Building a factory for a project
 
 1. **Interfaces first.** Write `project/arch.md` (which GP/GA skill,
-   pointer to the full SAD, constraints) and `project/sa.md` (what is
-   built, in the stack's terms, pointers to the requirements).
+   pointer to the full SAD, **and the binding invariants** — the operative
+   per-plan non-negotiables carried in the interface, not just pointed at) and
+   `project/sa.md` (what is built, in the stack's terms, pointers to the
+   requirements). The binding-invariants section of `arch.md` is **mandatory**:
+   a pointer with no operative invariants is an interface the process cannot
+   apply.
 2. **Confirm the product skills exist.** Reuse an existing GP/GA skill
    (e.g. `architectures`) or create one — always *external* to this
    skill.
