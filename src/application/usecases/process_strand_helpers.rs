@@ -399,6 +399,7 @@ pub fn handle_success(
     strand_path: &StrandPath,
     event_label: &str,
     event_id: Option<&PendingEventId>,
+    queue_before: &Option<std::collections::HashMap<String, usize>>,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::application::session_resume;
@@ -414,6 +415,7 @@ pub fn handle_success(
             knot,
             loom_id,
             strand_path,
+            queue_before.as_ref(),
         ) {
             let _ = ps.log_port.append(dispatch_event);
         }

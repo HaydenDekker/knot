@@ -353,6 +353,7 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             knot_id,
             strand_path,
             dispatches,
+            queue_busy,
             ..
         } => {
             let mut line = format!(
@@ -365,6 +366,12 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
                 line.push_str(&format!(
                     " dispatch={event_id}→{consumer_loom}/{consumer_knot}: {file_path}"
                 ));
+            }
+            // Plan 097 phase 4 — additive queue-busy note (per dispatched
+            // event type, entries net-gained during the session). Absent
+            // when the queue did not grow (format-stable).
+            for (event_id, gained) in queue_busy {
+                line.push_str(&format!(" queue-busy={event_id}:{gained}"));
             }
             line
         }
@@ -923,12 +930,28 @@ mod tests {
         let e = LoomEvent::EventsDispatched { loom_id: loom("prd-loom"), knot_id: knot("author"), strand_path: strand("strands/spec.md"), dispatches: vec![
             ("PlanCreated".into(), "write".into(), "docs-loom".into(), "/p/tie-offs/rig/docs-loom/spec.md".into()),
             ("PlanCreated".into(), "critique".into(), "crit-loom".into(), "/p/tie-offs/rig/crit-loom/spec.md".into()),
-        ], timestamp: ts() };
+        ], queue_busy: Vec::new(), timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
             "EventsDispatched loom=prd-loom knot=author strand=strands/spec.md \
              dispatch=PlanCreated→docs-loom/write: /p/tie-offs/rig/docs-loom/spec.md \
              dispatch=PlanCreated→crit-loom/critique: /p/tie-offs/rig/crit-loom/spec.md"
+        );
+    }
+
+    /// Plan 097 phase 4 — the additive queue-busy note: per dispatched
+    /// event type, the entries the shared queue net-gained during the
+    /// session; absent when the queue did not grow (format-stable, as
+    /// asserted by `events_dispatched_line_multiple_dispatches`).
+    #[test]
+    fn events_dispatched_line_queue_busy() {
+        let e = LoomEvent::EventsDispatched { loom_id: loom("prd-loom"), knot_id: knot("author"), strand_path: strand("strands/spec.md"), dispatches: vec![
+            ("PlanCreated".into(), "write".into(), "docs-loom".into(), "/p/tie-offs/rig/docs-loom/spec.md".into()),
+        ], queue_busy: vec![("PlanCreated".into(), 3)], timestamp: ts() };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "EventsDispatched loom=prd-loom knot=author strand=strands/spec.md \
+             dispatch=PlanCreated→docs-loom/write: /p/tie-offs/rig/docs-loom/spec.md queue-busy=PlanCreated:3"
         );
     }
 

@@ -430,6 +430,19 @@ impl ProcessStrand {
             )),
         );
 
+        // Plan 097 phase 4 — queue-busy baseline: the shared queue's
+        // per-type counts at session start. Compared at tie-off dispatch
+        // to observe queue growth during the session (passive note on
+        // the EventsDispatched log line — no bounce-back, no re-ask).
+        let queue_before: Option<std::collections::HashMap<String, usize>> =
+            self.strand_queue
+                .as_deref()
+                .map(|q| {
+                    crate::domain::pending_event::count_event_types(
+                        &q.pending_strand_paths(),
+                    )
+                });
+
         // 2. Resolve config, build prompt, execute agent, derive outcome.
         let resolved = match super::process_strand_helpers::resolve_config_and_build(
             self, knot,
@@ -573,6 +586,7 @@ impl ProcessStrand {
                     &loom_id, &knot_id, &strand_path,
                     &event_label,
                     event_id,
+                    &queue_before,
                 )
             }
             _ => {
@@ -826,6 +840,7 @@ impl ProcessStrand {
         knot: &Knot,
         loom_id: &LoomId,
         strand_path: &StrandPath,
+        queue_before: Option<&std::collections::HashMap<String, usize>>,
     ) -> Result<Option<LoomEvent>, PortError> {
         // Parse tie-off for agent events.
         // Returns a Vec of all events found (may be empty).
@@ -876,11 +891,47 @@ impl ProcessStrand {
             return Ok(None);
         }
 
+        // Plan 097 phase 4 — queue-busy observation: for each dispatched
+        // event type, did the shared queue net-gain same-type entries
+        // during the session (session start → now)? The session's own
+        // dispatched entries are not counted — they land in the queue
+        // after the session (this is the after-moment); the debounced
+        // watcher has normally not queued them yet. If it has, the note
+        // over-counts by at most the session's own dispatch count — an
+        // acceptable bias for a passive observation.
+        let queue_busy: Vec<(String, u32)> =
+            match (queue_before, &self.strand_queue) {
+                (Some(before), Some(queue)) => {
+                    let pending = queue.pending_strand_paths();
+                    let current =
+                        crate::domain::pending_event::count_event_types(&pending);
+                    let mut busy: Vec<(String, u32)> = Vec::new();
+                    let mut seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for (event_id, _, _, _) in &dispatches {
+                        if !seen.insert(event_id.clone()) {
+                            continue;
+                        }
+                        let after = current.get(event_id).copied().unwrap_or(0);
+                        let before_n = before.get(event_id).copied().unwrap_or(0);
+                        let gained = after.saturating_sub(before_n);
+                        if gained > 0 {
+                            busy
+                                .push((event_id.clone(), gained.min(u32::MAX as usize) as u32));
+                        }
+                    }
+                    busy.sort_by(|a, b| a.0.cmp(&b.0));
+                    busy
+                }
+                _ => Vec::new(),
+            };
+
         Ok(Some(LoomEvent::EventsDispatched {
             loom_id: loom_id.clone(),
             knot_id: knot.id.clone(),
             strand_path: strand_path.clone(),
             dispatches,
+            queue_busy,
             timestamp: super::types::format_timestamp(),
         }))
     }
@@ -4666,6 +4717,8 @@ mod file_existence_tests {
 #[cfg(test)]
 mod event_dispatch_tests {
     use super::*;
+    use crate::application::in_memory_event_queue::InMemoryEventQueue;
+    use crate::application::ports::StrandEventQueue;
     use crate::domain::entities::{KnotId, LoomId, PromptTemplate};
     use crate::application::ports::AgentOutput;
     use std::collections::HashMap;
@@ -6182,6 +6235,254 @@ mod event_dispatch_tests {
             has_missing,
             "KnotEventsMissing should be logged when no events are emitted"
         );
+    }
+
+    // ── Plan 097 phase 4: queue-busy observation ─────────────────
+
+    /// Seed a queue entry shaped like a dispatched event file (the
+    /// parent directory name is the event type; the file name starts
+    /// with `event-`) so `count_event_types` picks it up.
+    fn seed_queue_event(queue: &InMemoryEventQueue, n: u32, event_id: &str) {
+        queue.push(PendingEvent {
+            id: PendingEventId(format!("seed-{event_id}-{n}")),
+            kind: "Created".to_string(),
+            loom_id: "consumer-loom".to_string(),
+            knot_id: "plan-watcher".to_string(),
+            strand_path: format!(
+                "/rig/tie-offs/rig/consumer-loom/{event_id}/event-{n}.md"
+            ),
+            queued_at: "2026-10-18T10:00:00".to_string(),
+        });
+    }
+
+    /// The shared queue net-gained same-type entries during the session
+    /// (1 at session start, 3 at dispatch) → the EventsDispatched line
+    /// carries `queue-busy=PlanCreated:2`.
+    #[test]
+    fn dispatch_queue_busy_note_when_queue_grew_during_session() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+        let runner = Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })));
+        let (mut use_case, _log_events, _tie_off_appends, _content, _dispatches, store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        // Queue at dispatch time holds 3 PlanCreated entries; the
+        // session-start baseline captured 1 — two were gained during
+        // the session.
+        let queue = InMemoryEventQueue::new();
+        for n in 1..=3 {
+            seed_queue_event(&queue, n, "PlanCreated");
+        }
+        use_case.strand_queue =
+            Some(Arc::new(queue) as Arc<dyn StrandQueueAccessor>);
+
+        let producer = store
+            .get(&LoomId("producer-loom".to_string()))
+            .and_then(|loom| {
+                loom.knots
+                    .into_iter()
+                    .find(|k| k.id == KnotId("plan-creator".to_string()))
+            })
+            .expect("producer knot");
+        let before: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::from([("PlanCreated".to_string(), 1)]);
+
+        let content = concat!(
+            "Plan created.\n",
+            "\n",
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "plan: PLAN-001\n",
+            "---\n",
+            "```",
+        );
+        let event = use_case
+            .dispatch_agent_events(
+                content,
+                &producer,
+                &LoomId("producer-loom".to_string()),
+                &StrandPath(strand_path),
+                Some(&before),
+            )
+            .expect("dispatch ok")
+            .expect("an event was dispatched");
+        // The rendered log line carries the note.
+        let line = crate::adapters::service_log::render_loom_event_line(&event);
+        let LoomEvent::EventsDispatched { queue_busy, dispatches, .. } = event else {
+            panic!("expected EventsDispatched, got line: {line}");
+        };
+        assert!(!dispatches.is_empty());
+        assert_eq!(queue_busy, vec![("PlanCreated".to_string(), 2)]);
+        assert!(
+            line.contains("queue-busy=PlanCreated:2"),
+            "the EventsDispatched line must carry the queue-busy note: {line}"
+        );
+    }
+
+    /// The queue held the same count at dispatch as at session start →
+    /// no note (the line stays format-stable).
+    #[test]
+    fn dispatch_queue_busy_no_note_when_queue_did_not_grow() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+        let runner = Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })));
+        let (mut use_case, _log_events, _tie_off_appends, _content, _dispatches, store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+
+        let queue = InMemoryEventQueue::new();
+        seed_queue_event(&queue, 1, "PlanCreated");
+        use_case.strand_queue =
+            Some(Arc::new(queue) as Arc<dyn StrandQueueAccessor>);
+
+        let producer = store
+            .get(&LoomId("producer-loom".to_string()))
+            .and_then(|loom| {
+                loom.knots
+                    .into_iter()
+                    .find(|k| k.id == KnotId("plan-creator".to_string()))
+            })
+            .expect("producer knot");
+        let before: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::from([("PlanCreated".to_string(), 1)]);
+
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "```",
+        );
+        let event = use_case
+            .dispatch_agent_events(
+                content,
+                &producer,
+                &LoomId("producer-loom".to_string()),
+                &StrandPath(strand_path),
+                Some(&before),
+            )
+            .expect("dispatch ok")
+            .expect("an event was dispatched");
+        let line = crate::adapters::service_log::render_loom_event_line(&event);
+        let LoomEvent::EventsDispatched { queue_busy, .. } = event else {
+            panic!("expected EventsDispatched, got line: {line}");
+        };
+        assert!(
+            queue_busy.is_empty(),
+            "no queue-busy note when the queue did not grow: {queue_busy:?}"
+        );
+        assert!(
+            !line.contains("queue-busy"),
+            "the format-stable line must not mention queue-busy: {line}"
+        );
+    }
+
+    /// No wired queue (the fixture default) → no observation, no note,
+    /// even when a baseline was supplied.
+    #[test]
+    fn dispatch_queue_busy_no_note_without_queue() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+        let runner = Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })));
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, store) =
+            build_process_strand_with_dispatcher(vec![producer_loom, consumer_loom], runner);
+        assert!(use_case.strand_queue.is_none());
+
+        let producer = store
+            .get(&LoomId("producer-loom".to_string()))
+            .and_then(|loom| {
+                loom.knots
+                    .into_iter()
+                    .find(|k| k.id == KnotId("plan-creator".to_string()))
+            })
+            .expect("producer knot");
+        let before: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::from([("PlanCreated".to_string(), 5)]);
+
+        let content = concat!(
+            "```markdown\n",
+            "---\n",
+            "event: PlanCreated\n",
+            "occurred: true\n",
+            "---\n",
+            "```",
+        );
+        let event = use_case
+            .dispatch_agent_events(
+                content,
+                &producer,
+                &LoomId("producer-loom".to_string()),
+                &StrandPath(strand_path),
+                Some(&before),
+            )
+            .expect("dispatch ok")
+            .expect("an event was dispatched");
+        let LoomEvent::EventsDispatched { queue_busy, .. } = event else {
+            panic!("expected EventsDispatched, got {event:?}");
+        };
+        assert!(queue_busy.is_empty());
     }
 }
 

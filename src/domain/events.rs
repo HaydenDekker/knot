@@ -676,6 +676,15 @@ pub enum LoomEvent {
         /// created-file-path) quadruples dispatched. The path is absolute
         /// (the path the dispatcher returned when it created the file).
         dispatches: Vec<(String, String, String, String)>,
+        /// Queue-busy observations (plan 097 phase 4): per dispatched
+        /// event type, the number of same-type entries the shared queue
+        /// net-gained during the session ((event-id, entries-gained),
+        /// sorted by event id). Empty when the queue did not grow — the
+        /// rendered log line then stays byte-identical to the
+        /// pre-0.61.0 format. Legacy entries (pre-0.61.0 binaries)
+        /// deserialize as empty (the field is skipped in their JSON).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        queue_busy: Vec<(String, u32)>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
@@ -2164,6 +2173,56 @@ mod tests {
         assert_eq!(deserialized, event);
         // Externally tagged with the variant name.
         assert!(json.contains("ContextWrapUpSteered"));
+    }
+
+    /// Plan 097 phase 4 — `EventsDispatched` serde: the `queue_busy`
+    /// field round-trips, is omitted from JSON when empty (the log line
+    /// stays format-stable), and legacy entries (pre-0.61.0, no field in
+    /// the JSON) deserialize as empty.
+    #[test]
+    fn loom_event_events_dispatched_queue_busy_serde() {
+        let ts = "2026-06-10T12:00:00Z".to_string();
+        let event = LoomEvent::EventsDispatched {
+            loom_id: LoomId("prds".to_string()),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("strands/spec.md")),
+            dispatches: vec![(
+                "PlanCreated".to_string(),
+                "write".to_string(),
+                "docs".to_string(),
+                "/p/tie-offs/rig/docs-loom/spec.md".to_string(),
+            )],
+            queue_busy: vec![("PlanCreated".to_string(), 3)],
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: LoomEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+
+        // Empty queue_busy is omitted from the JSON (format-stable line).
+        let quiet = LoomEvent::EventsDispatched {
+            loom_id: LoomId("prds".to_string()),
+            knot_id: KnotId("review".to_string()),
+            strand_path: StrandPath(PathBuf::from("strands/spec.md")),
+            dispatches: vec![],
+            queue_busy: Vec::new(),
+            timestamp: "2026-06-10T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&quiet).unwrap();
+        assert!(!json.contains("queue_busy"));
+
+        // Legacy JSON (pre-0.61.0 — no queue_busy field) still parses:
+        // the field defaults to empty, so old activity entries survive
+        // the binary upgrade (graceful degradation, same precedent as
+        // the 3-tuple → 4-tuple dispatch expansion in 0.33.0).
+        let legacy = r#"{"EventsDispatched":{"loom_id":"prds","knot_id":"review","strand_path":"strands/spec.md","dispatches":[["PlanCreated","write","docs","/p/x.md"]],"timestamp":"2026-06-10T12:00:00Z"}}"#;
+        let deserialized: LoomEvent = serde_json::from_str(legacy).unwrap();
+        match deserialized {
+            LoomEvent::EventsDispatched { queue_busy, .. } => {
+                assert!(queue_busy.is_empty());
+            }
+            other => panic!("expected EventsDispatched, got {other:?}"),
+        }
     }
 
     #[test]
