@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.25.0"
+  version: "1.26.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,72 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Hard-Coded Tie-Off Contract + One Exposed Content Section (Knot 0.60.0, 2026-10-16)
+
+**What changed:** the over-externalisation of 0.59.0 is reined in —
+the **whole** contract is no longer overridable per rig; only the
+**content** is:
+
+1. **Hard-coded core.** The `## Tie-Off Contract`, `## Event Format`
+   (the fixed `event:` / `occurred:` / `timestamp:` block), and
+   `## Rules` (one structured block per subscriber event — always,
+   even when `occurred: false`) sections are compiled into the binary
+   (single source of truth: `.agents/skills/knot-template/knot-tie-off.md`
+   in the Knot repo, via `include_str!`) and are **always injected**
+   into the producer's prompt. A rig can no longer replace them.
+2. **One exposed content section.** The tie-off's header/narrative
+   content + the event-content guide (the `description`, body,
+   additional custom properties) is one overridable unit with a
+   hard-coded default compiled in from the new template
+   `.agents/skills/knot-template/knot-tie-off-content.md` (the
+   0.59.0 `knot-event-content.md` template is gone). A linked file's
+   **full content** replaces only this section; the core stays
+   untouched. The agent therefore always sees the canonical event
+   format + rules — the override/format-divergence risk from 0.59.0
+   is eliminated by construction.
+3. **Config keys.** `tie-off-instruction-file` and
+   `event-content-instruction-file` are **retired**: they are still
+   parsed (so a leftover key is detected) and each produces a
+   `[KNOT][EVENT] type=CONFIG source=prompt-instructions` warning per
+   new session, but neither is honoured. The one new key:
+   `tie-off-content-instruction-file` in `.workspace-agent-config.yaml`
+   — same mechanics as the 0.59.0 links (absolute path, relative to
+   the rig dir, `~/...`, or `file://` URL; `http(s)://` refused; pulled
+   fresh on every new session — never cached; missing/unreadable link →
+   hard-coded default content section + `type=CONFIG` log line; the
+   service never writes into the rig).
+
+**Affected documents:** `.workspace-agent-config.yaml` (two keys
+**retired**, one key **added** — existing files parse unchanged; the
+auto-created template now documents the new key commented-out and notes
+the retired keys).
+
+**Migration:**
+
+1. If the rig's `.workspace-agent-config.yaml` contains
+   `tie-off-instruction-file`: **remove the key** (no replacement —
+   the tie-off contract is hard-coded and can no longer be overridden
+   per rig). A 0.59.0 custom tie-off file is simply no longer read.
+2. If it contains `event-content-instruction-file`: **re-link the file
+   under `tie-off-content-instruction-file`** (same value works —
+   e.g. `event-content-instruction-file:
+   knot-template/knot-event-content.md` becomes
+   `tie-off-content-instruction-file:
+   knot-template/knot-event-content.md`). The custom file then
+   replaces the default content section; if it was only the
+   0.59.0 event-content guide, consider replacing the file's content
+   with the new `knot-tie-off-content.md` template (via the
+   `knot-template` skill) so the tie-off header content guidance
+   comes back.
+3. Rigs with a plain default (no keys) need no change.
+
+**Verify:** after removing/re-linking the keys, the next new agent
+session uses the new content section; the service log shows no
+`type=CONFIG` deprecation warnings. Restart the service to pick up
+the new binary.
 
 ---
 

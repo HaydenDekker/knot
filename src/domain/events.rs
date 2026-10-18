@@ -83,23 +83,24 @@ pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
 }
 
 /// Trait for reading per-session prompt instruction content (the
-/// tie-off and event-content instructions — the `knot-template` skill's
-/// templates).
+/// tie-off **content section** — the `knot-template` skill's content
+/// template).
+///
+/// The tie-off contract, event format, and rules
+/// ([`DEFAULT_TIE_OFF_INSTRUCTION`]) are hard-coded and never
+/// overridable; this source only ever supplies the content section
+/// (the tie-off header/narrative content + the event-content guide).
 ///
 /// Every call is a fresh read — the instruction is pulled each new
 /// session (never cached from startup or a previous run). A `None`
 /// result means "no per-rig link available": the caller falls back to
 /// the hard-coded embedded default
-/// ([`DEFAULT_TIE_OFF_INSTRUCTION`] /
-/// [`DEFAULT_EVENT_CONTENT_INSTRUCTION`]).
+/// ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]).
 pub trait PromptInstructionSource: Send + Sync + std::fmt::Debug {
-    /// The tie-off instruction for a new session (the file linked in the
-    /// rig config, or `None` for the hard-coded default).
-    fn read_tie_off_instruction(&self) -> Option<String>;
-
-    /// The event-content instruction for a new session (the file linked
-    /// in the rig config, or `None` for the hard-coded default).
-    fn read_event_content_instruction(&self) -> Option<String>;
+    /// The tie-off content-section instruction for a new session (the
+    /// file linked in the rig config, or `None` for the hard-coded
+    /// default).
+    fn read_tie_off_content_instruction(&self) -> Option<String>;
 }
 
 /// Data required to build dynamic prompt context segments.
@@ -129,11 +130,12 @@ pub struct BuildContext {
     /// note can fire, so the format must be known before it can).
     /// `None` for non-water-marked aliases (the block is unchanged).
     pub self_continuation_desc: Option<String>,
-    /// Per-session instruction source (the tie-off / event-content
-    /// instructions — the `knot-template` skill's templates). `None` when
-    /// not wired (unit tests) — the hard-coded embedded defaults are
-    /// used. Fetched fresh on every build: pulled each new session,
-    /// never cached.
+    /// Per-session instruction source (the tie-off **content section**
+    /// — the `knot-template` skill's content template). The hard-coded
+    /// core (contract / event format / rules) is never sourced. `None`
+    /// when not wired (unit tests) — the hard-coded embedded default
+    /// content section is used. Fetched fresh on every build: pulled
+    /// each new session, never cached.
     pub instruction_source: Option<Arc<dyn PromptInstructionSource>>,
 }
 
@@ -153,46 +155,59 @@ pub trait ContextProvider {
 
 // ── Context Injection ──────────────────────────────────────────────────────
 
-/// The default tie-off instruction (the `knot-tie-off` template).
+/// The hard-coded tie-off contract (the `knot-tie-off` template).
 ///
-/// Single source of the tie-off contract injected into a producer
-/// knot's prompt (`# Subscriber Events` block). The text lives in this
-/// repository at `.agents/skills/knot-template/knot-tie-off.md` — the
-/// `knot-template` skill's template, deployed alongside it to
+/// The core of the `# Subscriber Events` block injected into every
+/// producer knot's prompt: the tie-off contract (the final response
+/// *is* the tie-off), the event format (the fixed `event:` / `occurred:`
+/// / `timestamp:` block), and the rules (one structured block per
+/// subscriber event — always, even when `occurred: false`). This text
+/// is **never overridable per rig**: the per-rig link
+/// (`tie-off-content-instruction-file`) reaches only the content
+/// section ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]).
+///
+/// The text lives in this repository at
+/// `.agents/skills/knot-template/knot-tie-off.md` — the `knot-template`
+/// skill's contract reference, deployed alongside it to
 /// `~/.agents/skills-library/knot-template/` — and is compiled in here:
-/// this constant is the **hard-coded default**, always available.
-/// `FileSystemPromptInstructionSource` resolves the per-session text
-/// fresh (never cached; the service never writes into the rig): a
-/// per-rig link named in `.workspace-agent-config.yaml`
-/// (`tie-off-instruction-file`) wins if readable, otherwise this
-/// embedded text is injected. The `knot-template` skill is the
-/// agent-readable procedure for creating that per-rig override.
+/// this constant is the single source of truth.
 ///
 /// User-facing agent text — keep it greppable. The template file is the
 /// source of truth; edit it there.
 pub const DEFAULT_TIE_OFF_INSTRUCTION: &str =
     include_str!("../../.agents/skills/knot-template/knot-tie-off.md");
 
-/// The default event-content instruction (the `knot-event-content`
+/// The default tie-off content section (the `knot-tie-off-content`
 /// template).
 ///
-/// How to fill in an event block: the `description` field, the
+/// The one overridable part of the `# Subscriber Events` block: the
+/// tie-off's header/narrative content (`## Tie-Off Content`) and how to
+/// fill in each event block's content — the `description` field, the
 /// narrative body, and the extra fields a subscriber declares in its
-/// `event_description`. Same source-of-truth / hard-coded-default /
-/// per-rig-link semantics as [`DEFAULT_TIE_OFF_INSTRUCTION`] (the link
-/// key is `event-content-instruction-file`, the template file is
-/// `knot-template/knot-event-content.md`).
+/// `event_description` (`## Event Content Guide`).
+///
+/// Single source of truth: the text lives in this repository at
+/// `.agents/skills/knot-template/knot-tie-off-content.md` (the
+/// `knot-template` skill's content template, deployed alongside it to
+/// `~/.agents/skills-library/knot-template/`) and is compiled in here.
+/// `FileSystemPromptInstructionSource` resolves the per-session text
+/// fresh (never cached; the service never writes into the rig): a
+/// per-rig link named in `.workspace-agent-config.yaml`
+/// (`tie-off-content-instruction-file`) wins if readable, otherwise
+/// this embedded default content section is injected. The
+/// `knot-template` skill is the agent-readable procedure for creating
+/// that per-rig override.
 ///
 /// User-facing agent text — keep it greppable. The template file is the
 /// source of truth; edit it there.
-pub const DEFAULT_EVENT_CONTENT_INSTRUCTION: &str =
-    include_str!("../../.agents/skills/knot-template/knot-event-content.md");
+pub const DEFAULT_TIE_OFF_CONTENT_INSTRUCTION: &str =
+    include_str!("../../.agents/skills/knot-template/knot-tie-off-content.md");
 
 /// Build the listener context block to inject at the start of a target
 /// knot's prompt.
 ///
 /// Delegates to [`build_listener_context_with_instructions`] with the
-/// embedded default instructions (no per-session source).
+/// embedded default content section (no per-session source).
 pub fn build_listener_context(
     knot: &Knot,
     loom_id: &LoomId,
@@ -205,14 +220,15 @@ pub fn build_listener_context(
         all_knots,
         self_continuation_desc,
         None,
-        None,
     )
 }
 
-/// Same as [`build_listener_context`], but the tie-off and event-content
-/// instruction blocks are taken from `tie_off_instruction` /
-/// `event_content_instruction` when `Some` — skill content pulled fresh
-/// for this session — with the embedded defaults as the `None` fallback.
+/// Same as [`build_listener_context`], but the tie-off **content
+/// section** is taken from `tie_off_content_instruction` when `Some` —
+/// content pulled fresh for this session — with the embedded default
+/// as the `None` fallback. The hard-coded core
+/// ([`DEFAULT_TIE_OFF_INSTRUCTION`]: contract, event format, rules) is
+/// always injected — never replaced.
 ///
 /// Scans all knots' `strand_source` entries for `EventUri` subscriptions
 /// where the current knot is the producer. Groups by `event-id` — if
@@ -233,8 +249,7 @@ pub fn build_listener_context_with_instructions(
     loom_id: &LoomId,
     all_knots: &[Knot],
     self_continuation_desc: Option<&str>,
-    tie_off_instruction: Option<&str>,
-    event_content_instruction: Option<&str>,
+    tie_off_content_instruction: Option<&str>,
 ) -> String {
     use crate::domain::value_objects::StrandSource;
 
@@ -303,24 +318,23 @@ pub fn build_listener_context_with_instructions(
         ));
     }
 
-    // Skill-sourced instruction blocks (pulled fresh per session by the
-    // application layer and passed in): the tie-off contract and the
-    // event-content guide. `None` → the embedded default (the same text
-    // the default skill file is seeded with).
-    let tie_off_instruction = tie_off_instruction
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| DEFAULT_TIE_OFF_INSTRUCTION.to_string());
-    let event_content_instruction = event_content_instruction
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| DEFAULT_EVENT_CONTENT_INSTRUCTION.to_string());
-
+    // The hard-coded core — the tie-off contract, the event format, and
+    // the rules — is always injected: it is the Knot agent's contract
+    // and is never overridable per rig.
     output.push('\n');
-    output.push_str(&tie_off_instruction);
+    output.push_str(DEFAULT_TIE_OFF_INSTRUCTION);
     if !output.ends_with('\n') {
         output.push('\n');
     }
+
+    // The one overridable part — the tie-off content section — pulled
+    // fresh per session by the application layer and passed in.
+    // `None` → the embedded default content section.
+    let content_section = tie_off_content_instruction
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.to_string());
     output.push('\n');
-    output.push_str(&event_content_instruction);
+    output.push_str(&content_section);
     if !output.ends_with('\n') {
         output.push('\n');
     }
@@ -1198,11 +1212,12 @@ mod tests {
         );
     }
 
-    /// Skill-sourced instructions (pulled per session) replace the
-    /// embedded defaults block-for-block; a `None` side keeps its
-    /// default.
+    /// A skill-sourced content section (pulled per session) replaces
+    /// **only the content section**: the hard-coded core (contract,
+    /// event format, rules) stays present; `None` keeps the default
+    /// content section.
     #[test]
-    fn listener_context_with_instructions_uses_supplied_text() {
+    fn listener_context_with_instructions_content_replaces_only_content_section() {
         let producer = make_test_knot("plan-creator");
         let consumer = make_event_knot(
             "plan-validator",
@@ -1215,27 +1230,53 @@ mod tests {
             &default_loom_id(),
             &[consumer],
             None,
-            Some("CUSTOM TIE-OFF INSTRUCTION"),
-            Some("CUSTOM EVENT-CONTENT INSTRUCTION"),
+            Some("CUSTOM CONTENT SECTION"),
         );
         assert!(
-            context.contains("CUSTOM TIE-OFF INSTRUCTION"),
-            "custom tie-off instruction must be injected: {}",
+            context.contains("CUSTOM CONTENT SECTION"),
+            "custom content section must be injected: {}",
             context
         );
         assert!(
-            context.contains("CUSTOM EVENT-CONTENT INSTRUCTION"),
-            "custom event-content instruction must be injected: {}",
-            context
-        );
-        assert!(
-            !context.contains("## Tie-Off Contract"),
-            "default tie-off block must be replaced, not appended: {}",
+            !context.contains("## Tie-Off Content"),
+            "default content section must be replaced, not appended: {}",
             context
         );
         assert!(
             !context.contains("## Event Content Guide"),
-            "default event-content block must be replaced, not appended: {}",
+            "default event-content guide must be replaced, not appended: {}",
+            context
+        );
+        // The hard-coded core is always present — never replaced by an
+        // override:
+        assert!(
+            context.contains("## Tie-Off Contract"),
+            "hard-coded contract must stay: {}",
+            context
+        );
+        assert!(
+            context.contains("## Event Format"),
+            "hard-coded event format must stay: {}",
+            context
+        );
+        assert!(
+            context.contains("## Rules"),
+            "hard-coded rules must stay: {}",
+            context
+        );
+        assert!(
+            context.contains("event: EventId"),
+            "hard-coded event properties must stay: {}",
+            context
+        );
+        assert!(
+            context.contains("occurred: true"),
+            "hard-coded event properties must stay: {}",
+            context
+        );
+        assert!(
+            context.contains("Emit exactly one event block per subscriber event"),
+            "hard-coded emit-always rule must stay: {}",
             context
         );
         // The subscriber bullets are untouched.
@@ -1243,8 +1284,9 @@ mod tests {
         assert!(context.contains("`PlanCreated`"));
     }
 
-    /// `None` on either side falls back to that side's embedded default
-    /// (typos fixed relative to the old hard-coded text).
+    /// `None` falls back to the embedded defaults — the hard-coded core
+    /// and the default content section (typos fixed relative to the old
+    /// hard-coded text).
     #[test]
     fn listener_context_with_instructions_none_uses_defaults() {
         let producer = make_test_knot("plan-creator");
@@ -1260,16 +1302,18 @@ mod tests {
             &[consumer],
             None,
             None,
-            None,
         );
         assert!(context.contains("## Tie-Off Contract"));
+        assert!(context.contains("## Event Format"));
+        assert!(context.contains("## Rules"));
+        assert!(context.contains("## Tie-Off Content"));
         assert!(context.contains("## Event Content Guide"));
         assert!(context.contains("acknowledge each event"));
         assert!(!context.contains("acknolowedge"));
     }
 
     /// The wrapper (source-less entry point) is byte-identical to the
-    /// with-instructions variant on `None`/`None`.
+    /// with-instructions variant on `None`.
     #[test]
     fn listener_context_wrapper_matches_none_none_variant() {
         let producer = make_test_knot("plan-creator");
@@ -1290,7 +1334,6 @@ mod tests {
             &producer,
             &default_loom_id(),
             &knots,
-            None,
             None,
             None,
         );

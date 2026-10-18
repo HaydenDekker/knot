@@ -12,7 +12,7 @@ project's git history.
 ```
 project-root/
 ├── rig/                               ← Rig source — its own git repo (user commits)
-│   ├── .workspace-agent-config.yaml   ← Agent adapter + instruction links
+│   ├── .workspace-agent-config.yaml   ← Agent adapter + content-section link
 │   ├── profiles/                      ← Shared agent profiles
 │   │   ├── default.md
 │   │   ├── reviewer.md
@@ -187,30 +187,43 @@ Resume](../concepts.md#session-resume)). Defaults to **300** when
 absent; `0` disables the watchdog. Both settings are loaded at
 startup — restart Knot after editing the file.
 
-**Instruction links** (Knot 0.59.0+): the tie-off contract and the
-event-content guide injected into producer knots' `# Subscriber Events`
-block have a **hard-coded default** compiled into the binary. To
-replace one (or both) for this rig, name a file in this config — the
-file's **full content** replaces the corresponding default:
+**Instruction link** (Knot 0.60.0+): the `# Subscriber Events` block
+injected into producer knots' prompts has a **hard-coded core** — the
+tie-off contract, the event format (the fixed `event:` / `occurred:` /
+`timestamp:` block), and the rules (one block per subscriber event,
+always) — compiled into the binary and **not overridable per rig**.
+The one exposed part is the **tie-off content section** (the tie-off's
+header/narrative content + the event-content guide: the `description`,
+body, and additional custom properties), which has a hard-coded
+default. To replace it for this rig, name a file in this config — the
+file's **full content** replaces the default content section (the core
+stays untouched):
 
 ```yaml
-# Full file replaces the hard-coded tie-off instruction
+# Full replacement of the default tie-off content section
 # (absolute path, relative to rig/, ~/..., or a file:// URL)
-tie-off-instruction-file: knot-template/knot-tie-off.md
-# Same for the event-content guide
-event-content-instruction-file: knot-template/knot-event-content.md
+tie-off-content-instruction-file: knot-template/knot-tie-off-content.md
 ```
 
 The `knot-template` skill (the Knot skills library) is the procedure
-for this: it ships the two templates and copies them into
-`rig/knot-template/` when invoked, so the links above point at
-project-owned, git-versioned files you can edit. The config and the
-linked file are re-read on **every new session** — never cached — so an
-edit takes effect on the next strand without a restart. A missing or
-unreadable file falls back to the hard-coded default (with a
+for this: it ships the content template (plus the shipped contract for
+reference) and copies the template into `rig/knot-template/` when
+invoked, so the link above points at a project-owned, git-versioned
+file you can edit. The config and the linked file are re-read on
+**every new session** — never cached — so an edit takes effect on the
+next strand without a restart. A missing or unreadable file falls back
+to the hard-coded default content section (with a
 `[KNOT][EVENT] type=CONFIG` log line); `http(s)://` values are refused
 — Knot only reads local files. The service never writes instruction
 files into the rig.
+
+**Retired 0.59.0 keys**: `tie-off-instruction-file` and
+`event-content-instruction-file` are no longer honoured (the contract
+can no longer be overridden, and the event-content guide moved into
+the content section). A leftover key is still parsed and produces a
+`[KNOT][EVENT] type=CONFIG` warning per new session — remove
+`tie-off-instruction-file`, and re-link a custom event-content file
+under `tie-off-content-instruction-file`.
 
 **`ctx-wrap-up-limit`** (Knot 0.42.0+) is a per-model-alias token count
 set in `rig/models.yml` (not in this file). It is meaningful only on
@@ -224,8 +237,8 @@ reserve-aware limit) — so the steer lands before pi would auto-compact.
 runner logs a one-shot warning).
 
 If the file does not exist, Knot creates it with sensible defaults
-(`agent-adapter: pi-json` since 0.40.0, plus commented-out examples of
-the two instruction-link keys since 0.59.0) on first boot. Existing
+(`agent-adapter: pi-json` since 0.40.0, plus a commented-out example of
+the content-section link since 0.60.0) on first boot. Existing
 rigs with an explicit `agent-adapter` keep their setting.
 
 ## Rig Switching and Sharing

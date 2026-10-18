@@ -1,5 +1,42 @@
 # Release Notes
 
+## v0.60.0 — 2026-10-16
+
+### Changed — The tie-off contract is hard-coded again; one exposed content section (Plan 096)
+
+v0.59.0 externalised the **whole** tie-off contract (both templates as
+full per-rig replacements); from 0.60.0 only the **content** is
+exposed — the contract, the event format, and the rules are
+hard-coded into the binary and cannot be overridden per rig:
+
+- **Hard-coded core** — `## Tie-Off Contract`, `## Event Format`
+  (the fixed `event:` / `occurred:` / `timestamp:` block), and
+  `## Rules` (one structured block per subscriber event — always, even
+  when `occurred: false`) are compiled in from `knot-tie-off.md` (still
+  the single source of truth) and are **always injected** — the
+  agent always sees the canonical format, so the override/format
+  divergence risk from 0.59.0 is eliminated by construction.
+- **The exposed content section** — the tie-off's header/narrative
+  content + the event-content guide (`description`, body, additional
+  custom properties) is one overridable unit, with a hard-coded
+default compiled in from the new `knot-tie-off-content.md` template.
+- **Config key** — `tie-off-instruction-file` and
+  `event-content-instruction-file` are **retired** (parse-only:
+  detected and reported with a `[KNOT][EVENT] type=CONFIG` warning per
+  new session, never honoured). The one new key:
+  `tie-off-content-instruction-file` — same mechanics as before
+  (absolute / rig-relative / `~/` / `file://`; `http(s)` refused;
+  pulled fresh per new session, never cached; missing link → the
+  hard-coded default content section + a `type=CONFIG` warning; the
+  service never writes into the rig).
+- **`knot-template` skill (2.0.0)** — ships the content template + the
+  shipped contract for reference, and the procedure to link the
+  content section; `knot-update` (1.26.0) carries the migration entry.
+- **Migration** — remove `tie-off-instruction-file` (no replacement —
+  the contract is no longer overridable); a rig with a custom
+  `event-content-instruction-file` re-links that file under
+  `tie-off-content-instruction-file`.
+
 ## v0.59.0 — 2026-10-16
 
 ### Fixed — Event-enforcement follow-up response now lands in the tie-off

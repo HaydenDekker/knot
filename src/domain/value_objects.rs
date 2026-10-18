@@ -298,27 +298,41 @@ pub struct RigAgentConfig {
         default = "default_inactivity_timeout_secs"
     )]
     pub inactivity_timeout_secs: u64,
-    /// Optional link for the `knot-tie-off` instruction: a file
-    /// reference (absolute path, relative to the rig directory, `~/...`,
-    /// or a `file://` URL) whose full content replaces the hard-coded
-    /// default tie-off instruction in the producer's prompt. `None` →
-    /// the hard-coded default (the `knot-template` skill's template
-    /// text). `http(s)://` is refused (local-first). Pulled fresh per
-    /// session — never cached. The `knot-template` skill is the
-    /// procedure for creating these files.
+    /// Optional link for the tie-off **content section** (the
+    /// `knot-tie-off-content` template): a file reference (absolute
+    /// path, relative to the rig directory, `~/...`, or a `file://`
+    /// URL) whose full content replaces the hard-coded default content
+    /// section (the tie-off header/narrative content + the
+    /// event-content guide) in the producer's prompt. The tie-off
+    /// contract, event format, and rules are hard-coded and never
+    /// overridable. `None` → the hard-coded default content section
+    /// (the `knot-template` skill's template text). `http(s)://` is
+    /// refused (local-first). Pulled fresh per session — never cached.
+    /// The `knot-template` skill is the procedure for creating these
+    /// files.
+    #[serde(
+        rename = "tie-off-content-instruction-file",
+        default = "default_none_string"
+    )]
+    pub tie_off_content_instruction_file: Option<String>,
+    /// Deprecated (Knot 0.60.0): the tie-off contract is hard-coded and
+    /// can no longer be overridden per rig. Kept **parse-only** so a
+    /// rig's leftover key is detected and warned about by the
+    /// instruction source; never honoured.
     #[serde(
         rename = "tie-off-instruction-file",
         default = "default_none_string"
     )]
-    pub tie_off_instruction_file: Option<String>,
-    /// Optional link for the `knot-event-content` instruction: same
-    /// semantics as `tie_off_instruction_file` (full replacement of the
-    /// hard-coded default event-content guide; pulled fresh per session).
+    pub deprecated_tie_off_instruction_file: Option<String>,
+    /// Deprecated (Knot 0.60.0): superseded by
+    /// `tie_off_content_instruction_file` (the tie-off content section).
+    /// Kept **parse-only** so a rig's leftover key is detected and
+    /// warned about by the instruction source; never honoured.
     #[serde(
         rename = "event-content-instruction-file",
         default = "default_none_string"
     )]
-    pub event_content_instruction_file: Option<String>,
+    pub deprecated_event_content_instruction_file: Option<String>,
 }
 
 fn default_agent_adapter() -> AgentAdapter {
@@ -340,8 +354,9 @@ impl RigAgentConfig {
         Self {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: DEFAULT_INACTIVITY_TIMEOUT_SECS,
-            tie_off_instruction_file: None,
-            event_content_instruction_file: None,
+            tie_off_content_instruction_file: None,
+            deprecated_tie_off_instruction_file: None,
+            deprecated_event_content_instruction_file: None,
         }
     }
 
@@ -1692,8 +1707,9 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 300,
-            tie_off_instruction_file: None,
-            event_content_instruction_file: None,
+            tie_off_content_instruction_file: None,
+            deprecated_tie_off_instruction_file: None,
+            deprecated_event_content_instruction_file: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
@@ -1752,8 +1768,9 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 45,
-            tie_off_instruction_file: None,
-            event_content_instruction_file: None,
+            tie_off_content_instruction_file: None,
+            deprecated_tie_off_instruction_file: None,
+            deprecated_event_content_instruction_file: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("inactivity-timeout-seconds: 45"));
@@ -1766,8 +1783,9 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiStdio,
             inactivity_timeout_secs: 0,
-            tie_off_instruction_file: None,
-            event_content_instruction_file: None,
+            tie_off_content_instruction_file: None,
+            deprecated_tie_off_instruction_file: None,
+            deprecated_event_content_instruction_file: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"inactivity-timeout-seconds\":0"));
@@ -1776,27 +1794,39 @@ mod tests {
     }
 
     #[test]
-    fn rig_agent_config_instruction_file_yaml_keys() {
-        // Both override keys parse (kebab-case) and round-trip.
+    fn rig_agent_config_content_instruction_file_yaml_keys() {
+        // The one override key parses (kebab-case) and round-trips.
+        let yaml = "tie-off-content-instruction-file: my-content.md";
+        let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.tie_off_content_instruction_file.as_deref(),
+            Some("my-content.md")
+        );
+        let reserialized = serde_yaml::to_string(&config).unwrap();
+        assert!(reserialized.contains("tie-off-content-instruction-file: my-content.md"));
+
+        // The two 0.59.0 keys still parse (retired — parse-only, so a
+        // rig's leftover keys are detectable) and round-trip.
         let yaml = "tie-off-instruction-file: my-tieoff.md\n\
                     event-content-instruction-file: file:///abs/path.md";
         let config: RigAgentConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
-            config.tie_off_instruction_file.as_deref(),
+            config.deprecated_tie_off_instruction_file.as_deref(),
             Some("my-tieoff.md")
         );
         assert_eq!(
-            config.event_content_instruction_file.as_deref(),
+            config
+                .deprecated_event_content_instruction_file
+                .as_deref(),
             Some("file:///abs/path.md")
         );
-        let reserialized = serde_yaml::to_string(&config).unwrap();
-        assert!(reserialized.contains("tie-off-instruction-file: my-tieoff.md"));
 
         // Absent keys → None (old config files keep working).
         let config: RigAgentConfig =
             serde_yaml::from_str("agent-adapter: pi-json").unwrap();
-        assert!(config.tie_off_instruction_file.is_none());
-        assert!(config.event_content_instruction_file.is_none());
+        assert!(config.tie_off_content_instruction_file.is_none());
+        assert!(config.deprecated_tie_off_instruction_file.is_none());
+        assert!(config.deprecated_event_content_instruction_file.is_none());
     }
 
     // ── AgentProfile Tests ──────────────────────────────────────────────────
@@ -3043,8 +3073,9 @@ mod tests {
         let config = RigAgentConfig {
             agent_adapter: AgentAdapter::PiJson,
             inactivity_timeout_secs: 300,
-            tie_off_instruction_file: None,
-            event_content_instruction_file: None,
+            tie_off_content_instruction_file: None,
+            deprecated_tie_off_instruction_file: None,
+            deprecated_event_content_instruction_file: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();

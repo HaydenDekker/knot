@@ -111,20 +111,29 @@ acknowledgement.
 - The `TasksIncomplete` self-continuation entry is **never enforced** —
   it is a conditional signal, not a subscriber acknowledgement.
 
-The instructions themselves (the tie-off contract and the event-content
-guide in that block) have a **hard-coded default** compiled into the
-binary (Knot 0.59.0+) and a per-rig override: naming a file via
-`tie-off-instruction-file` / `event-content-instruction-file` in
+The instructions themselves in that block are split (Knot 0.60.0+) into
+a **hard-coded core** — the tie-off contract, the event format (the
+fixed `event:` / `occurred:` / `timestamp:` block), and the rules (one
+block per subscriber event, always) — compiled into the binary and
+**never overridable per rig** — and one **exposed content section**: the
+tie-off's header/narrative content plus the event-content guide (the
+`description`, body, and additional custom properties). The content
+section has a hard-coded default and a per-rig override: naming a file
+via `tie-off-content-instruction-file` in
 `.workspace-agent-config.yaml` makes its **full content** replace the
-corresponding default for that rig (local path, `~/...`, or `file://`
+default content section for that rig (local path, `~/...`, or `file://`
 URL — `http(s)` is refused). The config and the linked file are pulled
 fresh on **every new session** — never cached — so an edit takes effect
 on the next strand without a restart; a missing or unreadable link
-falls back to the hard-coded default. The `knot-template` skill (the
-Knot skills library) ships the two templates and the procedure for
-adding a project override (it copies them into `rig/knot-template/`
-and sets the links); the service never writes instruction files into
-the rig — see [configuration — rig
+falls back to the hard-coded default content section. The
+`knot-template` skill (the Knot skills library) ships the content
+template (plus the shipped contract for reference) and the procedure
+for adding a project override (it copies the template into
+`rig/knot-template/` and sets the link); the service never writes
+instruction files into the rig. The 0.59.0 keys
+(`tie-off-instruction-file` / `event-content-instruction-file`) are
+retired: a leftover key is parsed but not honoured (a service-log
+warning per session) — see [configuration — rig
 structure](configuration/rig-structure.md).
 
 **Event enforcement** runs after the agent completes: if the tie-off

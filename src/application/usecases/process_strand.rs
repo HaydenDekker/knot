@@ -74,12 +74,14 @@ pub struct ProcessStrand {
     /// [`ProcessStrand::with_system_emitter`] so run outcomes and failure
     /// classes are also dispatched to subscribers.
     pub(crate) system_emitter: Option<Arc<SystemEventEmitter>>,
-    /// Per-session instruction source (the `knot-tie-off` and
-    /// `knot-event-content` skills). `None` in unit tests — the embedded
-    /// default instructions are used. Set in production via
+    /// Per-session instruction source (the tie-off **content section**
+    /// — the `knot-tie-off-content` template). The hard-coded core (the
+    /// tie-off contract, event format, rules) is never sourced. `None`
+    /// in unit tests — the embedded default content section is used.
+    /// Set in production via
     /// [`ProcessStrand::with_instruction_source`]. Fetched fresh on
-    /// every context build: the skill is pulled each new session, never
-    /// cached.
+    /// every context build: the content section is pulled each new
+    /// session, never cached.
     pub(crate) instruction_source: Option<Arc<dyn PromptInstructionSource>>,
 }
 
@@ -130,11 +132,12 @@ impl ProcessStrand {
         self
     }
 
-    /// Attach the per-session instruction source (the `knot-tie-off` and
-    /// `knot-event-content` skills). Returns `self` for chaining. When
-    /// unset, the embedded default instructions are used (unit tests).
-    /// The source is consulted fresh on every context build — the skill
-    /// is pulled each new session, never cached.
+    /// Attach the per-session instruction source (the tie-off **content
+    /// section** — the `knot-tie-off-content` template; the hard-coded
+    /// core is never sourced). Returns `self` for chaining. When unset,
+    /// the embedded default content section is used (unit tests). The
+    /// source is consulted fresh on every context build — the content
+    /// section is pulled each new session, never cached.
     pub fn with_instruction_source(
         mut self,
         source: Arc<dyn PromptInstructionSource>,

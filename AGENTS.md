@@ -72,8 +72,9 @@ for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
   cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
 # (knot-template's whole-dir copy carries its two companion template
-#  files — knot-tie-off.md / knot-event-content.md — the source of the
-#  binary's hard-coded instruction defaults)
+#  files — knot-tie-off.md (the hard-coded contract, reference only) /
+#  knot-tie-off-content.md (the default tie-off content section) — the
+#  source of the binary's hard-coded instruction defaults)
 # Copy non-SKILL.md files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
   cp .agents/skills/knot-init/knot-glossary.md \
@@ -96,7 +97,7 @@ for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
 done
 # knot-template's companion template files (the source of the binary's
 # hard-coded instruction defaults — verify them too)
-for f in knot-tie-off.md knot-event-content.md; do
+for f in knot-tie-off.md knot-tie-off-content.md; do
   diff .agents/skills/knot-template/$f ~/.agents/skills-library/knot-template/$f \
     > /dev/null 2>&1 && echo "knot-template/$f: OK" || echo "knot-template/$f: FAILED"
 done
@@ -140,10 +141,13 @@ production location (see Skill Installation above).
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
-- **knot-template** — Customise the prompt instructions (tie-off /
-  event-content): ships the two templates (the source of the binary's
-  hard-coded default) and the procedure to add a per-project override
-  (`rig/knot-template/` + the config links in
+- **knot-template** — Customise the tie-off content section (the
+  producer's header/content + the event-content guide — the contract,
+  event format, and rules are hard-coded): ships the content template
+  (the source of the binary's hard-coded default content section) + the
+  shipped contract for reference, and the procedure to add a
+  per-project override (`rig/knot-template/` + the
+  `tie-off-content-instruction-file` link in
   `rig/.workspace-agent-config.yaml`)
 - **knot-visualise** — Render the whole-rig producer→consumer topology (knots + event/strand edges) as a self-contained D3 HTML file at a user-specified `--out` path
 - **knot-start** — Start/stop/restart the service; append and read `tie-offs/<rig>/knot-service.log`

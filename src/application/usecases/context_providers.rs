@@ -55,19 +55,16 @@ impl AgentEventsContextProvider {
     /// exist but no pending events are found, returns only the emission
     /// instructions.
     fn build_full_context(&self, input: &BuildContext) -> String {
-        // Pull the per-session instructions fresh here (never cached):
-        // the skills are re-read on every new session, so user edits to
-        // the default skill files (or the configured overrides) take
-        // effect immediately. `None` (source not wired, or the source
-        // found nothing) → the embedded default instructions.
-        let tie_off_instruction = input
+        // Pull the per-session instruction fresh here (never cached):
+        // the content section is re-read on every new session, so user
+        // edits to the configured override take effect immediately.
+        // `None` (source not wired, or the source found nothing) → the
+        // embedded default content section. The hard-coded core (the
+        // tie-off contract, event format, rules) is never sourced.
+        let tie_off_content_instruction = input
             .instruction_source
             .as_ref()
-            .and_then(|s| s.read_tie_off_instruction());
-        let event_content_instruction = input
-            .instruction_source
-            .as_ref()
-            .and_then(|s| s.read_event_content_instruction());
+            .and_then(|s| s.read_tie_off_content_instruction());
 
         let emission_instructions =
             build_listener_context_with_instructions(
@@ -75,8 +72,7 @@ impl AgentEventsContextProvider {
                 &input.loom_id,
                 &input.all_knots,
                 input.self_continuation_desc.as_deref(),
-                tie_off_instruction.as_deref(),
-                event_content_instruction.as_deref(),
+                tie_off_content_instruction.as_deref(),
             );
 
         // No listeners — no injection needed at all.
@@ -409,24 +405,21 @@ mod tests {
     }
 
     /// Test double for the per-session instruction source: fixed
-    /// content, `None` to emulate "skill file missing → default".
+    /// content, `None` to emulate "linked file missing → default".
     #[derive(Debug, Default)]
     struct FixedInstructions {
-        tie_off: Option<String>,
-        event_content: Option<String>,
+        content: Option<String>,
     }
 
     impl crate::domain::events::PromptInstructionSource for FixedInstructions {
-        fn read_tie_off_instruction(&self) -> Option<String> {
-            self.tie_off.clone()
-        }
-        fn read_event_content_instruction(&self) -> Option<String> {
-            self.event_content.clone()
+        fn read_tie_off_content_instruction(&self) -> Option<String> {
+            self.content.clone()
         }
     }
 
-    /// A wired instruction source replaces the default blocks in the
-    /// built context; a `None` side keeps its embedded default.
+    /// A wired instruction source replaces **only the content section**
+    /// in the built context; the hard-coded core stays present. A `None`
+    /// source keeps the embedded default content section.
     #[test]
     fn provider_pulls_instructions_from_source_per_session() {
         let provider = AgentEventsContextProvider;
@@ -444,36 +437,55 @@ mod tests {
             PathBuf::from("/tmp/nonexistent"),
         );
         ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
-            tie_off: Some("SKILL-SOURCED TIE-OFF TEXT".to_string()),
-            event_content: None,
+            content: Some("SKILL-SOURCED CONTENT TEXT".to_string()),
         }));
 
         let result = provider.build_context(&ctx);
         assert!(
-            result.contains("SKILL-SOURCED TIE-OFF TEXT"),
-            "skill-sourced tie-off text must appear: {}",
+            result.contains("SKILL-SOURCED CONTENT TEXT"),
+            "skill-sourced content text must appear: {}",
             result
         );
         assert!(
-            !result.contains("## Tie-Off Contract"),
-            "the default tie-off block must be replaced: {}",
+            !result.contains("## Tie-Off Content"),
+            "the default content section must be replaced: {}",
             result
         );
         assert!(
-            result.contains("## Event Content Guide"),
-            "the default event-content guide still applies for the None side: {}",
+            !result.contains("## Event Content Guide"),
+            "the default event-content guide must be replaced: {}",
+            result
+        );
+        // The hard-coded core is always present — never replaced by an
+        // override:
+        assert!(
+            result.contains("## Tie-Off Contract"),
+            "the hard-coded contract must stay: {}",
+            result
+        );
+        assert!(
+            result.contains("## Event Format"),
+            "the hard-coded event format must stay: {}",
+            result
+        );
+        assert!(
+            result.contains("## Rules"),
+            "the hard-coded rules must stay: {}",
             result
         );
 
         // "Pulled per session": a second build with a different source
         // content reflects the new content (nothing is cached).
         ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
-            tie_off: Some("UPDATED SKILL TEXT".to_string()),
-            event_content: None,
+            content: Some("UPDATED CONTENT TEXT".to_string()),
         }));
         let again = provider.build_context(&ctx);
-        assert!(again.contains("UPDATED SKILL TEXT"));
-        assert!(!again.contains("SKILL-SOURCED TIE-OFF TEXT"));
+        assert!(again.contains("UPDATED CONTENT TEXT"));
+        assert!(!again.contains("SKILL-SOURCED CONTENT TEXT"));
+        // The hard-coded core survives the content change untouched.
+        assert!(again.contains("## Tie-Off Contract"));
+        assert!(again.contains("## Event Format"));
+        assert!(again.contains("## Rules"));
     }
 
     /// `extract_emitted_event_ids` parses the subscriber bullets only —
