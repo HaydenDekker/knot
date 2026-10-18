@@ -984,6 +984,14 @@ mod tests {
             "frontmatter description must not leak: {}",
             result
         );
+        // Plan 097 phase 3: the section points at the dedup norm, which is
+        // present in the prompt via the (default) content section — the
+        // pointer and its target coexist in the same prompt.
+        assert!(
+            result.contains("Deduplication"),
+            "the dedup norm (rig wording) must be in the same prompt as the section: {}",
+            result
+        );
     }
 
     /// A backlog of 50 queued entries of one type must not become 50

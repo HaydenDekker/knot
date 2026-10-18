@@ -6050,20 +6050,21 @@ mod event_dispatch_tests {
             prompt
         );
 
-        // Should contain pending events section
+        // Should contain the queued events section (plan 097: queue-backed,
+        // metadata-only — count + path, no description carry-over)
         assert!(
-            prompt.contains("## Pending Events"),
-            "prompt should contain Pending Events section: {}",
+            prompt.contains("## Queued Events"),
+            "prompt should contain Queued Events section: {}",
             prompt
         );
         assert!(
-            prompt.contains("Previous plan for feature X"),
-            "prompt should contain pending event description: {}",
+            !prompt.contains("Previous plan for feature X"),
+            "prompt must not carry the frontmatter description: {}",
             prompt
         );
         assert!(
             prompt.contains("event-2026-07-14T10-00-00Z.md"),
-            "prompt should contain pending event filename: {}",
+            "prompt should contain the queued entry path: {}",
             prompt
         );
     }
@@ -8283,16 +8284,17 @@ mod phase4_integration_tests {
         assert!(!contexts.is_empty(), "agent should have been called");
         let prompt = &contexts[0].prompt;
 
-        // Should contain pending events section referencing the
-        // previously emitted event.
+        // Should contain the queued events section referencing the
+        // previously emitted event (plan 097: metadata-only — count +
+        // path, no description carry-over).
         assert!(
-            prompt.contains("## Pending Events"),
-            "prompt should contain Pending Events section: {}",
+            prompt.contains("## Queued Events"),
+            "prompt should contain Queued Events section: {}",
             prompt
         );
         assert!(
-            prompt.contains("Implementation plan for feature X"),
-            "prompt should contain pending event description: {}",
+            !prompt.contains("Implementation plan for feature X"),
+            "prompt must not carry the frontmatter description: {}",
             prompt
         );
         assert!(
@@ -8442,25 +8444,31 @@ mod phase4_integration_tests {
         assert!(!contexts.is_empty(), "agent should have been called");
         let prompt = &contexts[0].prompt;
 
-        // Should contain both pending events
+        // Should contain both queued events (plan 097: metadata-only —
+        // count + path, no description carry-over)
+        assert!(
+            prompt.contains("## Queued Events"),
+            "prompt should contain the Queued Events section: {}",
+            prompt
+        );
         assert!(
             prompt.contains("PlanCreated"),
-            "prompt should contain PlanCreated pending event: {}",
+            "prompt should contain PlanCreated queued event: {}",
             prompt
         );
         assert!(
             prompt.contains("ValidationFailed"),
-            "prompt should contain ValidationFailed pending event: {}",
+            "prompt should contain ValidationFailed queued event: {}",
             prompt
         );
         assert!(
-            prompt.contains("Plan for feature X"),
-            "prompt should contain PlanCreated description: {}",
+            !prompt.contains("Plan for feature X"),
+            "prompt must not carry the PlanCreated description: {}",
             prompt
         );
         assert!(
-            prompt.contains("Validation failed on PRD"),
-            "prompt should contain ValidationFailed description: {}",
+            !prompt.contains("Validation failed on PRD"),
+            "prompt must not carry the ValidationFailed description: {}",
             prompt
         );
     }

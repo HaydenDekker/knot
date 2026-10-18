@@ -1331,6 +1331,40 @@ mod tests {
         assert!(!context.contains("acknolowedge"));
     }
 
+    /// Plan 097: the default content section carries the dedup norm — the
+    /// per-rig instruction surface is where the queued-events dedup rule
+    /// lives (the injected `## Queued Events` section points at it). The
+    /// shipped template is the source of the embedded default
+    /// (`include_str!`), so this conformance test pins both the norm and
+    /// the pointer target.
+    #[test]
+    fn default_content_instruction_carries_dedup_norm() {
+        assert!(
+            DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.contains("Deduplication"),
+            "the dedup norm must live in the content section (rig wording)"
+        );
+        assert!(
+            DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.contains("Queued Events"),
+            "the norm must reference the section by its prompt heading"
+        );
+        // And it reaches the built prompt via the default path.
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let context = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &[consumer],
+            None,
+            None,
+        );
+        assert!(context.contains("Deduplication"));
+    }
+
     /// The wrapper (source-less entry point) is byte-identical to the
     /// with-instructions variant on `None`.
     #[test]

@@ -20,3 +20,8 @@ How to fill in each event block:
   the frontmatter. Keep it thin — facts and pointers, not narrative.
 - A block with `occurred: false` still needs a `description` saying why it did not occur;
   its body is optional.
+- **Deduplication** — if a queued event (see the *Queued Events* section of your
+  prompt, when present) already carries the same facts — compare the frontmatter
+  keys such as plan/phase — mark the subscriber event `occurred: false` and say so
+  in its `description` (it is already queued); do not queue a second signal for the
+  same outcome.
