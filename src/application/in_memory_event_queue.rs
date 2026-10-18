@@ -169,6 +169,21 @@ impl StrandQueueAccessor for InMemoryEventQueue {
             .collect()
     }
 
+    /// Real queue entries carry the persisted `queued_at` — override the
+    /// trait default so the pending index (plan 097) orders by the queue's
+    /// own timestamps.
+    fn pending_entries(&self) -> Vec<crate::domain::pending_event::QueueEntryView> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| crate::domain::pending_event::QueueEntryView {
+                strand_path: std::path::PathBuf::from(&e.strand_path),
+                queued_at: e.queued_at.clone(),
+            })
+            .collect()
+    }
+
     fn delete(&self, id: &PendingEventId) -> bool {
         let mut queue = self.events.lock().unwrap();
         if let Some(pos) = queue.iter().position(|e| &e.id == id) {

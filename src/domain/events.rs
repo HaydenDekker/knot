@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::entities::{
     Knot, KnotId, LoomId, StrandPath, TieOffPath,
 };
+use crate::domain::pending_event::QueueEntryView;
 
 // ── Agent Events (Intent-Based Routing) ────────────────────────────────────
 
@@ -70,6 +71,24 @@ pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
     /// Return the strand paths currently sitting in the queue
     /// (debounced, awaiting processing).
     fn pending_strand_paths(&self) -> Vec<std::path::PathBuf>;
+
+    /// Return the queue's current entries (path + `queued_at`) in FIFO
+    /// order.
+    ///
+    /// Used by the producer's queued-events index (plan 097), which needs
+    /// the queue's own `queued_at` timestamps. Default: derive from
+    /// [`Self::pending_strand_paths`] with an unknown (empty) timestamp —
+    /// implementations backed by real queue entries override with the
+    /// persisted timestamp.
+    fn pending_entries(&self) -> Vec<QueueEntryView> {
+        self.pending_strand_paths()
+            .into_iter()
+            .map(|strand_path| QueueEntryView {
+                strand_path,
+                queued_at: String::new(),
+            })
+            .collect()
+    }
 
     /// Remove the queued event with the given ID.
     ///

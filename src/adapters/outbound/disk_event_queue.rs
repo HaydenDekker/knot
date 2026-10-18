@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use crate::application::ports::StrandEventQueue;
 use crate::domain::events::StrandQueueAccessor;
 use crate::domain::pending_event::{
-    dedup_key, PendingEvent, PendingEventId, PendingEventOrShutdown,
+    dedup_key, PendingEvent, PendingEventId, PendingEventOrShutdown, QueueEntryView,
 };
 
 use super::event_store::FileSystemEventStore;
@@ -260,6 +260,21 @@ impl StrandQueueAccessor for DiskBackedEventQueue {
             .unwrap_or_default()
             .iter()
             .map(|e| PathBuf::from(&e.strand_path))
+            .collect()
+    }
+
+    /// Real queue entries carry the persisted `queued_at` — override the
+    /// trait default so the pending index (plan 097) orders by the queue's
+    /// own timestamps.
+    fn pending_entries(&self) -> Vec<QueueEntryView> {
+        self.store
+            .scan_events()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| QueueEntryView {
+                strand_path: PathBuf::from(e.strand_path),
+                queued_at: e.queued_at,
+            })
             .collect()
     }
 
