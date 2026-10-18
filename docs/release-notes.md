@@ -1,5 +1,34 @@
 # Release Notes
 
+## v0.62.0 — 2026-10-18
+
+### Added — `queue-busy` dispatch observation + end-to-end acceptance (Plan 097, phases 4–5)
+
+Two closing increments for plan 097, both strictly additive:
+
+- **`queue-busy` note on `EventsDispatched`** — at tie-off dispatch the
+  service compares the per-type queue counts taken at session start
+  against the counts at dispatch time. When the queue net-gained
+  entries of a dispatched event type *during* the session, an additive
+  `queue-busy=<event-type>:<n>` note is appended to the `EventsDispatched`
+  service-log line (after the `dispatch=…` entries). No growth → the
+  line is byte-identical to the 0.60.0/0.61.0 format; legacy
+  activity entries without the field deserialize as empty. Passive
+  observability only: it records whether producers race the queue —
+  nothing bounces, nothing re-asks.
+- **End-to-end acceptance tests** (`tests/queued_events_e2e.rs`) —
+  full-pipeline tests (real event dispatcher, mock runner, in-memory
+  queue) pin the plan-097 contract: producer emits → entry queued →
+  the re-entry prompt carries the **queued** entry (queue path + queue
+  timestamp + dedup norm); a 15-entry backlog shows “15 queued
+  (newest 10 shown)” with the 5 oldest capped out; a queue holding
+  only other-type / other-producer entries omits the section; an
+  `occurred: false` ack counts for enforcement and dispatches
+  nothing.
+
+No rig configuration change; no document migration. Service log +
+tests only.
+
 ## v0.61.0 — 2026-10-18
 
 ### Changed — Queue-backed pending-event visibility for producers (Plan 097)

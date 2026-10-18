@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.27.0"
+  version: "1.28.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,24 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### `queue-busy` Service-Log Note + e2e Acceptance Tests (Knot 0.62.0, 2026-10-18)
+
+**What changed:** `EventsDispatched` service-log lines can now carry an
+additive `queue-busy=<event-type>:<n>` note when the queue net-gained
+entries of a dispatched event type during the session (the plan-097
+passive observation — are producers racing the queue?); end-to-end
+acceptance tests pin the `## Queued Events` prompt contract (the
+0.61.0 section).
+
+**Migration:** none — no project-document (profile, knot, loom) changes.
+The note is additive: with no growth the log line is unchanged, and
+legacy activity entries without the field load fine. Log readers
+(`knot-analyst` / `knot-manage`) may now see `queue-busy=` notes on
+`EventsDispatched` lines — informational; parsing of those lines is
+otherwise unchanged.
 
 ---
 

@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-18 (plan 097 activated — fleshed out against the working tree (`c63608c` + the in-flight uncommitted 096-series changes): the queue-preferred scan already exists (re-key partial — no cap, per-file frontmatter reads, dispatch-dir fallback survive); phase documents 0–6 created; no feature branch per the repo's main-only convention)
+> **Last Updated:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
 > **Prior:** 2026-10-16 (plans 094–095 complete — the event-enforcement follow-up tie-off is now appended (bugfix) + the `knot-template` skill and per-rig instruction links (hard-coded default + config links); released in v0.59.0)
 > **Prior:** 2026-10-02 (plan 093 phase 10 — event-types panel: invocations / consumers / minutes caused per event type, the communication view — v0.58.0)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
