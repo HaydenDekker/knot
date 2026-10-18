@@ -20,21 +20,32 @@ duplicate."* The design intent is right; the **source of truth it keys on is sta
 Since the persistent queue (plan 065) and the runtime-tree split (plan 068), the
 authoritative set of *pending* events is the queue (`tie-offs/<rig>/events/*.json`).
 Dispatch directories accumulate forever — files are not removed on consumption — so
-"still present on disk" is no longer a signal of pending at all. A field instance
-(2026-10-18, recipt-parser rig, Knot 0.60-class service) shows the failure mode:
-byte-identical `PlanRequested` events and near-duplicate `PhaseReady` /
-`PlanScoped` events each triggered a full agent session, fanning out through four
-consumer looms — the advisory existed, but the producer was shown (at best) a
-directory of historical files that does not tell it what is *actually waiting*.
+"still present on disk" is not a signal of pending. As of drafting (verified
+against the working tree at drafting — `c63608c` plus the in-flight uncommitted
+096-series changes), the 060 index is re-keyed to the queue *when a queue
+reference is wired* (`AgentEventsContextProvider::scan_pending_events` →
+`StrandQueueAccessor::pending_strand_paths`), but the re-key is partial and the
+advisory is soft. A field instance (2026-10-18, recipt-parser rig, Knot 0.60-class
+service) shows the failure mode: byte-identical `PlanRequested` events and
+near-duplicate `PhaseReady` / `PlanScoped` events each triggered a full agent
+session, fanning out through four consumer looms — visibility (however keyed)
+plus a soft norm did not suppress the duplicates.
 
-Secondary gaps:
+Remaining gaps (verified at drafting, against the working tree):
 
 1. **No cap.** A backlog of N queued files becomes N unbounded entries in the
    prompt — the read-bloat anti-pattern the multi-session design exists to prevent.
-2. **Stale-by-construction timing.** The index is computed at prompt build; a long
+2. **Not metadata-only.** Every matching queued file is read for frontmatter
+   (producer filter via `target-knot`, plus `description` and `timestamp` carried
+   into the index). Queue entries store the *target* (consumer) loom/knot, not the
+   producer, so the producer filter cannot yet come from the queue alone (see
+   Target 1).
+3. **Directory-scan fallback.** With no queue reference wired the provider falls
+   back to `scan_dispatch_directory` — the stale-signal path survives.
+4. **Stale-by-construction timing.** The index is computed at prompt build; a long
    session can outdate it, and nothing is logged when the queue grows underneath a
    running session.
-3. **Advisory with no backstop.** Correctness rides entirely on producer
+5. **Advisory with no backstop.** Correctness rides entirely on producer
    discretion. That is acceptable (batching was rejected as the over-correction —
    see Notes), but the advisory needs a small *enforced* floor for the
    identical-event case.
@@ -45,10 +56,14 @@ Secondary gaps:
    the persistent queue, not the dispatch directory: per event type, the **count**
    of queued entries plus the **newest N paths and `queued_at`** (N capped, e.g.
    10). Scoped to the event types this knot may emit (the runtime already computes
-   that list for the emission instructions). **Content-blind**: the engine derives
-   the type from the dispatch path embedded in the queue entry — no event bodies
-   are parsed. The section is omitted entirely when the queue holds nothing of
-   the knot's emittable types.
+   that list for the emission instructions). **Metadata-only (body-blind)**: the
+   event type is derived from the dispatch path embedded in the queue entry and
+   `queued_at` comes from the queue entry — no event bodies are parsed. Producer
+   identity still requires a file read (queue entries store the *target*, not the
+   producer — verified in `domain/pending_event.rs`): the default is a
+   frontmatter-only `target-knot` read (metadata, no body); a producer field on
+   the queue entry is the alternative (Phase 1 decision). The section is omitted
+   entirely when the queue holds nothing of the knot's emittable types.
 2. **The norm survives, and is auditable.** The dedup norm ("if a queued event
    already carries the same facts — compare the frontmatter keys such as
    plan/phase — emit `event: None` instead of queueing a second signal") remains in
@@ -70,24 +85,26 @@ Secondary gaps:
 
 ## Existing Tests
 
-From plan 060 and 065 (source paths as recorded there; current wiring to be
-confirmed in Phase 0 — not yet re-verified against the tree):
+Verified against the working tree at drafting (`c63608c` + the in-flight
+096-series changes; Phase 0 re-verifies and records deltas):
 
 | Test class / file | What it covers | Status |
 |---|---|---|
-| `domain/events.rs` — `build_listener_context` tests | Emission-instruction generation, event dedup across consumers, loom-level subscriptions | ✅ Green (per 060) |
-| `application/usecases/context_providers.rs` — `AgentEventsContextProvider` tests | Pending-section formatting, frontmatter extraction, missing-dir graceful empty | ✅ Green (per 060) — **but keyed on dispatch-dir scan; the definition under test is what this plan replaces** |
-| `adapters/outbound/event_dispatcher.rs` tests | Dispatch file writing, frontmatter structure, fan-out | ✅ Green (per 060) |
-| Queue persistence tests (plan 065) | Queue write/restart-scan/late-removal, `events/*.json` shape | ✅ Green (per 065) |
-| `application/usecases/process_strand.rs` execution tests | Full pipeline incl. context injection | ✅ Green (per 060) |
+| `application/usecases/context_providers.rs` — `AgentEventsContextProvider` tests | Queue-preferred pending scan (`StrandQueueAccessor`), dispatch-dir scan fallback, section formatting, omit-when-empty | ✅ Green — **but the index carries `description`/`timestamp` from per-file frontmatter reads with no cap; the definition under test is what this plan replaces** |
+| `domain/events.rs` — `build_listener_context*` tests | Emission-instruction generation (incl. the `extract_emitted_event_ids` scoping list), event dedup across consumers, loom-level subscriptions | ✅ Green |
+| `adapters/outbound/event_dispatcher.rs` tests | Dispatch file writing, frontmatter structure (`target-knot` = producer), fan-out | ✅ Green |
+| `adapters/outbound/disk_event_queue.rs` tests + `tests/persistent_queue.rs` | Disk queue push/pop/restart-scan/late-removal, `pending_strand_paths`, `tie-offs/<rig>/events/*.json` shape | ✅ Green (per 065) |
+| `application/usecases/process_strand.rs` execution tests + `tests/pipeline.rs` | Full pipeline incl. context injection and `EventsDispatched` emission | ✅ Green |
+| `adapters/service_log.rs` — `EventsDispatched` render test | `EventsDispatched` log-line format | ✅ Green |
 
 ## Test Gaps
 
 - No test defines "pending" in terms of **queue entries** (vs. directory files).
 - No cap/backlog test: 50 queued entries must not become 50 prompt entries.
 - No test that the index is **scoped to the knot's emittable types** only.
-- No content-blindness test: the index must be buildable from queue metadata +
-  path alone.
+- No metadata-only test: the index must be buildable from queue metadata +
+  path alone (producer filter from frontmatter only — no `description` /
+  `timestamp` carry-over, no body reads).
 - No `queue-busy` observation test on `EventsDispatched` when the queue grew
   mid-session.
 - No integration test: producer re-entry with a same-type event **queued** → the
@@ -110,8 +127,10 @@ findings only.
 Build the pending-set source of truth: a function/usecase that, given a knot's
 emittable event types, reads the persistent queue and returns per-type
 `(count, newest-N {path, queued_at})`. Cap constant fixed. Content-blind by
-construction (type from path). **Pane:** the targeted unit test suite for the
-pending-set builder (includes cap, scoping, empty, content-blindness cases).
+Metadata-only by construction (type from path, `queued_at` from the entry; the
+producer-identity source is decided here — frontmatter-only read vs. a producer
+field on the queue entry). **Pane:** the targeted unit test suite for the
+pending-set builder (includes cap, scoping, empty, metadata-only cases).
 
 ### Phase 2: Prompt injection of the Queued Events section
 
@@ -157,6 +176,16 @@ test suite (identical dropped, distinct kept, different types never compared).
   `ContextProvider`, omit-when-empty, producer-side advisory) is kept; only the
   pending-set source and the norm's home change. If Phase 0 finds the tree has
   already moved on from the 060 design, re-record the delta there.
+- **Drafting-time verification.** The wiring facts above were verified against
+  the working tree at drafting (2026-10-18 — `c63608c` plus the in-flight
+  uncommitted 096-series changes): the queue-preferred scan already exists, the
+  frontmatter reads are current, and the queue entry carries no producer field.
+- **In-flight blind spot.** `pending_strand_paths()` covers debounced queue
+  entries only; popped (in-flight) entries are invisible, and their disk file is
+  removed at pop. If post-release field evidence shows the dominant duplicate
+  pattern is in-flight overlap (a producer re-entering while its own event is
+  mid-processing), a later increment could union the `state.json` strand queue
+  into the index. Out of scope here.
 - **Batching was considered and rejected** for this problem: it trades per-item
   fault isolation and the 1:1 strand→queue→completion mapping for a win that
   dedup + visibility already deliver. Revisit only with evidence that distinct

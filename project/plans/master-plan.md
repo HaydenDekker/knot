@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-18 (plan 097 drafted — Queue-Backed Pending-Event Visibility for Producers: re-key 060's producer pending-event index from dispatch-directory files to the persistent queue, capped + scoped + content-blind, the dedup norm moved to the per-rig instruction surface, `queue-busy` dispatch observation; gated `EventCoalesced` hash-dedup increment)
+> **Last Updated:** 2026-10-18 (plan 097 activated — fleshed out against the working tree (`c63608c` + the in-flight uncommitted 096-series changes): the queue-preferred scan already exists (re-key partial — no cap, per-file frontmatter reads, dispatch-dir fallback survive); phase documents 0–6 created; no feature branch per the repo's main-only convention)
 > **Prior:** 2026-10-16 (plans 094–095 complete — the event-enforcement follow-up tie-off is now appended (bugfix) + the `knot-template` skill and per-rig instruction links (hard-coded default + config links); released in v0.59.0)
 > **Prior:** 2026-10-02 (plan 093 phase 10 — event-types panel: invocations / consumers / minutes caused per event type, the communication view — v0.58.0)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
@@ -53,7 +53,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 97 | [Queue-Backed Pending-Event Visibility for Producers](097-queued-event-visibility/queued-event-visibility-plan.md) | ⬜ Draft | 2026-10-18 |
+| 97 | [Queue-Backed Pending-Event Visibility for Producers](097-queued-event-visibility/queued-event-visibility-plan.md) | 🟡 In Progress | 2026-10-18 |
 | 96 | [Hard-Coded Tie-Off Contract — the Content-Only Override](096-hardcoded-tieoff-contract/hardcoded-tieoff-contract-plan.md) | ✅ Complete (2026-10-16) — released in v0.60.0 | 2026-10-16 |
 | 95 | [Skill-Backed Tie-Off and Event-Content Instructions — `knot-template` Skill + Per-Rig Instruction Links](plan-skill-backed-tieoff-instructions.md) | ✅ Complete (2026-10-16) — released in v0.59.0 | 2026-10-16 |
 | 94 | [Event-Enforcement Follow-Up Tie-Off Is Never Appended](plan-bugfix-event-enforcement-followup-tieoff.md) | ✅ Complete (2026-10-16) — released in v0.59.0 | 2026-10-16 |
