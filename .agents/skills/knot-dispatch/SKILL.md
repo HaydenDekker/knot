@@ -4,7 +4,7 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.6.0"
+  version: "1.7.0"
   compatibility: "Knot 0.37.0+"
 ---
 
@@ -610,7 +610,8 @@ Freeform narrative context about the event.
 
 (Shown with cleaned-up wording — the runtime block lists the real
 subscriber events and their descriptions, and appends a
-`## Pending Events` section when events are still queued, see below.)
+`## Queued Events` section when events of your emittable types are
+still queued, see below.)
 
 ### The Acknowledgement Convention
 
@@ -640,19 +641,22 @@ description: Review found no architectural issues — nothing to refactor
 ---
 ````
 
-### Pending Events
+### Queued Events
 
 When the producer has previously dispatched events that are still
 queued for consumer processing, the injected block also contains a
-**`## Pending Events`** section listing each one (event id,
-description, file name). Two dedup rules apply:
+**`## Queued Events`** section (Knot 0.61.0+): per emittable event
+type, the full count plus the newest capped entries (path + queued
+at) — read from the persistent queue, not the event bodies. Two
+dedup rules apply (the norm itself lives in the event-content guide
+of the tie-off instructions):
 
-- **Covered outcome:** if a pending event already covers the outcome
-  of the work just done, emit that event with `occurred: false`
-  (description referencing the pending event) instead of re-emitting
-  it.
-- **Needs more context:** if a pending event is relevant but requires
-  additional context, do **not** edit the pending event file — emit a
+- **Covered outcome:** if a queued event already carries the same
+  facts (compare frontmatter keys such as plan/phase), emit the event
+  with `occurred: false` (description referencing the queued event)
+  instead of queueing a second signal.
+- **Needs more context:** if a queued event is relevant but requires
+  additional context, do **not** edit the queued event file — emit a
   new event of the same type with the additional context.
 
 ### Enforcement

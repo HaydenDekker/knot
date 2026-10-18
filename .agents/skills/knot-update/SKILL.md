@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.26.0"
+  version: "1.27.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -58,6 +58,42 @@ Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
 
 ---
+
+### Queue-Backed Pending-Event Visibility (Knot 0.61.0, 2026-10-18)
+
+**What changed:** the producer prompt's pending-events section is now
+built from the persistent event queue (the authoritative pending set)
+instead of a per-event-file frontmatter scan — a prompt-surface
+change only, no document-format change:
+
+1. **`## Queued Events`** (renamed from `## Pending Events`) — per
+   emittable event type: the full count plus the newest capped entries
+   (path + the queue's own `queued_at`), capped at 10 ("N queued
+   (newest 10 shown)").
+2. **Metadata-only (body-blind)** — no event bodies or `description` /
+   `timestamp` carry-over; the only file read is the frontmatter
+   `target-knot` key (producer identity).
+3. **Scoped + omitted-when-empty** — only entries of types the knot
+   may emit, from this producer; the section is absent when the queue
+   holds nothing relevant.
+4. **Dedup norm moved to the content section** — the event-content
+   guide carries the **Deduplication** bullet (same facts → emit
+   `occurred: false` and say so; don't queue a second signal); the
+   section points at the rig wording.
+
+**Affected documents:** none (no document-format change; no rig
+configuration change). The `knot-template` skill ships the updated
+content template (2.1.0 — the Deduplication bullet); the
+`knot-dispatch` skill's Pending Events section is reworded to
+Queued Events (1.7.0).
+
+**Migration:** none required. Prompt-surface note: a rig linking a
+custom `tie-off-content-instruction-file` does not pick up the new
+Deduplication bullet automatically — optionally add it to the override
+(the bullet text ships in the `knot-template` content template). Producers
+will see `## Queued Events` (count + capped newest entries) instead of
+`## Pending Events` (per-file description lines) whenever their queue
+holds relevant events.
 
 ### Hard-Coded Tie-Off Contract + One Exposed Content Section (Knot 0.60.0, 2026-10-16)
 

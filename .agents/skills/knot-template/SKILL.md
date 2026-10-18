@@ -4,7 +4,7 @@ description: "Customise the tie-off content section Knot injects into producer a
 license: MIT
 metadata:
   author: Knot Team
-  version: "2.0.0"
+  version: "2.1.0"
   compatibility: "Knot 0.60.0+"
 ---
 

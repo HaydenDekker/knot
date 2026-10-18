@@ -1,5 +1,41 @@
 # Release Notes
 
+## v0.61.0 — 2026-10-18
+
+### Changed — Queue-backed pending-event visibility for producers (Plan 097)
+
+The producer prompt's pending-events section is now built from the
+persistent event queue (the authoritative pending set) instead of a
+per-event-file frontmatter scan:
+
+- **`## Queued Events`** (renamed from `## Pending Events`) — per
+  emittable event type: the full count plus the newest capped entries
+  (path + the queue's own `queued_at`), capped by
+  `PENDING_INDEX_CAP = 10`. A backlog of N never becomes N prompt
+  entries ("N queued (newest 10 shown)").
+- **Metadata-only (body-blind)** — no event bodies or `description` /
+  `timestamp` parsing; the only file read is the frontmatter
+  `target-knot` key (producer identity). The event type comes from the
+  dispatch path.
+- **Scoped** — only entries of types this knot may emit, and only
+  entries FROM this producer (other producers' queued events are
+  excluded); the section is omitted entirely when the queue holds
+  nothing relevant.
+- **The queue-less directory-scan fallback** (contexts without a wired
+  queue, and tests) is kept and capped identically (plan 097 phase 0
+  decision D2).
+- **Dedup norm on the rig instruction surface** — the event-content
+  guide (the `knot-template` content template, the source of the
+  hard-coded default content section) gains a **Deduplication**
+  bullet: if a queued event already carries the same facts (compare
+  frontmatter keys such as plan/phase), emit the subscriber event
+  `occurred: false` and say so rather than queueing a second signal.
+  The `## Queued Events` section points at this rig wording.
+
+No rig configuration change; no document migration. Prompt-surface
+only: the section heading, wording, and entry shape change when the
+queue is non-empty (rigs may ignore the section).
+
 ## v0.60.0 — 2026-10-16
 
 ### Changed — The tie-off contract is hard-coded again; one exposed content section (Plan 096)
