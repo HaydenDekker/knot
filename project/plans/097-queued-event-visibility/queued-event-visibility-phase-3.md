@@ -23,7 +23,7 @@
       `queued_events_from_wired_queue_use_queue_timestamps` (prompt template).
 - [x] Verification — `cargo clippy --all-targets` clean; `cargo test --lib`
       green (1143 passed — including the instruction-surface and prompt
-      panes); commit sha `⟨TBD⟩` recorded as this phase's external-verdict
+      panes); commit sha `c4bb846` recorded as this phase's external-verdict
       request. The ON-COMMIT suite is not required by this item.
 
 ## Deviations

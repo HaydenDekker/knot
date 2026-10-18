@@ -31,11 +31,11 @@
 - [x] Baseline — `cargo test --lib context_providers` + `cargo test --test
       persistent_queue` + `cargo test --test pipeline` green on the untouched
       tree (the phase's pane: the existing suite green + the recorded findings).
-- [x] Verification — `cargo clippy --all-targets` clean; `cargo test --lib
+- [x] Verification — `cargo clippy --all-targets` clean (pre-existing lib-test
+      warnings unchanged); `cargo test --lib
       context_providers` green (no files changed in this phase — findings
-      committed only); commit sha `⟨see git log: the docs commit for this
-      phase⟩` recorded as this phase's external-verdict request. The
-      ON-COMMIT suite is not required by this item.
+      committed only); commit sha `5e198b0` recorded as this phase's
+      external-verdict request. The ON-COMMIT suite is not required by this item.
 
 ## Deviations
 - **D1 — producer identity stays in the frontmatter (default chosen).**

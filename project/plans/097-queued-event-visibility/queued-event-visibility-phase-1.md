@@ -36,7 +36,7 @@
       (+ producer-scoping and `count_event_types` helpers.)
 - [x] Verification — `cargo clippy --all-targets` clean; `cargo test --lib
       pending` (the targeted builder + queue-accessor tests) green; commit
-      sha `⟨TBD⟩` recorded as this phase's external-verdict request. The
+      sha `520412a` recorded as this phase's external-verdict request. The
       ON-COMMIT suite is not required by this item.
 
 ## Deviations

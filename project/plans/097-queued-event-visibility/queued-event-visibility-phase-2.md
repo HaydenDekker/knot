@@ -39,7 +39,7 @@
       context_providers` green (13 passed — the context-provider
       prompt-content suite, the phase's pane) + `cargo test --test pipeline`
       green (19 passed — full-pipeline context injection still holds); commit
-      sha `88c269c` recorded as this phase's external-verdict request. The
+      sha `d6cc16a` recorded as this phase's external-verdict request. The
       ON-COMMIT suite is not required by this item.
 
 ## Deviations
