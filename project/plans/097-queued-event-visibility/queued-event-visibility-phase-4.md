@@ -27,7 +27,7 @@
       `process_strand` dispatch tests (115 passed, incl. 3 new) +
       `cargo test --lib events` (139 passed) + full lib (1148 passed) +
       `cargo test --test pipeline` (19) + `--test persistent_queue` (8) green;
-      commit sha `⟨TBD⟩` recorded as this phase's external-verdict request. The
+      commit sha `1110aff` recorded as this phase's external-verdict request. The
       ON-COMMIT suite is not required by this item.
 
 ## Deviations
