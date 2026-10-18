@@ -25,7 +25,7 @@
       lints, identical to the `pipeline` target's count); the new integration
       test is green (`cargo test --test queued_events_e2e`: 10 passed — 3
       plan-097 tests + 7 `helpers`-module tests); `cargo test --test pipeline`
-      still green (19 passed); commit sha `⟨TBD⟩` recorded as this phase's
+      still green (19 passed); commit sha `5c4dc8c` recorded as this phase's
       external-verdict request. The ON-COMMIT suite is not required by this
       item.
 
