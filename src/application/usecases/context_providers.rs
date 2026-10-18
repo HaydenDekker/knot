@@ -14,22 +14,10 @@ use crate::domain::events::{
     StrandQueueAccessor,
 };
 use crate::domain::knot_file::derive_runtime_root;
+use crate::domain::pending_event::{
+    build_pending_index, event_type_from_path, QueuedEventMeta, QueuedEventType,
+};
 pub use crate::domain::events::ContextProvider;
-
-// ── Pending Event Metadata ──────────────────────────────────────────────
-
-/// Metadata extracted from a single dispatched event file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PendingEvent {
-    /// The event type (e.g. `PlanCreated`).
-    event_id: String,
-    /// Short description from the frontmatter `description` field.
-    description: Option<String>,
-    /// Filename of the dispatched event (e.g. `event-2026-07-14T10-00-00Z.md`).
-    filename: String,
-    /// ISO 8601 timestamp (local time) from the frontmatter.
-    timestamp: Option<String>,
-}
 
 // ── AgentEventsContextProvider ──────────────────────────────────────────
 
@@ -91,28 +79,30 @@ impl AgentEventsContextProvider {
             return emission_instructions;
         }
 
-        // Append pending events section after emission instructions.
-        // Agent sees what it can emit first, then what is already pending.
-        let pending_section = format_pending_events_section(&pending);
+        // Append the queued events section after the emission instructions.
+        // The agent sees what it can emit first, then what is already queued.
+        let pending_section = format_queued_events_section(&pending);
         format!("{}\n\n{}", emission_instructions, pending_section)
     }
 
-    /// Scan the in-memory strand queue for pending events emitted by
-    /// the current producer knot.
+    /// Build the producer's queued-events index (plan 097) from the
+    /// persistent queue — the authoritative pending set — or, when no
+    /// queue reference is wired, from the dispatch directories (capped
+    /// fallback, plan 097 phase 0 decision D2).
     ///
-    /// Queries the strand event queue (source of truth) for files
-    /// currently waiting to be processed. Only events dispatched from
-    /// this producer and matching an event ID the knot may emit are
-    /// included.
+    /// Metadata-only: the event type comes from the dispatch path and
+    /// `queued_at` from the queue entry; the only file read is the
+    /// frontmatter `target-knot` key (producer identity). No event
+    /// bodies, no `description`/`timestamp` carry-over.
     fn scan_pending_events(
         &self,
         knot: &Knot,
         emission_instructions: &str,
         rig_dir: &Path,
         strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
-    ) -> Vec<PendingEvent> {
+    ) -> Vec<QueuedEventType> {
         // Extract event IDs this knot may emit from the emission
-        // instructions. They appear as bullet points: `- \`EventId\` — ...`
+        // instructions (the backticked subscriber bullets).
         let event_ids = extract_emitted_event_ids(emission_instructions);
         if event_ids.is_empty() {
             return Vec::new();
@@ -120,67 +110,42 @@ impl AgentEventsContextProvider {
 
         let producer_id = &knot.id.0;
 
-        // Get pending strand paths from the in-memory queue.
-        // If no queue reference is available, fall back to filesystem scan.
-        let pending_paths = strand_queue
-            .as_ref()
-            .map(|q| q.pending_strand_paths())
-            .unwrap_or_else(|| {
-                Self::scan_dispatch_directory(rig_dir, &event_ids)
-            });
+        // Candidate entries: (path, queued_at). The queue path carries the
+        // queue's own timestamps; the fallback has none.
+        let candidates: Vec<(std::path::PathBuf, String)> = match &strand_queue {
+            Some(q) => q
+                .pending_entries()
+                .into_iter()
+                .map(|e| (e.strand_path, e.queued_at))
+                .collect(),
+            None => Self::scan_dispatch_directory(rig_dir, &event_ids)
+                .into_iter()
+                .map(|p| (p, String::new()))
+                .collect(),
+        };
 
-        let mut pending = Vec::new();
-
-        for strand_path in pending_paths {
-            // Only consider event files (start with "event-")
-            let filename = strand_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string());
-            let Some(ref name) = filename else {
+        // Only read the frontmatter of emittable-type event files (bounds
+        // the I/O); the domain builder re-scopes and applies the cap.
+        let mut metas = Vec::new();
+        for (path, queued_at) in candidates {
+            let Some(event_id) = event_type_from_path(&path) else {
                 continue;
             };
-            if !name.starts_with("event-") {
+            if !event_ids.contains(&event_id) {
                 continue;
             }
-
-            // Only include events from a matching event ID directory
-            let parent_dir_name = strand_path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string());
-            let Some(ref event_dir_name) = parent_dir_name else {
-                continue;
-            };
-            if !event_ids.contains(event_dir_name) {
-                continue;
-            }
-
-            // Read frontmatter to verify producer and extract metadata
-            let Ok(frontmatter) = extract_frontmatter(&strand_path) else {
-                continue;
-            };
-
-            // Only include events dispatched FROM this producer.
-            let target_knot = frontmatter_get(&frontmatter, "target-knot");
-            if target_knot != Some(producer_id.as_str()) {
-                continue;
-            }
-
-            let description =
-                frontmatter_get(&frontmatter, "description").map(String::from);
-            let timestamp =
-                frontmatter_get(&frontmatter, "timestamp").map(String::from);
-
-            pending.push(PendingEvent {
-                event_id: event_dir_name.clone(),
-                description,
-                filename: filename.unwrap_or_default(),
-                timestamp,
+            let producer = extract_frontmatter(&path)
+                .ok()
+                .and_then(|fm| frontmatter_get(&fm, "target-knot").map(String::from))
+                .filter(|p| !p.is_empty());
+            metas.push(QueuedEventMeta {
+                strand_path: path,
+                queued_at,
+                producer,
             });
         }
 
-        pending
+        build_pending_index(&metas, producer_id, &event_ids)
     }
 
     /// Scan the dispatch directory for event files matching given
@@ -327,26 +292,39 @@ fn extract_emitted_event_ids(instructions: &str) -> HashSet<String> {
     event_ids
 }
 
-// ── Pending Events Section Formatting ──────────────────────────────────
+// ── Queued Events Section Formatting ─────────────────────────────────
 
-/// Format the pending events section as markdown to prepend to the
-/// agent prompt.
-fn format_pending_events_section(pending: &[PendingEvent]) -> String {
+/// Format the queued events section as markdown to append to the agent
+/// prompt (plan 097): per emittable event type, the full count plus the
+/// newest capped entries. The dedup norm itself lives in the tie-off
+/// content instructions (the per-rig instruction surface) — this section
+/// only points at it.
+fn format_queued_events_section(pending: &[QueuedEventType]) -> String {
     let mut output = String::from(
-        "## Pending Events\n\n\
-         The following events have are queued awaiting processing. Do not emit a event if a queued event\n\
-         covers the same outcome, to avoid duplication.\n\n",
+        "## Queued Events\n\n\
+         The following events of the types you may emit are already queued, \
+         awaiting consumer invocation. If a queued event already covers the \
+         outcome you would emit, do not queue a duplicate — see the \
+         event-content norm in your tie-off instructions.\n\n",
     );
 
-    for event in pending {
-        let desc = event.description.as_deref().unwrap_or("");
-        if desc.is_empty() {
-            output.push_str(&format!("- `{}` (file: {})\n", event.event_id, event.filename));
-        } else {
+    for ty in pending {
+        if ty.count > ty.entries.len() {
             output.push_str(&format!(
-                "- `{}` — \"{}\" (file: {})\n",
-                event.event_id, desc, event.filename,
+                "- `{}` — {} queued (newest {} shown):\n",
+                ty.event_id,
+                ty.count,
+                ty.entries.len()
             ));
+        } else {
+            output.push_str(&format!("- `{}` — {} queued:\n", ty.event_id, ty.count));
+        }
+        for (path, queued_at) in &ty.entries {
+            if queued_at.is_empty() {
+                output.push_str(&format!("  - {}\n", path.display()));
+            } else {
+                output.push_str(&format!("  - {} (queued: {})\n", path.display(), queued_at));
+            }
         }
     }
 
@@ -599,14 +577,14 @@ mod tests {
             result
         );
         assert!(
-            !result.contains("## Pending Events"),
-            "should NOT contain pending events section: {}",
+            !result.contains("## Queued Events"),
+            "should NOT contain queued events section: {}",
             result
         );
     }
 
     /// Pending events exist → includes both emission instructions and
-    /// pending events section.
+    /// queued events section.
     #[test]
     fn pending_events_includes_both_sections() {
         let dir = tempfile::tempdir().unwrap();
@@ -642,8 +620,8 @@ mod tests {
         let result = provider.build_context(&ctx);
 
         assert!(
-            result.contains("## Pending Events"),
-            "should contain pending events section: {}",
+            result.contains("## Queued Events"),
+            "should contain queued events section: {}",
             result
         );
         assert!(
@@ -656,15 +634,17 @@ mod tests {
             "should reference the event type: {}",
             result
         );
+        // Plan 097: metadata-only — the frontmatter description must NOT
+        // leak into the section.
         assert!(
-            result.contains("Implementation plan for feature X"),
-            "should contain the description: {}",
+            !result.contains("Implementation plan for feature X"),
+            "description must not appear in the section: {}",
             result
         );
     }
 
-    /// Pending events section correctly extracts event-id, description,
-    /// and timestamp from dispatched event file frontmatter.
+    /// Queued events section shows count + path (no description /
+    /// timestamp carry-over — plan 097 metadata-only).
     #[test]
     fn pending_events_section_correctly_extracts_metadata() {
         let dir = tempfile::tempdir().unwrap();
@@ -704,13 +684,13 @@ mod tests {
             result
         );
         assert!(
-            result.contains("My plan description"),
-            "should contain description: {}",
+            !result.contains("My plan description"),
+            "description must not appear: {}",
             result
         );
         assert!(
             result.contains("event-2026-07-14T10-00-00Z.md"),
-            "should contain filename: {}",
+            "should contain the event file path: {}",
             result
         );
     }
@@ -777,16 +757,9 @@ mod tests {
             "should contain ValidationFailed: {}",
             result
         );
-        assert!(
-            result.contains("Plan for feature X"),
-            "should contain PlanCreated description: {}",
-            result
-        );
-        assert!(
-            result.contains("Validation failed on PRD"),
-            "should contain ValidationFailed description: {}",
-            result
-        );
+        // Plan 097: no description carry-over.
+        assert!(!result.contains("Plan for feature X"));
+        assert!(!result.contains("Validation failed on PRD"));
     }
 
     /// Missing dispatch directory (no events emitted yet) → graceful
@@ -821,8 +794,8 @@ mod tests {
             result
         );
         assert!(
-            !result.contains("## Pending Events"),
-            "should NOT contain pending events section when no events exist: {}",
+            !result.contains("## Queued Events"),
+            "should NOT contain queued events section when no events exist: {}",
             result
         );
     }
@@ -864,8 +837,8 @@ mod tests {
         let result = provider.build_context(&ctx);
 
         assert!(
-            result.contains("## Pending Events"),
-            "should contain pending events section: {}",
+            result.contains("## Queued Events"),
+            "should contain queued events section: {}",
             result
         );
         assert!(
@@ -875,7 +848,278 @@ mod tests {
         );
         assert!(
             result.contains("event-2026-07-14T10-00-00Z.md"),
-            "should contain filename: {}",
+            "should contain the event file path: {}",
+            result
+        );
+    }
+
+    // ── Queue-wired path (plan 097) ────────────────────────────────
+
+    /// Test double for the strand queue accessor: fixed entries
+    /// (path + `queued_at`) — the queue-backed source of truth.
+    #[derive(Debug, Default)]
+    struct FakeQueue {
+        entries: Vec<crate::domain::pending_event::QueueEntryView>,
+    }
+
+    impl crate::domain::events::StrandQueueAccessor for FakeQueue {
+        fn pending_strand_paths(&self) -> Vec<std::path::PathBuf> {
+            self.entries
+                .iter()
+                .map(|e| e.strand_path.clone())
+                .collect()
+        }
+
+        fn pending_entries(&self) -> Vec<crate::domain::pending_event::QueueEntryView> {
+            self.entries.clone()
+        }
+
+        fn delete(&self, _id: &crate::domain::pending_event::PendingEventId) -> bool {
+            true
+        }
+    }
+
+    /// One queued event: a real file on disk (frontmatter `target-knot`
+    /// = the given producer) + returns the event file path. Callers build
+    /// the `QueueEntryView` (with the queue's own `queued_at`).
+    fn seed_queued_event(
+        rig_dir: &Path,
+        consumer_loom: &str,
+        event_id: &str,
+        target_knot: &str,
+        filename: &str,
+    ) -> std::path::PathBuf {
+        setup_rig_with_events(
+            rig_dir,
+            consumer_loom,
+            event_id,
+            target_knot,
+            Some("seeded description that must not leak"),
+            "2026-07-14T09:00:00Z", // frontmatter ts — must NOT appear
+            filename,
+        );
+        crate::domain::knot_file::derive_runtime_root(rig_dir)
+            .join(consumer_loom)
+            .join(event_id)
+            .join(filename)
+    }
+
+    fn make_ctx_with_queue(
+        producer: Knot,
+        consumer: Knot,
+        rig_dir: PathBuf,
+        queue: FakeQueue,
+    ) -> BuildContext {
+        let mut ctx = make_build_context(
+            producer,
+            default_loom_id(),
+            vec![consumer],
+            rig_dir,
+        );
+        ctx.strand_queue = Some(std::sync::Arc::new(queue));
+        ctx
+    }
+
+    /// Wired queue → the section is built from the queue's entries and
+    /// timestamps (not the frontmatter, not the dispatch directory).
+    #[test]
+    fn queued_events_from_wired_queue_use_queue_timestamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let path = seed_queued_event(
+            &rig_dir,
+            "review-loom",
+            "PlanCreated",
+            "plan-creator",
+            "event-2026-07-14T10-00-00Z.md",
+        );
+        let queue = FakeQueue {
+            entries: vec![crate::domain::pending_event::QueueEntryView {
+                strand_path: path.clone(),
+                queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+            }],
+        };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir.clone(), queue);
+
+        let result = AgentEventsContextProvider.build_context(&ctx);
+
+        assert!(
+            result.contains("## Queued Events"),
+            "should contain queued events section: {}",
+            result
+        );
+        assert!(
+            result.contains("`PlanCreated` — 1 queued"),
+            "should show the per-type count: {}",
+            result
+        );
+        assert!(
+            result.contains(&path.display().to_string()),
+            "should show the queued entry path: {}",
+            result
+        );
+        // `queued_at` comes from the queue entry, not the frontmatter
+        // timestamp.
+        assert!(
+            result.contains("(queued: 2026-10-18T15:30:00+02:00)"),
+            "should show the queue's queued_at: {}",
+            result
+        );
+        assert!(
+            !result.contains("2026-07-14T09:00:00Z"),
+            "frontmatter timestamp must not leak: {}",
+            result
+        );
+        assert!(
+            !result.contains("seeded description that must not leak"),
+            "frontmatter description must not leak: {}",
+            result
+        );
+    }
+
+    /// A backlog of 50 queued entries of one type must not become 50
+    /// prompt entries: count 50, newest 10 shown (the cap).
+    #[test]
+    fn queued_events_backlog_is_capped_at_newest_ten() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let mut entries = Vec::new();
+        for i in 0..50 {
+            let filename = format!("event-{i:02}.md");
+            let queued_at = format!("2026-10-18T{0:02}:00:00+02:00", i);
+            let path = seed_queued_event(
+                &rig_dir,
+                "review-loom",
+                "PlanCreated",
+                "plan-creator",
+                &filename,
+            );
+            entries.push(crate::domain::pending_event::QueueEntryView {
+                strand_path: path,
+                queued_at,
+            });
+        }
+        let queue = FakeQueue { entries };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir.clone(), queue);
+
+        let result = AgentEventsContextProvider.build_context(&ctx);
+
+        assert!(
+            result.contains("`PlanCreated` — 50 queued (newest 10 shown)"),
+            "should show full count + capped listing: {}",
+            result
+        );
+        // Newest first: the highest timestamp (49) leads, the oldest (00)
+        // is not listed at all.
+        assert!(result.contains("event-49.md"), "newest entry must be listed: {}", result);
+        assert!(result.contains("event-40.md"), "entry #40 must be listed: {}", result);
+        assert!(
+            !result.contains("event-39.md"),
+            "entries beyond the cap must not be listed: {}",
+            result
+        );
+    }
+
+    /// Queue-wired: entries from other producers are excluded — when the
+    /// queue holds nothing FROM this producer of an emittable type, the
+    /// section is omitted entirely.
+    #[test]
+    fn queued_events_omitted_when_only_other_producers_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let path = seed_queued_event(
+            &rig_dir,
+            "review-loom",
+            "PlanCreated",
+            "some-other-producer",
+            "event-2026-07-14T10-00-00Z.md",
+        );
+        let queue = FakeQueue {
+            entries: vec![crate::domain::pending_event::QueueEntryView {
+                strand_path: path,
+                queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+            }],
+        };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir.clone(), queue);
+
+        let result = AgentEventsContextProvider.build_context(&ctx);
+
+        assert!(
+            result.contains("# Subscriber Events"),
+            "emission instructions still present: {}",
+            result
+        );
+        assert!(
+            !result.contains("## Queued Events"),
+            "section must be omitted for other producers' entries: {}",
+            result
+        );
+    }
+
+    /// Queue-wired: entries of non-emittable types are excluded even
+    /// when they are this producer's.
+    #[test]
+    fn queued_events_scoped_to_emittable_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        // This producer's own event, but of a type no consumer subscribes
+        // to (not in the emittable list).
+        let path = seed_queued_event(
+            &rig_dir,
+            "review-loom",
+            "PlanScoped",
+            "plan-creator",
+            "event-2026-07-14T10-00-00Z.md",
+        );
+        let queue = FakeQueue {
+            entries: vec![crate::domain::pending_event::QueueEntryView {
+                strand_path: path,
+                queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+            }],
+        };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir.clone(), queue);
+
+        let result = AgentEventsContextProvider.build_context(&ctx);
+
+        assert!(
+            !result.contains("## Queued Events"),
+            "non-emittable types must be scoped out: {}",
             result
         );
     }
