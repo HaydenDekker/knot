@@ -53,6 +53,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 98 | [Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule](098-knot-lint/knot-lint-plan.md) | ⬜ Planned | 2026-10-22 |
 | 97 | [Queue-Backed Pending-Event Visibility for Producers](097-queued-event-visibility/queued-event-visibility-plan.md) | 🟡 In Progress | 2026-10-18 |
 | 96 | [Hard-Coded Tie-Off Contract — the Content-Only Override](096-hardcoded-tieoff-contract/hardcoded-tieoff-contract-plan.md) | ✅ Complete (2026-10-16) — released in v0.60.0 | 2026-10-16 |
 | 95 | [Skill-Backed Tie-Off and Event-Content Instructions — `knot-template` Skill + Per-Rig Instruction Links](plan-skill-backed-tieoff-instructions.md) | ✅ Complete (2026-10-16) — released in v0.59.0 | 2026-10-16 |
@@ -71,6 +72,13 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
+
+**Status:** ⬜ Planned (2026-10-22)
+**Where it is:** Draft — awaiting activation
+**Where it's going:** the `knot-lint` sub-skill lints any rig for inline-behaviour knots and cross-document contract drift (advisory, never modifies), the behaviour-in-skill rule is normative in `knot-design` and the design guide, and the first dated report over the workspace's rigs lands in this project lifecycle.
+**Plan:** [098-knot-lint/knot-lint-plan.md](098-knot-lint/knot-lint-plan.md)
 
 ### 96. Hard-Coded Tie-Off Contract — the Content-Only Override
 
