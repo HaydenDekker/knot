@@ -1,6 +1,6 @@
 ---
 name: knot-analyst
-description: "Analyse rig productivity and project progress at runtime. Read the service log (`[KNOT][EVENT]` / `[KNOT][STATE]` lines), inspect git history, assess project completion against plan documents, and identify blockers. USE FOR: analyse rig, rig analysis, rig productivity, project progress, how far along, rig health, rig performance, blocker detection, stalled rig, rig diagnosis, activity analysis, progress report, rig review, project health check, rig assessment, knot productivity, service log. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting raw state (use knot-inspect), designing knots (use knot-design), starting or stopping the service (use knot-start)."
+description: "Analyse rig productivity and project progress at runtime. Read the service log (`[KNOT][EVENT]` / `[KNOT][STATE]` lines), inspect git history, assess project completion against plan documents, and identify blockers."
 license: MIT
 metadata:
   author: Knot Team

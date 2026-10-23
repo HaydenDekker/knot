@@ -1,6 +1,6 @@
 ---
 name: knot-manage
-description: "Review the rig's work using git history and tie-off files. Examine what the rig has produced, assess the quality of agent output, trace the interaction chain between producer and consumer knots to verify communication was effective, and identify gaps between what was triggered and what was delivered. USE FOR: review rig work, check rig output, review tie-offs, review git commits, inspect agent output, check what rig did, review knot work, assess knot quality, review interaction, check communication, review event chain, trace event flow, review dispatch, review producer consumer, review agent comms, check rig productivity, review tie-off quality. DO NOT USE FOR: creating looms (use knot-create), triggering knots (use knot-dispatch), inspecting raw state (use knot-inspect), analysing rig productivity at runtime (use knot-analyst), designing knots (use knot-design)."
+description: "Review the rig's work using git history and tie-off files. Examine what the rig has produced, assess the quality of agent output, trace the interaction chain between producer and consumer knots to verify communication was effective, and identify gaps between what was triggered and what was delivered."
 license: MIT
 metadata:
   author: Knot Team

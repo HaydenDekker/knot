@@ -1,6 +1,6 @@
 ---
 name: knot-update
-description: "Record format changes between Knot binary versions. When a project updates its Knot binary, this skill tells the agent what changed in project documents (profiles, knots, looms) and how to migrate them. Contains a versioned changelog with migration instructions for each breaking change. USE FOR: update knot, knot version change, knot migration, knot changelog, migrate knot documents, knot format change, knot upgrade, knot breaking change, profile format change, knot file migration, loom migration. DO NOT USE FOR: creating looms (use knot-create), modifying looms (use knot-create), initialising a rig (use knot-init), inspecting state (use knot-inspect), fixing bugs (use project-bugfix)."
+description: "Record format changes between Knot binary versions. When a project updates its Knot binary, this skill tells the agent what changed in project documents (profiles, knots, looms) and how to migrate them. Contains a versioned changelog with migration instructions for each breaking change."
 license: MIT
 metadata:
   author: Knot Team

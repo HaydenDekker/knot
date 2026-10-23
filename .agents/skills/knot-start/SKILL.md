@@ -1,6 +1,6 @@
 ---
 name: knot-start
-description: "Start, stop, restart, and supervise the Knot service the way an agent should: always append the service log to `tie-offs/<rig>/knot-service.log`, run it in the background with a recorded PID, verify startup through `tie-offs/<rig>/state.json`, and stop it with SIGINT so the queue drains. Covers rig auto-discovery, multiple rigs, hot-reload vs restart-required changes, service-log inspection and rotation. USE FOR: start knot, start the service, run knot, background knot, restart knot, stop knot, kill knot, service log, knot-service.log, knot pid, is knot running, service not running, verify knot started, daemon, rig not running, knot crashed, service died. DO NOT USE FOR: initialising rig files (use knot-init), creating looms/knots/profiles (use knot-create), triggering work (use knot-dispatch), inspecting rig state (use knot-inspect), analysing productivity (use knot-analyst)."
+description: "Start, stop, restart, and supervise the Knot service the way an agent should: always append the service log to `tie-offs/<rig>/knot-service.log`, run it in the background with a recorded PID, verify startup through `tie-offs/<rig>/state.json`, and stop it with SIGINT so the queue drains. Covers rig auto-discovery, multiple rigs, hot-reload vs restart-required changes, service-log inspection and rotation."
 license: MIT
 metadata:
   author: Knot Team

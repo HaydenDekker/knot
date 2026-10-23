@@ -1,6 +1,6 @@
 ---
 name: knot-init
-description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, seeds a `default` alias in `rig/models.yml` from ~/.pi/agent/models.json and creates a default profile that uses `model-ref: default`. Verifies setup by reading `tie-offs/rig/state.json`. USE FOR: init knot, knot init, setup knot, configure knot rig, initialise knot, knot configuration, rig init, rig setup. DO NOT USE FOR: starting or stopping the Knot service (use knot-start), creating looms, creating knots, inspecting loom state, modifying existing looms."
+description: "Initialise a Knot rig in the current directory. Detects if a rig exists, verifies Knot is running by checking `tie-offs/rig/state.json`, and creates the rig directory structure. If no profiles exist, seeds a `default` alias in `rig/models.yml` from ~/.pi/agent/models.json and creates a default profile that uses `model-ref: default`. Verifies setup by reading `tie-offs/rig/state.json`."
 license: MIT
 metadata:
   author: Knot Team

@@ -1,6 +1,6 @@
 ---
 name: knot-abstractions
-description: "Understand the layered architecture of the Knot agent orchestration system and how it relates to project application layers. Covers the abstraction boundary between the orchestration engine (Knot), agent identities (profiles), reusable behaviors (skills), and the project domain layer. USE FOR: understand rig architecture, learn knot abstractions, grasp system layers, understand profile-skill relationship, learn how project folder feeds into system. DO NOT USE FOR: creating looms (use knot-create), inspecting state (use knot-inspect), designing knots (use knot-design)."
+description: "Understand the layered architecture of the Knot agent orchestration system and how it relates to project application layers. Covers the abstraction boundary between the orchestration engine (Knot), agent identities (profiles), reusable behaviors (skills), and the project domain layer."
 license: MIT
 metadata:
   author: Knot Team

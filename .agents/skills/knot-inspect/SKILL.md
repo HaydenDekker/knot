@@ -1,6 +1,6 @@
 ---
 name: knot-inspect
-description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` (written on state change) and activity from the service log `tie-offs/<rig>/knot-service.log` (`[KNOT][EVENT]` lines, filter with `grep 'loom=<id>'`). USE FOR: inspect rig, check rig status, view looms, list looms, inspect loom, loom status, knot status, check knot, view activity, loom activity, processing status, knot state, rig state, what looms exist, show looms, loom details, list profiles, view profile, check profile. DO NOT USE FOR: creating looms (use knot-create), deleting looms (use knot-create), creating profiles (use knot-create), initialising a rig (use knot-init), triggering processing, starting or stopping the service (use knot-start)."
+description: "Inspect the current state of a Knot rig: list looms, examine loom details, view activity, check knot processing status, list agent profiles. Read rig state from `tie-offs/<rig>/state.json` (written on state change) and activity from the service log `tie-offs/<rig>/knot-service.log` (`[KNOT][EVENT]` lines, filter with `grep 'loom=<id>'`)."
 license: MIT
 metadata:
   author: Knot Team
