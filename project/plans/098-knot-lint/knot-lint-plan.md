@@ -1,18 +1,22 @@
 # Plan: Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
-> **Status:** in progress — phases 0 and 1 complete (2026-10-23), phases
-> 2–3 pending. Phase 0: the rule text and the measurable boundary
+> **Status:** in progress — phases 0, 1 and 2 complete (2026-10-23),
+> phase 3 pending. Phase 0: the rule text and the measurable boundary
 > (prose/numbered-step thresholds) are live in `knot-design` and
 > `docs/design-guide.md`. Phase 1: the lint engine landed at
 > `.agents/skills/knot-lint/scripts/knot-lint.py` (Python 3 stdlib,
 > read-only) with the fixture rigs (`references/fixtures/`), the golden
 > finding set, and `--selftest` (green: good rig 0 findings, bad rig 8
-> findings, exact match). The thresholds were calibrated against the
-> fixture rigs and the two live calibration rigs on 2026-10-23 — no
-> threshold had to move (the knot repo's rig: wiring-only knots at 2
-> words of prose; the software-factory rig: rig-document floor at 425
-> words, 33 documents over the knot boundary, 3 single-editor
-> violations, 1 write-pressure log, K3/K4 clean).
+> findings, exact match); the thresholds were calibrated against the
+> fixture rigs and the two live calibration rigs — no threshold had to
+> move (the knot repo's rig: wiring-only knots at 2 words of prose; the
+> software-factory rig: rig-document floor at 158 measured words, 33
+> documents over the knot boundary). Phase 2: the first dated report is
+> committed at `project/lint/knot-lint-2026-10-23.md` (software-factory
+> rig: 37 findings — K1 x33, K2 x3, K5 x1; K3/K4 clean. This repo's
+> rig: 0 findings). The 2026-10-22 baseline's shared-editor
+> `discoveries.md` and the format-bootstrap circularity were both
+> rectified in the software-factory rig between baselines.
 
 ## Problem
 

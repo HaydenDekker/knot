@@ -33,7 +33,7 @@ import os
 import re
 import sys
 
-# --- the measurable boundary (knot-design v1.7.0 / docs/design-guide.md) ---
+# --- the measurable boundary (knot-design v1.7.1 / docs/design-guide.md) ---
 # Prose = body excluding frontmatter, fenced code blocks, and table lines.
 # Calibrated 2026-10-23 (plan 098 phase 1): the knot repo's rig (wiring
 # knots, 2 words) sits far below; the software-factory rig's rig
@@ -429,7 +429,7 @@ def render(result, thresholds):
     else:
         lines.append("Nothing to classify (empty shared table).")
     lines += ["", "## 8. Provenance", "",
-              f"- Thresholds from the measurable boundary (knot-design v1.7.0, "
+              f"- Thresholds from the measurable boundary (knot-design v1.7.1, "
               f"calibrated plan 098 phase 1): {json.dumps(thresholds)}",
               "- Editor/reader split: line-wording heuristic (writer verbs on the "
               "line carrying the reference); one finding per (family, subject)",
