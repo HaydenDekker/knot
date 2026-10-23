@@ -35,6 +35,7 @@ fn make_pending_event(
         knot_id: knot_id.to_string(),
         strand_path: strand_path.to_string(),
         queued_at: "2026-07-21T10:00:00+00:00".to_string(),
+        delivery: None,
     }
 }
 

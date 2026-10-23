@@ -130,6 +130,11 @@ impl DebounceEngine {
     ///
     /// Using all three fields ensures that the same file watched by
     /// different knots produces independent debounced events.
+    ///
+    /// Plan 099: an `EventDelivered` event never reaches the debounce
+    /// engine (direct queueing bypasses the watcher), but its synthetic
+    /// descriptor still keys correctly through [`StrandEvent::strand_path`],
+    /// so the helper stays total.
     fn event_key(event: &StrandEvent) -> (StrandPath, LoomId, KnotId) {
         match event {
             StrandEvent::Created {
@@ -146,6 +151,12 @@ impl DebounceEngine {
                 strand_path,
                 loom_id,
                 knot_id,
+            } => (strand_path.clone(), loom_id.clone(), knot_id.clone()),
+            StrandEvent::EventDelivered {
+                strand_path,
+                loom_id,
+                knot_id,
+                ..
             } => (strand_path.clone(), loom_id.clone(), knot_id.clone()),
         }
     }

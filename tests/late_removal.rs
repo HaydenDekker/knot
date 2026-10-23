@@ -83,6 +83,7 @@ fn make_pending(loom_id: &str, knot_id: &str, strand_path: &Path) -> PendingEven
         knot_id: knot_id.to_string(),
         strand_path: strand_path.to_string_lossy().into_owned(),
         queued_at: "2026-01-01T00:00:00".to_string(),
+        delivery: None,
     }
 }
 

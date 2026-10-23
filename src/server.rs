@@ -1740,6 +1740,7 @@ mod abandoned_run_tests {
             knot_id: knot.to_string(),
             strand_path: format!("/rig/looms/{loom}-loom/strands/{path}"),
             queued_at: "2026-09-11T19:08:00+08:00".to_string(),
+            delivery: None,
         }
     }
 

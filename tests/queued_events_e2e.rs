@@ -123,6 +123,7 @@ fn push_entry(
         knot_id: "plan-reviewer".to_string(),
         strand_path: path.display().to_string(),
         queued_at: queued_at.to_string(),
+        delivery: None,
     });
 }
 

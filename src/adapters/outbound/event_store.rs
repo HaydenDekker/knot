@@ -251,6 +251,7 @@ mod tests {
             knot_id: "test-knot".to_string(),
             strand_path: strand_path.to_string(),
             queued_at: "2026-01-01T00:00:00+00:00".to_string(),
+            delivery: None,
         }
     }
 

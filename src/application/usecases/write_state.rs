@@ -1167,6 +1167,7 @@ mod write_state_tests {
             knot_id: knot.to_string(),
             strand_path: path.to_string(),
             queued_at: queued_at.to_string(),
+            delivery: None,
         }
     }
 

@@ -415,6 +415,13 @@ impl NotifyEventSource {
                                 StrandEvent::Created { .. } => "Created",
                                 StrandEvent::Modified { .. } => "Modified",
                                 StrandEvent::Deleted { .. } => "Deleted",
+                                // Plan 099: deliveries never arrive via
+                                // the watcher — this arm keeps the logger
+                                // total and names the anomaly if one ever
+                                // is seen here.
+                                StrandEvent::EventDelivered { .. } => {
+                                    "EventDelivered"
+                                }
                             };
                             let detail = format!("{:?}", se);
                             logging::log_notify_event(kind, path, &detail);

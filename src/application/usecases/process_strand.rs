@@ -354,17 +354,33 @@ impl ProcessStrand {
                 strand_path.clone(),
                 KnotEventType::Deleted,
             ),
+            // Plan 099: a delivered emission. The strand is the synthetic
+            // `event:<producer>/<event-id>` descriptor, not a file — the
+            // payload rides in `delivery` and reaches the agent through
+            // the prompt. Treated as a `Created` arrival for the
+            // lifecycle (a new thing landed for this knot to act on).
+            StrandEvent::EventDelivered {
+                loom_id,
+                knot_id,
+                strand_path,
+                ..
+            } => (
+                loom_id.clone(),
+                knot_id.clone(),
+                strand_path.clone(),
+                KnotEventType::Created,
+            ),
         };
-        let strand_kind = match event_type {
-            KnotEventType::Created => "Created",
-            KnotEventType::Modified => "Modified",
-            KnotEventType::Deleted => "Deleted",
+        let strand_kind = if event.is_event_delivery() {
+            "Event"
+        } else {
+            match event_type {
+                KnotEventType::Created => "Created",
+                KnotEventType::Modified => "Modified",
+                KnotEventType::Deleted => "Deleted",
+            }
         };
-        let event_label = match event_type {
-            KnotEventType::Created => "Created".to_string(),
-            KnotEventType::Modified => "Modified".to_string(),
-            KnotEventType::Deleted => "Deleted".to_string(),
-        };
+        let event_label = strand_kind.to_string();
 
         logging::log_strand_event(
             &format!("{} processing start (knot={})", strand_kind, knot_id.0),
@@ -451,6 +467,7 @@ impl ProcessStrand {
             &strand_path,
             &loom_id,
             &tie_off_path,
+            event.delivery(),
         ) {
             Ok(resolved) => resolved,
             Err(err) => {
@@ -537,6 +554,7 @@ impl ProcessStrand {
         super::process_strand_helpers::write_tie_off(
             self, &outcome, knot, &tie_off_path, &strand_path, &event_label,
             &resolved.session_id,
+            event.delivery(),
         );
 
         // Record the timeout operational event (plan 083: `[EVENT]` line).
@@ -629,6 +647,14 @@ impl ProcessStrand {
         knot_id: &KnotId,
         strand_path: &StrandPath,
     ) -> Result<bool, PortError> {
+        // Plan 099: an event delivery has no file to check — its strand
+        // is the synthetic `event:<producer>/<event-id>` descriptor and
+        // the message rides in the queue entry. Nothing to stat, nothing
+        // to skip on binary/temp/missing grounds.
+        if event.is_event_delivery() {
+            return Ok(true);
+        }
+
         // Domain rule lives in StrandPath::should_process().
         let is_deleted = matches!(event, StrandEvent::Deleted { .. });
         let check = strand_path
@@ -6252,6 +6278,7 @@ mod event_dispatch_tests {
                 "/rig/tie-offs/rig/consumer-loom/{event_id}/event-{n}.md"
             ),
             queued_at: "2026-10-18T10:00:00".to_string(),
+            delivery: None,
         });
     }
 

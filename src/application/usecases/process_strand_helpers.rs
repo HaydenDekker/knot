@@ -65,14 +65,24 @@ pub fn write_tie_off(
     strand_path: &StrandPath,
     event_label: &str,
     session_id: &Option<String>,
+    delivery: Option<&crate::domain::pending_event::EventDelivery>,
 ) {
     if !outcome.should_write_tie_off() {
         return;
     }
 
-    // Extract event metadata if this strand is an event file
-    // (dispatched by intent-based routing).
-    let event_metadata = extract_event_metadata(strand_path);
+    // Extract event metadata. Plan 099: for a delivered emission the
+    // trace fields come from the queue entry's payload — there is no
+    // dispatched file to read them from. For a filesystem strand they
+    // still come from the file's frontmatter when it carries them.
+    let event_metadata = match delivery {
+        Some(d) => crate::domain::entities::EventMetadata {
+            event_id: Some(d.event_id.clone()),
+            source_knot: Some(d.producer_knot.clone()),
+            original_strand: d.original_strand.clone(),
+        },
+        None => extract_event_metadata(strand_path).unwrap_or_default(),
+    };
 
     let tie_off = TieOff {
         content: outcome.tie_off_content().unwrap_or_default(),
@@ -85,7 +95,7 @@ pub fn write_tie_off(
         strand_path: Some(strand_path.0.display().to_string()),
         timestamp: None,
         agent_events: Vec::new(),
-        event_metadata: event_metadata.unwrap_or_default(),
+        event_metadata,
         session_id: session_id.clone(),
     };
     let _ = ps.tie_off_sink.append(tie_off);
@@ -211,6 +221,7 @@ pub fn resolve_config_and_build(
     strand_path: &StrandPath,
     loom_id: &LoomId,
     tie_off_path: &TieOffPath,
+    delivery: Option<&crate::domain::pending_event::EventDelivery>,
 ) -> Result<ResolvedExecution, PortError> {
     // Resolve effective agent config (profile).
     let (agent_config, mut effective_timeout, profile) =
@@ -222,7 +233,13 @@ pub fn resolve_config_and_build(
     // the timeout is the stamped remaining *execution* budget applied in
     // full — queue wait never erodes it (plan 087 Bound 2).
     let (incoming_continuations, budget_secs, batch_start_epoch) =
-        read_continuation_stamps(strand_path);
+        if delivery.is_some() {
+            // Plan 099: a delivered emission has no strand file to read
+            // its batch stamps from — a delivery is always a fresh hop.
+            (0, None, None)
+        } else {
+            read_continuation_stamps(strand_path)
+        };
     // Plan 087: capture this hop's dequeue instant — the start of the
     // hop's execution window. At handoff, `execution_secs =
     // now − dequeue_epoch` is the only amount that decrements the batch
@@ -333,8 +350,17 @@ pub fn resolve_config_and_build(
         format!("{}\n\n{}", listener_context, base_prompt)
     };
 
+    // Plan 099: a delivered emission carries its message in the queue
+    // entry, so the payload is rendered into the prompt — the consumer
+    // gets everything it used to read out of the dispatched `.md`, and
+    // no file is referenced.
+    let prompt = match delivery {
+        Some(d) => format!("{}\n{}", d.render_for_consumer(), prompt),
+        None => prompt,
+    };
+
     // Execute agent with session-resume retry logic.
-    let strand_file_ref = if is_deleted {
+    let strand_file_ref = if is_deleted || delivery.is_some() {
         None
     } else {
         Some(strand_path.clone())
@@ -1787,6 +1813,7 @@ mod tests {
             knot_id: "k1".to_string(),
             strand_path: "/already/queued/a.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+            delivery: None,
         });
         queue.push_or_replace(PendingEvent {
             id: PendingEventId("1500000000000-bbbb".to_string()),
@@ -1795,6 +1822,7 @@ mod tests {
             knot_id: "k1".to_string(),
             strand_path: "/already/queued/b.md".to_string(),
             queued_at: "2026-01-01T00:00:01Z".to_string(),
+            delivery: None,
         });
 
         // Simulate the watcher → debounce push: the continuation file's

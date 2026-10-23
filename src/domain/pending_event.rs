@@ -9,8 +9,21 @@
 //! filename of `{unix_timestamp_ms}-{4-hex-chars}.json`. The timestamp
 //! ensures FIFO ordering by filename sort; the random suffix prevents
 //! collisions within the same millisecond.
+//!
+//! ## Two entry kinds (plan 099)
+//!
+//! A **filesystem entry** (`kind` `Created` / `Modified` / `Deleted`)
+//! points at a real strand file — the entry is a pointer, the file holds
+//! the message, which is right for a file trigger.
+//!
+//! An **event entry** (`kind` [`EVENT_ENTRY_KIND`]) *is* the message: it
+//! carries the emitted payload in [`EventDelivery`] and no file exists
+//! to read. Its `strand_path` is the synthetic
+//! [`event_strand_descriptor`] (`event:<producer>/<event-id>`), so
+//! every log line and tie-off header keeps a meaningful, greppable
+//! `strand=` field.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -71,26 +84,169 @@ fn rand_hex(n: usize) -> String {
     buf.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+// ── Event delivery payload (plan 099) ─────────────────────────────────────
+
+/// The queue-entry `kind` for a delivered agent-event emission.
+///
+/// Distinct from the filesystem kinds: an `Event` entry carries its
+/// message in [`EventDelivery`] and its `strand_path` is the synthetic
+/// [`event_strand_descriptor`], not a file path.
+pub const EVENT_ENTRY_KIND: &str = "Event";
+
+/// Build the synthetic strand descriptor carried by an event-delivered
+/// queue entry: `event:<producer-knot>/<event-id>`.
+///
+/// Not a filesystem path — nothing is ever stat-ed or read at it. It
+/// exists so the delivered entry keeps a `strand=` field that names
+/// where the message came from, and so `grep 'strand=event:<knot>/'`
+/// finds every delivery of one producer's events.
+pub fn event_strand_descriptor(producer_knot: &str, event_id: &str) -> String {
+    format!("event:{}/{}", producer_knot, event_id)
+}
+
+/// Whether a `strand_path` value is an event descriptor rather than a
+/// filesystem path.
+pub fn is_event_descriptor(strand_path: &str) -> bool {
+    strand_path.starts_with("event:")
+}
+
+/// The payload one producer emission carries to one subscriber (plan
+/// 099).
+///
+/// Embedded in the queue entry that delivers the emission, so the
+/// consumer receives the message **from the queue** — no dispatched
+/// event file exists to read, and the payload is not duplicated on
+/// disk. The full agent narrative behind the emission stays reachable
+/// through the producer's `session:` trailer (`pi --session-id`).
+///
+/// `payload` is a [`BTreeMap`] (not the parsed [`super::events::AgentEvent`]'s
+/// `HashMap`) so the persisted entry JSON is deterministic — two runs of
+/// the same emission write byte-identical entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventDelivery {
+    /// The emitted event's id (e.g. `PlanCreated`).
+    pub event_id: String,
+    /// The knot that emitted the event.
+    pub producer_knot: String,
+    /// The loom the producer belongs to.
+    pub producer_loom: String,
+    /// The producer's own trigger strand — the file whose change started
+    /// the chain that produced this emission. `None` when the producer
+    /// had no file trigger (a system event, or a rig-scoped emission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_strand: Option<String>,
+    /// The event's narrative body, verbatim from the producer's tie-off
+    /// block (`None` when the producer emitted no body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// The event's key-value payload fields.
+    #[serde(default)]
+    pub payload: BTreeMap<String, String>,
+}
+
+impl EventDelivery {
+    /// The synthetic strand descriptor this delivery's queue entry
+    /// carries.
+    pub fn strand_descriptor(&self) -> String {
+        event_strand_descriptor(&self.producer_knot, &self.event_id)
+    }
+
+    /// Render the delivery as the block a consumer agent is given in
+    /// place of a file it cannot read (plan 099).
+    ///
+    /// Carries the producer identity, the event id, the producer's
+    /// original strand, the payload fields, and the body — everything
+    /// the consumer previously got from the dispatched `.md`'s
+    /// frontmatter and body, and nothing it did not.
+    pub fn render_for_consumer(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "## Event: {} from {} (loom {})\n",
+            self.event_id, self.producer_knot, self.producer_loom
+        ));
+        if let Some(ref original) = self.original_strand {
+            out.push_str(&format!("original_strand: {}\n", original));
+        }
+        if !self.payload.is_empty() {
+            out.push_str("\npayload:\n");
+            for (key, value) in &self.payload {
+                out.push_str(&format!("- **{}**: {}\n", key, value));
+            }
+        }
+        if let Some(ref body) = self.body {
+            out.push('\n');
+            out.push_str(body);
+            if !body.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
 // ── PendingEvent ──────────────────────────────────────────────────────────
 
 /// A serialisable strand event ready for disk persistence.
 ///
 /// Stored as JSON in `rig/events/` as `{id}.json`. The disk file IS the
 /// queue — there is no separate in-memory index.
+///
+/// Filesystem kinds carry `delivery: None` and `strand_path` points at a
+/// real file. An [`EVENT_ENTRY_KIND`] entry carries the message in
+/// `delivery` and a synthetic descriptor in `strand_path` — see the
+/// module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingEvent {
     /// Unique event identifier (matches the `.json` filename stem).
     pub id: PendingEventId,
-    /// Event kind: `"Created"`, `"Modified"`, or `"Deleted"`.
+    /// Event kind: `"Created"`, `"Modified"`, `"Deleted"`, or
+    /// [`EVENT_ENTRY_KIND`].
     pub kind: String,
     /// The loom this event targets.
     pub loom_id: String,
     /// The knot this event targets.
     pub knot_id: String,
-    /// Absolute path to the strand file.
+    /// Filesystem entries: the absolute path to the strand file.
+    /// Event entries: the synthetic [`event_strand_descriptor`].
     pub strand_path: String,
     /// ISO 8601 timestamp (local time) when the event entered the queue.
     pub queued_at: String,
+    /// The embedded emission payload — `Some` only for
+    /// [`EVENT_ENTRY_KIND`] entries. Absent (and never serialised) for
+    /// the filesystem kinds, so pre-099 entries on disk load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<EventDelivery>,
+}
+
+impl PendingEvent {
+    /// Whether this entry delivers an agent-event emission rather than a
+    /// filesystem change.
+    pub fn is_event_delivery(&self) -> bool {
+        self.kind == EVENT_ENTRY_KIND
+    }
+
+    /// Build the queue entry that delivers `delivery` to one subscriber
+    /// (`consumer_loom` / `consumer_knot`).
+    ///
+    /// One call per subscriber — fan-out is the caller's job, and each
+    /// subscriber gets its own entry with its own id and `queued_at` so
+    /// removal is per-delivery.
+    pub fn from_delivery(
+        delivery: EventDelivery,
+        consumer_loom: &LoomId,
+        consumer_knot: &KnotId,
+    ) -> Self {
+        let strand_path = delivery.strand_descriptor();
+        PendingEvent {
+            id: generate_event_id(),
+            kind: EVENT_ENTRY_KIND.to_string(),
+            loom_id: consumer_loom.0.clone(),
+            knot_id: consumer_knot.0.clone(),
+            strand_path,
+            queued_at: crate::adapters::logging::format_timestamp(),
+            delivery: Some(delivery),
+        }
+    }
 }
 
 // ── PendingEventOrShutdown ────────────────────────────────────────────────
@@ -137,8 +293,15 @@ impl From<StrandEvent> for PendingEvent {
             StrandEvent::Created { .. } => "Created",
             StrandEvent::Modified { .. } => "Modified",
             StrandEvent::Deleted { .. } => "Deleted",
+            StrandEvent::EventDelivered { .. } => EVENT_ENTRY_KIND,
         };
         match event {
+            StrandEvent::EventDelivered {
+                loom_id,
+                knot_id,
+                delivery,
+                ..
+            } => PendingEvent::from_delivery(*delivery, &loom_id, &knot_id),
             StrandEvent::Created {
                 loom_id,
                 knot_id,
@@ -160,6 +323,7 @@ impl From<StrandEvent> for PendingEvent {
                 knot_id: knot_id.0,
                 strand_path: strand_path.0.to_string_lossy().into_owned(),
                 queued_at: crate::adapters::logging::format_timestamp(),
+                delivery: None,
             },
         }
     }
@@ -167,8 +331,10 @@ impl From<StrandEvent> for PendingEvent {
 
 /// Convert a [`PendingEvent`] back into a domain [`StrandEvent`].
 ///
-/// Returns an error if `kind` is not one of `"Created"`, `"Modified"`,
-/// or `"Deleted"`.
+/// An [`EVENT_ENTRY_KIND`] entry becomes [`StrandEvent::EventDelivered`]
+/// (carrying its embedded payload); the filesystem kinds become their
+/// matching variants. Returns an error for any other `kind`, and for an
+/// `Event` kind with no payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownEventKind(String);
 
@@ -204,6 +370,21 @@ impl TryFrom<PendingEvent> for StrandEvent {
                 knot_id,
                 strand_path,
             }),
+            EVENT_ENTRY_KIND => {
+                let id = event.id.clone();
+                let delivery = event.delivery.ok_or_else(|| {
+                    UnknownEventKind(format!(
+                        "{} entry {} carries no delivery payload",
+                        EVENT_ENTRY_KIND, id
+                    ))
+                })?;
+                Ok(StrandEvent::EventDelivered {
+                    loom_id,
+                    knot_id,
+                    strand_path,
+                    delivery: Box::new(delivery),
+                })
+            }
             other => Err(UnknownEventKind(other.to_string())),
         }
     }
@@ -499,6 +680,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/f.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+        
+            delivery: None,
         };
         let result: Result<StrandEvent, _> = pending.try_into();
         assert!(result.is_err());
@@ -569,6 +752,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/file.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+        
+            delivery: None,
         };
         let e2 = PendingEvent {
             id: PendingEventId("200-b".to_string()), // different ID
@@ -577,6 +762,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/file.md".to_string(),
             queued_at: "2026-01-01T00:00:01Z".to_string(), // different time
+        
+            delivery: None,
         };
         assert_eq!(
             dedup_key(&e1),
@@ -595,6 +782,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/file.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+        
+            delivery: None,
         };
         let modified = PendingEvent {
             id: PendingEventId("100-b".to_string()),
@@ -603,6 +792,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/file.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+        
+            delivery: None,
         };
         assert_ne!(
             dedup_key(&created),
@@ -623,6 +814,8 @@ mod tests {
             knot_id: "knot".to_string(),
             strand_path: "/f.md".to_string(),
             queued_at: "2026-01-01T00:00:00Z".to_string(),
+        
+            delivery: None,
         };
         let eos = PendingEventOrShutdown::Event(event.clone());
         match eos {

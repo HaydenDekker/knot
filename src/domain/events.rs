@@ -385,6 +385,20 @@ pub enum StrandEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
     },
+    /// A producer's event emission was delivered to this knot (plan 099).
+    ///
+    /// Not a filesystem change: the message arrives embedded in the
+    /// queue entry ([`EventDelivery`](crate::domain::pending_event::EventDelivery))
+    /// and `strand_path` is the synthetic
+    /// [`event_strand_descriptor`](crate::domain::pending_event::event_strand_descriptor)
+    /// — there is no file to read. The consumer is given the rendered
+    /// delivery in its prompt instead of an `@file` reference.
+    EventDelivered {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        delivery: Box<crate::domain::pending_event::EventDelivery>,
+    },
 }
 
 impl StrandEvent {
@@ -393,8 +407,25 @@ impl StrandEvent {
         match self {
             StrandEvent::Created { strand_path, .. }
             | StrandEvent::Modified { strand_path, .. }
-            | StrandEvent::Deleted { strand_path, .. } => strand_path,
+            | StrandEvent::Deleted { strand_path, .. }
+            | StrandEvent::EventDelivered { strand_path, .. } => strand_path,
         }
+    }
+
+    /// The embedded delivery payload, when this is an event delivery.
+    pub fn delivery(
+        &self,
+    ) -> Option<&crate::domain::pending_event::EventDelivery> {
+        match self {
+            StrandEvent::EventDelivered { delivery, .. } => Some(delivery),
+            _ => None,
+        }
+    }
+
+    /// Whether this event is a delivered emission rather than a
+    /// filesystem change.
+    pub fn is_event_delivery(&self) -> bool {
+        matches!(self, StrandEvent::EventDelivered { .. })
     }
 }
 
