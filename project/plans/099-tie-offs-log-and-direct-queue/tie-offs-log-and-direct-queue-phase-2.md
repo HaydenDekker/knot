@@ -55,7 +55,8 @@
       unused `derive_runtime_root` import removed);
       `tests/step` 17 passed, `tests/system_event_subscriptions`
       13 passed, `tests/payload_queue` 21 passed; full `cargo test`
-      suite green. Commit sha recorded in the follow-up docs commit.
+      suite green. Commit sha `5733784` recorded as this phase's
+      external-verdict request.
       The ON-COMMIT suite is not required by this item.
 
 ## Deviations
