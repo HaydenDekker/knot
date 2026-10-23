@@ -50,9 +50,9 @@
       tests green (24 passed in `tests/git_versioning`),
       `cargo test --test consolidated_log` green (6 passed),
       `service_log` unit tests green (47 passed); full `cargo test`
-      suite green (33 suites, 0 failures). Commit sha recorded in the
-      follow-up docs commit. The ON-COMMIT suite is not required by
-      this item.
+      suite green (33 suites, 0 failures). Commit sha `bbb1808`
+      recorded as this phase's external-verdict request. The ON-COMMIT
+      suite is not required by this item.
 
 ## Deviations
 - "Run-lifecycle lines" is read as the knot-run bracket —
