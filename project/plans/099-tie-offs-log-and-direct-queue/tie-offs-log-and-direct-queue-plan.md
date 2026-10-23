@@ -56,14 +56,19 @@ The settled direction (worked through in the rig review):
 
 ## Existing Tests
 
-Outline level — re-verified in Phase 0. Known relevant surfaces:
+Re-verified in Phase 0 (baseline `a445278` green):
 
 | Test | What it covers | Status |
 |------|---------------|--------|
-| `tests/consolidated_log.rs` | Binary-level: single-line `[KNOT][EVENT]`/`[KNOT][STATE]` stderr grammar; `state.json` change-driven rewrites (plan 083) | ✅ Green — will be extended for the new trace fields |
-| `tests/event_fanout.rs` | Event fan-out to subscribers | ✅ Green — pins current (dispatch-file) behaviour; the migration target |
-| `tests/event_enforcement.rs` | Per-event enforcement / follow-up tie-off append (plans 091/094) | ✅ Green — the follow-up append must re-target `tie-offs.log` |
+| `tests/consolidated_log.rs` | Binary-level: single-line `[KNOT][EVENT]`/`[KNOT][STATE]` stderr grammar; `state.json` change-driven rewrites (plan 083) | ✅ Green — extended in Phases 3–4 for the new trace fields |
+| `tests/event_fanout.rs` | Event fan-out to subscribers (the dispatched-file shape) | ✅ Green — pins the retiring behaviour; the migration target (the file path retires in Phase 5) |
+| `tests/event_enforcement.rs` | Per-event enforcement / follow-up tie-off append (plans 091/094) | ✅ Green — the follow-up append re-targets `tie-offs.log` in Phase 4 |
+| `tests/queued_events_e2e.rs` | Queued-event visibility (plan 097) | ✅ Green — repoints to the entry-carried ids in Phase 2 |
+| `tests/persistent_queue.rs` | Queue persistence, `load_persisted` redelivery | ✅ Green — extended for the `Event` kind in Phase 1 |
+| `tests/late_removal.rs` | At-least-once removal at every terminal point | ✅ Green — extended for the `Event` kind in Phase 1 |
 | `tests/agent_integration.rs` | End-to-end knot processing through pi | ✅ Green — the e2e pane for the queue + log changes |
+| `tests/system_event_subscriptions.rs` | System-event delivery (plan 082) | ✅ Green — rides the new delivery in Phase 2 |
+| `tests/tie_off.rs` | Tie-off section format | ✅ Green — re-targeted to the unified log in Phase 4 |
 
 ## Test Gaps
 
@@ -83,70 +88,140 @@ Outline level — re-verified in Phase 0. Known relevant surfaces:
 
 ## Phases
 
-Outline — phase panes and file sets to be firmed up in Phase 0.
+The file sets are firmed against the Phase 0 pinned surface; the Phase 0
+decisions (D1–D8, recorded in the Phase 0 document) drive them.
 
 ### Phase 0: Technical exploration and baseline
 
 Pin the code surface (tie-off append path, event parser, queue adapter,
-git commit path), re-verify the test table, and decide the open technical
-questions (see Notes). Produces the phase file sets; no behaviour change.
+git commit path), re-verify the test table, and settle the open technical
+questions (see Notes). **Pane:** the baseline suite green + the recorded
+findings (deviations recorded, not silently fixed). **File set:** the
+phase document only — no behaviour change.
 
 ### Phase 1: Payload-embedded queue entries
 
-The new queue-entry shape carries the event payload in the entry body,
-fan-out one entry per subscriber, removal at completion/failure,
-`load_persisted` redelivery, and the direct-queue-write path for manual
-dispatch of the new kind. Pane: the fan-out/queue test pane green.
+The queue entry for a delivered emission becomes the message itself
+(D1–D3): `PendingEvent` gains `delivery: Option<EventDelivery>` and a
+new `kind: "Event"` (existing on-disk entries load unchanged — serde
+default, skipped when absent); the entry's `strand_path` is the
+synthetic `event:<producer-knot>/<event-id>` descriptor, never stat-ed;
+the `StrandEvent` pipeline gains an explicit `EventDelivered` branch —
+file validation skipped, no `@file` ref to the adapter, the rendered
+delivery prepended to the prompt, batch stamps a fresh hop — and
+`write_tie_off` takes its trace fields from the delivery rather than a
+dispatched file. **Pane:** `tests/payload_queue.rs` green (per-
+subscriber fan-out with the payload in the entry body, no dispatched
+`.md` written, removal at completion and at failure, `load_persisted`
+redelivery after a crash, prompt carries the payload with no `@file`,
+legacy JSON loads). **File set:** `src/domain/pending_event.rs`,
+`src/domain/events.rs`, `src/application/usecases/process_strand.rs`,
+`src/application/usecases/process_strand_helpers.rs`,
+`tests/payload_queue.rs`.
 
 ### Phase 2: Direct queueing from the tie-off parse
 
-Events parsed from a producer's tie-off queue directly; the dispatched
-`.md` files and the `event:`-URI strand/watch path for events are no
-longer created. Pane: e2e — producer tie-off → consumer processed, with
-the dispatch-dir-absent assertions green.
+Events parsed from a producer's tie-off queue directly — one
+payload-bearing entry per subscriber (D5: system events ride the same
+delivery). The `QueueEventDispatcher` adapter is wired as the sole
+`EventDispatcherPort` for both the agent-event and system-event paths,
+sharing one persistent queue; the `event:`-URI strand/watch path
+retires (no dispatch directory, no watcher, no `DirectoryCreated`);
+the pending-event visibility index repoints to the entry-carried ids
+(D6); the port contract carries `original_strand` and the producer's
+loom into the delivery. **Pane:** the e2e absence assertions — producer
+tie-off → consumer runs from the queue entry with the payload in its
+prompt, and no dispatch `.md`, per-`EventId` directory, or watcher
+exists. **File set:** `src/adapters/outbound/queue_event_dispatcher.rs`
+(new), `src/application/ports.rs`,
+`src/application/usecases/system_event_emitter.rs`,
+`src/application/usecases/process_strand.rs`,
+`src/application/usecases/loom/mod_watchers.rs`,
+`src/application/usecases/context_providers.rs`,
+`src/adapters/outbound/disk_event_queue.rs`,
+`src/application/in_memory_event_queue.rs`, `src/domain/events.rs`,
+`src/domain/pending_event.rs`, `src/server.rs`,
+`src/application/usecases/config_event_handler.rs`, `tests/step.rs`,
+`tests/system_event_subscriptions.rs`.
 
 ### Phase 3: Commit trailers and structured trace fields
 
-Knot commits carry the trailer fields (`session`, `event`, `source`,
-`original_strand`); the service-log line grammar gains the same fields.
-Pane: commit-trailer + consolidated-log grammar tests green.
+Knot commits carry the trailer block (`session:`, `event:`, `source:`,
+`original_strand:` — git's own trailer convention: last paragraph,
+`Token: value` lines); the service-log line grammar gains the same
+fields on the run-lifecycle lines, structured for grep. Fields that are
+`None` (e.g. `original_strand` for a loom- or rig-scoped system event)
+are omitted, not written empty. **Pane:** the commit-trailer tests
+(subject unchanged, block present and parseable by `git
+interpret-trailers`) + the consolidated-log grammar tests green.
+**File set:** `src/adapters/outbound/git_versioner.rs`,
+`src/adapters/service_log.rs`, `tests/consolidated_log.rs`, the trailer
+tests (new, or extended in `tests/`).
 
 ### Phase 4: The unified `tie-offs.log`
 
-The service appends every tie-off section (trigger header reworked into
-the structured first line, content, slim event audit blocks — id,
-occurred, reason, timestamp; no payload bodies) to one
-`tie-offs/<rig>/tie-offs.log`, serialised, sole writer. Per-knot files
-retire; the enforcement follow-up append re-targets the unified log.
-Pane: consolidated-log binary-level test pane green.
+The service appends every tie-off section to one
+`tie-offs/<rig>/tie-offs.log` — sole writer, serialised appends — with
+the trigger header reworked into a structured first line and the event
+audit blocks slimmed to id, occurred, reason, and timestamp (no payload
+bodies — the commit stays the fidelity source per D7; the full session
+narrative stays reachable via `pi --session-id`). Per-knot files
+retire; `TieOffSink::read_content` (the Deleted-event history path and
+the enforcement follow-up) re-targets the unified log; the enforcement
+follow-up append lands in the same file. **Pane:** the consolidated-log
+binary-level test pane green (section grammar, sole-writer
+serialisation under concurrent appends, enforcement follow-up appends
+to the same file). **File set:**
+`src/adapters/outbound/tieoff_sink.rs`, `src/application/ports.rs`,
+`src/application/usecases/process_strand.rs`,
+`tests/consolidated_log.rs`, `tests/event_enforcement.rs`,
+`tests/tie_off.rs`.
 
 ### Phase 5: Cutover and migration
 
-One planned change, never piecemeal: existing rig layouts cut over (old
-per-knot files stay in git history, no backfill — the service owns the
-write format), repoint the references (see Notes for the cross-repo
-surface), deprecate the retired paths with diagnostics. Pane: a
-field-rig acceptance run — the full trace chain verified end to end.
+One planned change, never piecemeal (D4: hard cutover, no config flag).
+Startup detects retired-layout artefacts (per-knot tie-off files,
+dispatch directories) and logs one-line `[KNOT][CONFIG]` deprecation
+diagnostics naming them; old files stay in git history, no backfill —
+the service owns the write format. The retired file-dispatcher path
+deprecates with diagnostics; the direct queue write becomes the sole
+manual dispatch mechanism (D8) and accepts the `Event` kind — `knot
+step --event <entry>` addresses queue entries by id, unchanged. **Pane:**
+the trace-chain acceptance — one emission traced service log → commit
+trailers → `tie-offs.log` → (session) with no persistent payload
+duplication, green as the in-repo acceptance test and as the field-rig
+run. **File set:** `src/server.rs` (startup diagnostics),
+`src/adapters/outbound/event_dispatcher.rs` (deprecation), the
+trace-chain acceptance test (new, in `tests/`).
 
 ## Notes
 
-Open technical questions for Phase 0 exploration:
+The open technical questions settled in Phase 0 (the full decisions
+D1–D8 are recorded in the Phase 0 document):
 
-- **Cutover strategy**: hard cutover vs. a config flag (the rig has a
-  history of deprecate-with-warning key handling — 096 retired keys by
-  parse-warn-not-honour). Decide before Phase 2.
-- **Plan 092 interplay**: the `event:knot:<EventId>` static engine token
-  and zero-consumer diagnostics reference the subscription mechanism this
-  plan changes — check what survives and what repoints.
-- **Plan 097 (in progress)**: queue-backed pending-event visibility reads
-  the queue; payload-embedded entries change what the visibility surface
-  shows (the payload is now *in* the queue). Coordinate ordering.
-- **Truncation contract**: the 1000-line commit-body truncation. With
-  slim event blocks the sections shrink; decide whether the file remains
-  the fidelity source (current stance) or the limit moves.
-- **Manual dispatch**: the `knot-dispatch` "drop an event file in a
-  dispatch directory" manual path retires; the direct queue write becomes
-  the sole manual mechanism and gains the new event kind.
+- **Cutover strategy** — hard cutover of the write format, no config flag
+  (D4). The service owns the write format (096's precedent is
+  deprecate-and-warn for *keys*, not dual-write for *artefacts*); old
+  per-knot files and dispatch directories are neither backfilled nor
+  read by the new writer — they stay in git history, and startup logs a
+  deprecation diagnostic naming what it finds.
+- **Plan 092 interplay** — the `event:knot:<EventId>` static engine token
+  and the zero-consumer diagnostics are subscription-side and survive
+  unchanged; only the delivery mechanism moves off the filesystem. Phase
+  2 verifies the static-token path e2e (the consumer still runs — from
+  the queue entry).
+- **Plan 097 coordination** — the queue-backed visibility repoints to
+  the entry-carried `event_id` / `producer`, with the path-derivation
+  fallback kept for legacy dispatched files during the transition (D6).
+  The index stays metadata-only: the payload being *in* the queue does
+  not leak into the prompt surface.
+- **Truncation contract** — unchanged (D7). The tie-off content remains
+  the fidelity source and the 1000-line commit-body cap stays; the slim
+  event audit blocks shrink `tie-offs.log`, not the commit body.
+- **Manual dispatch** — the `knot-dispatch` "drop an event file in a
+  dispatch directory" manual path retires with the files (D8); the
+  direct queue write is the sole manual mechanism and gains the `Event`
+  kind.
 - **Cross-repo repointing (not in this plan's file set)**: the
   `knot-manage`, `knot-dispatch`, `knot-inspect`, `knot-analyst` skills in
   the `agents` repo cite the per-knot paths, the dispatch directories,
