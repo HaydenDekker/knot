@@ -9,7 +9,6 @@ use crate::adapters::logging;
 use crate::application::ports::{EventSource, LoomLogPort, PortError};
 use crate::domain::entities::{KnotId, LoomId};
 use crate::domain::events::LoomEvent;
-use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::value_objects::StrandSource;
 
 use super::super::system_event_emitter::{
@@ -47,11 +46,9 @@ fn emit_directory_created(
 /// Handles both strand source variants:
 ///
 /// - **Filesystem**: creates the path if missing, starts a watcher.
-/// - **EventUri**: derives the event dispatch directory
-///   `tie-offs/<rig-basename>/{loom-id}/{event-id}/` (under the rig's
-///   runtime root), creates it if missing, and starts a watcher so
-///   dispatched event files trigger `StrandEvent::Created` for the
-///   consumer knot.
+/// - **EventUri**: **no directory and no watcher** (plan 099) — the
+///   event is delivered straight into the consumer's queue, so the
+///   dispatched-file machinery is retired.
 ///
 /// Logs `LoomEvent::DirectoryCreated` when a directory is auto-created,
 /// and always logs a `watch-started` event after the watcher is
@@ -162,68 +159,40 @@ fn ensure_filesystem_watch(
 /// `tie-offs/<rig-basename>/{loom-id}/{event-id}/`. Creates it if missing
 /// and starts a file watcher so dispatched event files trigger
 /// `StrandEvent::Created` for the consumer knot.
+/// Plan 099: an `EventUri` strand source needs **no directory and no
+/// watcher**.
+///
+/// Delivery is a direct write into the consumer's queue
+/// (`QueueEventDispatcher`), so the dispatched-file machinery this
+/// function used to set up is retired:
+///
+/// - the `tie-offs/<rig>/<loom>/<EventId>/` dispatch directory is no
+///   longer created,
+/// - no filesystem watcher is registered for it,
+/// - no `DirectoryCreated` record is emitted for it.
+///
+/// The subscription itself (`StrandSource::EventUri`) is unchanged —
+/// only the delivery mechanism moved off the filesystem. The knot is
+/// still recorded as event-driven so the producer-side matching
+/// (`resolve_for_producer`) and the read-side views keep working.
 fn ensure_event_uri_watch(
-    rig_dir: &Path,
+    _rig_dir: &Path,
     loom_id: &LoomId,
     knot_id: &KnotId,
     event_id: &str,
-    log_port: &dyn LoomLogPort,
-    event_source: &dyn EventSource,
-    emitter: Option<&SystemEventEmitter>,
+    _log_port: &dyn LoomLogPort,
+    _event_source: &dyn EventSource,
+    _emitter: Option<&SystemEventEmitter>,
 ) -> Result<(), PortError> {
-    let event_dir = derive_runtime_root(rig_dir)
-        .join(&loom_id.0)
-        .join(event_id);
-
-    let dir_created = if !event_dir.exists() {
-        std::fs::create_dir_all(&event_dir).map_err(|e| {
-            PortError::LoomSaveFailed(format!(
-                "failed to create event dir '{}': {}",
-                event_dir.display(),
-                e,
-            ))
-        })?;
-        log_port.append(LoomEvent::DirectoryCreated {
-            loom_id: loom_id.clone(),
-            knot_id: knot_id.clone(),
-            directory: event_dir.display().to_string(),
-            timestamp: format_timestamp(),
-        })?;
-        emit_directory_created(
-            emitter,
-            loom_id,
-            knot_id,
-            &event_dir.display().to_string(),
-        );
-        logging::log_knot_event(
-            "dir-created",
-            &loom_id.0,
-            &knot_id.0,
-            &format!("auto-created event dir: {} (event={})", event_dir.display(), event_id),
-        );
-        true
-    } else {
-        false
-    };
-
-    event_source.set_loom_ids(&event_dir, loom_id, knot_id);
-    event_source.watch(&event_dir).map_err(|e| {
-        PortError::LoomSaveFailed(format!(
-            "failed to watch event dir '{}': {}",
-            event_dir.display(),
-            e,
-        ))
-    })?;
-
-    if dir_created {
-        logging::log_knot_event(
-            "watch-started",
-            &loom_id.0,
-            &knot_id.0,
-            &format!("event watcher started on {} (event={})", event_dir.display(), event_id),
-        );
-    }
-
+    logging::log_knot_event(
+        "watch-skipped",
+        &loom_id.0,
+        &knot_id.0,
+        &format!(
+            "event subscription {event_id} needs no dispatch dir — \
+             plan 099 delivers straight to the queue"
+        ),
+    );
     Ok(())
 }
 
@@ -342,14 +311,14 @@ mod mod_watchers_tests {
         assert_eq!(watches.len(), 1);
     }
 
-    // ── EventUri tests ─────────────────────────────────────────────────
+    // ── EventUri tests (plan 099: the dispatched-file mechanism is retired) ──
 
-    /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
-    /// derives the event dispatch directory
-    /// `tie-offs/<rig-basename>/{loom-id}/{event-id}/` (under the
-    /// runtime root), creates it if missing, and starts the watcher.
+    /// Plan 099: an `EventUri` strand source creates **no** dispatch
+    /// directory, registers **no** watcher, and calls **no**
+    /// `set_loom_ids` — delivery is a direct queue write, so the
+    /// filesystem machinery this replaced must stay untouched.
     #[test]
-    fn event_uri_source_derives_and_creates_event_directory() {
+    fn event_uri_source_creates_no_directory_and_watches_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let rig_path = tmp.path().join("rig");
 
@@ -375,123 +344,60 @@ mod mod_watchers_tests {
             &event_source,
             None,
         );
+        assert!(result.is_ok(), "an event subscription must still register");
 
-        // Should succeed
-        assert!(result.is_ok());
-
-        // Event directory was created (under the runtime root)
-        let expected_dir = tmp.path()
+        // The retired dispatch directory must NOT be created.
+        let retired_dir = tmp
+            .path()
             .join("tie-offs")
             .join("rig")
             .join(&loom_id.0)
             .join(event_id);
         assert!(
-            expected_dir.exists(),
-            "event directory should have been created"
+            !retired_dir.exists(),
+            "plan 099 must not create the dispatch dir {}",
+            retired_dir.display()
+        );
+        assert!(
+            !tmp.path().join("tie-offs").exists(),
+            "plan 099 must not create the tie-offs runtime tree for a subscription"
         );
 
-        // DirectoryCreated event logged
+        // No watcher, no id mapping — nothing to watch.
+        assert!(watch_calls.lock().unwrap().is_empty(), "no watcher for an event source");
+        assert!(set_ids_calls.lock().unwrap().is_empty(), "no set_loom_ids for an event source");
+
+        // No DirectoryCreated record.
         let events = logged_events.lock().unwrap();
         assert!(
-            events.iter().any(|e| matches!(e, LoomEvent::DirectoryCreated { .. })),
-            "DirectoryCreated should be logged for event dir"
+            events
+                .iter()
+                .all(|e| !matches!(e, LoomEvent::DirectoryCreated { .. })),
+            "no DirectoryCreated for a retired mechanism"
         );
-
-        // Verify DirectoryCreated event fields
-        let dir_created_event = events.iter().find(|e| {
-            matches!(e, LoomEvent::DirectoryCreated { .. })
-        });
-        assert!(dir_created_event.is_some());
-        match dir_created_event.unwrap() {
-            LoomEvent::DirectoryCreated {
-                directory,
-                knot_id: event_knot_id,
-                ..
-            } => {
-                assert_eq!(
-                    directory.as_str(),
-                    expected_dir.display().to_string()
-                );
-                assert_eq!(event_knot_id.0, knot_id.0);
-            }
-            other => panic!("expected DirectoryCreated, got {other:?}"),
-        }
-
-        // Watcher started on event directory
-        let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], expected_dir);
-
-        // set_loom_ids called with event directory
-        let set_ids = set_ids_calls.lock().unwrap();
-        assert_eq!(set_ids.len(), 1);
-        assert_eq!(set_ids[0].0, expected_dir);
-        assert_eq!(set_ids[0].1, loom_id);
-        assert_eq!(set_ids[0].2, knot_id);
     }
 
-    /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
-    /// the event dispatch directory is watched (verified via
-    /// TrackingEventSource).
+    /// Plan 099: a pre-existing legacy dispatch directory (left by an
+    /// older binary) is left alone and is **not** watched — the queue is
+    /// the delivery mechanism, so a stale file dropped there no longer
+    /// drives the consumer.
     #[test]
-    fn event_uri_source_watches_derived_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().join("rig");
-
-        let loom_id = LoomId("event-loom".to_string());
-        let knot_id = KnotId("event-knot".to_string());
-
-        let (log_port, _) = MockLoomLogPort::new();
-        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
-
-        let event_uri = StrandSource::EventUri {
-            producer_knot: "producer".to_string(),
-            event_id: "TestEvent".to_string(),
-        };
-
-        ensure_strand_source_watch(
-            &rig_path,
-            &loom_id,
-            &knot_id,
-            &event_uri,
-            &log_port,
-            &event_source,
-            None,
-        )
-        .unwrap();
-
-        // Watcher started on the derived event directory
-        let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-
-        let expected = tmp.path()
-            .join("tie-offs")
-            .join("rig")
-            .join(&loom_id.0)
-            .join("TestEvent");
-        assert_eq!(watches[0], expected);
-    }
-
-    /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
-    /// when the event directory already exists, no creation event is
-    /// logged, but the watcher is still started.
-    #[test]
-    fn event_uri_source_existing_directory_starts_watcher() {
+    fn event_uri_source_ignores_a_legacy_dispatch_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let rig_path = tmp.path().join("rig");
 
         let loom_id = LoomId("test-loom".to_string());
         let knot_id = KnotId("test-knot".to_string());
 
-        // Pre-create the event directory (under the runtime root)
-        let event_dir = tmp.path()
+        let legacy_dir = tmp
+            .path()
             .join("tie-offs")
             .join("rig")
             .join(&loom_id.0)
             .join("PreEvent");
-        std::fs::create_dir_all(&event_dir).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
 
-        let (log_port, logged_events) = MockLoomLogPort::new();
+        let (log_port, _) = MockLoomLogPort::new();
         let (event_source, watch_calls, _, _) = TrackingEventSource::new();
 
         let event_uri = StrandSource::EventUri {
@@ -499,53 +405,6 @@ mod mod_watchers_tests {
             event_id: "PreEvent".to_string(),
         };
 
-        let result = ensure_strand_source_watch(
-            &rig_path,
-            &loom_id,
-            &knot_id,
-            &event_uri,
-            &log_port,
-            &event_source,
-            None,
-        );
-
-        assert!(result.is_ok());
-
-        // No DirectoryCreated event
-        let events = logged_events.lock().unwrap();
-        assert!(
-            events.iter().all(|e| !matches!(e, LoomEvent::DirectoryCreated { .. })),
-            "no DirectoryCreated when event dir already exists"
-        );
-
-        // Watcher still started
-        let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], event_dir);
-    }
-
-    /// `ensure_strand_source_watch` with `StrandSource::EventUri`:
-    /// missing runtime-root `tie-offs/` parent directories are created
-    /// automatically.
-    #[test]
-    fn event_uri_creates_missing_rig_tieoffs_parents() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rig_path = tmp.path().join("rig");
-        // Do NOT create the tie-offs runtime tree — it should be
-        // created automatically.
-        assert!(!tmp.path().join("tie-offs").exists());
-
-        let loom_id = LoomId("parent-loom".to_string());
-        let knot_id = KnotId("parent-knot".to_string());
-
-        let (log_port, _) = MockLoomLogPort::new();
-        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
-
-        let event_uri = StrandSource::EventUri {
-            producer_knot: "producer".to_string(),
-            event_id: "ParentTest".to_string(),
-        };
-
         ensure_strand_source_watch(
             &rig_path,
             &loom_id,
@@ -557,24 +416,41 @@ mod mod_watchers_tests {
         )
         .unwrap();
 
-        // Parent directories were created
-        let expected = tmp.path()
-            .join("tie-offs")
-            .join("rig")
-            .join(&loom_id.0)
-            .join("ParentTest");
         assert!(
-            expected.exists(),
-            "event dir with parents should exist"
+            watch_calls.lock().unwrap().is_empty(),
+            "a legacy dispatch directory must not be watched under plan 099"
         );
-        assert!(
-            tmp.path().join("tie-offs").exists(),
-            "tie-offs parent should exist"
-        );
+        assert!(legacy_dir.exists(), "the legacy directory is left in place");
+    }
 
-        // Watcher started on the final directory
+    /// Plan 099: the retirement is scoped to event sources — a
+    /// filesystem strand source still gets its directory and watcher.
+    #[test]
+    fn filesystem_source_still_creates_and_watches_after_the_retirement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rig_path = tmp.path().join("rig");
+
+        let loom_id = LoomId("work-loom".to_string());
+        let knot_id = KnotId("worker".to_string());
+        let strand_dir = tmp.path().join("strands");
+
+        let (log_port, _) = MockLoomLogPort::new();
+        let (event_source, watch_calls, _, _) = TrackingEventSource::new();
+
+        ensure_strand_source_watch(
+            &rig_path,
+            &loom_id,
+            &knot_id,
+            &StrandSource::Filesystem(strand_dir.clone()),
+            &log_port,
+            &event_source,
+            None,
+        )
+        .unwrap();
+
+        assert!(strand_dir.exists(), "filesystem strand dir is still created");
         let watches = watch_calls.lock().unwrap();
         assert_eq!(watches.len(), 1);
-        assert_eq!(watches[0], expected);
+        assert_eq!(watches[0], strand_dir);
     }
 }

@@ -86,6 +86,8 @@ pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
             .map(|strand_path| QueueEntryView {
                 strand_path,
                 queued_at: String::new(),
+                event_id: None,
+                producer: None,
             })
             .collect()
     }

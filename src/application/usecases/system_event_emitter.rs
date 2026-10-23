@@ -56,6 +56,10 @@ pub struct DispatchRequest<'a> {
     /// Producer token written to the event file (knot id, loom id, or rig
     /// id per scope).
     pub producer: &'a str,
+    /// Plan 099: the producer's own trigger strand, carried into the
+    /// delivery so the consumer's trace reaches the origin. `None` for a
+    /// loom- or rig-scoped system event.
+    pub original_strand: Option<&'a StrandPath>,
 }
 
 /// Group requests by target directory `(consumer_loom_id, event_id)` and
@@ -104,6 +108,7 @@ pub fn dispatch_grouped(
             r.consumer_loom,
             rig_dir,
             seq,
+            r.original_strand,
         )?;
         dispatches.push((
             r.event.event_id.clone(),
@@ -217,12 +222,27 @@ impl SystemEventEmitter {
         payload: HashMap<String, String>,
         body: Option<String>,
     ) -> Result<Vec<(String, String, String, String)>, PortError> {
-        let event = AgentEvent {
+        let mut event = AgentEvent {
             event_id: event_id.to_string(),
             occurred: true,
             payload,
             body,
         };
+
+        // Plan 099: name the producer's loom in the payload so the
+        // queue-backed delivery can record it (the dispatcher sees only
+        // the producer token otherwise).
+        if let Some(loom) = match scope {
+            EventScope::Knot { loom_id, .. } | EventScope::Loom { loom_id } => {
+                Some(loom_id.0.clone())
+            }
+            EventScope::Rig => Some(self.rig_id()),
+        } {
+            event
+                .payload
+                .entry("producer-loom".to_string())
+                .or_insert(loom);
+        }
 
         let all_looms = self.store.list();
         // Knot ids for knot-scoped resolve disambiguation (knot vs loom).
@@ -337,6 +357,15 @@ impl SystemEventEmitter {
                 consumer_knot,
                 consumer_loom,
                 producer: producer.as_str(),
+                // Plan 099: a knot-scoped system event carries the
+                // strand it happened on; loom- and rig-scoped events
+                // have no strand of their own.
+                original_strand: match scope {
+                    EventScope::Knot { strand_path, .. } => {
+                        strand_path.as_ref()
+                    }
+                    _ => None,
+                },
             })
             .collect();
 
@@ -385,6 +414,7 @@ mod tests {
             consumer_loom_id: &LoomId,
             rig_dir: &Path,
             seq: u32,
+            _original_strand: Option<&StrandPath>,
         ) -> Result<PathBuf, PortError> {
             self.calls.lock().unwrap().push((
                 event.event_id.clone(),
@@ -765,6 +795,7 @@ mod tests {
             consumer_knot: &solo,
             consumer_loom: &loom_id,
             producer: "p",
+            original_strand: None,
         }];
         let out =
             dispatch_grouped(&dispatcher, Path::new("/p/rig"), &requests)

@@ -266,14 +266,26 @@ impl StrandQueueAccessor for DiskBackedEventQueue {
     /// Real queue entries carry the persisted `queued_at` — override the
     /// trait default so the pending index (plan 097) orders by the queue's
     /// own timestamps.
+    ///
+    /// Plan 099: a payload-embedded entry also names its own event type
+    /// and producer, so the index reads them from the entry instead of
+    /// opening a dispatched file.
     fn pending_entries(&self) -> Vec<QueueEntryView> {
         self.store
             .scan_events()
             .unwrap_or_default()
             .into_iter()
-            .map(|e| QueueEntryView {
-                strand_path: PathBuf::from(e.strand_path),
-                queued_at: e.queued_at,
+            .map(|e| {
+                let (event_id, producer) = match &e.delivery {
+                    Some(d) => (Some(d.event_id.clone()), Some(d.producer_knot.clone())),
+                    None => (None, None),
+                };
+                QueueEntryView {
+                    strand_path: PathBuf::from(e.strand_path),
+                    queued_at: e.queued_at,
+                    event_id,
+                    producer,
+                }
             })
             .collect()
     }

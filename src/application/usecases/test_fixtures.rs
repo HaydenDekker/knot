@@ -987,6 +987,7 @@ impl EventDispatcherPort for MockEventDispatcher {
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
         seq: u32,
+        _original_strand: Option<&crate::domain::entities::StrandPath>,
     ) -> Result<std::path::PathBuf, PortError> {
         self.dispatches.lock().unwrap().push((
             event.clone(),

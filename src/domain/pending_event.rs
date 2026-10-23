@@ -110,6 +110,17 @@ pub fn is_event_descriptor(strand_path: &str) -> bool {
     strand_path.starts_with("event:")
 }
 
+/// Parse an event descriptor (`event:<producer>/<event-id>`) into its
+/// parts. `None` for anything else, including a filesystem path.
+pub fn parse_event_descriptor(strand_path: &str) -> Option<(String, String)> {
+    let rest = strand_path.strip_prefix("event:")?;
+    let (producer, event_id) = rest.split_once('/')?;
+    if producer.is_empty() || event_id.is_empty() {
+        return None;
+    }
+    Some((producer.to_string(), event_id.to_string()))
+}
+
 /// The payload one producer emission carries to one subscriber (plan
 /// 099).
 ///
@@ -401,8 +412,14 @@ pub const PENDING_INDEX_CAP: usize = 10;
 /// One queued event as observed by the pending-index builder: the event
 /// file path, when it entered the queue (`queued_at` from the queue entry —
 /// empty when the source has no timestamp, e.g. the directory-scan
-/// fallback), and the producer identity from the file's frontmatter
-/// (`target-knot`) — `None` when the frontmatter is missing or unreadable.
+/// fallback), the producer identity (`None` when unknown), and — for a
+/// plan 099 payload-embedded entry — the event id carried by the
+/// delivery.
+///
+/// `event_id` is `Some` only when the queue entry itself names the event
+/// type (an `Event`-kind entry). When it is `None` the builder falls back
+/// to deriving the type from the path, which is how a legacy dispatched
+/// file (or a producer's own frontmatter) is read.
 ///
 /// No event body is ever carried here — the index is metadata-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,6 +427,9 @@ pub struct QueuedEventMeta {
     pub strand_path: PathBuf,
     pub queued_at: String,
     pub producer: Option<String>,
+    /// The event id from the queue entry's delivery payload (plan 099).
+    /// `None` → derive from the path.
+    pub event_id: Option<String>,
 }
 
 /// Per-event-type summary in a producer's queued-events index.
@@ -424,12 +444,26 @@ pub struct QueuedEventType {
     pub entries: Vec<(PathBuf, String)>,
 }
 
-/// Derive the event type from a dispatched-event file path: the parent
-/// directory name of an `event-*` file (e.g.
-/// `…/review-loom/PlanCreated/event-2026-07-14T10-00-00Z.md` →
-/// `PlanCreated`). `None` for anything that is not a dispatched event
-/// file.
+/// Derive the event type from a queued-entry path.
+///
+/// Two shapes are recognised:
+///
+/// - The **event descriptor** (plan 099) —
+///   `event:<producer>/<event-id>` → the event id.
+/// - A **legacy dispatched file** —
+///   `…/review-loom/PlanCreated/event-2026-07-14T10-00-00Z.md` → the
+///   parent directory name (`PlanCreated`). Kept so entries queued by
+///   an older binary still index during the cutover.
+///
+/// `None` for anything that is neither.
 pub fn event_type_from_path(path: &Path) -> Option<String> {
+    // Plan 099: the descriptor is a whole string, not a path with a
+    // final component — check the full value first.
+    if let Some((_, event_id)) =
+        parse_event_descriptor(&path.to_string_lossy())
+    {
+        return Some(event_id);
+    }
     let file_name = path.file_name()?.to_str()?;
     if !file_name.starts_with("event-") {
         return None;
@@ -467,7 +501,13 @@ pub fn build_pending_index(
 ) -> Vec<QueuedEventType> {
     let mut by_type: HashMap<String, Vec<QueuedEventMeta>> = HashMap::new();
     for meta in metas {
-        let Some(event_id) = event_type_from_path(&meta.strand_path) else {
+        // Plan 099: a payload-embedded entry names its own event type;
+        // only a legacy dispatched file needs path derivation.
+        let Some(event_id) = meta
+            .event_id
+            .clone()
+            .or_else(|| event_type_from_path(&meta.strand_path))
+        else {
             continue;
         };
         if !emittable_types.contains(&event_id) {
@@ -499,12 +539,21 @@ pub fn build_pending_index(
 }
 
 /// View of a single queue entry for the pending-index builder (path +
-/// `queued_at`). Defined here (domain) so the accessor trait in
-/// [`super::events`] can reference it.
+/// `queued_at` + the identity the entry itself carries). Defined here
+/// (domain) so the accessor trait in [`super::events`] can reference it.
+///
+/// Plan 099: `event_id` and `producer` come from the entry's
+/// [`EventDelivery`] when it has one, so the index no longer has to
+/// open a dispatched file to know what is queued. Filesystem-strand
+/// entries leave both `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueEntryView {
     pub strand_path: PathBuf,
     pub queued_at: String,
+    /// The delivered event's id (`None` for a filesystem-strand entry).
+    pub event_id: Option<String>,
+    /// The delivering producer's knot id (`None` for a filesystem entry).
+    pub producer: Option<String>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -845,8 +894,9 @@ mod tests {
 
     // ── Queued event index (plan 097) ─────────────────────────────────
 
-    /// One `QueuedEventMeta` for a dispatched event file under
-    /// `<base>/<consumer-loom>/<EventId>/event-<n>.md`.
+    /// One `QueuedEventMeta` for a **legacy** dispatched event file
+    /// under `<base>/<consumer-loom>/<EventId>/event-<n>.md` — the
+    /// type is derived from the path (`event_id: None`).
     fn meta(event_id: &str, producer: &str, queued_at: &str) -> QueuedEventMeta {
         QueuedEventMeta {
             strand_path: PathBuf::from(format!(
@@ -854,6 +904,18 @@ mod tests {
             )),
             queued_at: queued_at.to_string(),
             producer: Some(producer.to_string()),
+            event_id: None,
+        }
+    }
+
+    /// One `QueuedEventMeta` for a plan 099 **payload-embedded** queue
+    /// entry — the entry names its own type and producer, no file read.
+    fn carried_meta(event_id: &str, producer: &str, queued_at: &str) -> QueuedEventMeta {
+        QueuedEventMeta {
+            strand_path: PathBuf::from(format!("event:{producer}/{event_id}")),
+            queued_at: queued_at.to_string(),
+            producer: Some(producer.to_string()),
+            event_id: Some(event_id.to_string()),
         }
     }
 
@@ -869,6 +931,11 @@ mod tests {
             ),
             Some("PlanCreated".to_string())
         );
+        // Plan 099: the event descriptor names the type directly.
+        assert_eq!(
+            event_type_from_path(Path::new("event:plan-creator/PlanCreated")),
+            Some("PlanCreated".to_string())
+        );
         // Not an `event-*` file.
         assert_eq!(
             event_type_from_path(Path::new("/tie-offs/rig/loom/feature.md")),
@@ -876,6 +943,33 @@ mod tests {
         );
         // No parent directory.
         assert_eq!(event_type_from_path(Path::new("event-x.md")), None);
+    }
+
+    #[test]
+    fn parse_event_descriptor_splits_producer_and_id() {
+        assert_eq!(
+            parse_event_descriptor("event:plan-creator/PlanCreated"),
+            Some(("plan-creator".to_string(), "PlanCreated".to_string()))
+        );
+        assert_eq!(parse_event_descriptor("/a/b.md"), None);
+        assert_eq!(parse_event_descriptor("event:no-slash"), None);
+        assert_eq!(parse_event_descriptor("event:/PlanCreated"), None);
+        assert_eq!(parse_event_descriptor("event:plan-creator/"), None);
+    }
+
+    #[test]
+    fn build_pending_index_reads_the_type_from_the_entry_not_the_path() {
+        // A carried entry whose path would NOT derive the type still
+        // indexes, because the delivery names it (plan 099).
+        let metas = vec![carried_meta("PlanCreated", "plan-creator", "2026-10-18T10:00:00Z")];
+        let index = build_pending_index(
+            &metas,
+            "plan-creator",
+            &one_type(&["PlanCreated"]),
+        );
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].event_id, "PlanCreated");
+        assert_eq!(index[0].count, 1);
     }
 
     #[test]
@@ -929,6 +1023,7 @@ mod tests {
                 ),
                 queued_at: "2026-10-18T12:00:00Z".to_string(),
                 producer: None,
+                event_id: None,
             },
         ];
         let index = build_pending_index(&metas, "plan-creator", &one_type(&["PlanCreated"]));

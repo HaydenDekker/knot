@@ -796,6 +796,7 @@ pub fn handle_success(
                                         knot,
                                         loom_id,
                                         &all_knot_ids,
+                                        Some(strand_path),
                                     );
                                 }
 

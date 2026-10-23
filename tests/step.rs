@@ -434,22 +434,40 @@ fn step_captures_dispatched_events_without_executing() {
         Some("gap-assessor"),
         "queued event must target the consumer knot: {ev:?}"
     );
-    // The dispatcher creates the event file atomically (temp file +
-    // rename), so the watcher sees Create *and* Modify for the final
-    // path; the debounce window coalesces them to the last one —
-    // either kind is a valid captured dispatch.
+    // Plan 099: delivery is a direct queue write, so the captured entry
+    // is an `Event`-kind entry carrying the payload — not a debounced
+    // watch of a dispatched file.
     let kind = ev.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    assert!(
-        kind == "Created" || kind == "Modified",
-        "dispatched event kind must be Created or Modified, got: {kind}"
+    assert_eq!(
+        kind, "Event",
+        "plan 099 delivery must be captured as an Event-kind entry"
     );
     let strand_path = ev
         .get("strand_path")
         .and_then(|v| v.as_str())
-        .expect("queued event must carry the dispatched strand path");
-    assert!(
-        strand_path.contains("validation-loom/PlanCreated/event-"),
-        "strand path must be the dispatched event file: {strand_path}"
+        .expect("queued event must carry the event descriptor");
+    assert_eq!(
+        strand_path, "event:plan-creator/PlanCreated",
+        "strand path must be the plan 099 event descriptor"
+    );
+    let delivery = ev
+        .get("delivery")
+        .expect("plan 099 entry must carry the delivery payload");
+    assert_eq!(
+        delivery.get("producer_knot").and_then(|v| v.as_str()),
+        Some("plan-creator")
+    );
+    assert_eq!(
+        delivery.get("event_id").and_then(|v| v.as_str()),
+        Some("PlanCreated")
+    );
+    assert_eq!(
+        delivery
+            .get("original_strand")
+            .and_then(|v| v.as_str())
+            .map(|s| s.ends_with("plan.md")),
+        Some(true),
+        "the delivery must carry the producer's trigger strand"
     );
 
     // The consumer was captured, NOT executed: no tie-off, no

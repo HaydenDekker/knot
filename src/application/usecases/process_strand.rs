@@ -791,6 +791,7 @@ impl ProcessStrand {
         producer_knot: &Knot,
         loom_id: &LoomId,
         all_knot_ids: &[&str],
+        original_strand: Option<&StrandPath>,
     ) -> Result<Vec<(String, String, String, String)>, PortError> {
         let all_looms = self.store.list();
 
@@ -825,6 +826,7 @@ impl ProcessStrand {
                                 consumer_knot,
                                 consumer_loom: &loom.id,
                                 producer: producer_token,
+                                original_strand,
                             });
                         }
                     }
@@ -887,13 +889,23 @@ impl ProcessStrand {
         // Only dispatch events that actually occurred.
         // Events with `occurred: false` are acknowledgements — they count
         // for enforcement but are not dispatched to consumers.
-        let events: Vec<_> = all_events
+        let mut events: Vec<_> = all_events
             .into_iter()
             .filter(|e| e.occurred)
             .collect();
 
         if events.is_empty() {
             return Ok(None);
+        }
+
+        // Plan 099: name this knot's loom in every emitted payload so
+        // the queue-backed delivery records the producer's origin
+        // without the dispatcher having to look it up.
+        for event in events.iter_mut() {
+            event
+                .payload
+                .entry("producer-loom".to_string())
+                .or_insert_with(|| loom_id.0.clone());
         }
 
         // Iterate by loom to track consumer_loom_id for dispatch.
@@ -911,6 +923,7 @@ impl ProcessStrand {
             knot,
             loom_id,
             &all_knot_ids,
+            Some(strand_path),
         )?;
 
         if dispatches.is_empty() {

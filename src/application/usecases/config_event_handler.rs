@@ -1877,21 +1877,13 @@ mod phase2_tests {
             }
         }
 
-        // Watcher started for the event dispatch directory.
+        // Plan 099: an event-URI knot gets **no** watcher — delivery is
+        // a direct queue write, so the dispatched-file directory that
+        // used to be watched here is retired.
         let watches = watch_calls.lock().unwrap();
-        assert_eq!(watches.len(), 1);
-        // The event dispatch path is tie-offs/<rig-basename>/{loom-id}/{event-id}/
-        // under the runtime root (parent of the rig dir).
-        let expected = tmp.path()
-            .join("tie-offs")
-            .join("rig")
-            .join("test-loom")
-            .join("PlanCreated");
         assert!(
-            watches[0] == expected,
-            "watcher path should be the event dispatch directory {:?}, got: {:?}",
-            expected,
-            watches[0]
+            watches.is_empty(),
+            "plan 099: an event subscription must not register a watcher, got: {watches:?}"
         );
     }
 

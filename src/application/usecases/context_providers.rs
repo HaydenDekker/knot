@@ -110,38 +110,53 @@ impl AgentEventsContextProvider {
 
         let producer_id = &knot.id.0;
 
-        // Candidate entries: (path, queued_at). The queue path carries the
-        // queue's own timestamps; the fallback has none.
-        let candidates: Vec<(std::path::PathBuf, String)> = match &strand_queue {
-            Some(q) => q
-                .pending_entries()
-                .into_iter()
-                .map(|e| (e.strand_path, e.queued_at))
-                .collect(),
-            None => Self::scan_dispatch_directory(rig_dir, &event_ids)
-                .into_iter()
-                .map(|p| (p, String::new()))
-                .collect(),
-        };
+        // Candidate entries: (path, queued_at, event_id, producer).
+        //
+        // Plan 099: a queue entry that carries a delivery names its own
+        // event type and producer, so neither is read from a file. The
+        // directory-scan fallback (no queue wired) still has neither and
+        // falls back to path derivation + frontmatter, as does a legacy
+        // dispatched file still sitting in the queue.
+        let candidates: Vec<(std::path::PathBuf, String, Option<String>, Option<String>)> =
+            match &strand_queue {
+                Some(q) => q
+                    .pending_entries()
+                    .into_iter()
+                    .map(|e| (e.strand_path, e.queued_at, e.event_id, e.producer))
+                    .collect(),
+                None => Self::scan_dispatch_directory(rig_dir, &event_ids)
+                    .into_iter()
+                    .map(|p| (p, String::new(), None, None))
+                    .collect(),
+            };
 
-        // Only read the frontmatter of emittable-type event files (bounds
-        // the I/O); the domain builder re-scopes and applies the cap.
+        // Only read the frontmatter of emittable-type entries the entry
+        // itself does not already identify (bounds the I/O); the domain
+        // builder re-scopes and applies the cap.
         let mut metas = Vec::new();
-        for (path, queued_at) in candidates {
-            let Some(event_id) = event_type_from_path(&path) else {
+        for (path, queued_at, carried_event_id, carried_producer) in candidates {
+            let Some(event_id) = carried_event_id
+                .clone()
+                .or_else(|| event_type_from_path(&path))
+            else {
                 continue;
             };
             if !event_ids.contains(&event_id) {
                 continue;
             }
-            let producer = extract_frontmatter(&path)
-                .ok()
-                .and_then(|fm| frontmatter_get(&fm, "target-knot").map(String::from))
-                .filter(|p| !p.is_empty());
+            let producer = carried_producer.or_else(|| {
+                extract_frontmatter(&path)
+                    .ok()
+                    .and_then(|fm| {
+                        frontmatter_get(&fm, "target-knot").map(String::from)
+                    })
+                    .filter(|p| !p.is_empty())
+            });
             metas.push(QueuedEventMeta {
                 strand_path: path,
                 queued_at,
                 producer,
+                event_id: carried_event_id,
             });
         }
 
@@ -939,6 +954,8 @@ mod tests {
             entries: vec![crate::domain::pending_event::QueueEntryView {
                 strand_path: path.clone(),
                 queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+                event_id: None,
+                producer: None,
             }],
         };
         let producer = make_producer_knot("plan-creator");
@@ -1016,6 +1033,8 @@ mod tests {
             entries.push(crate::domain::pending_event::QueueEntryView {
                 strand_path: path,
                 queued_at,
+                event_id: None,
+                producer: None,
             });
         }
         let queue = FakeQueue { entries };
@@ -1066,6 +1085,8 @@ mod tests {
             entries: vec![crate::domain::pending_event::QueueEntryView {
                 strand_path: path,
                 queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+                event_id: None,
+                producer: None,
             }],
         };
         let producer = make_producer_knot("plan-creator");
@@ -1112,6 +1133,8 @@ mod tests {
             entries: vec![crate::domain::pending_event::QueueEntryView {
                 strand_path: path,
                 queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+                event_id: None,
+                producer: None,
             }],
         };
         let producer = make_producer_knot("plan-creator");

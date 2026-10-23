@@ -26,7 +26,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::application::ports::{EventDispatcherPort, PortError};
-use crate::domain::entities::{Knot, LoomId};
+use crate::domain::entities::{Knot, LoomId, StrandPath};
 use crate::domain::events::AgentEvent;
 use crate::domain::knot_file::derive_runtime_root;
 
@@ -157,6 +157,7 @@ impl EventDispatcherPort for FileSystemEventDispatcher {
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
         seq: u32,
+        _original_strand: Option<&StrandPath>,
     ) -> Result<std::path::PathBuf, PortError> {
         let timestamp = format_timestamp();
 
@@ -505,7 +506,7 @@ mod tests {
         let loom_id = LoomId("consumer-loom".to_string());
 
         let dispatcher = FileSystemEventDispatcher::new();
-        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0);
+        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None);
 
         assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
         let path = result.unwrap();
@@ -542,7 +543,7 @@ mod tests {
         let loom_id = LoomId("new-loom".to_string());
 
         let dispatcher = FileSystemEventDispatcher::new();
-        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0);
+        let result = dispatcher.dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None);
 
         assert!(result.is_ok(), "should create parent dirs: {:?}", result);
 
@@ -567,7 +568,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -633,7 +634,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -665,10 +666,10 @@ mod tests {
         let dispatcher = FileSystemEventDispatcher::new();
 
         let path1 = dispatcher
-            .dispatch(&event, &consumer1, "plan-creator", &loom1, &rig_dir, 0)
+            .dispatch(&event, &consumer1, "plan-creator", &loom1, &rig_dir, 0, None)
             .unwrap();
         let path2 = dispatcher
-            .dispatch(&event, &consumer2, "plan-creator", &loom2, &rig_dir, 0)
+            .dispatch(&event, &consumer2, "plan-creator", &loom2, &rig_dir, 0, None)
             .unwrap();
 
         // Each consumer gets its own file in its own loom directory
@@ -718,10 +719,10 @@ mod tests {
         let dispatcher = FileSystemEventDispatcher::new();
 
         let path1 = dispatcher
-            .dispatch(&event1, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event1, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
         let path2 = dispatcher
-            .dispatch(&event2, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event2, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         // Different event-id subdirectories
@@ -747,7 +748,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let filename = path.file_name().unwrap().to_string_lossy();
@@ -824,7 +825,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -862,7 +863,7 @@ mod tests {
 
         let dispatcher = FileSystemEventDispatcher::new();
         let path = dispatcher
-            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -885,7 +886,7 @@ mod tests {
             body: None,
         };
         let path2 = dispatcher
-            .dispatch(&event_empty, &consumer, "plan-creator", &loom_id, &rig_dir, 0)
+            .dispatch(&event_empty, &consumer, "plan-creator", &loom_id, &rig_dir, 0, None)
             .unwrap();
 
         let content2 = std::fs::read_to_string(&path2).unwrap();

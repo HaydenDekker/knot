@@ -48,10 +48,14 @@
       runs from the queue entry — the prompt names the event and the
       actual rig id — and the per-`EventId` directory holds no `.md`);
       the config-handler test (an event-URI knot registers no watcher)
-- [ ] Verification — clippy clean for the new code; the targeted panes
-      green (`tests/step` 17 passed, `tests/system_event_subscriptions`
-      13 passed, `tests/payload_queue` 21 passed — verified in-tree
-      2026-10-23); the commit sha to be recorded when this phase lands.
+- [x] Verification (2026-10-23) — clippy clean for the new code (zero
+      new warnings vs the Phase 1 baseline; two introduced by the port
+      signature change and the retired watch path fixed: `too_many_arguments`
+      allowed on `EventDispatcherPort::dispatch` per repo convention,
+      unused `derive_runtime_root` import removed);
+      `tests/step` 17 passed, `tests/system_event_subscriptions`
+      13 passed, `tests/payload_queue` 21 passed; full `cargo test`
+      suite green. Commit sha recorded in the follow-up docs commit.
       The ON-COMMIT suite is not required by this item.
 
 ## Deviations

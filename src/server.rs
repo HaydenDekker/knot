@@ -71,6 +71,10 @@ pub struct AppContext {
     pub git_versioning: Arc<dyn GitVersioningPort>,
     /// Strand event queue — shared with WriteState for queue visibility.
     pub strand_queue: Arc<std::sync::Mutex<Option<Arc<dyn StrandEventQueue>>>>,
+    /// The one persistent event queue (plan 099). Created with the
+    /// context so both the system-event emitter and the strand processor
+    /// deliver into and drain from the same queue.
+    pub event_queue: Arc<DiskBackedEventQueue>,
     /// System event emitter (plan 082) — dispatches every system event to
     /// subscribed consumers. Shared by `ProcessStrand`, the config pipeline,
     /// the loom use cases, and the pipeline loop (`QueueIdle`).
@@ -340,15 +344,36 @@ pub fn build_app_context(
             ),
         );
 
+    // Event queue — created here (not in the pipeline) so the system
+    // event emitter can deliver straight into it. Plan 099: delivery is
+    // a queue write, not a dispatched file, so the emitter and the
+    // strand processor must share one queue.
+    //
+    // The legacy-layout migration runs FIRST: creating the events dir
+    // would otherwise create the runtime root before the migration, and
+    // a legacy `rig/tie-offs/` would then look like a conflict and never
+    // be moved (see `start_knot`'s ordering note). The migration is
+    // idempotent, so `run_startup`'s later call is a no-op.
+    migrate_legacy_rig_layout(&config.rig_dir);
+    let events_dir = runtime_root.join("events");
+    std::fs::create_dir_all(&events_dir).unwrap_or_else(|e| {
+        eprintln!(
+            "WARNING: failed to create events dir {}: {e}",
+            events_dir.display()
+        );
+    });
+    let event_queue: Arc<DiskBackedEventQueue> =
+        Arc::new(DiskBackedEventQueue::new(events_dir));
+
     // System event emitter (plan 082) — dispatches every system event to
-    // subscribed consumers through the same filesystem dispatcher used for
-    // agent events (identical event-file shape and placement).
+    // subscribed consumers. Plan 099: delivery goes straight into the
+    // queue as a payload-bearing entry; no event file is written.
     let system_emitter = Arc::new(
         application::usecases::SystemEventEmitter::new(
             store.clone(),
-            Arc::new(
-                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
-            ),
+            Arc::new(crate::adapters::outbound::QueueEventDispatcher::new(
+                Arc::clone(&event_queue) as Arc<dyn application::ports::StrandEventQueue>,
+            )),
             config.rig_dir.clone(),
         ),
     );
@@ -382,6 +407,7 @@ pub fn build_app_context(
             state_writer,
             git_versioning,
             strand_queue: Arc::new(std::sync::Mutex::new(None)),
+            event_queue,
         },
         strand_rx,
         config_rx,
@@ -429,13 +455,10 @@ pub fn start_event_pipeline(
         .map(Duration::from_millis)
         .unwrap_or(application::debounce::DEFAULT_CHECK_INTERVAL);
 
-    // Event queue lives at the runtime root (tie-offs/<rig-basename>/events/).
-    let events_dir = ctx.runtime_root.join("events");
-    std::fs::create_dir_all(&events_dir).unwrap_or_else(|e| {
-        eprintln!("WARNING: failed to create events dir {}: {e}", events_dir.display());
-    });
-    let debounce_queue: Arc<DiskBackedEventQueue> =
-        Arc::new(DiskBackedEventQueue::new(events_dir));
+    // The queue is created with the context (plan 099 — the system-event
+    // emitter delivers into the same queue) and drained here. Its
+    // directory was created by `DiskBackedEventQueue::new`.
+    let debounce_queue: Arc<DiskBackedEventQueue> = Arc::clone(&ctx.event_queue);
     // Load persisted events from disk before starting the debounce engine.
     // This ensures any events left over from a previous run are re-queued
     // before new file-watcher events arrive.
@@ -495,9 +518,11 @@ pub fn build_process_strand(
             Arc::clone(&ctx.rig_log_port),
             Arc::clone(&ctx.git_versioning),
             Arc::new(crate::adapters::outbound::ContentInspectorChecker),
-            Arc::new(
-                crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
-            ),
+            // Plan 099: agent-event delivery is a direct queue write —
+            // the emitted payload rides the entry, no dispatched file.
+            Arc::new(crate::adapters::outbound::QueueEventDispatcher::new(
+                Arc::clone(debounce_queue) as Arc<dyn application::ports::StrandEventQueue>,
+            )),
             Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
         )
         .with_system_emitter(Arc::clone(&ctx.system_emitter))

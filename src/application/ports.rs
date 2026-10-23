@@ -983,25 +983,27 @@ pub trait StrandEventQueue: Send + Sync {
 /// An event is dispatched by creating a file in the consumer's loom
 /// tie-off directory under an `{event-id}/` subdirectory.
 pub trait EventDispatcherPort: Send + Sync {
-    /// Dispatch a single agent event to a consumer knot.
+    /// Deliver a single agent event to a consumer knot.
     ///
-    /// Creates an event file at:
-    /// `rig/tie-offs/{consumer-loom-id}/{event-id}/event-{timestamp}.md`
-    /// Content: YAML frontmatter with event payload + markdown body with context.
-    /// If multiple consumers listen for the same event, each loom gets its own copy.
+    /// `seq` is the dispatch's position within its fan-out group,
+    /// preserved from the 070 filename contract so an implementation
+    /// that materialises one artefact per dispatch can order them.
     ///
-    /// `seq` is the dispatch's position within its target directory batch
-    /// (the `{consumer-loom-id}/{event-id}/` directory). `0` = plain name
-    /// `event-{ts}.md` (single-dispatch group); `i ≥ 1` = suffixed name
-    /// `event-{ts}-{i:03}.md` (the i-th dispatch of a same-second fan-out
-    /// into the same directory). The adapter owns name materialisation and
-    /// guarantees the created file is unique (atomic creation, taken-name
-    /// fallback).
+    /// `producer_knot` identifies the knot that emitted the event —
+    /// derived from the tie-off processing context, not from the event
+    /// itself.
     ///
-    /// `producer_knot` identifies the knot that emitted the event — derived
-    /// from the tie-off processing context, not from the event itself.
+    /// `original_strand` (plan 099) is the producer's own trigger
+    /// strand — the file whose change started the chain that produced
+    /// this emission. `None` when the producer had no file trigger (a
+    /// loom- or rig-scoped system event). It travels with the delivery
+    /// so the consumer's trace chain reaches back to the origin.
     ///
-    /// Returns the path of the created event file.
+    /// Returns the **delivery reference** — for the queue-backed
+    /// delivery (plan 099) the entry's `event:<producer>/<event-id>`
+    /// descriptor; for the retired file dispatcher, the created file
+    /// path. Callers log it verbatim.
+    #[allow(clippy::too_many_arguments)] // flat parameter list keeps the port's single-shape delivery readable
     fn dispatch(
         &self,
         event: &crate::domain::events::AgentEvent,
@@ -1010,6 +1012,7 @@ pub trait EventDispatcherPort: Send + Sync {
         consumer_loom_id: &LoomId,
         rig_dir: &Path,
         seq: u32,
+        original_strand: Option<&StrandPath>,
     ) -> Result<std::path::PathBuf, PortError>;
 }
 

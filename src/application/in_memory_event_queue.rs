@@ -177,9 +177,20 @@ impl StrandQueueAccessor for InMemoryEventQueue {
             .lock()
             .unwrap()
             .iter()
-            .map(|e| crate::domain::pending_event::QueueEntryView {
-                strand_path: std::path::PathBuf::from(&e.strand_path),
-                queued_at: e.queued_at.clone(),
+            .map(|e| {
+                let (event_id, producer) = match &e.delivery {
+                    Some(d) => (
+                        Some(d.event_id.clone()),
+                        Some(d.producer_knot.clone()),
+                    ),
+                    None => (None, None),
+                };
+                crate::domain::pending_event::QueueEntryView {
+                    strand_path: std::path::PathBuf::from(&e.strand_path),
+                    queued_at: e.queued_at.clone(),
+                    event_id,
+                    producer,
+                }
             })
             .collect()
     }

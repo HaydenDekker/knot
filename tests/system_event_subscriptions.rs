@@ -473,10 +473,13 @@ fn create_rig(cwd: &Path, consumer_subscription: &str) -> std::path::PathBuf {
     .unwrap();
     let pi = rig.join("bin").join("pi");
     fs::create_dir_all(pi.parent().unwrap()).unwrap();
+    // One line per run, with the prompt's opening carried along so tests
+    // can assert what the consumer was told (plan 099: the payload
+    // arrives from the queue entry, not a file).
     fs::write(
         &pi,
         format!(
-            "#!/usr/bin/env bash\ncat > /dev/null\necho run >> {}/agent-runs.log\necho \"ok\"\nexit 0\n",
+            "#!/usr/bin/env bash\nprompt=\"$(cat)\"\necho \"run ${{prompt:0:300}}\" >> {}/agent-runs.log\necho \"ok\"\nexit 0\n",
             cwd.display()
         ),
     )
@@ -626,31 +629,14 @@ fn queue_idle_reaches_static_engine_token_consumer() {
     fs::write(strands.join("s1.md"), "go").unwrap();
 
     // Queue drains after the worker completes; the 500ms idle window
-    // then dispatches `QueueIdle` to the consumer's event directory.
+    // then delivers `QueueIdle` to the consumer. Plan 099: delivery is
+    // a direct queue entry, not a dispatched `.md` file — the consumer
+    // runs from the entry, and the old per-EventId dispatch directory
+    // is never created.
     let event_dir = runtime_root(cwd).join("orch-loom").join("QueueIdle");
-    wait_until(
-        || !md_files(&event_dir).is_empty(),
-        20_000,
-        "QueueIdle event file for the static-token consumer",
-    );
-
-    // The first dispatched file carries the event id and the actual rig
-    // id as producer — the subscription form does not leak into the
-    // file (plan 092 D4).
-    let first = md_files(&event_dir).remove(0);
-    let content = fs::read_to_string(&first).unwrap();
-    assert_eq!(
-        frontmatter_field(&content, "event-id").as_deref(),
-        Some("QueueIdle")
-    );
-    assert_eq!(
-        frontmatter_field(&content, "target-knot").as_deref(),
-        Some("dev-rig"),
-        "the frontmatter must carry the actual rig id: {content}"
-    );
 
     // The consumer knot runs: the mock `pi` records the worker run plus
-    // the `queue-monitor` run triggered by the delivered event file.
+    // the `queue-monitor` run triggered by the delivered queue entry.
     let run_count = || {
         fs::read_to_string(cwd.join("agent-runs.log"))
             .map(|s| s.lines().count())
@@ -658,13 +644,42 @@ fn queue_idle_reaches_static_engine_token_consumer() {
     };
     wait_until(
         || run_count() >= 2,
-        15_000,
+        20_000,
         "worker + queue-monitor agent runs",
+    );
+
+    // Plan 099: no dispatched event file exists for the delivery.
+    assert!(
+        md_files(&event_dir).is_empty(),
+        "plan 099 delivers through the queue; no event .md at {}",
+        event_dir.display()
     );
 
     let (output, graceful) = stop_service(guard);
     assert!(graceful, "the service must stop gracefully on SIGINT");
     let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The delivery is observed on the consumer's prompt: plan 099
+    // renders the payload from the queue entry into the prompt, so the
+    // queue-monitor's run line names the event, its producer, and the
+    // actual rig id (the subscription form does not leak — plan 092 D4).
+    let runs = fs::read_to_string(cwd.join("agent-runs.log")).unwrap_or_default();
+    let monitor_run = runs
+        .lines()
+        .find(|line| line.contains("Event: QueueIdle"))
+        .unwrap_or_else(|| {
+            panic!(
+                "queue-monitor was never told about QueueIdle from the queue:\n{runs}"
+            )
+        });
+    assert!(
+        monitor_run.contains("from dev-rig"),
+        "the prompt must name the producer (the actual rig id): {monitor_run}"
+    );
+    assert!(
+        !monitor_run.contains("event:knot:QueueIdle"),
+        "the subscription form must not leak into the delivery: {monitor_run}"
+    );
 
     // Positive control: a dispatch that matched a consumer leaves no
     // zero-consumer diagnostic.
