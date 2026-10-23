@@ -22,8 +22,28 @@
 //! leading `[ts]` is the emit time (the same instant in practice).
 
 use crate::domain::entities::RigState;
-use crate::domain::events::{LoomEvent, RigLogEvent};
+use crate::domain::events::{LoomEvent, RigLogEvent, RunTrace};
 use crate::domain::state_change::{KnotField, ProfileField, StateChange};
+
+/// Plan 099 (Phase 3): render the run-trace fields for a
+/// run-lifecycle line. Each present field appends its `key=value`
+/// pair; `None` fields are omitted, never written empty. The values
+/// carry no whitespace by construction (ids, knot names, paths).
+fn push_trace(line: &mut String, trace: Option<&RunTrace>) {
+    let Some(t) = trace else { return };
+    if let Some(session) = &t.session_id {
+        line.push_str(&format!(" session={session}"));
+    }
+    if let Some(event) = &t.event_id {
+        line.push_str(&format!(" event={event}"));
+    }
+    if let Some(source) = &t.source_knot {
+        line.push_str(&format!(" source={source}"));
+    }
+    if let Some(original) = &t.original_strand {
+        line.push_str(&format!(" original-strand={original}"));
+    }
+}
 
 /// Render the `[KNOT][EVENT]` line body for a loom event (no timestamp,
 /// no `[KNOT][EVENT]` prefix — [`log_loom_event_line`] adds both).
@@ -48,39 +68,54 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             loom_id,
             knot_id,
             strand_path,
+            trace,
             ..
-        } => format!(
-            "KnotProcessing loom={} knot={} strand={}",
-            loom_id.0,
-            knot_id.0,
-            strand_path.0.display()
-        ),
+        } => {
+            let mut line = format!(
+                "KnotProcessing loom={} knot={} strand={}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display()
+            );
+            push_trace(&mut line, trace.as_ref());
+            line
+        }
         LoomEvent::KnotCompleted {
             loom_id,
             knot_id,
             strand_path,
             tie_off_path,
+            trace,
             ..
-        } => format!(
-            "KnotCompleted loom={} knot={} strand={} tie-off={}",
-            loom_id.0,
-            knot_id.0,
-            strand_path.0.display(),
-            tie_off_path.0.display()
-        ),
+        } => {
+            let mut line = format!(
+                "KnotCompleted loom={} knot={} strand={} tie-off={}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display(),
+                tie_off_path.0.display()
+            );
+            push_trace(&mut line, trace.as_ref());
+            line
+        }
         LoomEvent::KnotFailed {
             loom_id,
             knot_id,
             strand_path,
             error,
+            trace,
             ..
-        } => format!(
-            "KnotFailed loom={} knot={} strand={} error={}",
-            loom_id.0,
-            knot_id.0,
-            strand_path.0.display(),
-            error
-        ),
+        } => {
+            let mut line = format!(
+                "KnotFailed loom={} knot={} strand={} error={}",
+                loom_id.0,
+                knot_id.0,
+                strand_path.0.display(),
+                error
+            );
+            push_trace(&mut line, trace.as_ref());
+            line
+        }
         LoomEvent::StrandProcessed {
             loom_id,
             strand_path,
@@ -720,7 +755,7 @@ mod tests {
 
     #[test]
     fn knot_processing_line() {
-        let e = LoomEvent::KnotProcessing { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), timestamp: ts() };
+        let e = LoomEvent::KnotProcessing { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), trace: None, timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
             "KnotProcessing loom=review-loom knot=review strand=strands/prd.md"
@@ -729,7 +764,7 @@ mod tests {
 
     #[test]
     fn knot_completed_line() {
-        let e = LoomEvent::KnotCompleted { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), tie_off_path: tie_off("tie-offs/rig/review-loom/prd.md"), timestamp: ts() };
+        let e = LoomEvent::KnotCompleted { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), tie_off_path: tie_off("tie-offs/rig/review-loom/prd.md"), trace: None, timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
             "KnotCompleted loom=review-loom knot=review strand=strands/prd.md tie-off=tie-offs/rig/review-loom/prd.md"
@@ -738,10 +773,128 @@ mod tests {
 
     #[test]
     fn knot_failed_line() {
-        let e = LoomEvent::KnotFailed { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), error: "boom".into(), timestamp: ts() };
+        let e = LoomEvent::KnotFailed { loom_id: loom("review-loom"), knot_id: knot("review"), strand_path: strand("strands/prd.md"), error: "boom".into(), trace: None, timestamp: ts() };
         assert_eq!(
             render_loom_event_line(&e),
             "KnotFailed loom=review-loom knot=review strand=strands/prd.md error=boom"
+        );
+    }
+
+    // ── Plan 099 Phase 3: run-trace fields on the lifecycle lines ──
+
+    fn full_trace() -> RunTrace {
+        RunTrace {
+            session_id: Some("sess-42".into()),
+            event_id: Some("PlanCreated".into()),
+            source_knot: Some("author".into()),
+            original_strand: Some("strands/spec.md".into()),
+        }
+    }
+
+    #[test]
+    fn knot_processing_line_with_trace() {
+        let e = LoomEvent::KnotProcessing {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("event:author/PlanCreated"),
+            trace: Some(full_trace()),
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "KnotProcessing loom=prd-loom knot=write strand=event:author/PlanCreated session=sess-42 event=PlanCreated source=author original-strand=strands/spec.md"
+        );
+    }
+
+    #[test]
+    fn knot_completed_line_with_trace() {
+        let e = LoomEvent::KnotCompleted {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("event:author/PlanCreated"),
+            tie_off_path: tie_off("tie-offs/rig/prd-loom/tie-off-write.md"),
+            trace: Some(full_trace()),
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "KnotCompleted loom=prd-loom knot=write strand=event:author/PlanCreated tie-off=tie-offs/rig/prd-loom/tie-off-write.md session=sess-42 event=PlanCreated source=author original-strand=strands/spec.md"
+        );
+    }
+
+    #[test]
+    fn knot_failed_line_with_trace() {
+        let e = LoomEvent::KnotFailed {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("event:author/PlanCreated"),
+            error: "boom".into(),
+            trace: Some(full_trace()),
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "KnotFailed loom=prd-loom knot=write strand=event:author/PlanCreated error=boom session=sess-42 event=PlanCreated source=author original-strand=strands/spec.md"
+        );
+    }
+
+    /// Plan 099: `None` trace fields are omitted, not written empty —
+    /// e.g. a loom-scoped system event has no original strand, and a
+    /// KnotProcessing line has no session yet.
+    #[test]
+    fn trace_line_omits_absent_fields() {
+        let e = LoomEvent::KnotProcessing {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("event:author/PlanCreated"),
+            trace: Some(RunTrace {
+                session_id: None,
+                event_id: Some("PlanCreated".into()),
+                source_knot: Some("author".into()),
+                original_strand: None,
+            }),
+            timestamp: ts(),
+        };
+        let line = render_loom_event_line(&e);
+        assert_eq!(
+            line,
+            "KnotProcessing loom=prd-loom knot=write strand=event:author/PlanCreated event=PlanCreated source=author"
+        );
+        assert!(!line.contains("session="));
+        assert!(!line.contains("original-strand="));
+    }
+
+    /// Plan 099: the single-line invariant holds with the trace fields
+    /// rendered — no newlines, and the line stays greppable by each key.
+    #[test]
+    fn trace_line_stays_single_line() {
+        let e = LoomEvent::KnotCompleted {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("event:author/PlanCreated"),
+            tie_off_path: tie_off("tie-offs/rig/prd-loom/tie-off-write.md"),
+            trace: Some(full_trace()),
+            timestamp: ts(),
+        };
+        let line = render_loom_event_line(&e);
+        assert!(!line.contains('\n'));
+        for key in ["session=sess-42", "event=PlanCreated", "source=author", "original-strand=strands/spec.md"] {
+            assert!(line.contains(key), "line should contain {key}: {line}");
+        }
+    }
+
+    #[test]
+    fn empty_trace_renders_no_fields() {
+        let e = LoomEvent::KnotProcessing {
+            loom_id: loom("prd-loom"),
+            knot_id: knot("write"),
+            strand_path: strand("strands/spec.md"),
+            trace: Some(RunTrace::default()),
+            timestamp: ts(),
+        };
+        assert_eq!(
+            render_loom_event_line(&e),
+            "KnotProcessing loom=prd-loom knot=write strand=strands/spec.md"
         );
     }
 

@@ -528,6 +528,10 @@ impl ModelRegistryPort for MockModelRegistry {
 /// Supports forcing an error via `set_error()` for error-path testing.
 pub struct MockGitVersioningPort {
     commits: Arc<Mutex<Vec<(LoomId, KnotId, String, String, String)>>>,
+    /// Plan 099: the trace recorded with each commit call (parallel to
+    /// `commits`), so trailer plumbing can be asserted without touching
+    /// the existing tuple shape.
+    traces: Arc<Mutex<Vec<crate::domain::events::RunTrace>>>,
     force_error: Arc<Mutex<Option<PortError>>>,
 }
 
@@ -541,10 +545,16 @@ impl MockGitVersioningPort {
         (
             Self {
                 commits: commits.clone(),
+                traces: Arc::new(Mutex::new(vec![])),
                 force_error: Arc::new(Mutex::new(None)),
             },
             commits,
         )
+    }
+
+    /// Plan 099: the traces recorded with each commit call.
+    pub fn traces(&self) -> Arc<Mutex<Vec<crate::domain::events::RunTrace>>> {
+        self.traces.clone()
     }
 
     /// Force the next (and all subsequent) `commit()` calls to return an error.
@@ -573,7 +583,9 @@ impl GitVersioningPort for MockGitVersioningPort {
         strand_path: &StrandPath,
         event_type: &str,
         tie_off_content: &str,
+        trace: &crate::domain::events::RunTrace,
     ) -> Result<(), PortError> {
+        self.traces.lock().unwrap().push(trace.clone());
         self.commits
             .lock()
             .unwrap()

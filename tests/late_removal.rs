@@ -382,6 +382,7 @@ impl GitVersioningPort for OrderingGit {
         strand_path: &StrandPath,
         _event_type: &str,
         _tie_off_content: &str,
+        _trace: &knot::domain::events::RunTrace,
     ) -> Result<(), PortError> {
         self.order
             .lock()

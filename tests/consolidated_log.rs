@@ -608,3 +608,111 @@ fn step_mode_baseline_and_delta_lines() {
         "queue must be drained after the step"
     );
 }
+
+// ── Plan 099 Phase 3: trace fields on the run-lifecycle lines ────────────
+
+/// A strand file named `event-*` carries trigger metadata in its
+/// front-matter; the run-lifecycle lines must carry the same fields
+/// structured for grep: `event=`, `source=`, `original-strand=`
+/// (`session=` only when the adapter reports one — the mock `pi` here
+/// does not, so it must be absent, never empty).
+#[test]
+fn run_lifecycle_lines_carry_trace_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    let rig = create_rig(cwd, "0");
+    let pi = rig.join("bin").join("pi");
+
+    let child = spawn_service(cwd, &pi);
+
+    thread::sleep(Duration::from_secs(1));
+    let strands = cwd.join("strands");
+    fs::create_dir_all(&strands).unwrap();
+    fs::write(
+        strands.join("event-2026-10-23T00-00-00Z.md"),
+        "---\nevent-id: TestEvent\ntarget-knot: author\noriginal-strand: strands/origin.md\n---\n\nTriggered by a test emission.\n",
+    )
+    .unwrap();
+    let tie_off =
+        runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+    wait_for(|| tie_off.exists(), 15_000, "tie-off written");
+
+    let (output, _graceful) = stop_service(child);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let events = event_lines(&stderr);
+
+    let processing = events
+        .iter()
+        .find(|l| l.starts_with("KnotProcessing "))
+        .expect("a KnotProcessing line");
+    let completed = events
+        .iter()
+        .find(|l| l.starts_with("KnotCompleted "))
+        .expect("a KnotCompleted line");
+
+    for line in [processing, completed] {
+        assert!(
+            line.contains("event=TestEvent"),
+            "lifecycle line must carry event=: {line}"
+        );
+        assert!(
+            line.contains("source=author"),
+            "lifecycle line must carry source=: {line}"
+        );
+        assert!(
+            line.contains("original-strand=strands/origin.md"),
+            "lifecycle line must carry original-strand=: {line}"
+        );
+        // The mock pi reports no session — the field is omitted, not
+        // written empty.
+        assert!(
+            !line.contains("session="),
+            "session= must be absent when unknown: {line}"
+        );
+        // Single-line invariant: the rendered line holds no newline and
+        // stays greppable end-to-end.
+        assert!(
+            !line.contains('\n'),
+            "lifecycle line must stay single-line: {line:?}"
+        );
+    }
+}
+
+/// A plain (non-`event-*`) strand has no trigger metadata — the
+/// lifecycle lines stay exactly as before (no trace keys, no empty
+/// placeholders).
+#[test]
+fn plain_strand_lifecycle_lines_carry_no_trace_keys() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    let rig = create_rig(cwd, "0");
+    let pi = rig.join("bin").join("pi");
+
+    let child = spawn_service(cwd, &pi);
+
+    thread::sleep(Duration::from_secs(1));
+    let strands = cwd.join("strands");
+    fs::create_dir_all(&strands).unwrap();
+    fs::write(strands.join("plain.md"), "just a strand").unwrap();
+    let tie_off =
+        runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+    wait_for(|| tie_off.exists(), 15_000, "tie-off written");
+
+    let (output, _graceful) = stop_service(child);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let events = event_lines(&stderr);
+
+    for prefix in ["KnotProcessing ", "KnotCompleted "] {
+        let line = events
+            .iter()
+            .find(|l| l.starts_with(prefix))
+            .unwrap_or_else(|| panic!("a {prefix} line"));
+        assert!(
+            !line.contains("event=")
+                && !line.contains("source=")
+                && !line.contains("original-strand=")
+                && !line.contains("session="),
+            "plain-strand lifecycle line must carry no trace keys: {line}"
+        );
+    }
+}

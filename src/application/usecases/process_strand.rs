@@ -425,11 +425,21 @@ impl ProcessStrand {
             Err(err) => return self.abort_with(event_id, err),
         }
 
-        // 1. Append KnotProcessing to the loom's run activity
+        // 1. Append KnotProcessing to the loom's run activity.
+        // Plan 099 (Phase 3): the run's trace origin rides the line —
+        // from the delivery for a delivered emission, from the strand
+        // file's front-matter otherwise. The session is not yet known
+        // at start.
+        let trace_origin =
+            super::process_strand_helpers::trace_origin(
+                event.delivery(),
+                &strand_path,
+            );
         if let Err(err) = self.log_port.append(LoomEvent::KnotProcessing {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
+            trace: Some(trace_origin.clone()),
             timestamp: format_timestamp(),
         }) {
             return self.abort_with(event_id, err);
@@ -487,15 +497,20 @@ impl ProcessStrand {
                     timestamp: None,
                     agent_events: Vec::new(),
                     event_metadata: crate::domain::entities::EventMetadata::default(),
-                    session_id,
+                    session_id: session_id.clone(),
                 };
                 let _ = self.tie_off_sink.append(tie_off);
-                // Append KnotFailed to the loom's run activity
+                // Append KnotFailed to the loom's run activity.
+                // Plan 099: the trace origin plus the session the error
+                // carried (plan 071) ride the line.
+                let mut failed_trace = trace_origin.clone();
+                failed_trace.session_id = session_id;
                 let _ = self.log_port.append(LoomEvent::KnotFailed {
                     loom_id: loom_id.clone(),
                     knot_id: knot_id.clone(),
                     strand_path: strand_path.clone(),
                     error: error_msg.clone(),
+                    trace: Some(failed_trace),
                     timestamp: format_timestamp(),
                 });
                 // Append StrandProcessed with error
@@ -547,6 +562,12 @@ impl ProcessStrand {
             }
         };
         let outcome = resolved.outcome.clone();
+
+        // Plan 099 (Phase 3): the run's full trace — the origin plus
+        // the session captured during execution. Rides the completion /
+        // failure lines and the commit trailer block.
+        let mut run_trace = trace_origin;
+        run_trace.session_id = resolved.session_id.clone();
 
         // Write tie-off (skipped for timeout). The session ID captured
         // during execution (success metadata or PortError) is recorded
@@ -605,6 +626,7 @@ impl ProcessStrand {
                     &event_label,
                     event_id,
                     &queue_before,
+                    run_trace,
                 )
             }
             _ => {
@@ -612,6 +634,7 @@ impl ProcessStrand {
                     self, &outcome, strand_kind,
                     &loom_id, &knot_id, &strand_path,
                     event_id,
+                    run_trace,
                 )
             }
         }?;

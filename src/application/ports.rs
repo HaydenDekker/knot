@@ -862,6 +862,11 @@ pub trait GitVersioningPort: Send + Sync {
     /// - `strand_path` — path to the strand that was processed
     /// - `event_type` — type of strand event (Created/Modified/Deleted)
     /// - `tie_off_content` — the current response / tie-off output
+    /// - `trace` — plan 099: the run's trace fields, appended as a
+    ///   git trailer block (the message's last paragraph, `Token: value`
+    ///   lines: `session:`, `event:`, `source:`, `original-strand:`).
+    ///   Fields that are `None` are omitted, not written empty; when
+    ///   every field is `None` no trailer block is appended.
     fn commit(
         &self,
         loom_id: &LoomId,
@@ -869,6 +874,7 @@ pub trait GitVersioningPort: Send + Sync {
         strand_path: &StrandPath,
         event_type: &str,
         tie_off_content: &str,
+        trace: &crate::domain::events::RunTrace,
     ) -> Result<(), PortError>;
 
     /// Ensure the rig directory is its own git repository and — when
@@ -1215,6 +1221,7 @@ mod tests {
             strand_path: &StrandPath,
             event_type: &str,
             tie_off_content: &str,
+            trace: &crate::domain::events::RunTrace,
         ) -> Result<(), PortError> {
             self.commits
                 .lock()
@@ -1226,6 +1233,7 @@ mod tests {
                     event_type.to_string(),
                     tie_off_content.to_string(),
                 ));
+            let _ = trace;
             Ok(())
         }
 
@@ -1502,6 +1510,7 @@ mod tests {
             &strand,
             "Created",
             "tie-off output here",
+            &crate::domain::events::RunTrace::default(),
         );
         assert!(result.is_ok());
 

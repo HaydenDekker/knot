@@ -50,6 +50,37 @@ pub struct ResolvedExecution {
     pub was_watermarked: bool,
 }
 
+/// Plan 099 (Phase 3): the run's trace origin — the `event` /
+/// `source` / `original-strand` fields, without the session (which is
+/// only known once the agent has started).
+///
+/// For a delivered emission the fields come from the queue entry's
+/// delivery; for a file-triggered strand they come from the strand
+/// file's front-matter when it carries them.
+pub fn trace_origin(
+    delivery: Option<&crate::domain::pending_event::EventDelivery>,
+    strand_path: &StrandPath,
+) -> crate::domain::events::RunTrace {
+    match delivery {
+        Some(d) => crate::domain::events::RunTrace {
+            session_id: None,
+            event_id: Some(d.event_id.clone()),
+            source_knot: Some(d.producer_knot.clone()),
+            original_strand: d.original_strand.clone(),
+        },
+        None => {
+            let metadata =
+                extract_event_metadata(strand_path).unwrap_or_default();
+            crate::domain::events::RunTrace {
+                session_id: None,
+                event_id: metadata.event_id,
+                source_knot: metadata.source_knot,
+                original_strand: metadata.original_strand,
+            }
+        }
+    }
+}
+
 /// Construct a `TieOff` from execution outcome and write it.
 ///
 /// Skipped for timeout outcomes (tie-off preserved unchanged).
@@ -115,6 +146,7 @@ pub fn handle_failure(
     knot_id: &KnotId,
     strand_path: &StrandPath,
     event_id: Option<&PendingEventId>,
+    trace: crate::domain::events::RunTrace,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::domain::events::LoomEvent;
@@ -132,6 +164,7 @@ pub fn handle_failure(
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             error: error_msg.clone(),
+            trace: Some(trace.clone()),
             timestamp: format_timestamp(),
         })?;
 
@@ -413,6 +446,7 @@ pub fn resolve_config_and_build(
 /// commit captures everything, including the removal. The removal is
 /// unconditional on success (even when the knot is not git-versioned or
 /// has no commit content).
+#[allow(clippy::too_many_arguments)] // flat run-context list keeps the single call site readable (plan 099 added the trace)
 pub fn handle_success(
     ps: &ProcessStrand,
     outcome: &TieOffOutcome,
@@ -426,6 +460,7 @@ pub fn handle_success(
     event_label: &str,
     event_id: Option<&PendingEventId>,
     queue_before: &Option<std::collections::HashMap<String, usize>>,
+    trace: crate::domain::events::RunTrace,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::application::session_resume;
@@ -612,6 +647,7 @@ pub fn handle_success(
         knot_id: knot_id.clone(),
         strand_path: strand_path.clone(),
         tie_off_path: tie_off_path.clone(),
+        trace: Some(trace.clone()),
         timestamp: format_timestamp(),
     }) {
         ps.remove_pending_event(event_id);
@@ -896,6 +932,7 @@ pub fn handle_success(
                 strand_path,
                 event_label,
                 content,
+                &trace,
             );
             if let Err(ref e) = commit_result {
                 logging::log_strand_event(

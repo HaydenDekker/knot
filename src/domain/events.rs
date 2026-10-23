@@ -447,6 +447,47 @@ pub struct ProcessingFailed {
     pub error_message: String,
 }
 
+/// Plan 099 (Phase 3): the trace fields that ride a knot run.
+///
+/// These are the fields that make the debug trace chain durable and
+/// greppable: rendered as structured `key=value` fields on the
+/// run-lifecycle service-log lines, and as git commit trailers on the
+/// knot's commit. A field that is `None` is **omitted** everywhere —
+/// never written empty.
+///
+/// The values arrive from the delivery for an `EventDelivered` strand
+/// (plan 099 Phase 1/2) and from the run context — the strand file's
+/// front-matter and the captured session — for a file-triggered strand.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunTrace {
+    /// The pi session id of the run (known once the agent has started;
+    /// `None` before execution and when the adapter reports no session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The event id that triggered the run (delivered emission id, or
+    /// the strand file's `event-id` front-matter when it carries one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    /// The knot that emitted the triggering event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_knot: Option<String>,
+    /// The strand whose change started the chain that produced this run.
+    /// `None` when the chain has no file origin (a loom- or rig-scoped
+    /// system event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_strand: Option<String>,
+}
+
+impl RunTrace {
+    /// True when no trace field is present.
+    pub fn is_empty(&self) -> bool {
+        self.session_id.is_none()
+            && self.event_id.is_none()
+            && self.source_knot.is_none()
+            && self.original_strand.is_none()
+    }
+}
+
 /// An event that describes the lifecycle of a Loom.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoomEvent {
@@ -483,6 +524,11 @@ pub enum LoomEvent {
         loom_id: LoomId,
         knot_id: KnotId,
         strand_path: StrandPath,
+        /// Plan 099: the run's trace origin (event/source/original-strand;
+        /// the session is not yet known at start). `None` when no trace
+        /// is available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace: Option<RunTrace>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
@@ -492,6 +538,9 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         tie_off_path: TieOffPath,
+        /// Plan 099: the run's trace (incl. the captured session).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace: Option<RunTrace>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
@@ -501,6 +550,10 @@ pub enum LoomEvent {
         knot_id: KnotId,
         strand_path: StrandPath,
         error: String,
+        /// Plan 099: the run's trace (incl. the session, when the
+        /// failure carried one).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace: Option<RunTrace>,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
@@ -2292,6 +2345,7 @@ mod tests {
             loom_id: loom_id.clone(),
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
+            trace: None,
             timestamp: ts.clone(),
         };
 
@@ -2301,6 +2355,7 @@ mod tests {
                 loom_id: lid,
                 knot_id: kid,
                 strand_path: sp,
+                trace: _,
                 timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
@@ -2330,6 +2385,7 @@ mod tests {
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             tie_off_path: tie_off_path.clone(),
+            trace: None,
             timestamp: ts.clone(),
         };
 
@@ -2340,6 +2396,7 @@ mod tests {
                 knot_id: kid,
                 strand_path: sp,
                 tie_off_path: tp,
+                trace: _,
                 timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
@@ -2370,6 +2427,7 @@ mod tests {
             knot_id: knot_id.clone(),
             strand_path: strand_path.clone(),
             error: error.clone(),
+            trace: None,
             timestamp: ts.clone(),
         };
 
@@ -2380,6 +2438,7 @@ mod tests {
                 knot_id: kid,
                 strand_path: sp,
                 error: msg,
+                trace: _,
                 timestamp: t,
             } => {
                 assert_eq!(*lid, loom_id);
@@ -2551,6 +2610,7 @@ mod tests {
                 loom_id: loom_id.clone(),
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
+                trace: None,
                 timestamp: ts.clone(),
             },
             LoomEvent::KnotCompleted {
@@ -2558,6 +2618,7 @@ mod tests {
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 tie_off_path: tie_off_path.clone(),
+                trace: None,
                 timestamp: ts.clone(),
             },
             LoomEvent::KnotFailed {
@@ -2565,6 +2626,7 @@ mod tests {
                 knot_id: knot_id.clone(),
                 strand_path: strand_path.clone(),
                 error: "boom".to_string(),
+                trace: None,
                 timestamp: ts.clone(),
             },
             LoomEvent::KnotDeregistered {

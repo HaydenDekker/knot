@@ -300,6 +300,7 @@ fn git_commit_excludes_fresh_rig_gitlink() {
         &StrandPath(PathBuf::from("input/s.md")),
         "Modified",
         "tie-off",
+        &knot::domain::events::RunTrace::default(),
     );
     assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
 
@@ -362,6 +363,7 @@ fn git_commit_excludes_pre_tracked_rig_files() {
         &StrandPath(PathBuf::from("input/s.md")),
         "Modified",
         "tie-off",
+        &knot::domain::events::RunTrace::default(),
     );
     assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
 
@@ -407,6 +409,7 @@ fn git_commit_skips_rig_exclusion_when_rig_is_repo_root() {
         &StrandPath(PathBuf::from("input/s.md")),
         "Modified",
         "tie-off",
+        &knot::domain::events::RunTrace::default(),
     );
     assert!(result.is_ok(), "commit should succeed: {:?}", result.err());
 
@@ -464,4 +467,255 @@ fn git_commit_error_is_handled_gracefully() {
     // Verify tie-off was written
     let appends = tie_off_appends.lock().unwrap();
     assert_eq!(appends.len(), 1, "tie-off should be written despite git error");
+}
+
+// ── Plan 099 Phase 3: commit trailers ─────────────────────────────────────
+//
+// Every knot commit carries the run's trace as a git trailer block —
+// the message's last paragraph, `Token: value` lines (`session:`,
+// `event:`, `source:`, `original-strand:`). The subject and the
+// 1000-line body truncation are unchanged; `None` fields are omitted,
+// not written empty. One test per field so a dropped field fails one
+// test.
+
+use knot::domain::events::RunTrace;
+
+/// Helper: a versioner over a fresh git repo with one knot run
+/// committed with `trace`. Returns the tempdir (repo at `dir.path()`).
+fn commit_with_trace(trace: &RunTrace) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    std::fs::write(root.join("README.md"), "project").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "initial"]);
+
+    std::fs::write(root.join("out.md"), "agent work").unwrap();
+    let versioner =
+        FileSystemGitVersioner::new(root.to_path_buf(), root.join("rig"));
+    versioner
+        .commit(
+            &LoomId("prd-loom".to_string()),
+            &KnotId("write".to_string()),
+            &StrandPath(PathBuf::from("strands/spec.md")),
+            "Created",
+            "tie-off body line",
+            trace,
+        )
+        .expect("commit should succeed");
+    dir
+}
+
+/// The trailer block, extracted from HEAD via `git interpret-trailers`
+/// (git's own trailer parser).
+fn head_trailers(dir: &std::path::Path) -> String {
+    let msg = git_stdout(dir, &["log", "-1", "--format=%B"]);
+    let mut child = std::process::Command::new("git")
+        .args(["interpret-trailers", "--parse"])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("git interpret-trailers should be available");
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(msg.as_bytes())
+            .expect("write to interpret-trailers stdin");
+    }
+    let out = child.wait_with_output().expect("interpret-trailers run");
+    assert!(
+        out.status.success(),
+        "git interpret-trailers failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn trace_with(
+    session: Option<&str>,
+    event: Option<&str>,
+    source: Option<&str>,
+    original: Option<&str>,
+) -> RunTrace {
+    RunTrace {
+        session_id: session.map(str::to_string),
+        event_id: event.map(str::to_string),
+        source_knot: source.map(str::to_string),
+        original_strand: original.map(str::to_string),
+    }
+}
+
+#[test]
+fn commit_trailer_session() {
+    let dir = commit_with_trace(&trace_with(
+        Some("sess-42"),
+        None,
+        None,
+        None,
+    ));
+    let trailers = head_trailers(dir.path());
+    assert!(
+        trailers.contains("session: sess-42"),
+        "trailer block should carry the session: {trailers}"
+    );
+}
+
+#[test]
+fn commit_trailer_event() {
+    let dir = commit_with_trace(&trace_with(
+        None,
+        Some("PlanCreated"),
+        None,
+        None,
+    ));
+    let trailers = head_trailers(dir.path());
+    assert!(
+        trailers.contains("event: PlanCreated"),
+        "trailer block should carry the event id: {trailers}"
+    );
+}
+
+#[test]
+fn commit_trailer_source() {
+    let dir = commit_with_trace(&trace_with(
+        None,
+        None,
+        Some("author"),
+        None,
+    ));
+    let trailers = head_trailers(dir.path());
+    assert!(
+        trailers.contains("source: author"),
+        "trailer block should carry the source knot: {trailers}"
+    );
+}
+
+#[test]
+fn commit_trailer_original_strand() {
+    let dir = commit_with_trace(&trace_with(
+        None,
+        None,
+        None,
+        Some("strands/spec.md"),
+    ));
+    let trailers = head_trailers(dir.path());
+    assert!(
+        trailers.contains("original-strand: strands/spec.md"),
+        "trailer block should carry the original strand: {trailers}"
+    );
+}
+
+#[test]
+fn commit_trailer_full_block_parses_with_interpret_trailers() {
+    let dir = commit_with_trace(&trace_with(
+        Some("sess-42"),
+        Some("PlanCreated"),
+        Some("author"),
+        Some("strands/spec.md"),
+    ));
+    let trailers = head_trailers(dir.path());
+    // All four tokens parse out of the last paragraph.
+    for token in [
+        "session: sess-42",
+        "event: PlanCreated",
+        "source: author",
+        "original-strand: strands/spec.md",
+    ] {
+        assert!(
+            trailers.contains(token),
+            "interpret-trailers should yield '{token}': {trailers}"
+        );
+    }
+    // The trailer block is the LAST paragraph of the message.
+    let msg = git_stdout(dir.path(), &["log", "-1", "--format=%B"]);
+    let last_para =
+        msg.trim_end().split("\n\n").last().unwrap().trim_end();
+    assert!(
+        last_para.starts_with("session: sess-42")
+            && last_para.contains("original-strand: strands/spec.md"),
+        "trailer block should be the last paragraph: {msg}"
+    );
+}
+
+#[test]
+fn commit_subject_unchanged_with_trace() {
+    let dir = commit_with_trace(&trace_with(
+        Some("sess-42"),
+        Some("PlanCreated"),
+        Some("author"),
+        Some("strands/spec.md"),
+    ));
+    let subject = git_stdout(dir.path(), &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        subject.trim_end(),
+        "knot: write — processed spec.md (Created)",
+        "subject must be unchanged by the trailer block"
+    );
+}
+
+#[test]
+fn commit_body_unchanged_with_trace() {
+    let dir = commit_with_trace(&trace_with(
+        Some("sess-42"),
+        Some("PlanCreated"),
+        Some("author"),
+        Some("strands/spec.md"),
+    ));
+    // The body (everything after the subject, before the trailer
+    // paragraph) still carries the tie-off content verbatim.
+    let msg = git_stdout(dir.path(), &["log", "-1", "--format=%B"]);
+    assert!(
+        msg.contains("tie-off body line"),
+        "tie-off content must stay in the commit body: {msg}"
+    );
+    let paras: Vec<&str> =
+        msg.trim_end().split("\n\n").map(str::trim_end).collect();
+    // subject / body / trailers — exactly three paragraphs.
+    assert_eq!(
+        paras.len(),
+        3,
+        "message should be subject + body + trailer paragraph: {msg}"
+    );
+}
+
+#[test]
+fn commit_no_trailer_block_when_trace_empty() {
+    let dir = commit_with_trace(&RunTrace::default());
+    let trailers = head_trailers(dir.path());
+    assert!(
+        trailers.trim().is_empty(),
+        "empty trace must append no trailer block: {trailers:?}"
+    );
+    let msg = git_stdout(dir.path(), &["log", "-1", "--format=%B"]);
+    let paras: Vec<&str> =
+        msg.trim_end().split("\n\n").map(str::trim_end).collect();
+    assert_eq!(
+        paras.len(),
+        2,
+        "message should stay subject + body only: {msg}"
+    );
+}
+
+/// A `None` field is omitted, not written empty — the token must not
+/// appear at all (e.g. `original_strand` for a loom-scoped chain).
+#[test]
+fn commit_omits_none_trailer_fields() {
+    let dir = commit_with_trace(&trace_with(
+        Some("sess-42"),
+        Some("QueueIdle"),
+        Some("rig"),
+        None,
+    ));
+    let trailers = head_trailers(dir.path());
+    assert!(trailers.contains("session: sess-42"));
+    assert!(trailers.contains("event: QueueIdle"));
+    assert!(trailers.contains("source: rig"));
+    assert!(
+        !trailers.contains("original-strand"),
+        "None field must not appear in the trailer block: {trailers}"
+    );
 }

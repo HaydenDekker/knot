@@ -208,6 +208,34 @@ impl FileSystemGitVersioner {
             knot_id.0, strand_name, event_type
         )
     }
+
+    /// Plan 099 (Phase 3): build the git trailer block for a knot-run
+    /// commit — the message's last paragraph, git's own trailer
+    /// convention (`Token: value` lines).
+    ///
+    /// Fields that are `None` are omitted, not written empty; when every
+    /// field is `None` this returns `None` and no trailer block is
+    /// appended. The block is parseable by `git interpret-trailers`.
+    fn build_trailers(trace: &crate::domain::events::RunTrace) -> Option<String> {
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(session) = &trace.session_id {
+            lines.push(format!("session: {session}"));
+        }
+        if let Some(event) = &trace.event_id {
+            lines.push(format!("event: {event}"));
+        }
+        if let Some(source) = &trace.source_knot {
+            lines.push(format!("source: {source}"));
+        }
+        if let Some(original) = &trace.original_strand {
+            lines.push(format!("original-strand: {original}"));
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
 }
 
 impl GitVersioningPort for FileSystemGitVersioner {
@@ -218,6 +246,7 @@ impl GitVersioningPort for FileSystemGitVersioner {
         strand_path: &StrandPath,
         event_type: &str,
         tie_off_content: &str,
+        trace: &crate::domain::events::RunTrace,
     ) -> Result<(), PortError> {
         // 1. Check if this is a git repo
         if self.is_git_repo().is_err() {
@@ -251,10 +280,16 @@ impl GitVersioningPort for FileSystemGitVersioner {
         //     with a staged rig is exactly what this guard prevents.
         self.unstage_rig()?;
 
-        // 3. Build commit message
+        // 3. Build commit message. Plan 099: the trailer block (when
+        //    any trace field is present) is appended as the message's
+        //    last paragraph — git's own trailer convention. The subject
+        //    and the 1000-line body truncation are unchanged.
         let subject = Self::build_subject(knot_id, strand_path, event_type);
         let body = Self::truncate_body(tie_off_content);
-        let full_message = format!("{subject}\n\n{body}");
+        let full_message = match Self::build_trailers(trace) {
+            Some(trailers) => format!("{subject}\n\n{body}\n\n{trailers}"),
+            None => format!("{subject}\n\n{body}"),
+        };
 
         // 4. Commit
         let commit_result = Command::new("git")
@@ -445,9 +480,16 @@ impl GitVersioningPort for FileSystemGitVersioner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::events::RunTrace;
     use std::fs;
     use std::io::Write;
     use std::path::Path;
+
+    /// Plan 099: an empty trace for commit calls in tests that do not
+    /// exercise the trailer block.
+    fn trace_none() -> RunTrace {
+        RunTrace::default()
+    }
 
     /// Helper: create a temp directory with a git repo initialized and
     /// configured (user.name/email set so commits work).
@@ -518,7 +560,9 @@ mod tests {
             StrandPath(std::path::PathBuf::from("input/strand.md"));
 
         let result =
-            versioner.commit(&loom_id, &knot_id, &strand, "Created", "body");
+            versioner.commit(
+                &loom_id, &knot_id, &strand, "Created", "body", &trace_none(),
+            );
         assert!(result.is_ok(), "commit should succeed in git repo");
 
         // Verify a new commit was created
@@ -548,6 +592,7 @@ mod tests {
             &strand,
             "Created",
             "body",
+            &trace_none(),
         );
         // Should return Ok(()) — graceful skip, not an error
         assert!(
@@ -583,6 +628,7 @@ mod tests {
             &strand,
             "Modified",
             "tie-off content",
+            &trace_none(),
         );
         assert!(result.is_ok());
 
@@ -641,6 +687,7 @@ mod tests {
             &strand,
             "Created",
             tie_off,
+            &trace_none(),
         );
         assert!(result.is_ok());
 
@@ -694,6 +741,7 @@ mod tests {
             &strand1,
             "Created",
             "tie-off 1",
+            &trace_none(),
         );
         assert!(result1.is_ok(), "first commit should succeed");
 
@@ -707,6 +755,7 @@ mod tests {
             &strand2,
             "Modified",
             "tie-off 2",
+            &trace_none(),
         );
         assert!(result2.is_ok(), "second commit should succeed");
 
@@ -720,6 +769,7 @@ mod tests {
             &strand3,
             "Deleted",
             "tie-off 3",
+            &trace_none(),
         );
         assert!(result3.is_ok(), "third commit should succeed");
 

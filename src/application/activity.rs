@@ -200,6 +200,7 @@ mod tests {
             knot_id: KnotId(knot.to_string()),
             strand_path: StrandPath(p("strands/prd.md")),
             tie_off_path: crate::domain::entities::TieOffPath(p("tie-offs/rig/prd.md")),
+            trace: None,
             timestamp: ts(),
         }
     }
