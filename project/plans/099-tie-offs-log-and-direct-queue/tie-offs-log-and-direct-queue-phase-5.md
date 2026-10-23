@@ -88,4 +88,6 @@ never piecemeal (Phase 0 decision D4: hard cutover, no config flag).
   code.
 
 ## External verdict request
-**Commit sha:** `<pending>` — recorded in the follow-up docs commit.
+**Commit sha:** `1c249889cf49b383771dd3f87da4411e8d2e59a3` — the
+Phase 5 cutover commit (this docs update records it as the
+external-verdict request).
