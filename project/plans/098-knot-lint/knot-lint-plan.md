@@ -1,7 +1,6 @@
 # Plan: Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
-> **Status:** in progress — phases 0, 1 and 2 complete (2026-10-23),
-> phase 3 pending. Phase 0: the rule text and the measurable boundary
+> **Status:** complete — all four phases landed 2026-10-23. Phase 0: the rule text and the measurable boundary
 > (prose/numbered-step thresholds) are live in `knot-design` and
 > `docs/design-guide.md`. Phase 1: the lint engine landed at
 > `.agents/skills/knot-lint/scripts/knot-lint.py` (Python 3 stdlib,
@@ -16,7 +15,11 @@
 > rig: 37 findings — K1 x33, K2 x3, K5 x1; K3/K4 clean. This repo's
 > rig: 0 findings). The 2026-10-22 baseline's shared-editor
 > `discoveries.md` and the format-bootstrap circularity were both
-> rectified in the software-factory rig between baselines.
+> rectified in the software-factory rig between baselines. Phase 3: `knot-lint` is packaged as a sub-skill
+> (SKILL.md v0.1.0 — the five check families, the advisory-only
+> boundary, the dated-report convention, the `--selftest` verification)
+> and registered in the `knot` master's routing table (agents-repo
+> commit 6707085; conformance record ninth run, all conformant).
 
 ## Problem
 

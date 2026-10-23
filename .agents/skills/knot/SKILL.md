@@ -1,6 +1,11 @@
 ---
 name: knot
-description: "Master router for all Knot agent-orchestration (rig) work. Routes to sub-skills for initialising rigs, starting and stopping the Knot service, creating/modifying looms, knots and profiles, dispatching strands and events, inspecting rig state, visualising the rig graph, reviewing tie-offs and git output, analysing productivity and blockers, designing looms and knots, building software-factory rigs (the generic process layer), understanding Knot abstractions, customising the tie-off content section (the prompt content the producer writes — the tie-off header/content + the event-content guide; the contract, event format, and rules are hard-coded), and migrating between Knot versions. USE FOR: rig, loom, knot, strand, event, tie-off, profile, dispatch, knot step, start knot, service log, rig state, rig review, rig productivity, blockers, rig design, rig graph, rig visualisation, rig topology, knot connections, knot migration, knot template, tie-off content, tie-off instruction, event content instruction, software factory, factory rig, GProc, generic process. DO NOT USE FOR: project document lifecycle (use the project master)."
+description: "Master router for all Knot agent-orchestration (rig) work: the rig lifecycle (init, service start/stop, version migration), rig modelling (looms, knots, profiles; loom-and-knot design; the software-factory rig — the GProc generic process layer), execution (strand and event dispatch), the read side (state inspection, graph visualisation, tie-off and git-output review, productivity and blocker analysis, static consistency lint), the Knot abstractions, and the tie-off content section. Project document lifecycle of the served project: the project master."
+license: MIT
+metadata:
+  author: AI Workflow Team
+  version: "1.0.0"
+  compatibility: "the ~/.agents skill set (skills/ + skills-library/ + project/)"
 ---
 
 # Knot (master)
@@ -21,6 +26,7 @@ guess a sub-skill's workflow from this index.
 | Visualise the rig graph (knots + event/strand edges) as HTML | `/home/hayden/.agents/skills-library/knot-visualise/SKILL.md` |
 | Review rig work: git history, tie-offs, producer→consumer comms | `/home/hayden/.agents/skills-library/knot-manage/SKILL.md` |
 | Analyse rig productivity, project progress, blockers | `/home/hayden/.agents/skills-library/knot-analyst/SKILL.md` |
+| Lint rig consistency: inline behaviour, shared docs, event pairing | `/home/hayden/.agents/skills-library/knot-lint/SKILL.md` |
 | Design looms and knots: idempotency, naming, loops | `/home/hayden/.agents/skills-library/knot-design/SKILL.md` |
 | Build/design a software-factory rig: GProc layer, interfaces | `/home/hayden/.agents/skills-library/knot-software-factory/SKILL.md` |
 | Understand Knot's layered architecture and abstractions | `/home/hayden/.agents/skills-library/knot-abstractions/SKILL.md` |
