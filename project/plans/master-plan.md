@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
+> **Last Updated:** 2026-10-23 (plan 099 drafted — unified `tie-offs.log` + direct payload-embedded event queueing)
+> **Prior:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
 > **Prior:** 2026-10-16 (plans 094–095 complete — the event-enforcement follow-up tie-off is now appended (bugfix) + the `knot-template` skill and per-rig instruction links (hard-coded default + config links); released in v0.59.0)
 > **Prior:** 2026-10-02 (plan 093 phase 10 — event-types panel: invocations / consumers / minutes caused per event type, the communication view — v0.58.0)
 > **Prior:** 2026-10-02 (plan 093 draft — Rig Graph Visualiser: extract the rig's knot/strand graph into a self-contained offline D3 HTML visualisation, packaged as the `knot-visualise` skill)
@@ -53,6 +54,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 99 | [Unified Tie-Off Log and Direct Event Queueing](099-tie-offs-log-and-direct-queue/tie-offs-log-and-direct-queue-plan.md) | ⬜ Planned | 2026-10-23 |
 | 98 | [Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule](098-knot-lint/knot-lint-plan.md) | ⬜ Planned | 2026-10-22 |
 | 97 | [Queue-Backed Pending-Event Visibility for Producers](097-queued-event-visibility/queued-event-visibility-plan.md) | 🟡 In Progress | 2026-10-18 |
 | 96 | [Hard-Coded Tie-Off Contract — the Content-Only Override](096-hardcoded-tieoff-contract/hardcoded-tieoff-contract-plan.md) | ✅ Complete (2026-10-16) — released in v0.60.0 | 2026-10-16 |
@@ -72,6 +74,13 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 99. Unified Tie-Off Log and Direct Event Queueing
+
+**Status:** ⬜ Planned (2026-10-23)
+**Where it is:** Draft — awaiting activation
+**Where it's going:** `tie-offs/<rig>/` holds only `state.json`, the service log, one accumulating `tie-offs.log` (sole-writer, structured section headers), and the `events/` queue; events queue directly from the tie-off parse as payload-embedded per-subscriber entries (dispatched-md files and the `event:`-URI strand path retire); commits carry trace trailers (`session`, `event`, `source`, `original_strand`) and the service-log grammar gains the same fields — the debug trace chain closes with no persistent payload duplication.
+**Plan:** [099-tie-offs-log-and-direct-queue/tie-offs-log-and-direct-queue-plan.md](099-tie-offs-log-and-direct-queue/tie-offs-log-and-direct-queue-plan.md)
 
 ### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
