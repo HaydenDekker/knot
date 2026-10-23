@@ -612,25 +612,36 @@ fn count_event_files(rig_dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Count a knot's runs from its tie-off file: each run appends exactly
-/// one `## {knot} triggered by …` section. Plan 083: loom-logs no
+/// Count a knot's runs from the unified tie-off log: each run appends
+/// exactly one `## knot={knot} …` section. Plan 083: loom-logs no
 /// longer exist as files — tie-offs and `state.json` are the
 /// observable run record for in-process (no-stderr-capture) tests.
-fn tie_off_sections(rig_dir: &Path, loom_id: &str, knot: &str) -> usize {
-    let path = knot::domain::knot_file::derive_tieoff_path(loom_id, knot, rig_dir)
-        .join(format!("tie-off-{knot}.md"));
+/// Plan 099: the sections live in the one `tie-offs.log`.
+fn tie_off_sections(rig_dir: &Path, _loom_id: &str, knot: &str) -> usize {
+    let path = knot::domain::knot_file::derive_runtime_root(rig_dir)
+        .join("tie-offs.log");
     fs::read_to_string(&path)
-        .map(|c| c.matches("## ").count())
+        .map(|c| {
+            knot::domain::tieoff_parser::parse_sections(&c)
+                .iter()
+                .filter(|s| s.knot_name == knot)
+                .count()
+        })
         .unwrap_or(0)
 }
 
 /// Count a knot's failed runs (tie-off sections carrying the failure
 /// marker `Processing failed:`).
-fn tie_off_failed_sections(rig_dir: &Path, loom_id: &str, knot: &str) -> usize {
-    let path = knot::domain::knot_file::derive_tieoff_path(loom_id, knot, rig_dir)
-        .join(format!("tie-off-{knot}.md"));
+fn tie_off_failed_sections(rig_dir: &Path, _loom_id: &str, knot: &str) -> usize {
+    let path = knot::domain::knot_file::derive_runtime_root(rig_dir)
+        .join("tie-offs.log");
     fs::read_to_string(&path)
-        .map(|c| c.matches("Processing failed:").count())
+        .map(|c| {
+            knot::domain::tieoff_parser::parse_sections(&c)
+                .iter()
+                .filter(|s| s.knot_name == knot && s.body.contains("Processing failed:"))
+                .count()
+        })
         .unwrap_or(0)
 }
 
@@ -687,8 +698,7 @@ fn front_loop_drains_queue_then_idles() {
 
     // Both tie-offs recorded for the same knot (appended entries).
     let tie_off = knot::domain::knot_file::derive_runtime_root(&f.rig_dir)
-        .join("review-loom")
-        .join("tie-off-review.md");
+        .join("tie-offs.log");
     let content = fs::read_to_string(&tie_off).unwrap();
     assert!(
         content.contains("review complete"),
@@ -726,8 +736,7 @@ fn event_file_present_during_processing_gone_after() {
 
     // The agent saw the event file while it was running.
     let tie_off = knot::domain::knot_file::derive_runtime_root(&f.rig_dir)
-        .join("review-loom")
-        .join("tie-off-review.md");
+        .join("tie-offs.log");
     let content = fs::read_to_string(&tie_off).unwrap();
     assert!(
         content.contains("EVENT_FILE_PRESENT_DURING_RUN"),

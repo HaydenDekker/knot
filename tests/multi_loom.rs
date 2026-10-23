@@ -131,18 +131,16 @@ fn multi_loom_log_isolation() {
 
     // Each loom produced its own tie-off with its own knot's section
     let runtime_root = knot::domain::knot_file::derive_runtime_root(&rig_dir);
-    let review_tie_off = runtime_root.join("review-loom").join("tie-off-review.md");
-    let plan_tie_off = runtime_root.join("planning-loom").join("tie-off-plan.md");
-    let review_content = fs::read_to_string(&review_tie_off)
-        .expect("review-loom tie-off should exist");
-    let plan_content = fs::read_to_string(&plan_tie_off)
-        .expect("planning-loom tie-off should exist");
+    let unified = runtime_root.join("tie-offs.log");
+    let review_content = fs::read_to_string(&unified)
+        .expect("unified tie-off log should exist");
+    let plan_content = review_content.clone();
     assert!(
-        review_content.contains("## review triggered by"),
-        "review-loom tie-off should carry the review knot's section"
+        review_content.contains("## knot=review event="),
+        "unified log should carry the review knot's section"
     );
     assert!(
-        plan_content.contains("## plan triggered by"),
+        plan_content.contains("## knot=plan event="),
         "planning-loom tie-off should carry the plan knot's section"
     );
 

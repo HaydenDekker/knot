@@ -68,9 +68,10 @@ fn create_strand_file(dir: &tempfile::TempDir, name: &str, content: &str) -> Pat
 
 // ── Tie-off path structure ───────────────────────────────────────────────
 
-/// Tie-off is written to the correct path under the runtime root.
+/// Tie-off is written to the unified log under the runtime root.
 ///
-/// Path structure: `tie-offs/<rig-basename>/{loom-id}/tie-off-{knot-id}.md`
+/// Plan 099: path structure is `tie-offs/<rig-basename>/tie-offs.log` —
+/// one accumulating file; the knot identity rides the section header.
 #[test]
 fn tie_off_written_to_correct_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -95,12 +96,12 @@ fn tie_off_written_to_correct_path() {
     assert_eq!(appends.len(), 1, "should have 1 tie-off append");
     let tie_off = &appends[0];
 
-    // Path should be: /tie-offs/rig/review-loom/tie-off-review.md
+    // Path should be the unified log: /tie-offs/rig/tie-offs.log
     // (builder rig dir is /rig → runtime root /tie-offs/rig)
     let path_str = tie_off.path.0.display().to_string();
-    assert!(
-        path_str.contains("tie-offs/rig/review-loom/tie-off-review.md"),
-        "tie-off path should contain loom and knot ID: {}",
+    assert_eq!(
+        path_str, "/tie-offs/rig/tie-offs.log",
+        "tie-off path should be the unified log: {}",
         path_str
     );
 
@@ -113,9 +114,9 @@ fn tie_off_written_to_correct_path() {
     );
 }
 
-/// Tie-off path includes the knot ID (not loom ID) in the filename.
-///
-/// With multiple knots in one loom, each gets its own tie-off file.
+/// Plan 099: the per-knot files retire — every knot appends to the one
+/// unified log, and the knot identity rides the section header
+/// (`knot_name` on the entity, `knot=` on the rendered line).
 #[test]
 fn tie_off_path_includes_knot_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -138,10 +139,15 @@ fn tie_off_path_includes_knot_id() {
 
     let appends = tie_off_appends.lock().unwrap();
     let path_str = appends[0].path.0.display().to_string();
-    assert!(
-        path_str.contains("tie-off-knot-a.md"),
-        "tie-off filename should include knot-a ID: {}",
+    assert_eq!(
+        path_str, "/tie-offs/rig/tie-offs.log",
+        "knot-a appends to the unified log: {}",
         path_str
+    );
+    assert_eq!(
+        appends[0].knot_name.as_deref(),
+        Some("knot-a"),
+        "the section carries the knot identity"
     );
 }
 
@@ -187,8 +193,8 @@ fn tie_off_append_mode_history() {
     // Content map tracks the latest write (same path, second overwrites)
     let content = tie_off_content.lock().unwrap();
     let latest = content
-        .get("/tie-offs/rig/review-loom/tie-off-review.md")
-        .expect("tie-off path should be in content map");
+        .get("/tie-offs/rig/tie-offs.log")
+        .expect("unified log path should be in content map");
     assert!(
         latest.contains("review v1"),
         "tie-off content should contain agent output"
@@ -252,11 +258,10 @@ fn delete_event_context_extraction_reads_tieoff() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/tie-offs.log".to_string(),
             concat!(
-                "## review triggered by Created strands/feature.md\n",
-                "Timestamp: 2026-06-05T10:00:00Z\n",
-                "---\n",
+                "## knot=review event=Created strand=strands/feature.md \
+                 timestamp=2026-06-05T10:00:00Z\n",
                 "Initial review content",
             )
             .to_string(),
@@ -400,28 +405,20 @@ fn acceptance_real_sink_writes_session_line_on_disk() {
         .execute(created_event("review-loom", "review", strand_path))
         .unwrap();
 
-    // Runtime root: <tmp>/tie-offs/rig/review-loom/tie-off-review.md
+    // Plan 099: the unified log — <tmp>/tie-offs/rig/tie-offs.log
     let file_path = dir
         .path()
-        .join("tie-offs/rig/review-loom/tie-off-review.md");
+        .join("tie-offs/rig/tie-offs.log");
     let content = std::fs::read_to_string(&file_path)
-        .unwrap_or_else(|e| panic!("tie-off file should exist at {file_path:?}: {e}"));
+        .unwrap_or_else(|e| panic!("tie-off log should exist at {file_path:?}: {e}"));
 
-    let lines: Vec<&str> = content.lines().collect();
-    let ts = lines
-        .iter()
-        .position(|l| l.starts_with("Timestamp: "))
-        .expect("Timestamp line");
-    let sep = lines
-        .iter()
-        .position(|l| *l == "---")
-        .expect("--- separator");
-    assert_eq!(
-        lines[ts + 1],
-        "session: accept-sess",
-        "session line must follow Timestamp on disk: {content}"
+    // The session rides the structured header line, after the timestamp.
+    let header = content.lines().next().unwrap();
+    assert!(
+        header.starts_with("## knot=review event=Created strand=")
+            && header.contains(" session=accept-sess"),
+        "session must ride the header line: {header}"
     );
-    assert!(ts + 1 < sep, "session line must precede ---: {content}");
 }
 
 /// Acceptance: stdio-style run (no metadata) → on-disk file contains no
@@ -448,24 +445,21 @@ fn acceptance_real_sink_no_session_line_without_metadata() {
 
     let file_path = dir
         .path()
-        .join("tie-offs/rig/review-loom/tie-off-review.md");
+        .join("tie-offs/rig/tie-offs.log");
     let content = std::fs::read_to_string(&file_path).unwrap();
 
     assert!(
-        !content.contains("session:"),
-        "no session line without metadata: {content}"
+        !content.contains("session="),
+        "no session field without metadata: {content}"
     );
-    // Header block keeps today's exact shape.
+    // Plan 099 section shape: one structured header line, then the
+    // content — no separate Timestamp line, no --- after the header.
     let lines: Vec<&str> = content.lines().collect();
     assert!(
-        lines[0].starts_with("## review triggered by Created "),
-        "header line unchanged: {content}"
+        lines[0].starts_with("## knot=review event=Created strand=")
+            && lines[0].contains(" timestamp=2"),
+        "structured header line: {content}"
     );
-    assert!(
-        lines[1].starts_with("Timestamp: "),
-        "timestamp directly after header: {content}"
-    );
-    assert_eq!(lines[2], "---", "separator directly after timestamp: {content}");
     assert!(content.contains("output"), "body present: {content}");
 }
 
@@ -497,7 +491,7 @@ fn acceptance_real_sink_append_sections_still_parse() {
 
     let file_path = dir
         .path()
-        .join("tie-offs/rig/review-loom/tie-off-review.md");
+        .join("tie-offs/rig/tie-offs.log");
     let content = std::fs::read_to_string(&file_path).unwrap();
 
     let sections =
@@ -517,16 +511,12 @@ fn acceptance_real_sink_append_sections_still_parse() {
     }
     assert_eq!(sections[0].event_type, "Created");
     assert_eq!(sections[1].event_type, "Modified");
-    // The session line is carried in the body of each section — the
-    // parser is deliberately unchanged (plan 071, Target 4).
+    // Plan 099: the session rides the header line (parsed into the
+    // section header, not the body). The parser recognises the new
+    // structured first line.
     assert!(
-        sections[0].body.contains("session: accept-sess"),
-        "session line belongs to the section body: {:?}",
+        !sections[0].body.contains("session"),
+        "session is header-borne, not body: {:?}",
         sections[0].body
-    );
-    assert!(
-        sections[1].body.contains("session: accept-sess"),
-        "second section body carries it too: {:?}",
-        sections[1].body
     );
 }

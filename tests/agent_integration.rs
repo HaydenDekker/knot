@@ -166,8 +166,8 @@ fn agent_execution_append_mode_tie_offs() {
     // Content map tracks the latest write
     let content = tie_off_content.lock().unwrap();
     let latest = content
-        .get("/tie-offs/rig/test-loom/tie-off-review.md")
-        .expect("tie-off path should be in content map");
+        .get("/tie-offs/rig/tie-offs.log")
+        .expect("unified log path should be in content map");
     assert!(
         latest.contains("review v1"),
         "tie-off content should contain agent output"
@@ -217,8 +217,9 @@ fn agent_execution_updates_state_file() {
     assert!(!completed.is_empty(), "should have KnotCompleted event");
     let (tie_off_path, strand_path) = &completed[0];
     assert!(
-        tie_off_path.0.to_string_lossy().contains("tie-off-review.md"),
-        "tie_off_path should reference tie-off-review.md"
+        tie_off_path.0.to_string_lossy().ends_with("tie-offs.log"),
+        "tie_off_path should reference the unified log: {:?}",
+        tie_off_path
     );
     assert!(
         strand_path.0.file_name().map(|f| f.to_string_lossy())

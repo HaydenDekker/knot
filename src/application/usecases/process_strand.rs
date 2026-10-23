@@ -21,7 +21,7 @@ use crate::domain::events::{
     AgentEvent, LoomEvent, PromptInstructionSource, StrandEvent, StrandQueueAccessor,
 };
 use crate::domain::pending_event::{PendingEvent, PendingEventId};
-use crate::domain::knot_file::derive_tieoff_path;
+use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::value_objects::{
     AgentConfig, AgentProfile, AgentProfileError, RigAgentConfig,
 };
@@ -642,19 +642,21 @@ impl ProcessStrand {
         Ok(())
     }
 
-    /// Compute the tie-off output path from knot + strand path.
-    /// Uses statically derived path: `tie-offs/<rig-basename>/{loom-id}/tie-off-{knot-name}.md`
-    /// (under the rig's runtime root). Tie-off files are placed flat under
-    /// the loom's tie-off directory.
+    /// Compute the tie-off output path.
+    /// Plan 099 (Phase 4): the unified log — every tie-off section
+    /// appends to the single `tie-offs/<rig>/tie-offs.log` under the
+    /// rig's runtime root. The per-(loom, knot) files retire; the
+    /// section header carries the knot/strand identity.
     fn compute_tie_off_path(
         &self,
-        loom: &Loom,
-        knot: &Knot,
+        _loom: &Loom,
+        _knot: &Knot,
         _strand_path: &StrandPath,
     ) -> TieOffPath {
-        let filename = format!("tie-off-{}.md", knot.id.0);
-        let base = derive_tieoff_path(&loom.id.0, &knot.id.0, &self.rig_dir);
-        TieOffPath(base.join(filename))
+        TieOffPath(
+            crate::domain::knot_file::derive_runtime_root(&self.rig_dir)
+                .join("tie-offs.log"),
+        )
     }
 
     /// Validate the strand file before processing.
@@ -2340,23 +2342,20 @@ mod execution_deleted_tests {
             build_process_strand(loom, runner);
 
         // Pre-populate the tie-off sink with history.
-        // The tie-off header stores the strand path as written by the sink
-        // (from `strand_path.0.display().to_string()`), which matches the
-        // event's strand_path. The extract_last_n comparison uses the full
-        // path string, so the mock must use the same path format.
+        // Plan 099: the history lives in the unified log — the same
+        // path compute_tie_off_path now returns for every knot. The
+        // sections carry the new structured header format.
         {
             let mut content = tie_off_content.lock().unwrap();
             content.insert(
-                "/tie-offs/rig/test-loom/tie-off-k1.md".to_string(),
+                "/tie-offs/rig/tie-offs.log".to_string(),
                 concat!(
-                    "## review triggered by Created input/strand.md\n",
-                    "Timestamp: 2026-06-05T10:00:00Z\n",
-                    "---\n",
+                    "## knot=review event=Created strand=input/strand.md \
+                     timestamp=2026-06-05T10:00:00Z\n",
                     "Initial review content\n",
                     "---\n",
-                    "## review triggered by Modified input/strand.md\n",
-                    "Timestamp: 2026-06-05T11:00:00Z\n",
-                    "---\n",
+                    "## knot=review event=Modified strand=input/strand.md \
+                     timestamp=2026-06-05T11:00:00Z\n",
                     "Updated review content",
                 )
                 .to_string(),
@@ -6588,30 +6587,31 @@ mod tieoff_event_metadata_tests {
         let content =
             std::fs::read_to_string(&file_path).unwrap();
 
-        // Should contain the structured metadata fields
+        // Plan 099: the structured trace fields ride the one header
+        // line.
         assert!(
-            content.contains("event: PlanCreated"),
+            content.contains("event-id=PlanCreated"),
             "should contain event field: {}",
             content
         );
         assert!(
-            content.contains("source: plan-creator"),
+            content.contains("source=plan-creator"),
             "should contain source field: {}",
             content
         );
         assert!(
-            content.contains("original_strand: 001-feature.md"),
-            "should contain original_strand field: {}",
+            content.contains("original-strand=001-feature.md"),
+            "should contain original-strand field: {}",
             content
         );
         // Regular header fields still present
         assert!(
-            content.contains("## event-consumer triggered by Created"),
+            content.contains("## knot=event-consumer event=Created"),
             "should contain standard header: {}",
             content
         );
         assert!(
-            content.contains("Timestamp: 2026-07-09T12:05:00Z"),
+            content.contains("timestamp=2026-07-09T12:05:00Z"),
             "should contain timestamp: {}",
             content
         );
@@ -6640,20 +6640,21 @@ mod tieoff_event_metadata_tests {
         let content =
             std::fs::read_to_string(&file_path).unwrap();
 
-        // Should NOT contain event metadata fields
+        // Should NOT contain the event trace fields (the header's
+        // event= is the run label, not a trace emission).
         assert!(
-            !content.contains("event:"),
-            "should NOT contain event field for normal strand: {}",
+            !content.contains("source="),
+            "should NOT contain source field: {}",
             content
         );
         assert!(
-            !content.contains("source:"),
-            "should NOT contain source field: {}",
+            !content.contains("original-strand="),
+            "should NOT contain original-strand field: {}",
             content
         );
         // Standard header still present
         assert!(
-            content.contains("## normal-knot triggered by Created"),
+            content.contains("## knot=normal-knot event=Created"),
             "should contain standard header"
         );
     }
@@ -6687,12 +6688,12 @@ mod tieoff_event_metadata_tests {
 
         // Only event_id should be present
         assert!(
-            content.contains("event: PlanCreated"),
+            content.contains("event-id=PlanCreated"),
             "should contain event field: {}",
             content
         );
         assert!(
-            !content.contains("source:"),
+            !content.contains("source="),
             "should NOT contain source when not set: {}",
             content
         );

@@ -19,10 +19,13 @@ pub struct TieOffSection {
 
 /// Header line regex for tie-off sections.
 ///
-/// Format: `## {knot_name} triggered by {event_type} {strand_path}`
-/// The knot name, event type, and strand path are separated by whitespace
-/// with the literal `triggered by` in between.
-const HEADER_RE: &str = r"^## (?P<knot_name>[^\s]+)\s+triggered by\s+(?P<event_type>[^\s]+)\s+(?P<strand_path>.+)$";
+/// Plan 099 (Phase 4) unified-log format: one structured, greppable
+/// line — `## knot=<name> event=<type> strand=<path> timestamp=<ts>`
+/// with optional trailing `session=<id>`, `source=<knot>`, and
+/// `original-strand=<path>` fields (omitted, never empty).
+/// The old `## {knot} triggered by {event} {strand}` header retires
+/// with the per-knot files (hard cutover, plan 099 D4).
+const HEADER_RE: &str = r"^## knot=(?P<knot_name>\S+)\s+event=(?P<event_type>\S+)\s+strand=(?P<strand_path>\S+)\s+timestamp=(?P<timestamp>\S+)(?:\s+session=(?P<session>\S+))?(?:\s+source=(?P<source>\S+))?(?:\s+original-strand=(?P<original_strand>\S+))?$";
 
 /// Parse a tie-off file's content into structured sections.
 ///
@@ -64,7 +67,11 @@ pub fn parse_sections(content: &str) -> Vec<TieOffSection> {
                         .name("strand_path")
                         .map(|m| m.as_str().to_string())
                         .unwrap_or_default(),
-                    timestamp: String::new(),
+                    // Plan 099: the timestamp rides the header line.
+                    timestamp: captures
+                        .name("timestamp")
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default(),
                     body: String::new(),
                 };
                 current = Some(section);
@@ -492,7 +499,7 @@ mod tests {
     #[test]
     fn parse_sections_single_section() {
         let content =
-            "## review triggered by Created docs.md\nTimestamp: 2026-06-01T00:00:00Z\n---\nBody text";
+            "## knot=review event=Created strand=docs.md timestamp=2026-06-01T00:00:00Z\n---\nBody text";
         let sections = parse_sections(content);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].knot_name, "review");
@@ -505,18 +512,18 @@ mod tests {
     #[test]
     fn parse_sections_multiple_sections() {
         let content = concat!(
-            "## review triggered by Created a.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=a.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Body one\n",
             "---\n",
-            "## review triggered by Modified b.md\n",
-            "Timestamp: 2026-06-02T00:00:00Z\n",
+            "## knot=review event=Modified strand=b.md timestamp=2026-06-02T00:00:00Z\n",
+            
             "---\n",
             "Body two\n",
             "---\n",
-            "## review triggered by Deleted c.md\n",
-            "Timestamp: 2026-06-03T00:00:00Z\n",
+            "## knot=review event=Deleted strand=c.md timestamp=2026-06-03T00:00:00Z\n",
+            
             "---\n",
             "Body three",
         );
@@ -533,8 +540,8 @@ mod tests {
     #[test]
     fn parse_sections_preserves_body_newlines() {
         let content = concat!(
-            "## review triggered by Created file.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=file.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Line one\n",
             "Line two\n",
@@ -551,23 +558,23 @@ mod tests {
     #[test]
     fn extract_last_n_filters_by_strand() {
         let content = concat!(
-            "## review triggered by Created alpha.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=alpha.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Alpha body\n",
             "---\n",
-            "## review triggered by Created beta.md\n",
-            "Timestamp: 2026-06-02T00:00:00Z\n",
+            "## knot=review event=Created strand=beta.md timestamp=2026-06-02T00:00:00Z\n",
+            
             "---\n",
             "Beta body\n",
             "---\n",
-            "## review triggered by Modified alpha.md\n",
-            "Timestamp: 2026-06-03T00:00:00Z\n",
+            "## knot=review event=Modified strand=alpha.md timestamp=2026-06-03T00:00:00Z\n",
+            
             "---\n",
             "Alpha updated\n",
             "---\n",
-            "## review triggered by Created gamma.md\n",
-            "Timestamp: 2026-06-04T00:00:00Z\n",
+            "## knot=review event=Created strand=gamma.md timestamp=2026-06-04T00:00:00Z\n",
+            
             "---\n",
             "Gamma body",
         );
@@ -584,7 +591,7 @@ mod tests {
         let mut content_parts: Vec<String> = Vec::new();
         for i in 1..=7 {
             content_parts.push(format!(
-                "## review triggered by Created strand.md\nTimestamp: 2026-06-{0:02}T00:00:00Z\n---\nBody {0}",
+                "## knot=review event=Created strand=strand.md timestamp=2026-06-{0:02}T00:00:00Z\n---\nBody {0}",
                 i
             ));
         }
@@ -599,8 +606,8 @@ mod tests {
     #[test]
     fn extract_last_n_less_than_n() {
         let content = concat!(
-            "## review triggered by Created strand.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=strand.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Only entry",
         );
@@ -612,8 +619,8 @@ mod tests {
     #[test]
     fn extract_last_n_no_matches() {
         let content = concat!(
-            "## review triggered by Created other.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=other.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Some body",
         );
@@ -625,8 +632,8 @@ mod tests {
     fn parse_sections_malformed_header() {
         // Section with no valid header line is skipped
         let content = concat!(
-            "## review triggered by Created valid.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=valid.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Valid body\n",
             "---\n",
@@ -635,8 +642,8 @@ mod tests {
             "---\n",
             "Orphan body\n",
             "---\n",
-            "## review triggered by Modified valid.md\n",
-            "Timestamp: 2026-06-03T00:00:00Z\n",
+            "## knot=review event=Modified strand=valid.md timestamp=2026-06-03T00:00:00Z\n",
+            
             "---\n",
             "Updated body",
         );
@@ -660,8 +667,8 @@ mod tests {
     #[test]
     fn extract_agent_events_no_markdown_blocks() {
         let content = concat!(
-            "## review triggered by Created file.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=file.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Normal body text without any events.",
         );
@@ -1104,13 +1111,13 @@ mod tests {
     #[test]
     fn extract_agent_events_mixed_with_full_tieoff_sections() {
         let content = concat!(
-            "## planner triggered by Created spec.md\n",
-            "Timestamp: 2026-06-25T10:00:00Z\n",
+            "## knot=planner event=Created strand=spec.md timestamp=2026-06-25T10:00:00Z\n",
+            
             "---\n",
             "Spec reviewed. No issues found.\n",
             "---\n",
-            "## planner triggered by Created plan.md\n",
-            "Timestamp: 2026-06-25T11:00:00Z\n",
+            "## knot=planner event=Created strand=plan.md timestamp=2026-06-25T11:00:00Z\n",
+            
             "---\n",
             "Plan created successfully.\n",
             "\n",
@@ -1124,8 +1131,8 @@ mod tests {
             "Plan created with three phases.\n",
             "```\n",
             "---\n",
-            "## planner triggered by Modified plan.md\n",
-            "Timestamp: 2026-06-25T12:00:00Z\n",
+            "## knot=planner event=Modified strand=plan.md timestamp=2026-06-25T12:00:00Z\n",
+            
             "---\n",
             "Plan updated with new scope.",
         );
@@ -1236,8 +1243,8 @@ mod tests {
     #[test]
     fn has_no_events_normal_body_returns_true() {
         let content = concat!(
-            "## review triggered by Created file.md\n",
-            "Timestamp: 2026-06-01T00:00:00Z\n",
+            "## knot=review event=Created strand=file.md timestamp=2026-06-01T00:00:00Z\n",
+            
             "---\n",
             "Normal body text without any events.",
         );

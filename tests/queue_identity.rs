@@ -248,29 +248,21 @@ fn count_event_files(fixture: &RigFixture) -> usize {
 /// The `strand_path` values of the tie-off completion sections for a
 /// loom's knots, in processing order (plan 083 replacement for the
 /// retired loom-log `KnotCompleted` events).
-fn completed_strands(fixture: &RigFixture, loom_id: &str) -> Vec<String> {
-    let dir = runtime_root(fixture).join(loom_id);
+fn completed_strands(fixture: &RigFixture, _loom_id: &str) -> Vec<String> {
+    // Plan 099: the unified log — every knot's sections carry a
+    // structured header line with `strand=<path>`.
+    let path = runtime_root(fixture).join("tie-offs.log");
     let mut strands: Vec<String> = Vec::new();
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(content) = fs::read_to_string(&path) else {
         return strands;
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("tie-off-") || !name.ends_with(".md") {
-            continue;
-        }
-        let Ok(content) = fs::read_to_string(entry.path()) else {
+    for line in content.lines() {
+        let Some(rest) = line.strip_prefix("## knot=") else {
             continue;
         };
-        // Section header: `## {knot} triggered by {event} {strand}`.
-        for line in content.lines() {
-            if let Some(rest) = line.strip_prefix("## ") {
-                if let Some(after) = rest.split(" triggered by ").nth(1) {
-                    if let Some(strand) = after.rsplit_once(' ') {
-                        strands.push(strand.1.to_string());
-                    }
-                }
+        for field in rest.split(' ') {
+            if let Some(strand) = field.strip_prefix("strand=") {
+                strands.push(strand.to_string());
             }
         }
     }
@@ -405,9 +397,7 @@ fn backdated_head_processes_first_and_drains() {
 
     // The tie-off records the runs in the same order — the head run's
     // section was appended before the tail run's.
-    let tie_off = runtime_root(&f)
-        .join("review-loom")
-        .join("tie-off-review.md");
+    let tie_off = runtime_root(&f).join("tie-offs.log");
     let content = fs::read_to_string(&tie_off).expect("tie-off must exist");
     let head_pos =
         content.find("rectify.md").expect("tie-off must cover the head");

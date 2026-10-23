@@ -455,9 +455,14 @@ mod tieoff_sink_adapter {
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("Section one"));
         assert!(content.contains("Section two"));
-        assert!(content.contains("review triggered by Created strand.md"));
-        assert!(content.contains("review triggered by Modified strand.md"));
-        assert!(content.matches("---").count() >= 2);
+        // Plan 099: structured header line per section, `---` between.
+        assert!(content.contains(
+            "## knot=review event=Created strand=strand.md timestamp=2026-06-05T10:00:00Z"
+        ));
+        assert!(content.contains(
+            "## knot=review event=Modified strand=strand.md timestamp=2026-06-05T11:00:00Z"
+        ));
+        assert!(content.matches("---").count() >= 1);
     }
 
     /// `read_content()` returns existing content.

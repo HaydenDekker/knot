@@ -465,11 +465,10 @@ fn delete_event_agent_receives_context() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/tie-offs.log".to_string(),
             concat!(
-                "## review triggered by Created strands/feature.md\n",
-                "Timestamp: 2026-06-05T10:00:00Z\n",
-                "---\n",
+                "## knot=review event=Created strand=strands/feature.md \
+                 timestamp=2026-06-05T10:00:00Z\n",
                 "Initial review content",
             )
             .to_string(),
@@ -591,18 +590,16 @@ fn delete_event_large_tieoff_bounded_context() {
     let mut tie_off_entries = Vec::new();
     for i in 1..=8 {
         tie_off_entries.push(format!(
-            "## review triggered by Modified strands/target.md\n\
-             Timestamp: 2026-06-05T{:02}:00:00Z\n\
-             ---\n\
+            "## knot=review event=Modified strand=strands/target.md \
+             timestamp=2026-06-05T{:02}:00:00Z\n\
              Target review v{}",
             i, i
         ));
         // Interleave with other strand entries
         if i <= 3 {
             tie_off_entries.push(format!(
-                "## review triggered by Created strands/other{}.md\n\
-                 Timestamp: 2026-06-05T{:02}:30:00Z\n\
-                 ---\n\
+                "## knot=review event=Created strand=strands/other{}.md \
+                 timestamp=2026-06-05T{:02}:30:00Z\n\
                  Other {} review",
                 i, i, i
             ));
@@ -612,7 +609,7 @@ fn delete_event_large_tieoff_bounded_context() {
     {
         let mut content = tie_off_content.lock().unwrap();
         content.insert(
-            "/tie-offs/rig/review-loom/tie-off-review.md".to_string(),
+            "/tie-offs/rig/tie-offs.log".to_string(),
             tie_off_entries.join("\n---\n"),
         );
     }

@@ -239,29 +239,21 @@ fn run_step(
 /// `KnotCompleted` events). Tie-offs persist and accumulate across
 /// `knot step` runs, so the sections are the durable per-run record
 /// for in-process tests.
-fn completed_strands(fixture: &StepFixture, loom_id: &str) -> Vec<String> {
-    let dir = runtime_root(fixture).join(loom_id);
+fn completed_strands(fixture: &StepFixture, _loom_id: &str) -> Vec<String> {
+    // Plan 099: the unified log — every knot's sections carry a
+    // structured header line with `strand=<path>`.
+    let path = runtime_root(fixture).join("tie-offs.log");
     let mut strands: Vec<String> = Vec::new();
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(content) = fs::read_to_string(&path) else {
         return strands;
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("tie-off-") || !name.ends_with(".md") {
-            continue;
-        }
-        let Ok(content) = fs::read_to_string(entry.path()) else {
+    for line in content.lines() {
+        let Some(rest) = line.strip_prefix("## knot=") else {
             continue;
         };
-        // Section header: `## {knot} triggered by {event} {strand}`.
-        for line in content.lines() {
-            if let Some(rest) = line.strip_prefix("## ") {
-                if let Some(after) = rest.split(" triggered by ").nth(1) {
-                    if let Some(strand) = after.rsplit_once(' ') {
-                        strands.push(strand.1.to_string());
-                    }
-                }
+        for field in rest.split(' ') {
+            if let Some(strand) = field.strip_prefix("strand=") {
+                strands.push(strand.to_string());
             }
         }
     }
@@ -321,7 +313,7 @@ fn step_processes_head_and_leaves_rest() {
         vec![a.to_string_lossy().into_owned()],
         "exactly one KnotCompleted (head strand): {completed:?}"
     );
-    let tie_off = runtime_root(&f).join("review-loom").join("tie-off-review.md");
+    let tie_off = runtime_root(&f).join("tie-offs.log");
     let content = fs::read_to_string(&tie_off).expect("producer tie-off must exist");
     assert!(content.contains("a.md"), "tie-off must cover the head strand");
     assert!(
@@ -470,27 +462,30 @@ fn step_captures_dispatched_events_without_executing() {
         "the delivery must carry the producer's trigger strand"
     );
 
-    // The consumer was captured, NOT executed: no tie-off, no
-    // completion (the consumer's tie-off absence is the plan-083
-    // observable of "no KnotProcessing / KnotCompleted" — the in-run
-    // event lines are process-private).
-    let consumer_tie_off = runtime_root(&f)
-        .join("validation-loom")
-        .join("tie-off-gap-assessor.md");
+    // Plan 099: the unified log. The consumer was captured, NOT
+    // executed: the log carries no `gap-assessor` section (the
+    // absence of the consumer's section is the plan-083 observable
+    // of "no KnotProcessing / KnotCompleted" — the in-run event
+    // lines are process-private).
+    let log_path = runtime_root(&f).join("tie-offs.log");
+    let content = fs::read_to_string(&log_path)
+        .expect("unified tie-off log must exist");
     assert!(
-        !consumer_tie_off.exists(),
-        "consumer tie-off must NOT be written (captured, not executed)"
+        !content.contains("## knot=gap-assessor"),
+        "consumer section must NOT be written (captured, not \
+         executed): {content}"
     );
 
-    // The producer completed and its tie-off carries the event block.
-    let producer_tie_off = runtime_root(&f)
-        .join("planning-loom")
-        .join("tie-off-plan-creator.md");
-    let content =
-        fs::read_to_string(&producer_tie_off).expect("producer tie-off must exist");
+    // The producer completed and its section carries the event block.
     assert!(
-        content.contains("event: PlanCreated"),
-        "producer tie-off must contain the dispatched event block: {content}"
+        content.contains("## knot=plan-creator"),
+        "producer section must exist: {content}"
+    );
+    assert!(
+        content.contains(
+            "- event-audit id=PlanCreated occurred=true"
+        ),
+        "producer tie-off must carry the slim event audit: {content}"
     );
 }
 

@@ -194,8 +194,7 @@ fn full_flow_alias_profile_resolves_model_and_writes_tieoff() {
 
     // Tie-off written under the runtime root.
     let tie_off_path = derive_runtime_root(&rig_dir)
-        .join("test-loom")
-        .join("tie-off-k1.md");
+        .join("tie-offs.log");
     assert!(
         tie_off_path.exists(),
         "tie-off should be written at {}",

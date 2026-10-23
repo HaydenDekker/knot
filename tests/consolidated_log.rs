@@ -241,7 +241,7 @@ fn full_run_emits_event_lines_and_no_log_files() {
     thread::sleep(Duration::from_secs(1));    let strands = cwd.join("strands");
     fs::create_dir_all(&strands).unwrap();
     fs::write(strands.join("s1.md"), "strand one").unwrap();
-    let tie_off = runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+    let tie_off = runtime_root(&rig).join("tie-offs.log");
     wait_for(
         || tie_off.exists(),
         15_000,
@@ -365,7 +365,7 @@ fn state_json_written_at_startup_and_only_on_change() {
     );
 
     // The mock pi exits instantly; wait for the run to finish.
-    let tie_off = runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+    let tie_off = runtime_root(&rig).join("tie-offs.log");
     wait_for(|| tie_off.exists(), 15_000, "tie-off written");
 
     let (output, _graceful) = stop_service(child);
@@ -634,7 +634,7 @@ fn run_lifecycle_lines_carry_trace_fields() {
     )
     .unwrap();
     let tie_off =
-        runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+        runtime_root(&rig).join("tie-offs.log");
     wait_for(|| tie_off.exists(), 15_000, "tie-off written");
 
     let (output, _graceful) = stop_service(child);
@@ -695,7 +695,7 @@ fn plain_strand_lifecycle_lines_carry_no_trace_keys() {
     fs::create_dir_all(&strands).unwrap();
     fs::write(strands.join("plain.md"), "just a strand").unwrap();
     let tie_off =
-        runtime_root(&rig).join("review-loom").join("tie-off-review.md");
+        runtime_root(&rig).join("tie-offs.log");
     wait_for(|| tie_off.exists(), 15_000, "tie-off written");
 
     let (output, _graceful) = stop_service(child);
@@ -715,4 +715,113 @@ fn plain_strand_lifecycle_lines_carry_no_trace_keys() {
             "plain-strand lifecycle line must carry no trace keys: {line}"
         );
     }
+}
+
+// ── Plan 099 Phase 4: the unified tie-offs.log ─────────────────────────
+
+/// Section grammar: every section opens with the structured header
+/// line — `## knot=… event=… strand=… timestamp=…` — one greppable
+/// line carrying the trigger identity, then the content.
+#[test]
+fn tie_off_log_section_grammar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    let rig = create_rig(cwd, "0");
+    let pi = rig.join("bin").join("pi");
+
+    let child = spawn_service(cwd, &pi);
+
+    thread::sleep(Duration::from_secs(1));
+    let strands = cwd.join("strands");
+    fs::create_dir_all(&strands).unwrap();
+    fs::write(strands.join("feature.md"), "a feature").unwrap();
+    let log = runtime_root(&rig).join("tie-offs.log");
+    wait_for(
+        || {
+            fs::read_to_string(&log)
+                .map(|c| c.contains("## knot=review"))
+                .unwrap_or(false)
+        },
+        15_000,
+        "review section appended",
+    );
+
+    let (_output, _graceful) = stop_service(child);
+    let content = fs::read_to_string(&log).unwrap();
+    let header = content.lines().next().expect("section header line");
+    let re = regex::Regex::new(
+        r"^## knot=review event=(Created|Modified) strand=\S*feature\.md timestamp=\d{4}-\d{2}-\d{2}T\S+$",
+    )
+    .unwrap();
+    assert!(
+        re.is_match(header),
+        "structured header grammar violated: {header}\nfull log:\n{content}"
+    );
+    assert!(
+        content.contains("ok"),
+        "agent body follows the header: {content}"
+    );
+}
+
+/// Sole-writer serialisation end-to-end: two knots (two looms watching
+/// the same strand dir) append to the one log. Both sections land
+/// whole — exactly two complete headers, no interleaved fragments.
+#[test]
+fn tie_off_log_concurrent_sections_intact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    let rig = create_rig(cwd, "0");
+    // A second loom + knot watching the same strand dir — both knots
+    // take the same strand and append from their own runs.
+    let loom2 = rig.join("audit-loom");
+    fs::create_dir_all(&loom2).unwrap();
+    fs::write(
+        loom2.join("audit.md"),
+        "---\nname: audit\nagent-profile-ref: fast\nstrand-dir: \"./strands\"\ngit-versioned: false\n---\n\nSecond knot.\n",
+    )
+    .unwrap();
+    let pi = rig.join("bin").join("pi");
+
+    let child = spawn_service(cwd, &pi);
+
+    thread::sleep(Duration::from_secs(1));
+    let strands = cwd.join("strands");
+    fs::create_dir_all(&strands).unwrap();
+    fs::write(strands.join("shared.md"), "shared strand").unwrap();
+    let log = runtime_root(&rig).join("tie-offs.log");
+    wait_for(
+        || {
+            let c = fs::read_to_string(&log).unwrap_or_default();
+            c.contains("## knot=review") && c.contains("## knot=audit")
+        },
+        20_000,
+        "both knots' sections appended",
+    );
+
+    let (_output, _graceful) = stop_service(child);
+    let content = fs::read_to_string(&log).unwrap();
+    let header_re = regex::Regex::new(
+        r"^## knot=(review|audit) event=(Created|Modified) strand=\S*shared\.md timestamp=\d{4}-\d{2}-\d{2}T\S+$",
+    )
+    .unwrap();
+    let headers: Vec<&str> = content
+        .lines()
+        .filter(|l| l.starts_with("## knot="))
+        .collect();
+    assert_eq!(
+        headers.len(),
+        2,
+        "exactly two section headers, one per knot:\n{content}"
+    );
+    for h in &headers {
+        assert!(
+            header_re.is_match(h),
+            "every header must be a complete structured line: {h}"
+        );
+    }
+    // Sections are separated by the `---` marker — both bodies intact.
+    assert!(
+        content.contains("\n---\n"),
+        "sections separated by ---:\n{content}"
+    );
 }

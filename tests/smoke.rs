@@ -89,8 +89,7 @@ fn composition_smoke_stdio() {
 
     // ── Verify tie-off file ──
     let tie_off_file = knot::domain::knot_file::derive_runtime_root(&rig_dir)
-        .join("review-loom")
-        .join("tie-off-review.md");
+        .join("tie-offs.log");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",
@@ -185,8 +184,7 @@ fn composition_smoke_json() {
 
     // ── Verify tie-off file ──
     let tie_off_file = knot::domain::knot_file::derive_runtime_root(&rig_dir)
-        .join("review-loom")
-        .join("tie-off-review.md");
+        .join("tie-offs.log");
     assert!(
         tie_off_file.exists(),
         "tie-off file should exist at {}",

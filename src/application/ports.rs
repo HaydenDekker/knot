@@ -786,14 +786,21 @@ pub trait TieOffSink: Send + Sync {
     /// Write tie-off output to its target location (overwrites existing file).
     fn write(&self, tie_off: TieOff) -> Result<(), PortError>;
 
-    /// Append tie-off content as a new section with metadata header.
+    /// Append a tie-off section to the unified `tie-offs/<rig>/tie-offs.log`
+    /// (plan 099 — the per-knot files retire).
     ///
-    /// If the file exists, a `---` delimiter and metadata header are
-    /// prepended before the new content. If the file does not exist,
-    /// it is created with the metadata header and content.
+    /// The section opens with one structured, greppable header line
+    /// (`## knot=… event=… strand=… timestamp=… [session=…] [source=…]`
+    /// `[original-strand=…]`), then the content with the event audit
+    /// slimmed to one line per event (id, occurred, reason, timestamp
+    /// — no payload bodies). Sections are separated by `---` lines.
+    /// Appends from concurrent knots are serialised — the service is
+    /// the sole writer of the file.
     fn append(&self, tie_off: TieOff) -> Result<(), PortError>;
 
-    /// Read existing tie-off content at the given path.
+    /// Read the tie-off log content at the given path (the unified
+    /// `tie-offs.log` — read by the Deleted-event history path and the
+    /// enforcement follow-up).
     ///
     /// Returns an empty string if the file does not exist.
     fn read_content(&self, path: &TieOffPath) -> Result<String, PortError>;
