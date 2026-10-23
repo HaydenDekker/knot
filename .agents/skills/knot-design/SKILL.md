@@ -1,10 +1,10 @@
 ---
 name: knot-design
-description: "Design looms and knots for the Knot agent orchestration framework. Covers idempotency, naming conventions, responsibility boundaries, domain direction, loop design, loop-breaking patterns, and multi-session task-list design (choosing a durable store for knots whose work spans sessions). USE FOR: design knot, design loom, knot design, loom design, knot architecture, agent loop, feedback loop, knot naming, strand direction, knot responsibility, idempotent knot, loop-breaking, knot workflow design, multi-session knot, task list, durable checklist, fan-out, chain continuation, context overflow, task-list store. DO NOT USE FOR: creating looms/knots (use knot-create), initialising a rig (use knot-init), inspecting state (use knot-inspect)."
+description: "Design looms and knots for the Knot agent orchestration framework. Covers idempotency, naming conventions, responsibility boundaries, domain direction, loop design, loop-breaking patterns, the behaviour-in-skill boundary (a knot file is wiring — identity, event/strand declarations, a one-line intent — procedure belongs in a skill), and multi-session task-list design (choosing a durable store for knots whose work spans sessions)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.6.0"
+  version: "1.7.0"
   compatibility: "Knot 0.31.0+"
 ---
 
@@ -81,6 +81,61 @@ your output.
 
 > Inside the rig, these terms are always defined via the Knot glossary
 > in AGENTS.md, so they enhance clarity, not harm it.
+
+---
+
+## Behaviour-in-Skill — the Wiring Boundary
+
+A knot file is **wiring, not a procedure**. It declares exactly three
+things:
+
+1. **Identity** — `name`, loom placement.
+2. **Wiring** — `agent-profile-ref`, `strand-dir`, event subscriptions.
+3. **At most a one-line intent** — role and goal in one sentence.
+
+Procedural behaviour — numbered steps, write contracts, format
+definitions, multi-paragraph prose — belongs in a **skill** (the
+knot's profile references it, or its intent line does). Skill
+behaviour is the only behaviour that gets versioned, audited, and
+reused: the skill ecosystem is where lint and conformance records
+apply, and rig documents sit outside it. Inline procedures also
+duplicate a project document's write contract across several rig
+documents at once.
+
+Profiles sit one step away from the wiring: they may carry ownership
+and scope **tables** (declared data, not procedure), but not
+procedures.
+
+**The measurable boundary.** This is the line the `knot-lint` check
+family 1 applies. *Prose* is the body **excluding frontmatter,
+fenced code blocks, and markdown table lines** (tables are declared
+data, not procedure):
+
+| Document | Prose limit | Numbered steps | Verdict |
+|----------|------------:|---------------:|---------|
+| Knot (`*-loom/*.md`) | > 80 words | ≥ 3 | WARN finding |
+| Profile (`profiles/*.md`) | > 400 words | ≥ 5 | WARN finding |
+
+*Calibrated 2026-10-23 (plan 098 phase 1): measured against the fixture
+rigs and the two live calibration rigs — the knot repo's rig
+(wiring-only knots, 2 words of prose) and the software-factory rig
+(rig-document floor at 425 words). The limits sit in the gap between
+them: every wiring-only document clears the knot limit with room to
+spare, and every procedure-bearing software-factory document
+(158–1547 words) crosses it. No threshold had to move. Profiles carry
+the looser bound because they may hold ownership/scope tables (tables
+ever count as prose). The same values are recorded in the repo's
+`docs/design-guide.md` (closes the plan 098 phase 0 placeholder).*
+
+Two companion norms the lint enforces with the same measurability:
+
+- **Single editor.** At most **one** rig document holds write rights
+  over a given project document; every other rig reference to it is a
+  read. Two or more editors over one document is a finding (check
+  family 2).
+- **No format-bootstrap circularity.** A format's source of truth is a
+  skill or a normative document — never the runtime data file it
+  governs (check family 4).
 
 ---
 

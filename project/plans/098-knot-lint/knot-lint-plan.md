@@ -1,5 +1,19 @@
 # Plan: Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
+> **Status:** in progress — phases 0 and 1 complete (2026-10-23), phases
+> 2–3 pending. Phase 0: the rule text and the measurable boundary
+> (prose/numbered-step thresholds) are live in `knot-design` and
+> `docs/design-guide.md`. Phase 1: the lint engine landed at
+> `.agents/skills/knot-lint/scripts/knot-lint.py` (Python 3 stdlib,
+> read-only) with the fixture rigs (`references/fixtures/`), the golden
+> finding set, and `--selftest` (green: good rig 0 findings, bad rig 8
+> findings, exact match). The thresholds were calibrated against the
+> fixture rigs and the two live calibration rigs on 2026-10-23 — no
+> threshold had to move (the knot repo's rig: wiring-only knots at 2
+> words of prose; the software-factory rig: rig-document floor at 425
+> words, 33 documents over the knot boundary, 3 single-editor
+> violations, 1 write-pressure log, K3/K4 clean).
+
 ## Problem
 
 Knot definitions currently carry full operational behaviour inline. In the

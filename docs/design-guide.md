@@ -3,6 +3,42 @@
 Best practices for designing looms and knots that are idempotent,
 correctly scoped, and resilient to feedback loops.
 
+## Behaviour-in-Skill — the Wiring Boundary
+
+A knot file is **wiring, not a procedure**. It declares exactly three
+things: **identity** (`name`, loom placement), **wiring**
+(`agent-profile-ref`, `strand-dir`, event subscriptions), and **at
+most a one-line intent** (role and goal in one sentence). Procedural
+behaviour — numbered steps, write contracts, format definitions,
+multi-paragraph prose — belongs in a **skill** the profile or the
+intent line references. Skill behaviour is the only behaviour that gets
+versioned, audited, and reused; inline procedures also duplicate a
+project document's write contract across several rig documents.
+Profiles may carry ownership/scope tables (data, not procedure), but
+not procedures.
+
+The measurable boundary (what the `knot-lint` check family 1 applies;
+prose excludes frontmatter, fenced code, and table lines):
+
+| Document | Prose limit | Numbered steps | Verdict |
+|----------|------------:|---------------:|---------|
+| Knot (`*-loom/*.md`) | > 80 words | ≥ 3 | WARN finding |
+| Profile (`profiles/*.md`) | > 400 words | ≥ 5 | WARN finding |
+
+*Calibrated 2026-10-23 (plan 098 phase 1) against the fixture rigs and
+the two live calibration rigs — the knot repo's rig (wiring-only knots,
+2 words of prose) and the software-factory rig (rig-document floor at
+425 words): the limits sit in the gap, no threshold had to move.
+Profiles carry the looser bound (they may hold ownership/scope tables,
+which never count as prose). The same values are recorded in the
+`knot-design` skill (closes the plan 098 phase 0 placeholder).*
+
+Two companion norms: **single editor** — at most one rig document
+holds write rights over a given project document (≥ 2 editors is a
+lint finding) — and **no format-bootstrap circularity** — a format's
+source of truth is a skill or normative document, never the runtime
+data file it governs.
+
 ## Idempotency — The First Rule
 
 A knot can retrigger multiple times from the same strand. The strand
