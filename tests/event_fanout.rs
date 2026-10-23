@@ -1,30 +1,29 @@
-//! Acceptance test: producer fan-out to consumer processing.
+//! Acceptance test: producer fan-out to consumer delivery.
 //!
 //! Replays the 2026-08-22 incident end-to-end with the **real**
-//! `FileSystemEventDispatcher`: a producer knot emits four
+//! queue-backed delivery (plan 099): a producer knot emits four
 //! `ValidationFail` event blocks (distinct CI payloads, one shared
-//! event id) in a single tie-off; all four are dispatched to one
-//! consumer loom within the same wall-clock second.
+//! event id) in a single tie-off; all four are delivered to the
+//! consumer's queue as four payload-bearing entries within the same
+//! wall-clock second.
 //!
 //! Before per-batch sequence suffixes + atomic creation, all four
-//! writes targeted one path and only the last survived. After the fix:
-//! four distinct event files with four distinct payloads, an
-//! `EventsDispatched` entry listing all four dispatches, and the
-//! consumer processes all four strands.
+//! writes targeted one path and only the last survived. After the fix
+//! — and after plan 099 retired the dispatched file entirely — four
+//! distinct queue entries carry four distinct payloads, an
+//! `EventsDispatched` entry lists all four deliveries, and the
+//! consumer processes all four deliveries.
 
 mod helpers;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use helpers::ProcessStrandBuilder;
-use knot::application::ports::AgentOutput;
+use knot::application::ports::{AgentOutput, StrandEventQueue};
 use knot::application::usecases::test_fixtures::*;
-use knot::application::usecases::extract_event_metadata;
-use knot::domain::entities::{
-    Knot, KnotId, Loom, LoomId, PromptTemplate, StrandPath,
-};
+use knot::domain::entities::{Knot, KnotId, Loom, LoomId, PromptTemplate};
 use knot::domain::events::{LoomEvent, StrandEvent};
+use knot::domain::pending_event::EVENT_ENTRY_KIND;
 use knot::domain::value_objects::StrandSource;
 
 // ── Fixtures ─────────────────────────────────────────────────────────
@@ -118,63 +117,60 @@ fn fan_out_four_events_same_second_all_delivered_and_processed() {
         .execute(StrandEvent::Created {
             loom_id: LoomId("retest-loom".to_string()),
             knot_id: KnotId("retest-validator".to_string()),
-            strand_path: StrandPath(strand_path),
+            strand_path: knot::domain::entities::StrandPath(strand_path),
         })
         .expect("producer strand should process");
 
-    // 2. Four event files in the consumer's dispatch directory — all
-    //    four survive (the incident regression: before the fix, one).
-    let event_dir = root
-        .path()
-        .join("proj")
-        .join("tie-offs")
-        .join("rig")
-        .join("uat-gap-assessment-loom")
-        .join("ValidationFail");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&event_dir)
-        .expect("consumer event directory should exist")
-        .map(|e| e.unwrap().path())
+    // 2. Four Event-kind entries in the consumer's queue — all four
+    //    survive (the incident regression: before the fix, one).
+    let queue = result
+        .event_queue
+        .as_ref()
+        .expect("the builder wired the real queue");
+    let entries: Vec<_> = queue
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.kind == EVENT_ENTRY_KIND)
+        .filter(|e| e.loom_id == "uat-gap-assessment-loom")
         .collect();
-    files.sort();
 
     assert_eq!(
-        files.len(),
+        entries.len(),
         4,
-        "all four event files must exist (none lost to a same-second \
-         collision): {files:?}"
+        "all four deliveries must exist (none lost to a same-second \
+         collision): {:?}",
+        queue.snapshot().len()
     );
 
-    // 4 distinct names, all in the `event-*.md` shape
-    let mut names: Vec<String> = files
-        .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(
-        names.iter().all(|n| n.starts_with("event-") && n.ends_with(".md")),
-        "all names must be event-*.md: {names:?}"
-    );
-    names.sort();
-    names.dedup();
-    assert_eq!(names.len(), 4, "names must be distinct: {names:?}");
-
-    // 4 distinct payloads — each file contains exactly its own CI
-    let contents: Vec<String> =
-        files.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+    // 4 distinct payloads — each entry carries exactly its own CI.
     let mut seen_cis: Vec<&str> = Vec::new();
-    for content in &contents {
+    for entry in &entries {
+        let delivery = entry
+            .delivery
+            .as_ref()
+            .expect("event entries carry the delivery");
+        assert_eq!(delivery.event_id, "ValidationFail");
+        assert_eq!(delivery.producer_knot, "retest-validator");
         let ci = ["frontend", "tauri-commands", "tauri-desktop", "tauri-android"]
             .into_iter()
-            .find(|ci| content.contains(&format!("ci: {ci}")))
-            .expect("each file must contain one of the four CI payloads");
+            .find(|ci| {
+                delivery
+                    .payload
+                    .get("ci")
+                    .map(|v| v == ci)
+                    .unwrap_or(false)
+            })
+            .expect("each entry must carry one of the four CI payloads");
         assert!(
             !seen_cis.contains(&ci),
-            "two files carry the same payload {ci:?}: {names:?}"
+            "two entries carry the same payload {ci:?}"
         );
         seen_cis.push(ci);
     }
     assert_eq!(seen_cis.len(), 4, "all four payloads delivered");
 
-    // 3. The `EventsDispatched` loom-log entry lists all four dispatches.
+    // 3. The `EventsDispatched` loom-log entry lists all four
+    //    dispatches.
     let log_events = result.log_events.lock().unwrap();
     let dispatch_log = log_events
         .iter()
@@ -197,20 +193,19 @@ fn fan_out_four_events_same_second_all_delivered_and_processed() {
     }
     drop(log_events);
 
-    // 4. Drive the consumer side: one `StrandEvent::Created` per event
-    //    file (the watcher reports per path, so N files → N strands).
-    for file in &files {
+    // 4. Drive the consumer side: one `StrandEvent` per queued entry
+    //    (the queue entry converts via the real `TryInto`).
+    for entry in entries {
+        let se: StrandEvent = entry
+            .try_into()
+            .expect("an Event-kind entry converts to a delivered strand event");
         result
             .strand
-            .execute(StrandEvent::Created {
-                loom_id: LoomId("uat-gap-assessment-loom".to_string()),
-                knot_id: KnotId("gap-assessor".to_string()),
-                strand_path: StrandPath(file.clone()),
-            })
+            .execute(se)
             .expect("consumer strand should process");
     }
 
-    // The consumer processed all four strands.
+    // The consumer processed all four deliveries.
     let log_events = result.log_events.lock().unwrap();
     let completions = log_events
         .iter()
@@ -221,23 +216,10 @@ fn fan_out_four_events_same_second_all_delivered_and_processed() {
         .count();
     assert_eq!(
         completions, 4,
-        "consumer must process all four event strands, got {completions}"
+        "consumer must process all four event deliveries, got {completions}"
     );
 
-    // Event metadata is traceable on every event file (a2a
-    // traceability: event-id + producing knot).
-    for file in &files {
-        let meta = extract_event_metadata(&StrandPath(file.clone()))
-            .expect("event metadata must be extractable");
-        assert_eq!(
-            meta.event_id.as_deref(),
-            Some("ValidationFail"),
-            "event-id must round-trip through the frontmatter"
-        );
-        assert_eq!(
-            meta.source_knot.as_deref(),
-            Some("retest-validator"),
-            "target-knot must round-trip through the frontmatter"
-        );
-    }
+    // Event metadata is traceable on every delivery (a2a
+    // traceability: event-id + producing knot ride the entry —
+    // asserted above on the delivered payloads).
 }

@@ -265,13 +265,25 @@ pub fn resolve_config_and_build(
     // `batch-start-epoch`, `continuations`). When a budget is present,
     // the timeout is the stamped remaining *execution* budget applied in
     // full — queue wait never erodes it (plan 087 Bound 2).
+    // Plan 099 (Phase 5): a delivered entry carries its batch stamps in
+    // the delivery payload (a self-continuation of an event-source knot
+    // is a queue delivery, not a file); a fresh delivery — one without
+    // the stamps — is a fresh hop, exactly as a fresh file dispatch is.
     let (incoming_continuations, budget_secs, batch_start_epoch) =
-        if delivery.is_some() {
-            // Plan 099: a delivered emission has no strand file to read
-            // its batch stamps from — a delivery is always a fresh hop.
-            (0, None, None)
-        } else {
-            read_continuation_stamps(strand_path)
+        match delivery {
+            Some(d) => (
+                d.payload
+                    .get("continuations")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(0),
+                d.payload
+                    .get("budget-secs")
+                    .and_then(|v| v.parse::<u64>().ok()),
+                d.payload
+                    .get("batch-start-epoch")
+                    .and_then(|v| v.parse::<u64>().ok()),
+            ),
+            None => read_continuation_stamps(strand_path),
         };
     // Plan 087: capture this hop's dequeue instant — the start of the
     // hop's execution window. At handoff, `execution_secs =
@@ -461,6 +473,7 @@ pub fn handle_success(
     event_id: Option<&PendingEventId>,
     queue_before: &Option<std::collections::HashMap<String, usize>>,
     trace: crate::domain::events::RunTrace,
+    delivery: Option<&crate::domain::pending_event::EventDelivery>,
 ) -> Result<(), PortError> {
     use crate::adapters::logging;
     use crate::application::session_resume;
@@ -586,6 +599,25 @@ pub fn handle_success(
                     });
 
                     // Dispatch the self-continuation (best-effort).
+                    // Plan 099 (Phase 5): the continuation's origin —
+                    // the original strand and the accumulated
+                    // background — come from the current delivery when
+                    // this hop was itself a delivery, else from the
+                    // strand file's front-matter (the plan 087
+                    // round-trip).
+                    let incoming_bg = match delivery {
+                        Some(d) => d
+                            .payload
+                            .get("background-additional")
+                            .cloned()
+                            .unwrap_or_default(),
+                        None => crate::application::usecases::strand_event_metadata::parse_yaml_frontmatter(
+                            &std::fs::read_to_string(&strand_path.0)
+                                .unwrap_or_default(),
+                        )
+                        .and_then(|fm| fm.get("background-additional").cloned())
+                        .unwrap_or_default(),
+                    };
                     let _ = dispatch_self_continuation(
                         ps,
                         knot,
@@ -595,6 +627,8 @@ pub fn handle_success(
                         resolved.incoming_continuations,
                         stamped_budget,
                         stamped_start,
+                        trace.original_strand.as_deref(),
+                        &incoming_bg,
                     );
 
                     // Service log line (plan 087: the budget is the
@@ -1180,6 +1214,8 @@ pub fn dispatch_self_continuation(
     incoming_continuations: u32,
     budget_secs: u64,
     batch_start_epoch: u64,
+    original_strand: Option<&str>,
+    incoming_bg: &str,
 ) -> Result<Option<std::path::PathBuf>, PortError> {
     use crate::application::usecases::types::format_timestamp;
     use crate::domain::events::LoomEvent;
@@ -1223,101 +1259,146 @@ pub fn dispatch_self_continuation(
         return Ok(None);
     }
 
-    // Accumulate the background-additional: incoming accumulation +
-    // this event's contribution (append-only, hop-labelled).
-    let incoming_bg = crate::application::usecases::strand_event_metadata::parse_yaml_frontmatter(
-        &std::fs::read_to_string(&strand_path.0).unwrap_or_default(),
-    )
-    .and_then(|fm| fm.get("background-additional").cloned())
-    .unwrap_or_default();
-    let new_bg = event.payload.get("background-additional").cloned().unwrap_or_default();
+    // Accumulate the background-additional: incoming accumulation (read
+    // by the caller from the current delivery payload or the strand
+    // file) plus this event's contribution (append-only, hop-labelled).
+    let new_bg = event
+        .payload
+        .get("background-additional")
+        .cloned()
+        .unwrap_or_default();
     let accumulated_bg = if incoming_bg.is_empty() {
         format!("[hop {}]\n{}", next_continuations, new_bg)
     } else if new_bg.is_empty() {
-        incoming_bg
+        incoming_bg.to_string()
     } else {
         format!("{}\n[hop {}]\n{}", incoming_bg, next_continuations, new_bg)
     };
 
-    // Build the continuation file content.
+    // The handoff sections — the structured body both delivery shapes
+    // carry (file body for filesystem knots, delivery body for
+    // event-source knots).
     let timestamp = format_timestamp();
-    let next_task_context =
-        event.payload.get("next-task-context").cloned().unwrap_or_default();
+    let next_task_context = event
+        .payload
+        .get("next-task-context")
+        .cloned()
+        .unwrap_or_default();
     let handoff_body = event.body.as_deref().unwrap_or("");
 
-    let mut lines = Vec::new();
-    lines.push("---".to_string());
-    lines.push(format!("event-id: TasksIncomplete"));
-    lines.push(format!("target-knot: {}", knot_id.0));
-    lines.push(format!("timestamp: {timestamp}"));
-    lines.push(format!("continuations: {next_continuations}"));
-    lines.push(format!("budget-secs: {budget_secs}"));
-    lines.push(format!("batch-start-epoch: {batch_start_epoch}"));
+    let mut sections = Vec::new();
     if !accumulated_bg.is_empty() {
-        // Multi-line YAML: use a block scalar
-        lines.push("background-additional: |".to_string());
-        for bg_line in accumulated_bg.lines() {
-            lines.push(format!("  {bg_line}"));
-        }
+        sections.push("## Accumulated Background".to_string());
+        sections.push(String::new());
+        sections.push(accumulated_bg.clone());
+        sections.push(String::new());
     }
-    lines.push("---".to_string());
-    lines.push(String::new());
-
-    if !accumulated_bg.is_empty() {
-        lines.push("## Accumulated Background".to_string());
-        lines.push(String::new());
-        lines.push(accumulated_bg);
-        lines.push(String::new());
-    }
-
     if !handoff_body.is_empty() {
-        lines.push("## Handoff".to_string());
-        lines.push(String::new());
-        lines.push(handoff_body.to_string());
-        lines.push(String::new());
+        sections.push("## Handoff".to_string());
+        sections.push(String::new());
+        sections.push(handoff_body.to_string());
+        sections.push(String::new());
     }
-
     if !next_task_context.is_empty() {
-        lines.push("## Next Task Context".to_string());
-        lines.push(String::new());
-        lines.push(next_task_context);
+        sections.push("## Next Task Context".to_string());
+        sections.push(String::new());
+        sections.push(next_task_context);
     }
+    let body = sections.join("\n");
 
-    let content = lines.join("\n");
-
-    // Plan 087 (D1): the continuation lands in the knot's *existing
-    // input* — the dir the watcher already watches, bound to this
-    // `(loom_id, knot_id)` pair:
-    // - filesystem source: the knot's own strand dir (v1 behaviour);
-    // - event source: the event dispatch dir (the same dir
-    //   `FileSystemEventDispatcher::dispatch` writes and
-    //   `ensure_event_uri_watch` watches).
-    let target_dir = match &knot.strand_source {
+    match &knot.strand_source {
         crate::domain::value_objects::StrandSource::Filesystem(path) => {
-            path.clone()
+            // Plan 087 (D1): the continuation lands in the knot's
+            // *existing input* — the dir the watcher already watches,
+            // bound to this `(loom_id, knot_id)` pair: the knot's own
+            // strand dir (v1 behaviour).
+            let target_dir = path.clone();
+            std::fs::create_dir_all(&target_dir).map_err(|e| {
+                PortError::EventDispatchFailed(format!(
+                    "failed to create continuation dir '{}': {e}",
+                    target_dir.display()
+                ))
+            })?;
+
+            // Build the continuation file content — front-matter stamps
+            // plus the handoff sections.
+            let mut lines = Vec::new();
+            lines.push("---".to_string());
+            lines.push("event-id: TasksIncomplete".to_string());
+            lines.push(format!("target-knot: {}", knot_id.0));
+            lines.push(format!("timestamp: {timestamp}"));
+            lines.push(format!("continuations: {next_continuations}"));
+            lines.push(format!("budget-secs: {budget_secs}"));
+            lines.push(format!("batch-start-epoch: {batch_start_epoch}"));
+            if !accumulated_bg.is_empty() {
+                // Multi-line YAML: use a block scalar
+                lines.push("background-additional: |".to_string());
+                for bg_line in accumulated_bg.lines() {
+                    lines.push(format!("  {bg_line}"));
+                }
+            }
+            lines.push("---".to_string());
+            lines.push(String::new());
+            lines.push(body);
+
+            let content = lines.join("\n");
+            let filename =
+                format!("event-{timestamp}-continuation.md");
+            let file_path = target_dir.join(filename);
+            std::fs::write(&file_path, content).map_err(|e| {
+                PortError::EventDispatchFailed(format!(
+                    "failed to write continuation file '{}': {e}",
+                    file_path.display()
+                ))
+            })?;
+            Ok(Some(file_path))
         }
-        crate::domain::value_objects::StrandSource::EventUri { event_id, .. } =>
-            crate::domain::knot_file::derive_runtime_root(&ps.rig_dir)
-                .join(&loom_id.0)
-                .join(event_id),
-    };
-    std::fs::create_dir_all(&target_dir).map_err(|e| {
-        PortError::EventDispatchFailed(format!(
-            "failed to create continuation dir '{}': {e}",
-            target_dir.display()
-        ))
-    })?;
-
-    let filename = format!("event-{timestamp}-continuation.md");
-    let file_path = target_dir.join(filename);
-    std::fs::write(&file_path, content).map_err(|e| {
-        PortError::EventDispatchFailed(format!(
-            "failed to write continuation file '{}': {e}",
-            file_path.display()
-        ))
-    })?;
-
-    Ok(Some(file_path))
+        crate::domain::value_objects::StrandSource::EventUri { .. } => {
+            // Plan 099 (Phase 5): the dispatched-file mechanism is
+            // retired — an event-source knot's continuation is a
+            // direct queue delivery to the same knot. The batch stamps
+            // ride the delivery payload (read back by
+            // `resolve_config_and_build`); the handoff sections ride
+            // the delivery body. The producer of a self-continuation
+            // is the knot itself.
+            let mut stamped = event.clone();
+            stamped.payload.insert(
+                "continuations".to_string(),
+                next_continuations.to_string(),
+            );
+            stamped.payload.insert(
+                "budget-secs".to_string(),
+                budget_secs.to_string(),
+            );
+            stamped.payload.insert(
+                "batch-start-epoch".to_string(),
+                batch_start_epoch.to_string(),
+            );
+            if !accumulated_bg.is_empty() {
+                stamped.payload.insert(
+                    "background-additional".to_string(),
+                    accumulated_bg.clone(),
+                );
+            }
+            stamped.body = if body.is_empty() {
+                None
+            } else {
+                Some(body.clone())
+            };
+            let orig = original_strand
+                .map(|s| StrandPath(std::path::PathBuf::from(s)));
+            ps.event_dispatcher.dispatch(
+                &stamped,
+                knot,
+                &knot_id.0,
+                loom_id,
+                &ps.rig_dir,
+                0,
+                orig.as_ref(),
+            )?;
+            Ok(None)
+        }
+    }
 }
 
 // ── Plan 087: tests ──────────────────────────────────────────────────────────
@@ -1355,19 +1436,25 @@ mod tests {
         path
     }
 
+    type Dispatches =
+        Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>;
+
     fn build_process_strand(
         profile: AgentProfile,
-    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
+    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>, Dispatches) {
         build_process_strand_at(PathBuf::from("/rig"), profile)
     }
 
     /// Same as `build_process_strand` but with an explicit `rig_dir`
     /// (plan 087 phase 1: the event-source continuation test needs a
-    /// writable runtime root under the rig dir).
+    /// writable runtime root under the rig dir). Plan 099 (Phase 5):
+    /// also returns the dispatcher's captured dispatches — an
+    /// event-source continuation is a queue delivery, and the capture
+    /// is the observable.
     fn build_process_strand_at(
         rig_dir: PathBuf,
         profile: AgentProfile,
-    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>) {
+    ) -> (ProcessStrand, Arc<Mutex<Vec<LoomEvent>>>, Dispatches) {
         let store = LoomStore::new();
         store.register(build_loom(
             "test-loom",
@@ -1376,6 +1463,7 @@ mod tests {
 
         let (log_port, log_events) = MockLoomLogPort::new();
         let (rig_log, _rig_events) = MockRigLogPort::new();
+        let (dispatcher, dispatches) = MockEventDispatcher::new();
         let use_case = ProcessStrand::new(
             store,
             Arc::new(log_port),
@@ -1393,10 +1481,10 @@ mod tests {
             Arc::new(rig_log),
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
-            Arc::new(MockEventDispatcher::default()),
+            Arc::new(dispatcher),
             None,
         );
-        (use_case, log_events)
+        (use_case, log_events, dispatches)
     }
 
     /// The knot registered by `build_process_strand`.
@@ -1479,7 +1567,7 @@ mod tests {
         )
         .unwrap()
         .with_timeout(Some(1800));
-        let (ps, _events) = build_process_strand(profile);
+        let (ps, _events, _dispatches) = build_process_strand(profile);
         let knot = budgeted_knot();
         let dequeue = now_secs();
         let (budget, start) =
@@ -1498,7 +1586,7 @@ mod tests {
     /// start is inherited verbatim (never recomputed), even when stale.
     #[test]
     fn stamp_continuation_budget_continuation_hop_inherits_start() {
-        let (ps, _events) = build_process_strand(
+        let (ps, _events, _dispatches) = build_process_strand(
             crate::application::usecases::test_fixtures::default_profile(),
         );
         let knot = budgeted_knot();
@@ -1515,7 +1603,7 @@ mod tests {
     /// stamped budget.
     #[test]
     fn stamp_continuation_budget_queue_wait_exempt() {
-        let (ps, _events) = build_process_strand(
+        let (ps, _events, _dispatches) = build_process_strand(
             crate::application::usecases::test_fixtures::default_profile(),
         );
         let knot = budgeted_knot();
@@ -1547,18 +1635,17 @@ mod tests {
         }
     }
 
-    /// **Event-source** delivery (the v1 gap this phase closes): the
-    /// continuation lands in the knot's event dispatch dir —
-    /// `derive_runtime_root(rig_dir)/<loom_id>/<event_id>/` — and carries
-    /// the stamped budget + batch origin. The existing watcher (bound to
-    /// this `(loom, knot)` pair) picks the file up like any other
-    /// dispatched event.
+    /// **Event-source** delivery (plan 099 Phase 5): the continuation
+    /// is a direct queue delivery to the same knot — no file is
+    /// written. The delivery carries the stamped budget + batch origin
+    /// in its payload and the handoff sections in its body; the
+    /// producer is the knot itself.
     #[test]
-    fn dispatch_self_continuation_event_source_lands_in_event_dir() {
+    fn dispatch_self_continuation_event_source_is_a_queue_delivery() {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         std::fs::create_dir_all(&rig_dir).unwrap();
-        let (ps, _events) = build_process_strand_at(
+        let (ps, _events, dispatches) = build_process_strand_at(
             rig_dir.clone(),
             crate::application::usecases::test_fixtures::default_profile(),
         );
@@ -1593,31 +1680,50 @@ mod tests {
             0,
             1200,
             t0,
+            Some("project/plans/099.md"),
+            "",
         )
         .expect("dispatch must not fail");
-        let path = result.expect(
-            "an event-source knot whose work remains must get a continuation (v1 gap)",
-        );
-
-        let expected_dir =
-            crate::domain::knot_file::derive_runtime_root(&rig_dir)
-                .join("test-loom")
-                .join("SomeEvent");
         assert!(
-            path.starts_with(&expected_dir),
-            "continuation must land in the event dispatch dir {}: got {}",
-            expected_dir.display(),
-            path.display()
+            result.is_none(),
+            "an event-source continuation writes no file"
         );
 
-        // The file carries the stamped budget + batch origin (087 stamps).
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("event-id: TasksIncomplete"));
-        assert!(content.contains("target-knot: k1"));
-        assert!(content.contains("continuations: 1"));
-        assert!(content.contains("budget-secs: 1200"));
-        assert!(content.contains(&format!("batch-start-epoch: {t0}")));
-        assert!(content.contains("## Next Task Context"));
+        // The dispatch was captured by the mock dispatcher.
+        let calls = dispatches.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one delivery for the continuation");
+        let (evt, consumer_knot, consumer_loom, _rig, _seq) = &calls[0];
+        assert_eq!(evt.event_id, "TasksIncomplete");
+        assert_eq!(consumer_knot, "k1", "self-continuation targets the same knot");
+        assert_eq!(consumer_loom, "test-loom");
+
+        // The batch stamps ride the payload.
+        assert_eq!(evt.payload.get("continuations").map(String::as_str), Some("1"));
+        assert_eq!(evt.payload.get("budget-secs").map(String::as_str), Some("1200"));
+        assert_eq!(
+            evt.payload.get("batch-start-epoch").map(String::as_str),
+            Some(t0.to_string().as_str())
+        );
+
+        // The handoff sections ride the body.
+        let body = evt.body.as_deref().expect("continuation body");
+        assert!(body.contains("## Next Task Context"), "got body: {body}");
+        assert!(
+            body.contains("Resume at checklist task 4."),
+            "got body: {body}"
+        );
+        assert!(
+            body.contains("Checklist is at tasks/checklist.md."),
+            "got body: {body}"
+        );
+
+        // No dispatch directory was created under the runtime root.
+        let runtime_root =
+            crate::domain::knot_file::derive_runtime_root(&rig_dir);
+        assert!(
+            !runtime_root.join("test-loom").exists(),
+            "no dispatch dir must be created under the runtime root"
+        );
     }
 
     /// **Filesystem** delivery (preserved from v1): the continuation still
@@ -1627,7 +1733,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         std::fs::create_dir_all(&rig_dir).unwrap();
-        let (ps, _events) = build_process_strand_at(
+        let (ps, _events, _dispatches) = build_process_strand_at(
             rig_dir,
             crate::application::usecases::test_fixtures::default_profile(),
         );
@@ -1650,6 +1756,8 @@ mod tests {
             0,
             1200,
             t0,
+            None,
+            "",
         )
         .expect("dispatch must not fail");
         let path = result.expect("filesystem knots keep their strand-dir continuation");
@@ -1666,20 +1774,20 @@ mod tests {
         assert!(content.contains("batch-start-epoch"));
     }
 
-    /// **Plan 087 p4 (accumulation round-trip)**: the continuation chain
-    /// must pass the incoming accumulation **through** and **append** the
-    /// agent's new input each hop. Hop 1 writes a continuation whose
-    /// `background-additional: |` carries hop 1's facts; hop 2 (fed by that
-    /// file, so `incoming_bg` reads it back through the now block-scalar
-    /// -aware `parse_yaml_frontmatter`) must produce a continuation whose
-    /// `## Accumulated Background` contains **both** hop 1's body **and** the
-    /// new `[hop 2]` contribution.
+    /// **Plan 087 p4 / 099 p5 (accumulation round-trip, queue path)**:
+    /// the continuation chain must pass the incoming accumulation
+    /// **through** and **append** the agent's new input each hop. Hop 1
+    /// delivers a continuation whose payload `background-additional`
+    /// carries hop 1's facts; hop 2 (fed by that delivery payload, the
+    /// queue-carried pass-through source) must produce a continuation
+    /// whose `## Accumulated Background` body contains **both** hop 1's
+    /// body **and** the new `[hop 2]` contribution, in order.
     #[test]
     fn dispatch_self_continuation_accumulates_background_across_hops() {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         std::fs::create_dir_all(&rig_dir).unwrap();
-        let (ps, _events) = build_process_strand_at(
+        let (ps, _events, dispatches) = build_process_strand_at(
             rig_dir.clone(),
             crate::application::usecases::test_fixtures::default_profile(),
         );
@@ -1714,7 +1822,7 @@ mod tests {
             "Only the data layer changed; app wiring untouched.".to_string(),
         );
 
-        let hop1_path = dispatch_self_continuation(
+        dispatch_self_continuation(
             &ps,
             &knot,
             &loom_id,
@@ -1723,57 +1831,71 @@ mod tests {
             0,
             1200,
             t0,
+            Some("project/plans/099.md"),
+            "",
         )
-        .expect("hop 1 must not fail")
-        .expect("hop 1 must get a continuation");
+        .expect("hop 1 must not fail");
 
-        // Hop 1's file carries its `[hop 1]` contribution (unindented) in the
-        // `## Accumulated Background` body — the pass-through source for hop 2.
-        let hop1_content = std::fs::read_to_string(&hop1_path).unwrap();
+        // Hop 1's delivery carries its `[hop 1]` contribution in the
+        // accumulated-background payload field — the pass-through
+        // source for hop 2.
+        let hop1_bg = {
+            let calls = dispatches.lock().unwrap();
+            let (evt, ..) = calls.last().expect("hop 1 delivery");
+            evt.payload
+                .get("background-additional")
+                .cloned()
+                .expect("hop 1 accumulation in the payload")
+        };
         assert!(
-            hop1_content
+            hop1_bg
                 .contains("[hop 1]\nOnly the data layer changed; app wiring untouched."),
-            "hop 1 contribution must be written: {}",
-            hop1_content
+            "hop 1 contribution must be carried: {hop1_bg}"
         );
 
-        // Hop 2: fed by hop 1's file (so `incoming_bg` reads it back), the
-        // agent contributes new facts (hop 2).
+        // Hop 2: fed by hop 1's delivery payload (so `incoming_bg`
+        // reads it back), the agent contributes new facts (hop 2).
         let mut hop2 = tasks_incomplete_event();
         hop2.payload.insert(
             "background-additional".to_string(),
             "test:unit and test:components are green.".to_string(),
         );
 
-        let hop2_path = dispatch_self_continuation(
+        dispatch_self_continuation(
             &ps,
             &knot,
             &loom_id,
-            &StrandPath(hop1_path.clone()),
+            &trigger,
             &hop2,
             1,
             1169,
             t0,
+            Some("project/plans/099.md"),
+            &hop1_bg,
         )
-        .expect("hop 2 must not fail")
-        .expect("hop 2 must get a continuation");
+        .expect("hop 2 must not fail");
 
         // The invariant: hop 2's accumulated background carries hop 1's
         // pass-through body AND the new [hop 2] contribution, in order.
-        let hop2_content = std::fs::read_to_string(&hop2_path).unwrap();
+        let hop2_bg = {
+            let calls = dispatches.lock().unwrap();
+            let (evt, ..) = calls.last().expect("hop 2 delivery");
+            evt.payload
+                .get("background-additional")
+                .cloned()
+                .expect("hop 2 accumulation in the payload")
+        };
         assert!(
-            hop2_content
+            hop2_bg
                 .contains("[hop 1]\nOnly the data layer changed; app wiring untouched."),
-            "hop 1 pass-through must survive into hop 2: {}",
-            hop2_content
+            "hop 1 pass-through must survive into hop 2: {hop2_bg}"
         );
         assert!(
-            hop2_content.contains("[hop 2]\ntest:unit and test:components are green."),
-            "hop 2 append must be present: {}",
-            hop2_content
+            hop2_bg.contains("[hop 2]\ntest:unit and test:components are green."),
+            "hop 2 append must be present: {hop2_bg}"
         );
-        let h1 = hop2_content.find("[hop 1]").expect("hop 1 label");
-        let h2 = hop2_content.find("[hop 2]").expect("hop 2 label");
+        let h1 = hop2_bg.find("[hop 1]").expect("hop 1 label");
+        let h2 = hop2_bg.find("[hop 2]").expect("hop 2 label");
         assert!(h1 < h2, "hop 1 must precede hop 2");
     }
 
@@ -1797,13 +1919,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
         std::fs::create_dir_all(&rig_dir).unwrap();
-        let (ps, _events) = build_process_strand_at(
+        let (ps, _events, dispatches) = build_process_strand_at(
             rig_dir,
             crate::application::usecases::test_fixtures::default_profile(),
         );
 
-        // An event-source knot — its inbox is the event dispatch dir
-        // `derive_runtime_root(rig_dir)/<loom>/<event-id>`.
+        // An event-source knot — its continuation is a queue delivery
+        // (plan 099 Phase 5); the FIFO property is that the delivery is
+        // appended after already-queued events, never front-inserted.
         let knot = Knot {
             id: KnotId("k1".to_string()),
             agent_profile_ref: "fast".to_string(),
@@ -1825,8 +1948,8 @@ mod tests {
         ));
         let t0 = now_secs() - 60;
 
-        // The handoff writes the continuation into the knot's inbox.
-        let cont_path = dispatch_self_continuation(
+        // The handoff delivers the continuation into the knot's queue.
+        dispatch_self_continuation(
             &ps,
             &knot,
             &loom_id,
@@ -1835,9 +1958,23 @@ mod tests {
             0,
             1200,
             t0,
+            Some("project/plans/099.md"),
+            "",
         )
-        .expect("dispatch must not fail")
-        .expect("an event-source knot whose work remains must get a continuation");
+        .expect("dispatch must not fail");
+        let (stamped, ..) = dispatches
+            .lock()
+            .unwrap()
+            .last()
+            .expect("the continuation delivery was captured")
+            .clone();
+        let delivery = crate::adapters::outbound::QueueEventDispatcher::build_delivery(
+            &stamped,
+            "k1",
+            "test-loom",
+            Some(&trigger),
+        );
+        let cont_descriptor = delivery.strand_descriptor();
 
         // The durable queue, seeded with two already-queued events whose
         // 13-digit timestamp prefixes are far earlier than the
@@ -1863,17 +2000,14 @@ mod tests {
             delivery: None,
         });
 
-        // Simulate the watcher → debounce push: the continuation file's
-        // `StrandEvent::Created` is converted via the real
-        // `From<StrandEvent>` (a fresh, later timestamp id) and
-        // `push_or_replace`d, exactly as the debounce engine does.
-        let cont_pending: PendingEvent =
-            crate::domain::events::StrandEvent::Created {
-                loom_id: LoomId("test-loom".to_string()),
-                knot_id: KnotId("k1".to_string()),
-                strand_path: StrandPath(cont_path.clone()),
-            }
-            .into();
+        // The delivery is pushed as a payload-bearing Event entry
+        // (a fresh, later timestamp id), exactly as the dispatcher
+        // pushes it in production.
+        let cont_pending = PendingEvent::from_delivery(
+            delivery,
+            &LoomId("test-loom".to_string()),
+            &KnotId("k1".to_string()),
+        );
         queue.push_or_replace(cont_pending);
 
         // The head is still the first already-queued event — the
@@ -1896,7 +2030,7 @@ mod tests {
         assert_eq!(order[1], "/already/queued/b.md");
         assert_eq!(
             order[2],
-            cont_path.to_string_lossy().to_string(),
+            cont_descriptor,
             "the continuation must be queued after the already-queued events"
         );
     }

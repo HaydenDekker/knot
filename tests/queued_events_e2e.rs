@@ -164,20 +164,22 @@ fn queued_entry_appears_in_reentry_prompt_and_ack_dispatches_nothing() {
         Ok(output(session_2)),
     ]));
 
-    let queue = Arc::new(InMemoryEventQueue::new());
-    let queue_accessor: Arc<dyn StrandQueueAccessor> = queue.clone();
     let result = ProcessStrandBuilder::new(producer_loom.clone(), runner.clone())
         .with_looms(vec![producer_loom, consumer_loom])
         .with_real_event_dispatcher(rig_dir.clone())
-        .with_strand_queue(queue_accessor)
         .build();
+    let queue = result
+        .event_queue
+        .as_ref()
+        .expect("the builder wired the real queue");
 
     let strand_path = rig_dir.join("strands").join("plan.md");
     std::fs::create_dir_all(strand_path.parent().unwrap()).unwrap();
     std::fs::write(&strand_path, "write PLAN-001").unwrap();
 
-    // 1. Session 1 — the producer emits; the real dispatcher writes
-    //    the event file under the consumer's dispatch directory.
+    // 1. Session 1 — the producer emits; the emission is queued
+    //    directly as a payload-bearing delivery (plan 099: no
+    //    dispatched file).
     result
         .strand
         .execute(StrandEvent::Created {
@@ -187,23 +189,30 @@ fn queued_entry_appears_in_reentry_prompt_and_ack_dispatches_nothing() {
         })
         .expect("session 1 should process");
 
-    let event_dir = runtime_root(root.path()).join("review-loom").join("PlanCreated");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&event_dir)
-        .expect("dispatched event file should exist")
-        .map(|e| e.unwrap().path())
+    let queued_entries: Vec<_> = queue
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.kind == knot::domain::pending_event::EVENT_ENTRY_KIND)
+        .filter(|e| e.loom_id == "review-loom")
         .collect();
-    assert_eq!(files.len(), 1, "exactly one event dispatched: {files:?}");
-    let dispatched = files.pop().unwrap();
-    assert!(
-        std::fs::read_to_string(&dispatched)
-            .unwrap()
-            .contains("target-knot: plan-creator"),
-        "the event file frontmatter carries the producer identity"
+    assert_eq!(
+        queued_entries.len(),
+        1,
+        "exactly one delivery queued: {:?}",
+        queue.snapshot().len()
+    );
+    let delivery = queued_entries[0]
+        .delivery
+        .as_ref()
+        .expect("the entry carries the delivery");
+    assert_eq!(delivery.event_id, "PlanCreated");
+    assert_eq!(
+        delivery.producer_knot, "plan-creator",
+        "the delivery carries the producer identity"
     );
 
-    // 2. The entry lands in the queue (the watcher's job in production;
-    //    the test pushes the same shape directly).
-    push_entry(&queue, 1, &dispatched, "2026-10-18T10:00:00");
+    // 2. (No manual push — the producer's emission landed in the
+    //    queue directly; the entry is the queued event.)
 
     // 3. Session 2 — the producer re-enters the same strand (Modified).
     result
@@ -225,12 +234,8 @@ fn queued_entry_appears_in_reentry_prompt_and_ack_dispatches_nothing() {
         "the re-entry prompt must carry the queued-events section:\n{prompt}"
     );
     assert!(
-        prompt.contains(&dispatched.display().to_string()),
-        "the QUEUED entry (queue path) must appear in the prompt:\n{prompt}"
-    );
-    assert!(
-        prompt.contains("queued: 2026-10-18T10:00:00"),
-        "the queue's own queued_at must be shown:\n{prompt}"
+        prompt.contains("event:plan-creator/PlanCreated"),
+        "the QUEUED entry (descriptor) must appear in the prompt:\n{prompt}"
     );
     assert!(
         prompt.contains("do not queue a duplicate"),

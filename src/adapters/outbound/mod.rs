@@ -1,6 +1,5 @@
 pub mod content_inspector;
 pub mod disk_event_queue;
-pub mod event_dispatcher;
 pub mod event_source;
 pub mod event_store;
 pub mod git_versioner;
@@ -14,7 +13,6 @@ pub mod strand_file_checker;
 pub mod tieoff_sink;
 
 pub use disk_event_queue::DiskBackedEventQueue;
-pub use event_dispatcher::FileSystemEventDispatcher;
 pub use event_store::FileSystemEventStore;
 pub use event_source::NotifyEventSource;
 pub use git_versioner::FileSystemGitVersioner;

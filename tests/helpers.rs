@@ -58,10 +58,18 @@ pub struct ProcessStrandResult {
     /// Event dispatcher — present only when `.with_tracking_event_dispatcher()` is used.
     pub event_dispatcher: Option<Arc<MockEventDispatcher>>,
     /// The real rig directory — present only when `.with_real_event_dispatcher(rig_dir)`
-    /// is used. Event files are created by the real `FileSystemEventDispatcher`
-    /// under `tie-offs/<rig-basename>/` (the runtime root, a sibling of the
-    /// rig directory's parent).
+    /// is used. Plan 099: deliveries are direct queue writes — the real
+    /// `QueueEventDispatcher` pushes payload-bearing entries into the
+    /// real `DiskBackedEventQueue` under the runtime root
+    /// (`tie-offs/<rig-basename>/events/`, a sibling of the rig
+    /// directory's parent).
     pub rig_dir: Option<PathBuf>,
+    /// The real disk-backed queue the dispatcher delivers into —
+    /// present only when `.with_real_event_dispatcher(rig_dir)` is
+    /// used. Snapshot it to observe deliveries; `pop()` +
+    /// `TryInto<StrandEvent>` to drive a consumer.
+    pub event_queue:
+        Option<Arc<knot::adapters::outbound::disk_event_queue::DiskBackedEventQueue>>,
 }
 
 /// Builder for constructing [`ProcessStrand`] with all mock ports wired up.
@@ -96,8 +104,10 @@ pub struct ProcessStrandBuilder {
     tracking_event_dispatcher: bool,
     /// Whether to expose the file checker in the result.
     tracking_file_checker: bool,
-    /// Real rig directory + real `FileSystemEventDispatcher` — when set,
-    /// event dispatch writes real files to disk instead of the mock.
+    /// Real rig directory + real queue-backed dispatcher — when set,
+    /// event delivery is a direct write of payload-bearing queue
+    /// entries into a real `DiskBackedEventQueue` under the runtime
+    /// root (plan 099; the dispatched-file mechanism is retired).
     real_event_dispatcher: Option<PathBuf>,
     /// Real rig directory + real `FileSystemTieOffSink` — when set, tie-off
     /// appends write real files to disk under the runtime root instead of
@@ -183,13 +193,14 @@ impl ProcessStrandBuilder {
         self
     }
 
-    /// Wire the **real** `FileSystemEventDispatcher` against a real rig
+    /// Wire the **real** queue-backed dispatcher against a real rig
     /// directory (default is a mock that records calls without touching
     /// the filesystem).
     ///
-    /// `rig_dir` must be an existing directory; event files are created
-    /// under the runtime root — `tie-offs/<rig-basename>/` next to it.
-    /// Returns `rig_dir` in the result.
+    /// `rig_dir` must be an existing directory; deliveries are written
+    /// as queue entries under the runtime root —
+    /// `tie-offs/<rig-basename>/events/` next to it. Returns
+    /// `rig_dir` and `event_queue` in the result.
     pub fn with_real_event_dispatcher(mut self, rig_dir: PathBuf) -> Self {
         self.real_event_dispatcher = Some(rig_dir);
         self
@@ -225,7 +236,8 @@ impl ProcessStrandBuilder {
 
     /// Attach a real system-event emitter (plan 082). Requires
     /// `with_real_event_dispatcher(rig_dir)` — the emitter dispatches
-    /// system events through a real dispatcher to the same runtime root.
+    /// system events through the same queue-backed dispatcher, so
+    /// they land as queue entries in the same runtime-root queue.
     pub fn with_system_emitter(mut self) -> Self {
         self.use_system_emitter = true;
         self
@@ -295,10 +307,28 @@ impl ProcessStrandBuilder {
         let event_dispatcher: Arc<dyn knot::application::ports::EventDispatcherPort>;
         let event_dispatcher_concrete: Option<Arc<MockEventDispatcher>>;
 
-        if self.real_event_dispatcher.is_some() {
-            // Real dispatcher writing real event files to the runtime root
+        // Plan 099: the real dispatcher is the queue-backed one — a
+        // direct write of payload-bearing entries into a real
+        // DiskBackedEventQueue under the runtime root. The queue is
+        // exposed in the result so tests can observe deliveries and
+        // drive consumers.
+        let event_queue = self.real_event_dispatcher.as_ref().map(|rig_dir| {
+            let events_dir =
+                knot::domain::knot_file::derive_runtime_root(rig_dir)
+                    .join("events");
+            Arc::new(
+                knot::adapters::outbound::disk_event_queue::DiskBackedEventQueue::new(
+                    events_dir,
+                ),
+            )
+        });
+
+        if let Some(queue) = &event_queue {
             event_dispatcher = Arc::new(
-                knot::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+                knot::adapters::outbound::QueueEventDispatcher::new(
+                    Arc::clone(queue)
+                        as Arc<dyn knot::application::ports::StrandEventQueue>,
+                ),
             );
             event_dispatcher_concrete = None;
         } else if self.tracking_event_dispatcher {
@@ -331,21 +361,35 @@ impl ProcessStrandBuilder {
             git_port,
             file_checker,
             event_dispatcher,
-            self.strand_queue.clone(),
+            // Production parity: the dispatcher's queue IS the strand's
+            // queue (one queue, plan 099). An explicitly provided
+            // strand queue takes precedence (tests that seed their own).
+            self.strand_queue.clone().or_else(|| {
+                event_queue
+                    .clone()
+                    .map(|q| q as Arc<dyn knot::domain::events::StrandQueueAccessor>)
+            }),
         );
 
-        // Optional real system-event emitter (plan 082): same store, a
-        // fresh real dispatcher, the same rig dir — so system events land
-        // as real event files at the runtime root.
+        // Optional real system-event emitter (plan 082): same store, the
+        // same queue-backed dispatcher, the same rig dir — so system
+        // events land as queue entries in the same runtime-root queue
+        // the strand processor drains (plan 099).
         let strand = if self.use_system_emitter {
             let rig_dir = effective_rig_dir
+                .clone()
+                .expect("with_system_emitter requires with_real_event_dispatcher");
+            let queue = event_queue
                 .clone()
                 .expect("with_system_emitter requires with_real_event_dispatcher");
             let emitter = Arc::new(
                 knot::application::usecases::SystemEventEmitter::new(
                     store.clone(),
                     Arc::new(
-                        knot::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::new(),
+                        knot::adapters::outbound::QueueEventDispatcher::new(
+                            queue
+                                as Arc<dyn knot::application::ports::StrandEventQueue>,
+                        ),
                     ),
                     rig_dir,
                 ),
@@ -368,6 +412,7 @@ impl ProcessStrandBuilder {
             file_checker: file_checker_concrete,
             event_dispatcher: event_dispatcher_concrete,
             rig_dir: effective_rig_dir,
+            event_queue,
         }
     }
 }

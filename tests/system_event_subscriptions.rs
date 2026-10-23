@@ -70,25 +70,31 @@ fn ok_output() -> AgentOutput {
     }
 }
 
-/// Collect the event files written to a consumer's dispatch directory
-/// (`tie-offs/rig/<loom>/<event-id>/`), sorted by name.
-fn event_files(rig_dir: &PathBuf, consumer_loom: &str, event_id: &str) -> Vec<PathBuf> {
-    let dir = rig_dir
-        .parent()
-        .unwrap()
-        .join("tie-offs")
-        .join("rig")
-        .join(consumer_loom)
-        .join(event_id);
-    if !dir.exists() {
-        return Vec::new();
-    }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("event directory should be readable")
-        .map(|e| e.unwrap().path())
-        .collect();
-    files.sort();
-    files
+/// Collect the deliveries queued for a consumer loom with a given
+/// event id (plan 099: the queue entry is the delivery — the
+/// dispatched file is retired).
+fn delivered_entries<'a>(
+    result: &'a helpers::ProcessStrandResult,
+    consumer_loom: &str,
+    event_id: &str,
+) -> Vec<knot::domain::pending_event::PendingEvent> {
+    use knot::application::ports::StrandEventQueue;
+    let queue = result
+        .event_queue
+        .as_ref()
+        .expect("the builder wired the real queue");
+    queue
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.kind == knot::domain::pending_event::EVENT_ENTRY_KIND)
+        .filter(|e| e.loom_id == consumer_loom)
+        .filter(|e| {
+            e.delivery
+                .as_ref()
+                .map(|d| d.event_id == event_id)
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 fn frontmatter_field(content: &str, field: &str) -> Option<String> {
@@ -146,37 +152,35 @@ fn failure_reaches_wildcard_consumer_and_consumer_runs() {
         "producer run should fail at config resolution"
     );
 
-    // The wildcard consumer received a `KnotFailed` event file, produced by
-    // the failing producer (the resolved producer token).
-    let files = event_files(&rig_dir, "mon-loom", "KnotFailed");
+    // The wildcard consumer received a `KnotFailed` delivery, produced
+    // by the failing producer (the resolved producer token).
+    let entries = delivered_entries(&result, "mon-loom", "KnotFailed");
     assert_eq!(
-        files.len(),
+        entries.len(),
         1,
-        "exactly one KnotFailed event file for the wildcard consumer: {files:?}"
+        "exactly one KnotFailed delivery for the wildcard consumer: {:?}",
+        entries.len()
     );
-    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let delivery = entries[0].delivery.as_ref().unwrap();
+    assert_eq!(delivery.event_id, "KnotFailed");
     assert_eq!(
-        frontmatter_field(&content, "event-id").as_deref(),
-        Some("KnotFailed")
-    );
-    assert_eq!(
-        frontmatter_field(&content, "target-knot").as_deref(),
-        Some("producer"),
+        delivery.producer_knot, "producer",
         "the resolved producer token must name the failing knot"
     );
     assert!(
-        frontmatter_field(&content, "error").is_some(),
-        "KnotFailed must carry the error payload: {content}"
+        delivery.payload.contains_key("error"),
+        "KnotFailed must carry the error payload: {:?}",
+        delivery.payload
     );
 
-    // The consumer is enqueued and runs: drive it with the delivered file.
+    // The consumer is enqueued and runs: drive it with the entry.
+    let se: StrandEvent = entries[0]
+        .clone()
+        .try_into()
+        .expect("event entry converts to a delivered strand event");
     result
         .strand
-        .execute(StrandEvent::Created {
-            loom_id: LoomId("mon-loom".to_string()),
-            knot_id: KnotId("monitor".to_string()),
-            strand_path: StrandPath(files[0].clone()),
-        })
+        .execute(se)
         .expect("consumer strand should process");
 
     let log_events = result.log_events.lock().unwrap();
@@ -228,32 +232,29 @@ fn success_reaches_specific_producer_consumer_and_consumer_runs() {
         })
         .expect("producer strand should process");
 
-    // The consumer received a KnotCompleted file (KnotFailed must NOT exist —
-    // the run succeeded).
-    let files = event_files(&rig_dir, "mon-loom", "KnotCompleted");
+    // The consumer received a KnotCompleted delivery (KnotFailed must
+    // NOT exist — the run succeeded).
+    let entries = delivered_entries(&result, "mon-loom", "KnotCompleted");
     assert_eq!(
-        files.len(),
+        entries.len(),
         1,
-        "exactly one KnotCompleted event file: {files:?}"
+        "exactly one KnotCompleted delivery: {:?}",
+        entries.len()
     );
-    let content = std::fs::read_to_string(&files[0]).unwrap();
-    assert_eq!(
-        frontmatter_field(&content, "target-knot").as_deref(),
-        Some("producer")
-    );
+    assert_eq!(entries[0].delivery.as_ref().unwrap().producer_knot, "producer");
     assert!(
-        event_files(&rig_dir, "mon-loom", "KnotFailed").is_empty(),
+        delivered_entries(&result, "mon-loom", "KnotFailed").is_empty(),
         "no KnotFailed on a successful run"
     );
 
-    // Drive the consumer with the delivered file.
+    // Drive the consumer with the entry.
+    let se: StrandEvent = entries[0]
+        .clone()
+        .try_into()
+        .expect("event entry converts to a delivered strand event");
     result
         .strand
-        .execute(StrandEvent::Created {
-            loom_id: LoomId("mon-loom".to_string()),
-            knot_id: KnotId("monitor".to_string()),
-            strand_path: StrandPath(files[0].clone()),
-        })
+        .execute(se)
         .expect("consumer strand should process");
 }
 
@@ -318,16 +319,17 @@ fn self_exclusion_does_not_retrigger_producer() {
 
     // Self: the producer's own loom must NOT receive its own KnotCompleted.
     assert!(
-        event_files(&rig_dir, "prod-loom", "KnotCompleted").is_empty(),
+        delivered_entries(&result, "prod-loom", "KnotCompleted").is_empty(),
         "self-exclusion: the producing knot must not be re-triggered by its \
          own KnotCompleted"
     );
     // The separate consumer in another loom IS triggered.
-    let files = event_files(&rig_dir, "mon-loom", "KnotCompleted");
+    let entries = delivered_entries(&result, "mon-loom", "KnotCompleted");
     assert_eq!(
-        files.len(),
+        entries.len(),
         1,
-        "the separate consumer must receive the KnotCompleted: {files:?}"
+        "the separate consumer must receive the KnotCompleted: {:?}",
+        entries.len()
     );
 }
 
@@ -383,17 +385,17 @@ fn timeout_reaches_consumer_and_rig_log_records_timeout() {
     // A timeout is a terminal *outcome*, not an error — `execute` returns Ok.
     let _ = res.expect("timeout is a terminal outcome, not an error");
 
-    // The consumer received a TimeoutExceeded file.
-    let files = event_files(&rig_dir, "mon-loom", "TimeoutExceeded");
+    // The consumer received a TimeoutExceeded delivery.
+    let entries = delivered_entries(&result, "mon-loom", "TimeoutExceeded");
     assert_eq!(
-        files.len(),
+        entries.len(),
         1,
-        "exactly one TimeoutExceeded event file: {files:?}"
+        "exactly one TimeoutExceeded delivery: {:?}",
+        entries.len()
     );
-    let content = std::fs::read_to_string(&files[0]).unwrap();
     assert_eq!(
-        frontmatter_field(&content, "target-knot").as_deref(),
-        Some("producer")
+        entries[0].delivery.as_ref().unwrap().producer_knot,
+        "producer"
     );
 
     // The rig-log records TimeoutExceeded.

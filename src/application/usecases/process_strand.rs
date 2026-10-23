@@ -21,7 +21,6 @@ use crate::domain::events::{
     AgentEvent, LoomEvent, PromptInstructionSource, StrandEvent, StrandQueueAccessor,
 };
 use crate::domain::pending_event::{PendingEvent, PendingEventId};
-use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::value_objects::{
     AgentConfig, AgentProfile, AgentProfileError, RigAgentConfig,
 };
@@ -66,7 +65,9 @@ pub struct ProcessStrand {
     /// Strand file checker for text/binary/temp detection.
     file_checker: Arc<dyn StrandFileChecker>,
     /// Event dispatcher for intent-based agent-to-agent routing.
-    event_dispatcher: Arc<dyn EventDispatcherPort>,
+    /// `pub(crate)` so the self-continuation helper can deliver an
+    /// event-source knot's continuation as a queue entry (plan 099).
+    pub(crate) event_dispatcher: Arc<dyn EventDispatcherPort>,
     /// Strand event queue — source of truth for pending events.
     pub(crate) strand_queue: Option<Arc<dyn StrandQueueAccessor>>,
     /// System event emitter (plan 082). `None` in unit tests that only
@@ -627,6 +628,7 @@ impl ProcessStrand {
                     event_id,
                     &queue_before,
                     run_trace,
+                    event.delivery(),
                 )
             }
             _ => {
@@ -3455,6 +3457,12 @@ mod commit_capture_tests {
     /// The continuation file is captured in the **project's** per-turn
     /// commit (replay-by-commit source), while the rig dir (source-only)
     /// is excluded from that commit.
+    ///
+    /// Plan 099 (Phase 5): retargeted to a **filesystem-source** knot.
+    /// The event-source continuation is now a direct queue delivery
+    /// (`tie-offs/<rig>/events/`, git-excluded) — the file-into-project
+    /// property is carried by the filesystem strand dir, which still
+    /// receives the continuation file.
     #[test]
     fn continuation_file_captured_in_project_commit() {
         let dir = TempDir::new().unwrap();
@@ -3477,9 +3485,11 @@ mod commit_capture_tests {
         std::fs::create_dir_all(rig_dir.join("test-loom")).unwrap();
         std::fs::write(rig_dir.join("test-loom/knot.md"), "# knot source\n").unwrap();
 
-        // 4. The event-source knot (the continuation lands in
-        //    `tie-offs/rig/<loom>/<event-id>/` — inside the project repo,
-        //    outside the excluded rig dir).
+        // 4. A filesystem-source knot — the continuation lands in the
+        //    knot's own strand dir, inside the project repo and outside
+        //    the excluded rig dir.
+        let strands_dir = project_root.join("strands");
+        std::fs::create_dir_all(&strands_dir).unwrap();
         let knot = Knot {
             id: KnotId("k1".to_string()),
             agent_profile_ref: "budgeted".to_string(),
@@ -3487,11 +3497,10 @@ mod commit_capture_tests {
                 instructions: "React to events.".to_string(),
             },
             git_versioned: true,
-            strand_source: crate::domain::value_objects::StrandSource::EventUri {
-                producer_knot: "producer".to_string(),
-                event_id: "SomeEvent".to_string(),
-            },
-            event_description: Some("When SomeEvent occurs.".to_string()),
+            strand_source: crate::domain::value_objects::StrandSource::Filesystem(
+                strands_dir.clone(),
+            ),
+            event_description: Some("When a strand changes.".to_string()),
         };
 
         let profile = crate::domain::value_objects::AgentProfile::new(
@@ -3538,8 +3547,8 @@ mod commit_capture_tests {
             None,
         );
 
-        // 5. The triggering event file (a real file on disk).
-        let strand_path = dir.path().join("event-20260101T000000-SomeEvent.md");
+        // 5. The triggering strand file (a real file on disk).
+        let strand_path = strands_dir.join("feature.md");
         std::fs::write(&strand_path, "event file body").unwrap();
 
         // 6. Run the turn.
@@ -3552,17 +3561,12 @@ mod commit_capture_tests {
         assert!(result.is_ok(), "the turn should succeed: {result:?}");
 
         // 7. The continuation file must be in the project's commit.
-        let expected_cont_dir = project_root
-            .join("tie-offs")
-            .join("rig")
-            .join("test-loom")
-            .join("SomeEvent");
         assert!(
-            expected_cont_dir.exists(),
-            "the continuation dir must exist: {}",
-            expected_cont_dir.display()
+            strands_dir.exists(),
+            "the strand dir must exist: {}",
+            strands_dir.display()
         );
-        let cont_file = std::fs::read_dir(&expected_cont_dir)
+        let cont_file = std::fs::read_dir(&strands_dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .find(|e| e.file_name().to_string_lossy().ends_with("-continuation.md"))
@@ -5691,8 +5695,9 @@ mod event_dispatch_tests {
     }
 
     /// `target-knot` is derived from the producing knot context, not from
-    /// the event block. Event file frontmatter should contain the producer's
-    /// knot ID.
+    /// the event block. The delivery carries the producer's knot ID —
+    /// plan 099: the identity rides the queue entry's delivery, not a
+    /// dispatched file's frontmatter.
     #[test]
     fn target_knot_derived_from_producer_context() {
         let dir = TempDir::new().unwrap();
@@ -5757,36 +5762,25 @@ mod event_dispatch_tests {
         assert_eq!(*consumer_knot_name, "plan-watcher");
         assert_eq!(*consumer_loom_id, "consumer-loom");
 
-        // Verify that the event file would contain target-knot = producer
-        // knot ID by constructing what the real dispatcher would write.
-        // (under the runtime root, not the rig dir)
-        let event_path = crate::domain::knot_file::derive_runtime_root(
-            std::path::Path::new(rig_dir),
-        )
-        .join(consumer_loom_id)
-        .join(&evt.event_id)
-        .join("event-mock.md");
-        let _ = event_path;
-
-        // The real dispatcher (FileSystemEventDispatcher) receives the
-        // producer knot ID as a separate parameter and writes it into
-        // the event file frontmatter — confirming that target-knot is
-        // derived from context, not from the event block.
-        let content =
-            crate::adapters::outbound::event_dispatcher::FileSystemEventDispatcher::build_event_file_content(
+        // The delivery carries the producer knot identity — derived
+        // from the dispatch context, not from the event block. The
+        // consumer renders it as the event's origin.
+        let delivery =
+            crate::adapters::outbound::QueueEventDispatcher::build_delivery(
                 evt,
-                "2026-07-10T12:00:00Z",
                 "plan-creator",
+                "producer-loom",
+                Some(&StrandPath(strand_path.clone())),
             );
-        assert!(
-            content.contains("target-knot: plan-creator"),
-            "event file frontmatter should contain target-knot: {}",
-            content
+        assert_eq!(
+            delivery.producer_knot, "plan-creator",
+            "the delivery must carry the producer knot from context"
         );
+        let rendered = delivery.render_for_consumer();
         assert!(
-            content.contains("## Event: PlanCreated from plan-creator"),
-            "event file body should reference producer knot: {}",
-            content
+            rendered.contains("## Event: PlanCreated from plan-creator"),
+            "the consumer rendering must name the producer: {}",
+            rendered
         );
     }
 
@@ -6021,6 +6015,7 @@ mod event_dispatch_tests {
         Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
         TempDir,
+        Arc<crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue>,
     ) {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
@@ -6036,6 +6031,15 @@ mod event_dispatch_tests {
             TrackingTieOffSink::new();
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        // Plan 099: the pending-event visibility reads queue entries,
+        // so the use case is wired with a real disk-backed queue.
+        let queue = Arc::new(
+            crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue::new(
+                crate::domain::knot_file::derive_runtime_root(&rig_dir)
+                    .join("events"),
+            ),
+        );
 
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([
@@ -6057,10 +6061,43 @@ mod event_dispatch_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
-            None,
+            Some(queue.clone()
+                as Arc<dyn crate::domain::events::StrandQueueAccessor>),
         );
 
-        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir, queue)
+    }
+
+    /// Seed a pending Event-delivery entry into `queue` — the plan 099
+    /// form of "an event is in flight to the consumer".
+    fn seed_pending_delivery(
+        queue: &crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue,
+        event_id: &str,
+        producer: &str,
+        consumer_loom: &str,
+        consumer_knot: &str,
+    ) {
+        use crate::application::ports::StrandEventQueue;
+        use crate::domain::pending_event::{EventDelivery, PendingEvent};
+        let mut payload = std::collections::BTreeMap::new();
+        payload.insert(
+            "description".to_string(),
+            format!("{} payload", event_id),
+        );
+        let delivery = EventDelivery {
+            event_id: event_id.to_string(),
+            producer_knot: producer.to_string(),
+            producer_loom: "producer-loom".to_string(),
+            original_strand: Some("project/plans/x.md".to_string()),
+            body: None,
+            payload,
+        };
+        let entry = PendingEvent::from_delivery(
+            delivery,
+            &LoomId(consumer_loom.to_string()),
+            &KnotId(consumer_knot.to_string()),
+        );
+        queue.push_or_replace(entry);
     }
 
     /// Helper: create a dispatched event file in the rig directory.
@@ -6124,18 +6161,17 @@ mod event_dispatch_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir, queue) =
             build_process_strand_with_rig(vec![producer_loom, consumer_loom], runner.clone());
 
-        // Create a pending event file in the rig directory
-        let rig_dir = temp_dir.path().join("rig");
-        create_pending_event_file(
-            &rig_dir,
-            "consumer-loom",
+        // A PlanCreated delivery is in flight to the consumer — the
+        // plan 099 form of a pending event (queue entry, not file).
+        seed_pending_delivery(
+            &queue,
             "PlanCreated",
             "plan-creator",
-            Some("Previous plan for feature X"),
-            "event-2026-07-14T10-00-00Z.md",
+            "consumer-loom",
+            "plan-watcher",
         );
 
         let event = StrandEvent::Created {
@@ -6177,8 +6213,8 @@ mod event_dispatch_tests {
             prompt
         );
         assert!(
-            prompt.contains("event-2026-07-14T10-00-00Z.md"),
-            "prompt should contain the queued entry path: {}",
+            prompt.contains("event:plan-creator/PlanCreated"),
+            "prompt should contain the queued entry descriptor: {}",
             prompt
         );
     }
@@ -6213,7 +6249,7 @@ mod event_dispatch_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir) =
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir, _queue) =
             build_process_strand_with_rig(vec![producer_loom, consumer_loom], runner.clone());
 
         let event = StrandEvent::Created {
@@ -8494,6 +8530,7 @@ mod phase4_integration_tests {
         Arc<Mutex<Vec<(crate::domain::events::AgentEvent, String, String, String, u32)>>>,
         LoomStore,
         TempDir,
+        Arc<crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue>,
     ) {
         let dir = TempDir::new().unwrap();
         let rig_dir = dir.path().join("rig");
@@ -8509,6 +8546,15 @@ mod phase4_integration_tests {
             TrackingTieOffSink::new();
         let (rig_log, _rig_events) = MockRigLogPort::new();
         let (event_dispatcher, dispatches) = MockEventDispatcher::new();
+
+        // Plan 099: the pending-event visibility reads queue entries,
+        // so the use case is wired with a real disk-backed queue.
+        let queue = Arc::new(
+            crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue::new(
+                crate::domain::knot_file::derive_runtime_root(&rig_dir)
+                    .join("events"),
+            ),
+        );
 
         let profile_repo = Arc::new(MockProfileRepository {
             profiles: Arc::new(Mutex::new(HashMap::from_iter([
@@ -8530,20 +8576,52 @@ mod phase4_integration_tests {
             Arc::new(MockGitVersioningPort::default()),
             Arc::new(MockStrandFileChecker::new()),
             Arc::new(event_dispatcher),
-            None,
+            Some(queue.clone()
+                as Arc<dyn crate::domain::events::StrandQueueAccessor>),
         );
 
-        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir)
+        (use_case, log_events, tie_off_appends, tie_off_content, dispatches, store, dir, queue)
     }
 
-    /// Integration test: producer emits event, then re-enters, prompt
-    /// contains pending event reference.
+    /// Seed a pending Event-delivery entry into `queue` — the plan 099
+    /// form of "an event is in flight to the consumer".
+    fn seed_pending_delivery(
+        queue: &crate::adapters::outbound::disk_event_queue::DiskBackedEventQueue,
+        event_id: &str,
+        producer: &str,
+        consumer_loom: &str,
+        consumer_knot: &str,
+    ) {
+        use crate::application::ports::StrandEventQueue;
+        use crate::domain::pending_event::{EventDelivery, PendingEvent};
+        let mut payload = std::collections::BTreeMap::new();
+        payload.insert(
+            "description".to_string(),
+            format!("{} payload", event_id),
+        );
+        let delivery = EventDelivery {
+            event_id: event_id.to_string(),
+            producer_knot: producer.to_string(),
+            producer_loom: "producer-loom".to_string(),
+            original_strand: Some("project/plans/x.md".to_string()),
+            body: None,
+            payload,
+        };
+        let entry = PendingEvent::from_delivery(
+            delivery,
+            &LoomId(consumer_loom.to_string()),
+            &KnotId(consumer_knot.to_string()),
+        );
+        queue.push_or_replace(entry);
+    }
+
+    /// Integration test: producer emits an event that is in flight to
+    /// the consumer, then the producer re-enters — its prompt contains
+    /// the pending-event reference.
     ///
-    /// Simulates the flow:
-    /// 1. Producer knot emits `PlanCreated` → event file created in
-    ///    dispatch directory (via FileSystemEventDispatcher simulation).
-    /// 2. Producer knot re-enters (same strand, e.g., Modified event) →
-    ///    pending event from step 1 is visible in its prompt.
+    /// Plan 099: the in-flight event is a payload-bearing queue entry
+    /// (the dispatched-file simulation is retired); the visibility
+    /// index reads the entry-carried ids.
     #[test]
     fn producer_re_enters_prompt_contains_pending_event() {
         let dir = TempDir::new().unwrap();
@@ -8564,42 +8642,6 @@ mod phase4_integration_tests {
             )],
         );
 
-        // Step 1: Producer emits PlanCreated.
-        // Simulate by creating the dispatched event file directly.
-        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
-            build_process_strand_with_rig(
-                vec![producer_loom.clone(), consumer_loom.clone()],
-                Arc::new(MockAgentRunner::new(Ok(AgentOutput {
-                    stdout: "ok".to_string(),
-                    stderr: String::new(),
-                    exit_code: 0,
-                    metadata: None,
-                }))),
-            );
-
-        // Simulate the dispatched event file that would have been created
-        // by FileSystemEventDispatcher.
-        let rig_dir = temp_dir.path().join("rig");
-        let event_dir = crate::domain::knot_file::derive_runtime_root(&rig_dir)
-            .join("consumer-loom")
-            .join("PlanCreated");
-        std::fs::create_dir_all(&event_dir).unwrap();
-        std::fs::write(
-            event_dir.join("event-2026-07-14T10-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: PlanCreated\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T10:00:00Z\n"
-                + "description: Implementation plan for feature X\n"
-                + "---\n"
-                + "\n"
-                + "## Event: PlanCreated from plan-creator\n",
-        )
-        .unwrap();
-
-        // Step 2: Producer re-enters with a Modified event.
-        // Verify the prompt contains the pending event reference.
         let output = Ok(AgentOutput {
             stdout: "ok".to_string(),
             stderr: String::new(),
@@ -8608,40 +8650,29 @@ mod phase4_integration_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (use_case2, _log_events2, _tie_off_appends2, _content2, _dispatches2, _store2, _temp_dir2) =
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir, queue) =
             build_process_strand_with_rig(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),
             );
 
-        // We need to reuse the same rig directory, so let's copy the
-        // event file from step 1 into step 2's rig directory.
-        let rig_dir2 = _temp_dir2.path().join("rig");
-        let event_dir2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
-            .join("consumer-loom")
-            .join("PlanCreated");
-        std::fs::create_dir_all(&event_dir2).unwrap();
-        std::fs::write(
-            event_dir2.join("event-2026-07-14T10-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: PlanCreated\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T10:00:00Z\n"
-                + "description: Implementation plan for feature X\n"
-                + "---\n"
-                + "\n"
-                + "## Event: PlanCreated from plan-creator\n",
-        )
-        .unwrap();
+        // The PlanCreated delivery is in flight to the consumer.
+        seed_pending_delivery(
+            &queue,
+            "PlanCreated",
+            "plan-creator",
+            "consumer-loom",
+            "plan-watcher",
+        );
 
+        // The producer re-enters with a Modified event.
         let event = StrandEvent::Modified {
             loom_id: LoomId("producer-loom".to_string()),
             knot_id: KnotId("plan-creator".to_string()),
             strand_path: StrandPath(strand_path.clone()),
         };
 
-        let result = use_case2.execute(event);
+        let result = use_case.execute(event);
         assert!(result.is_ok());
 
         // Inspect the captured prompt
@@ -8707,93 +8738,28 @@ mod phase4_integration_tests {
         });
         let runner = Arc::new(MockAgentRunner::new(output));
 
-        let (_use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, temp_dir) =
-            build_process_strand_with_rig(
-                vec![producer_loom.clone(), consumer_loom.clone()],
-                runner.clone(),
-            );
-
-        // Create pending events for both event types.
-        let rig_dir = temp_dir.path().join("rig");
-        let event_dir1 = crate::domain::knot_file::derive_runtime_root(&rig_dir)
-            .join("consumer-loom")
-            .join("PlanCreated");
-        std::fs::create_dir_all(&event_dir1).unwrap();
-        std::fs::write(
-            event_dir1.join("event-2026-07-14T10-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: PlanCreated\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T10:00:00Z\n"
-                + "description: Plan for feature X\n"
-                + "---\n"
-                + "\n"
-                + "## Event: PlanCreated from plan-creator\n",
-        )
-        .unwrap();
-
-        let event_dir2 = crate::domain::knot_file::derive_runtime_root(&rig_dir)
-            .join("consumer-loom")
-            .join("ValidationFailed");
-        std::fs::create_dir_all(&event_dir2).unwrap();
-        std::fs::write(
-            event_dir2.join("event-2026-07-14T11-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: ValidationFailed\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T11:00:00Z\n"
-                + "description: Validation failed on PRD\n"
-                + "---\n"
-                + "\n"
-                + "## Event: ValidationFailed from plan-creator\n",
-        )
-        .unwrap();
-
-        let (use_case, _log_events2, _tie_off_appends2, _content2, _dispatches2, _store2, _temp_dir2) =
+        let (use_case, _log_events, _tie_off_appends, _content, _dispatches, _store, _temp_dir, queue) =
             build_process_strand_with_rig(
                 vec![producer_loom, consumer_loom],
                 runner.clone(),
             );
 
-        // Copy event files to the new rig directory.
-        let rig_dir2 = _temp_dir2.path().join("rig");
-        let event_dir1_2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
-            .join("consumer-loom")
-            .join("PlanCreated");
-        std::fs::create_dir_all(&event_dir1_2).unwrap();
-        std::fs::write(
-            event_dir1_2.join("event-2026-07-14T10-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: PlanCreated\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T10:00:00Z\n"
-                + "description: Plan for feature X\n"
-                + "---\n"
-                + "\n"
-                + "## Event: PlanCreated from plan-creator\n",
-        )
-        .unwrap();
-
-        let event_dir2_2 = crate::domain::knot_file::derive_runtime_root(&rig_dir2)
-            .join("consumer-loom")
-            .join("ValidationFailed");
-        std::fs::create_dir_all(&event_dir2_2).unwrap();
-        std::fs::write(
-            event_dir2_2.join("event-2026-07-14T11-00-00Z.md"),
-            "---\n"
-                .to_string()
-                + "event-id: ValidationFailed\n"
-                + "target-knot: plan-creator\n"
-                + "timestamp: 2026-07-14T11:00:00Z\n"
-                + "description: Validation failed on PRD\n"
-                + "---\n"
-                + "\n"
-                + "## Event: ValidationFailed from plan-creator\n",
-        )
-        .unwrap();
+        // Two deliveries are in flight to the consumer — PlanCreated
+        // and ValidationFailed.
+        seed_pending_delivery(
+            &queue,
+            "PlanCreated",
+            "plan-creator",
+            "consumer-loom",
+            "plan-watcher",
+        );
+        seed_pending_delivery(
+            &queue,
+            "ValidationFailed",
+            "plan-creator",
+            "consumer-loom",
+            "plan-watcher",
+        );
 
         let event = StrandEvent::Created {
             loom_id: LoomId("producer-loom".to_string()),

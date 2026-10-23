@@ -667,6 +667,77 @@ fn create_minimal_rig(cwd: &Path, name: &str) -> PathBuf {
     rig
 }
 
+/// Plan 099: a **hand-written** delivery-carrying entry in `events/`
+/// loads and delivers via `knot step --event <id>`. The manual dispatch
+/// path — an operator drops an entry JSON by hand and steps it.
+#[test]
+fn manual_delivery_entry_steps_by_id() {
+    // A mock that records the prompt (stdin) so the hand-written
+    // delivery payload is observable in the runs log.
+    let mock = "#!/usr/bin/env bash\n\
+cat > \"__RUNS_LOG__\"\n\
+exit 0\n";
+    let f = setup(mock);
+    write_knot_file(&f.rig_dir, "review-loom", "review", "./strands");
+
+    // Hand-write an Event-kind entry carrying a delivery (the plan 099
+    // shape an operator would drop by hand).
+    let events = runtime_root(&f).join("events");
+    fs::create_dir_all(&events).unwrap();
+    let json = serde_json::json!({
+        "id": "9000000000001-hand",
+        "kind": "Event",
+        "loom_id": "review-loom",
+        "knot_id": "review",
+        "strand_path": "event:plan-creator/PlanCreated",
+        "queued_at": "2026-01-01T00:00:00",
+        "delivery": {
+            "event_id": "PlanCreated",
+            "producer_knot": "plan-creator",
+            "producer_loom": "plan-loom",
+            "original_strand": "/some/plan.md",
+            "body": null,
+            "payload": {
+                "description": "hand-written plan created",
+                "plan": "PLAN-001"
+            }
+        }
+    });
+    fs::write(
+        events.join("9000000000001-hand.json"),
+        json.to_string(),
+    )
+    .unwrap();
+
+    let config =
+        knot::AppConfig::with_rig_dir(f.rig_dir.clone()).with_cli_path(f.pi_path.clone());
+    let (result, _elapsed) = run_step(config, Some("9000000000001-hand"));
+    assert!(
+        result.is_ok(),
+        "hand-written delivery entry should step: {:?}",
+        result.err()
+    );
+
+    // The agent received the hand-written delivery payload in its
+    // prompt (the runs log holds the prompt content).
+    let prompt = fs::read_to_string(&f.runs_log).unwrap_or_default();
+    assert!(
+        prompt.contains("PLAN-001") && prompt.contains("hand-written plan created"),
+        "the agent must receive the hand-written payload:\n{prompt}"
+    );
+    assert!(
+        prompt.contains("plan-creator"),
+        "the prompt must name the producing knot:\n{prompt}"
+    );
+
+    // The entry was consumed (removed from the queue).
+    let remaining = event_files(&f);
+    assert!(
+        remaining.iter().all(|p| !p.to_string_lossy().contains("9000000000001-hand")),
+        "the stepped entry must be removed: {remaining:?}"
+    );
+}
+
 /// `--event` naming an unknown event: exit 1, and stderr lists the
 /// queued event ids (the user-facing listing of what *is* queued).
 #[test]

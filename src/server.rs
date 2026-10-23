@@ -991,6 +991,86 @@ fn migrate_legacy_rig_layout(rig_dir: &StdPath) {
     }
 }
 
+/// Plan 099: startup detection of the retired tie-off/dispatch layout.
+///
+/// Before the unified log, tie-offs lived in per-knot files
+/// (`<runtime-root>/<loom-id>/tie-off-<knot>.md`) and event delivery
+/// wrote dispatched `event-*.md` files into per-`EventId` directories
+/// (`<runtime-root>/<loom-id>/<EventId>/`). Both are retired: the
+/// unified `tie-offs.log` and payload-bearing queue entries replaced
+/// them. This function logs one `[KNOT][CONFIG]` deprecation line per
+/// artefact found — no backfill, no read of the content; the old files
+/// stay where they are and git history owns them.
+fn detect_retired_layout_artifacts(runtime_root: &StdPath) {
+    let Ok(entries) = std::fs::read_dir(runtime_root) else {
+        return; // No runtime root — nothing was ever written here.
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy().into_owned();
+        if path.is_file() {
+            if name.starts_with("tie-off-") && name.ends_with(".md") {
+                crate::adapters::logging::log_config_event(
+                    "retired-layout",
+                    &format!(
+                        "per-knot tie-off file {} is no longer written \
+                         or read — the unified log is {}",
+                        path.display(),
+                        runtime_root.join("tie-offs.log").display(),
+                    ),
+                );
+            }
+            continue;
+        }
+        if !path.is_dir() || name == "events" {
+            continue;
+        }
+        // A loom-named directory under the runtime root: per-knot
+        // tie-off files inside it, and per-EventId dispatch
+        // directories (subdirs holding event-*.md).
+        let Ok(sub) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for s in sub.flatten() {
+            let sp = s.path();
+            let sn = s.file_name();
+            let sn = sn.to_string_lossy().into_owned();
+            if sp.is_file() && sn.starts_with("tie-off-") && sn.ends_with(".md") {
+                crate::adapters::logging::log_config_event(
+                    "retired-layout",
+                    &format!(
+                        "per-knot tie-off file {} is no longer written \
+                         or read — the unified log is {}",
+                        sp.display(),
+                        runtime_root.join("tie-offs.log").display(),
+                    ),
+                );
+            } else if sp.is_dir() {
+                let has_dispatched = std::fs::read_dir(&sp)
+                    .map(|rd| {
+                        rd.flatten().any(|e| {
+                            let n = e.file_name();
+                            let n = n.to_string_lossy();
+                            n.starts_with("event-") && n.ends_with(".md")
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_dispatched {
+                    crate::adapters::logging::log_config_event(
+                        "retired-layout",
+                        &format!(
+                            "dispatch directory {} is no longer written \
+                             or read — delivery is a direct queue write",
+                            sp.display(),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Run the startup discovery and registration sequence.
 ///
 /// After building the AppContext, this:
@@ -1112,6 +1192,14 @@ agent-adapter: pi-json
     // to the project-level runtime root. Idempotent and non-fatal —
     // runs after rig-dir creation and before any watcher registration.
     migrate_legacy_rig_layout(rig_dir);
+
+    // Plan 099: name the retired-layout artefacts once, at startup.
+    // The per-knot tie-off files and the per-EventId dispatch
+    // directories no longer have a writer or a reader — the service
+    // owns the new format (`tie-offs.log` + queue entries). The old
+    // files are left in place (git history owns them); this is a
+    // diagnostic, not a migration.
+    detect_retired_layout_artifacts(&derive_runtime_root(rig_dir));
 
     // Ensure the rig has its own git repository and the parent project
     // repo (if any) excludes it. Idempotent and non-fatal — runs after
