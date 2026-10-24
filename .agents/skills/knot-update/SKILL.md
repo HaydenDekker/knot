@@ -4,7 +4,7 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.28.0"
+  version: "1.29.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -56,6 +56,43 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Unified Tie-Off Log + Direct Event Queueing (Knot 0.63.0, 2026-10-24)
+
+**What changed:** a hard cutover of the rig's *runtime* tree (no config flag —
+the service owns the write format). This is a runtime-artefact change, not a
+project-document change:
+
+1. **Unified `tie-offs/<rig>/tie-offs.log`** — every tie-off section is appended
+   to one accumulating log (sole writer, serialised appends). Per-knot
+   `tie-off-{knot-name}.md` files retire — the 0.63.0 binary no longer writes or
+   reads them; existing files stay in git history. Section headers are now
+   structured (`event-id` / `source` / `session` / `original-strand`) and the
+   event-audit blocks are slimmed (id, occurred, reason, timestamp — no payload
+   bodies; the git commit is the fidelity source).
+2. **Direct event queueing** — events parsed from a producer's tie-off queue
+   directly as payload-bearing `kind: "Event"` entries, one per subscriber. The
+   `event:`-URI strand/watch delivery path and the per-`EventId` dispatch `.md`
+   files retire (`FileSystemEventDispatcher` deleted). Legacy queue JSON (no
+   `delivery`) loads unchanged.
+3. **Manual dispatch** — the direct queue write is the sole manual mechanism and
+   accepts the `Event` kind; `knot step --event <id>` addresses entries by id.
+4. **Commit trailers + structured trace fields** — knot commits carry a trailer
+   block (`session:`, `event:`, `source:`, `original_strand:`); run-lifecycle
+   service-log lines gain the same grep-able fields.
+
+**Affected documents:** none. This is a runtime-artefact change, not a project
+change (profiles, knots, looms are unchanged). Rigs linking a custom tie-off
+content instruction are unaffected (the contract stays hard-coded in the
+binary).
+
+**Migration:** none required. Existing per-knot tie-off files and dispatch
+directories remain on disk (git history); the 0.63.0 binary neither writes nor
+reads them and logs a one-line `[KNOT][CONFIG]` deprecation diagnostic naming
+any it detects at startup. New work appends to `tie-offs.log` and queues
+directly.
 
 ---
 

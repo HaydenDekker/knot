@@ -1,5 +1,43 @@
 # Release Notes
 
+## v0.63.0 — 2026-10-24
+
+### Breaking — Unified Tie-Off Log + Direct Event Queueing (Plan 099)
+
+A hard cutover of the rig's **runtime** tree (no config flag — the service owns
+the write format). This changes runtime artefacts, not project documents.
+
+- **Unified `tie-offs/<rig>/tie-offs.log`** — the service appends every tie-off
+  section to one accumulating log (sole writer, serialised appends). Per-knot
+  `tie-off-{knot-name}.md` files retire: no longer written or read; existing
+  files stay in git history. Section headers are structured (`event-id`,
+  `source`, `session`, `original-strand`) and the event-audit blocks are slimmed
+  to id / occurred / reason / timestamp — no payload bodies; the git commit
+  stays the fidelity source.
+- **Direct event queueing** — events parsed from a producer's tie-off queue
+  directly as payload-bearing `kind: "Event"` entries, one per subscriber. The
+  `event:`-URI strand/watch delivery path and the per-`EventId` dispatch `.md`
+  files retire (the `FileSystemEventDispatcher` adapter is deleted). Legacy
+  queue JSON (no `delivery`) loads unchanged.
+- **Manual dispatch** — the direct queue write is the sole manual mechanism and
+  accepts the `Event` kind; `knot step --event <id>` addresses entries by id
+  (unchanged).
+- **Commit trailers + structured trace fields** — every knot commit carries a
+  trailer block (`session:`, `event:`, `source:`, `original_strand:`) and the
+  run-lifecycle service-log lines gain the same grep-able fields. The debug
+  trace chain (service log → commit → `tie-offs.log` → `pi --session-id`) closes
+  with no persistent payload duplication.
+- **Startup deprecation diagnostics** — the service detects retired-layout
+  artefacts (per-knot tie-off files, dispatch directories) and logs a
+  one-line `[KNOT][CONFIG]` diagnostic naming them; no backfill, no read.
+
+**Migration:** none required for project documents (profiles, knots, looms are
+unchanged). The runtime layout changes: existing per-knot tie-off files and
+dispatch directories remain on disk (git history) but the 0.63.0 binary neither
+writes nor reads them; new work appends to `tie-offs.log` and queues directly.
+Rigs linking a custom tie-off content instruction are unaffected (the contract
+stays hard-coded in the binary).
+
 ## v0.62.0 — 2026-10-18
 
 ### Added — `queue-busy` dispatch observation + end-to-end acceptance (Plan 097, phases 4–5)

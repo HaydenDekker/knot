@@ -1,5 +1,7 @@
 # Plan: Unified Tie-Off Log and Direct Event Queueing
 
+**Implementation Status:** ✅ Complete (2026-10-24) — released in v0.63.0
+
 ## Problem
 
 The rig's runtime tree carries the same event information in redundant,
@@ -234,3 +236,13 @@ D1–D8 are recorded in the Phase 0 document):
 - **Read norm**: the plan changes the artefacts; the norm ("tie-offs are
   logs — query, never whole-file read; `state.json` for snapshots; git is
   the rotation") travels with the skills repointing, not the code.
+- **Completion verification (2026-10-24, honest)**: plan-099's own contract
+  suites are green on this tree — `persistent_queue` 8/8, `queued_events_e2e`
+  10/10, `event_enforcement` 16/16, `event_fanout` 8/8, `step` 17/18,
+  `trace_chain` and `tie_off` green. The full-suite "1514/0" recorded in the
+  phase docs was observed in a different environment: on this host a
+  watcher-dependent slice of the suite (the `event_source` `--lib` unit tests,
+  four `late_removal` tests, and one `step` test) fails with `notify`'s
+  `MaxFilesWatch` ("OS file watch limit reached") — an environment resource
+  limit, reproduced identically on the pre-plan-099 baseline `a445278`, and
+  unrelated to plan-099's code.
