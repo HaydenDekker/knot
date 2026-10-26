@@ -1,6 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-23 (plan 099 activated — phases 1–5 file sets firmed against the Phase 0 decisions, phase documents 0–5 initialized)
+> **Last Updated:** 2026-10-27 (plan 100 draft — Shim Rig: a project rig points at a shared external rig via `external-rig:`; external looms/knots/profiles, local configuration, runtime tree unchanged)
+> **Prior:** 2026-10-23 (plan 099 activated — phases 1–5 file sets firmed against the Phase 0 decisions, phase documents 0–5 initialized)
 > **Prior:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
 > **Prior:** 2026-10-16 (plans 094–095 complete — the event-enforcement follow-up tie-off is now appended (bugfix) + the `knot-template` skill and per-rig instruction links (hard-coded default + config links); released in v0.59.0)
 > **Prior:** 2026-10-02 (plan 093 phase 10 — event-types panel: invocations / consumers / minutes caused per event type, the communication view — v0.58.0)
@@ -54,6 +55,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 100 | [Shim Rig — Externalised Workflow Rig with Local Project Shim](100-shim-rig/shim-rig-plan.md) | ⬜ Planned | 2026-10-27 |
 | 99 | [Unified Tie-Off Log and Direct Event Queueing](099-tie-offs-log-and-direct-queue/tie-offs-log-and-direct-queue-plan.md) | ✅ Complete (2026-10-24) — released in v0.63.0 | 2026-10-23 |
 | 98 | [Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule](098-knot-lint/knot-lint-plan.md) | ⬜ Planned | 2026-10-22 |
 | 97 | [Queue-Backed Pending-Event Visibility for Producers](097-queued-event-visibility/queued-event-visibility-plan.md) | 🟡 In Progress | 2026-10-18 |
@@ -74,6 +76,13 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 100. Shim Rig — Externalised Workflow Rig with Local Project Shim
+
+**Status:** ⬜ Planned (2026-10-27)
+**Where it is:** Draft — awaiting activation
+**Where it's going:** `rig/.workspace-agent-config.yaml` accepts `external-rig: <path>`: the shim rig serves looms, knots, and profiles from the external rig (whole-rig, disjoint — local looms/profiles ignored with a warning), keeps project-local configuration (`models.yml`, adapter, instruction links) and the project's runtime tree, hot-reloads the external rig live, hard-fails with a clear diagnostic when the path is missing, and records the resolved path in `state.json` provenance.
+**Plan:** [100-shim-rig/shim-rig-plan.md](100-shim-rig/shim-rig-plan.md)
 
 ### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
