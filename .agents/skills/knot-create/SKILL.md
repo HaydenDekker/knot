@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.10.0"
-  compatibility: "Knot 0.63.0+"
+  version: "5.11.0"
+  compatibility: "Knot 0.64.0+"
 ---
 
 # Knot Create Skill

@@ -4,8 +4,8 @@ description: "Start, stop, restart, and supervise the Knot service the way an ag
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.1.0"
-  compatibility: "Knot 0.63.0+"
+  version: "1.2.0"
+  compatibility: "Knot 0.64.0+"
 ---
 
 # Knot Start Skill

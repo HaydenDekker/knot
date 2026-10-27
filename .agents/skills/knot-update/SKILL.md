@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.29.0"
-  compatibility: "Knot 0.41.0+"
+  version: "1.30.0"
+  compatibility: "Knot 0.41.0+ (changelog through 0.64.0)"
 ---
 
 # Knot Update Skill

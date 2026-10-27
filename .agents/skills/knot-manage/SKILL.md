@@ -4,8 +4,8 @@ description: "Review the rig's work using git history and the unified tie-off lo
 license: MIT
 metadata:
   author: Knot Team
-  version: "2.0.0"
-  compatibility: "Knot 0.63.0+"
+  version: "2.1.0"
+  compatibility: "Knot 0.64.0+"
 ---
 
 # Knot Manage Skill

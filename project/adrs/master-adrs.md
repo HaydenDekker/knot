@@ -1,11 +1,12 @@
 # Master ADR — Decision Index
 
-> **Last Updated:** 2026-07-09
+> **Last Updated:** 2026-10-27
 
 ## ADR Index
 
 | # | ADR | Status | Date |
 |---|-----|--------|------|
+| 13 | [ADR-013: Shim Rig — Externalised Workflow Rig with Local Project Shim](adr-013-shim-rig.md) | Accepted | 2026-10-27 |
 | 12 | [ADR-012: Event Files Placed Per Consumer](adr-012-event-placement-per-consumer.md) | Accepted | 2026-07-09 |
 | 11 | [ADR-011: Hexagonal Test Strategy](adr-011-hexagonal-test-strategy.md) | Accepted | 2026-07-02 |
 | 10 | [ADR-010: Domain Rule Extraction](adr-010-domain-rule-extraction.md) | Accepted | 2026-06-29 |
@@ -20,6 +21,14 @@
 | 1 | [ADR-001: Integration Test Server Pattern](adr-001-integration-test-server-pattern.md) | Superseded | 2026-06-07 |
 
 ## ADR Summaries
+
+### 13. Shim Rig — Externalised Workflow Rig with Local Project Shim
+
+**Status:** Accepted
+**Date:** 2026-10-27
+**Summary:** A project-local rig may declare an `external-rig:` path and become a **shim** — the workflow (looms, knots, profiles) is served whole from the external rig; local workflow files are ignored with warnings (no overriding, disjoint sides); an unresolvable path is a hard startup error; identity and runtime tree stay local (`external_rig` provenance in `state.json`); project-side config (`models.yml`, adapter, instruction links) always resolves from the local rig; the rig watch follows the external directory for live hot-reload.
+
+Full details in [adr-013-shim-rig.md](adr-013-shim-rig.md).
 
 ### 12. Event Files Placed Per Consumer
 
