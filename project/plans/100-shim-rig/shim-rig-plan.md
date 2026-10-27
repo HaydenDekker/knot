@@ -1,5 +1,7 @@
 # Plan: Shim Rig — Externalised Workflow Rig with Local Project Shim
 
+**Implementation Status:** Phases 0–5 ✅ Complete (2026-10-27, branch `feature/shim-rig`) — resolver + config key (0), startup hard-fail (1), effective-rig serving + models/config separation (2), external-rig hot-reload (3), `external_rig` provenance in `state.json` (4), `knot share` compatibility + glossary/changelog/skill notes (5). Full suite green (1554 passed, 0 failed), clippy clean. Awaiting `project-plan-completion` (version bump to 0.64.0, merge).
+
 ## Related PRD
 
 This plan contributes to [Shim Rig — Externalised Workflow Rig](../../prds/prd-shim-rig.md).
