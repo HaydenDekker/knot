@@ -1,6 +1,12 @@
 # Plan: Shim Rig — Externalised Workflow Rig with Local Project Shim
 
-**Implementation Status:** Phases 0–5 ✅ Complete (2026-10-27, branch `feature/shim-rig`) — resolver + config key (0), startup hard-fail (1), effective-rig serving + models/config separation (2), external-rig hot-reload (3), `external_rig` provenance in `state.json` (4), `knot share` compatibility + glossary/changelog/skill notes (5). Full suite green (1554 passed, 0 failed), clippy clean. Awaiting `project-plan-completion` (version bump to 0.64.0, merge).
+**Implementation Status:** ✅ Complete (2026-10-27) — released in v0.64.0. Phases 0–5 delivered on `feature/shim-rig` and merged: resolver + config key (0), startup hard-fail (1), effective-rig serving + models/config separation (2), external-rig hot-reload (3), `external_rig` provenance in `state.json` (4), `knot share` compatibility + glossary/changelog/skill notes (5). Full suite green (1554 passed, 0 failed), clippy clean. Lasting knowledge extracted to [ADR-013](../../adrs/adr-013-shim-rig.md).
+
+## Notes
+
+- Phase 3 caught a real gap: relative `strand-dir` resolved against the external rig's parent; fixed with an explicit resolution base on `FileSystemLoomRepository` so strands belong to the consuming project.
+- YAML nuance: a bare `external-rig:` is null — treated as absent (plain rig). The error case is an explicit empty string (`external-rig: ""`).
+- `knot share` on a shim decided (Phase 0 note resolved): it packs the external rig's contents under the local rig's name, with a CLI note; a broken shim fails the share.
 
 ## Related PRD
 
