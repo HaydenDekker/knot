@@ -15,6 +15,9 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+
+#[allow(unused_imports)]
+use zip::ZipArchive;
 use std::thread;
 use std::time::Duration;
 
@@ -323,6 +326,79 @@ fn shim_ignores_local_looms_and_profiles_with_warnings() {
     assert!(
         stderr.contains("ignores local profile 'fast.md'"),
         "startup must warn about the ignored local profile, got: {stderr}"
+    );
+}
+
+// ── knot share on a shim rig ──────────────────────────────────────────────
+
+#[test]
+fn share_on_shim_rig_packs_the_external_rig() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let external = project.join("shared/factory-rig");
+    fs::create_dir_all(&external).unwrap();
+    create_loom(&external, "ext");
+    create_fast_profile(&external);
+    write_shim_config(&project.join("rig"), "shared/factory-rig");
+
+    let output = Command::new(binary_path())
+        .current_dir(project)
+        .args(["share", "rig"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("share should run");
+
+    assert!(
+        output.status.success(),
+        "share on a valid shim must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("shim rig") && stderr.contains("factory-rig"),
+        "share must note it is packing the external rig, got: {stderr}"
+    );
+
+    // The zip carries the EXTERNAL loom and profile under the local
+    // rig's name.
+    let zip_file = fs::File::open(project.join("rig.zip")).unwrap();
+    let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("ext-loom") && n.ends_with("ext.md")),
+        "zip must contain the external loom, got: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("profiles/fast.md")),
+        "zip must contain the external profile, got: {names:?}"
+    );
+}
+
+#[test]
+fn share_on_broken_shim_rig_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    write_shim_config(&project.join("rig"), "gone-rig");
+
+    let output = Command::new(binary_path())
+        .current_dir(project)
+        .args(["share", "rig"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("share should run");
+
+    assert!(
+        !output.status.success(),
+        "share on a broken shim must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("gone-rig") && stderr.contains("does not exist"),
+        "share must name the broken external path, got: {stderr}"
     );
 }
 

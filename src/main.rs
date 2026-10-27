@@ -381,7 +381,34 @@ fn share_command(rig: &str) -> ! {
         eprintln!("Error: rig directory '{}' does not exist", rig_path.display());
         std::process::exit(1);
     }
-    share_rig(&cwd, &rig_path, rig);
+    // Shim rig (plan 100): share what the rig serves — the external
+    // rig's workflow contents, packed under the local rig's name. A
+    // broken shim reference is an error, never a silent pack of the
+    // local stub.
+    let source_path = match knot::resolve_shim_rig_dir(
+        &rig_path,
+        &knot::RigAgentConfig::default_config(),
+    ) {
+        Ok(dir) => {
+            if dir != rig_path {
+                eprintln!(
+                    "Note: '{rig}' is a shim rig — packing external rig '{}'",
+                    dir.display()
+                );
+            }
+            dir
+        }
+        Err(e) => {
+            eprintln!(
+                "Error: {e} — declared in 'external-rig' in '{}'",
+                rig_path
+                    .join(".workspace-agent-config.yaml")
+                    .display()
+            );
+            std::process::exit(1);
+        }
+    };
+    share_rig(&cwd, &source_path, rig);
     std::process::exit(0);
 }
 

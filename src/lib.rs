@@ -16,7 +16,7 @@ pub use domain::value_objects::{AgentAdapter, RigAgentConfig};
 
 // Re-export server lifecycle from composition root
 pub use server::{
-    AppConfig, build_app_context, build_process_strand, run_startup,
-    spawn_process_strand_loop, start_config_pipeline, start_event_pipeline,
-    start_knot, start_state_writer, step_knot,
+    resolve_shim_rig_dir, AppConfig, build_app_context, build_process_strand,
+    run_startup, spawn_process_strand_loop, start_config_pipeline,
+    start_event_pipeline, start_knot, start_state_writer, step_knot,
 };
