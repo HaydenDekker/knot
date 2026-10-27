@@ -4,8 +4,8 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.3.0"
-  compatibility: "Knot 0.41.0+"
+  version: "1.4.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Abstractions Skill
@@ -95,8 +95,8 @@ rig.
 
 *Note:* While profiles *could* theoretically be ported to another
 orchestrator if stripped of Knot terminology, this portability is
-currently theoretical — the rig's event injection, dispatch directory,
-and tie-off mechanics are deeply coupled to Knot's execution model
+currently theoretical — the rig's event injection, queue delivery, and
+tie-off mechanics are deeply coupled to Knot's execution model
 regardless of terminology.
 
 ### 3. Skills (Generic Behaviors)
@@ -144,8 +144,10 @@ boundary ensures agents consume project knowledge without corrupting it.
    uses its **skills** (file operations, TDD practices, ADR references)
    to implement the phase.
 
-4. Upon completion, the agent's output is captured as a **tie-off file**,
-   and the rig may emit events to trigger downstream knots.
+4. Upon completion, the agent's output is captured as a **tie-off** — a
+   section appended to the unified tie-off log (and the run's commit
+   body) — and the rig may queue delivery events to trigger downstream
+   knots.
 
 5. If more phases remain, the next `PhaseReady` event chains to the
    same or another knot/profile combination.

@@ -1,6 +1,6 @@
 # Plan: Unified Tie-Off Log and Direct Event Queueing
 
-**Implementation Status:** ✅ Complete (2026-10-24) — released in v0.63.0
+**Implementation Status:** Phases 0–5 ✅ Complete (2026-10-24) — released in v0.63.0; **Phase 6 (skills repointing) in progress** (added 2026-10-25 after a live test-rig run got confused on the new queueing mechanics because the skills still taught the retired ones) — all skill repoints, the audit grep, and the `~/.agents/` deploy + diff verification are done; only the field test (re-run the test project) remains
 
 ## Problem
 
@@ -196,6 +196,34 @@ run. **File set:** `src/server.rs` (startup diagnostics),
 `src/adapters/outbound/event_dispatcher.rs` (deprecation), the
 trace-chain acceptance test (new, in `tests/`).
 
+### Phase 6: Skills repointing
+
+Documents only — the skills still teach the retired mechanics
+(per-knot `tie-off-{knot-name}.md` paths, event files dropped into
+`{loom}/{EventId}/` dispatch directories, "dispatched strand
+files") and a live test-rig run after v0.63.0 got confused on the new
+queueing as a result. Re-point the affected skills to the post-099
+reality: the unified `tie-offs.log` (query, never whole-file read),
+direct queueing (one payload-bearing `Event`-kind entry per subscriber
+in `events/`, `event:` URIs as subscription descriptors), the direct
+queue write as the sole manual event dispatch (`knot step --event
+<id>`), the commit-trailer trace chain, and the read norm. **Pane:**
+the repo-wide audit grep for the retired tokens comes back clean,
+every deployed copy diff-verified, and a field re-run of the test
+project where the agent navigates the new mechanics from the skills
+alone. **File set:** `.agents/skills/knot-dispatch/SKILL.md`,
+`.agents/skills/knot-manage/SKILL.md`,
+`.agents/skills/knot-inspect/SKILL.md`,
+`.agents/skills/knot-analyst/SKILL.md`,
+`.agents/skills/knot-create/SKILL.md`,
+`.agents/skills/knot-design/SKILL.md`,
+`.agents/skills/knot-init/knot-glossary.md`,
+`.agents/skills/knot-template/knot-tie-off.md`,
+`.agents/skills/knot-template/knot-tie-off-content.md`, plus a
+verify-and-fix pass over `knot-abstractions`, `knot-start`, and the
+`knot` master — and the deploy to `~/.agents/skills/` /
+`~/.agents/skills-library/` per `AGENTS.md`.
+
 ## Notes
 
 The open technical questions settled in Phase 0 (the full decisions
@@ -224,15 +252,19 @@ D1–D8 are recorded in the Phase 0 document):
   dispatch directory" manual path retires with the files (D8); the
   direct queue write is the sole manual mechanism and gains the `Event`
   kind.
-- **Cross-repo repointing (not in this plan's file set)**: the
-  `knot-manage`, `knot-dispatch`, `knot-inspect`, `knot-analyst` skills in
-  the `agents` repo cite the per-knot paths, the dispatch directories,
-  and the dead-subscription/oscillation diagnoses; loom/profile event
-  URIs in rig definitions; and the `knot-template` templates (095/096 —
-  the contract is hard-coded in the binary, so the template text that
-  says "never write or read directly from `tie-offs/`" needs its update
-  here). These land as their own planned changes in the `agents`
-  project and the affected rigs.
+- **Skills repointing** — brought inside this plan as **Phase 6**
+  (added 2026-10-25, after the v0.63.0 test-rig run showed the
+  confusion): the `knot-manage`, `knot-dispatch`, `knot-inspect`,
+  `knot-analyst`, `knot-create`, `knot-design`, `knot-init` glossary,
+  and `knot-template` project-level skills (`.agents/skills/`) cite
+  the per-knot tie-off paths, the dispatch directories, the dead-
+  subscription diagnoses, and the retired "never write or read
+  directly from `tie-offs/`" framing — re-pointed there, and deployed
+  to the production `~/.agents/` locations. Per-rig
+  `rig/knot-template/knot-tie-off-content.md` overrides remain
+  per-project; the loom/profile `event:` URIs survive unchanged
+  (subscription descriptors — only their resolution target moved off
+  the filesystem).
 - **Read norm**: the plan changes the artefacts; the norm ("tie-offs are
   logs — query, never whole-file read; `state.json` for snapshots; git is
   the rotation") travels with the skills repointing, not the code.

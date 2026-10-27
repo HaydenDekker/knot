@@ -4,8 +4,8 @@ description: "Design looms and knots for the Knot agent orchestration framework.
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.7.0"
-  compatibility: "Knot 0.31.0+"
+  version: "1.8.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Design Skill
@@ -438,20 +438,24 @@ in their instructions. The wiring is entirely declarative:
    `<producer-target>`." The `<producer-target>` is either a knot ID
    (knot-level) or a loom ID ending in `-loom` (loom-level).
 
-2. **Knot discovers the subscription** and creates a dispatch directory
-   at `tie-offs/<rig>/{consumer-loom-id}/{EventName}/` (in the runtime
-tree).
+2. **Knot discovers the subscription** at startup (Knot 0.63.0+, plan
+   099). The `event:` URI is a **subscription descriptor** — nothing is
+   created or watched on disk for it (the per-`EventId/` dispatch
+   directories retired).
 
 3. **Knot injects event instructions** into the producer's prompt at
    runtime — grouped by event ID, deduplicated across consumers. The
    producer knot does not need to know it has consumers; Knot tells it
    how and when to emit.
 
-4. **Producer emits in its tie-off** (`event: EventName` or
-   `event: None`). Knot parses it and writes event files into the
-   consumer's dispatch directory.
+4. **Producer emits in its tie-off** (`event: EventName` or an
+   `occurred: false` acknowledgement). Knot parses it and **queues
+   directly** — one payload-bearing `Event`-kind entry per subscriber
+   in `tie-offs/<rig>/events/` (the payload is in the entry; no
+   dispatched file is written).
 
-5. **Consumer processes the event** as a strand.
+5. **Consumer runs from its queue entry** — the delivery is rendered
+   into its prompt in place of a strand file to read.
 
 ```yaml
 # Consumer declaration — this is the ONLY wiring needed
@@ -598,7 +602,8 @@ Each knot is idempotent and goal-focused. The loop terminates when:
 2. `plan-architect` runs: ADR already captures plan's needs → no changes
 3. Both knots report "no changes needed" → convergence reached
 
-The tie-off files provide the audit trail showing each iteration
+The tie-off sections (the unified `tie-offs/<rig>/tie-offs.log`, plus the
+per-run git commits) provide the audit trail showing each iteration
 and the eventual stable state.
 
 ### Designing Knots That Loop Well
@@ -636,9 +641,11 @@ If the same knot produces different tie-off conclusions on
 consecutive runs (e.g., "changed A → no change → changed A"),
 the loop is oscillating rather than converging.
 
-The knot should detect this by reading its own tie-off file before
-acting. If the last two entries show opposite actions on the same
-strand version, log a warning and defer to human review.
+The knot should detect this by querying its own recent tie-off sections
+before acting (grep `^## knot=<this-knot> ` in
+`tie-offs/<rig>/tie-offs.log`, or the run commits). If the last two
+sections show opposite actions on the same strand version, log a
+warning and defer to human review.
 
 **Pattern 2: Strand version pinning.**
 
@@ -706,7 +713,8 @@ The knot appends an acknowledgement line to its tie-off:
 Processed ADR-001 (sha256: abc123...) — no changes needed
 ```
 
-On re-trigger, the knot reads its tie-off, compares the strand hash.
+On re-trigger, the knot reads its previous tie-off sections (its own
+sections in `tie-offs.log` / its commits), compares the strand hash.
 If the hash matches, the knot skips: "Already processed this version."
 
 ### Loop Design Checklist
@@ -716,7 +724,7 @@ When designing a pair of knots that form a loop:
 - [ ] Each knot has a **different goal** (information actually flows)
 - [ ] Each knot is **idempotent** (re-running converges)
 - [ ] One knot is the **authority** for each domain (breaks infinite loops)
-- [ ] Tie-off files provide an **audit trail** of iterations
+- [ ] Tie-off sections provide an **audit trail** of iterations
 - [ ] A **stale-strand check** exists (skip if strand content unchanged)
 - [ ] A **human-escalation path** exists (max iterations or oscillation detection)
 
@@ -836,16 +844,19 @@ Design consequences:
   the handoff clause is in the prompt and can fire*. Two knots on the same
   water-marked alias may use different stores (one a chain, one a file). Choose
   the store by the checklist above — never by "is it water-marked".
-- **Cross-fire for the queue store.** A continuation delivered into a *shared*
-  event dispatch dir re-triggers **every knot watching that dir** — the
-  dispatcher keys off the *watching* knot's `(loom, knot)`, not the file's
-  `target-knot`, so the runtime does not filter it out. Mitigate by (a) making
-  the worker **idempotent** (a cross-fired continuation is a no-op for a knot
-  that is not its target) and (b) having the worker **honour `target-knot`**
-  and skip a continuation that is not addressed to it — a worker convention the
-  runtime does not enforce. Giving each unit of work its own event id still
-  helps keep a single knot's backlog from piling into one dir — the same
-  caution as *Event Subscription Design*.
+- **Cross-fire for the queue store.** A continuation delivered to an
+  event that *multiple* knots subscribe to re-triggers **every
+  subscriber** — delivery is per-subscription (one queue entry per
+  subscribing knot's `(loom, knot)`), so the runtime does not filter
+  out knots the continuation was not addressed to. Mitigate by (a)
+  making the worker **idempotent** (a cross-fired continuation is a
+  no-op for a knot that is not its target) and (b) having the worker
+  **honour an addressing field in the payload** (e.g. carry
+  `target-knot` in the event payload and skip a continuation that is
+  not addressed to it) — a worker convention the runtime does not
+  enforce. Giving each unit of work its own event id still helps keep
+  a single knot's backlog from piling into one queue of same-type
+  entries — the same caution as *Event Subscription Design*.
 - **Config lives in another skill.** The wrap-up limit, the runner/adapter that
   can steer mid-run, and the migration to 0.42 are **knot-init / knot-create /
   knot-update** concerns. This skill decides *whether* a knot spans sessions and

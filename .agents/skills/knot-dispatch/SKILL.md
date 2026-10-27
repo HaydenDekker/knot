@@ -1,22 +1,23 @@
 ---
 name: knot-dispatch
-description: "Trigger knots into action by creating or touching strand files, dispatching events manually, stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), event file creation in dispatch directories, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via the service log and state, and the full dispatch pipeline from strand creation to tie-off completion."
+description: "Trigger knots into action by creating or touching strand files, dispatching events manually (the direct queue write), stepping the queue one event at a time with `knot step`, and understanding the event flow from producer to consumer. Covers filesystem triggers (creating/touching files in strand-dir), manual event delivery via hand-written `Event`-kind queue entries in `tie-offs/<rig>/events/`, single-event stepping (`knot step`, `--rig`, `--event`, empty-queue behaviour), verifying triggers via the service log and `tie-offs.log`, and the full dispatch pipeline from strand creation to tie-off completion."
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.7.0"
-  compatibility: "Knot 0.37.0+"
+  version: "2.0.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Dispatch Skill
 
 Trigger knots into action by adding or touching strand files, manually
-creating event files, and understanding the full dispatch pipeline from
-strand creation through tie-off completion.
+queueing event deliveries, and understanding the full dispatch pipeline
+from strand creation through tie-off completion.
 
-Knots are event-driven — they react to filesystem changes in their
-`strand-dir`. This skill covers how to trigger them, verify they fired,
-and troubleshoot when they don't.
+Knots are event-driven — filesystem knots react to file changes in
+their `strand-dir`, event-consumer knots react to **queue entries**
+that carry the producer's emission payload. This skill covers how to
+trigger them, verify they fired, and troubleshoot when they don't.
 
 **State file:** `tie-offs/<rig>/state.json` (written when the state
 changes — a background writer ticks every 5 seconds, but idle ticks
@@ -25,7 +26,12 @@ never rewrite it; default rig: `tie-offs/rig/state.json`)
 `[KNOT][EVENT]` / `[KNOT][STATE]` records, appended across runs by
 `knot-start`; filter with `grep 'loom=<id>'`) — since Knot 0.41.0 there
 are no per-run log files
-**Tie-off output:** `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
+**Tie-off output:** `tie-offs/<rig>/tie-offs.log` — one accumulating
+log, the service is the sole writer. Every knot's every run appends
+one section with a structured header line (`## knot=… event=…
+strand=… timestamp=… session=… source=… original-strand=…`). It is a
+**log, not a state file**: query it (`grep` by knot/loom/`event-id=`),
+never whole-file read it; git is the rotation
 
 ---
 
@@ -33,10 +39,17 @@ are no per-run log files
 
 ### Everything Is a Strand Event
 
-Knots have one input direction (`strand-dir`). Whether it points to a
-filesystem directory or an `event:` URI, the trigger is always the same:
-a file appears or changes in the watched directory. There is no "start"
-command — you dispatch work by touching the filesystem.
+Knots have one input direction: the event queue. Filesystem knots are
+triggered by file changes in their `strand-dir` (the watcher turns
+them into `Created` / `Modified` / `Deleted` queue entries); event-
+consumer knots — whose `strand-dir` is an `event:` URI such as
+`event:quality-reviewer:ReviewCompleted` — are triggered by
+`Event`-kind queue entries that **carry the producer's payload in the
+entry itself**. An `event:` URI is a *subscription descriptor*: it is
+not a watched path, nothing is stat-ed at it. Either way the trigger is
+the same final step — a queue entry names this knot, `ProcessStrand`
+picks it up. There is no "start" command — you dispatch work by
+touching the filesystem or the queue.
 
 ### File Watch, Not Polling
 
@@ -50,7 +63,8 @@ is needed.
 If multiple changes occur to the same file within the debounce window
 (100ms default), Knot coalesces them into a single `Modified` event.
 This prevents re-processing mid-edit. The final processed state
-reflects the last saved content.
+reflects the last saved content. (Debounce applies to filesystem
+entries; `Event`-kind entries queue directly, one per subscriber.)
 
 ### The Event Queue Is the Disk
 
@@ -62,6 +76,20 @@ event store.
 ```
 tie-offs/<rig>/events/{timestamp}-{rand}.json
 ```
+
+Entries come in **two kinds** (Knot 0.63.0+, plan 099):
+
+- **Filesystem entries** (`kind` `Created` / `Modified` / `Deleted`)
+  point at a real strand file — the entry is a *pointer*, the file
+  holds the message. Right for a file trigger.
+- **Event entries** (`kind` `Event`) **are the message**: they carry
+  the emitted payload in a `delivery` object and no file exists to
+  read. Their `strand_path` is the synthetic descriptor
+  `event:<producer-knot>/<event-id>` — greppable (`grep
+  'strand=event:<knot>/'`) but never a path. The consumer's prompt
+  gets the rendered delivery (producer identity, event id, original
+  strand, payload fields, body) prepended in place of a file it cannot
+  read.
 
 Key properties:
 
@@ -91,26 +119,23 @@ Key properties:
 - **Viewable in state**: `tie-offs/<rig>/state.json` includes a `strand_queue`
   array showing all currently pending events.
 
-### Event Queue vs. Dispatch Directories
+### No Dispatch Directories Anymore
 
-These are two separate mechanisms:
-
-**Event queue** (`tie-offs/<rig>/events/*.json`):
-- Holds pending filesystem change events (`Created`, `Modified`,
-  `Deleted`) from the file watcher
-- Each `.json` file is a queue entry — removed after its work is done
-  (late removal: just-before-commit on success, point of failure on
-  failure/skip)
-- `StrandSkipped` entries in the service log relate to this queue: the file
-  referenced by a queued event was missing when processing reached it
-
-**Dispatch directories** (`tie-offs/<rig>/{loom-id}/{EventId}/`):
-- Hold event strand files created by Knot's event dispatcher
-- Used for producer→consumer intent-based routing
-- Each `.md` file is a one-shot event with YAML frontmatter and body
-- The consumer knot watches these directories as its `strand-dir`
-- These are **not** the event queue — they are regular strand files
-  that the consumer knot processes as normal strands
+Knot 0.63.0 (plan 099) retired the old per-`EventId` **dispatch
+directories** (`tie-offs/<rig>/{loom-id}/{EventId}/` with dispatched
+`.md` event strand files inside) and the per-knot tie-off files
+(`tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`). If an older rig
+still has them, startup logs one-line `[KNOT][CONFIG]` deprecation
+diagnostics naming them — the service neither reads nor backfills
+them; they stay in git history. Today `tie-offs/<rig>/` holds exactly:
+`state.json`, `knot-service.log`, `tie-offs.log`, and `events/`.
+Producer→consumer delivery is a **direct queue write**: one `Event`-
+kind entry per subscriber, payload embedded (see [Event Queue Is the
+Disk](#the-event-queue-is-the-disk)). The only on-disk artefact of an
+emission that persists is the producer's **git commit** (the full event
+block in the body + `session:` / `event:` / `source:` /
+`original_strand:` trailers) and the slim `- event-audit …` line in
+`tie-offs.log`.
 
 ---
 
@@ -150,10 +175,15 @@ ProcessStrand picks up the event
     ↓
 Agent invoked with profile + knot instructions
     ↓
-Tie-off appended to tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md
+Tie-off section appended to tie-offs/<rig>/tie-offs.log (structured header line)
     ↓
-Event blocks parsed → `occurred: true` events dispatched to consumer knots (fan-out)
+Event blocks parsed → `occurred: true` events queued directly — one
+payload-bearing `Event`-kind entry per subscriber (fan-out, `EventsDispatched`)
 ```
+
+An event-consumer knot's trigger chain starts at that last line: its
+queue entry carries the delivery, and `ProcessStrand` renders it into
+the prompt.
 
 ### Three Trigger Types
 
@@ -203,58 +233,67 @@ filesystem directory:
    then `KnotCompleted` (or `KnotFailed`) for the target knot:
    `grep 'knot={knot-name}' tie-offs/<rig>/knot-service.log | tail`.
 
-6. **Check the tie-off output**: Read
-   `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` and verify the
-   latest section contains the expected output.
-
-### Trigger an Event Consumer Knot
-
-When asked to trigger a knot whose `strand-dir` is an `event:` URI
-(e.g. `event:quality-reviewer:ReviewCompleted`):
-
-The consumer knot watches a dispatch directory at
-`tie-offs/<rig>/{consumer-loom-id}/{EventId}/`. To trigger it manually:
-
-1. **Identify the dispatch directory**: Read the consumer knot's
-   definition file at `rig/{loom-id}/{knot-name}.md`. Extract the
-   `strand-dir` event URI to determine the `EventId`.
-
-   The dispatch directory is:
-   `tie-offs/<rig>/{consumer-loom-id}/{EventId}/`
-
-2. **Create an event file** in the dispatch directory:
+6. **Check the tie-off output**: Query the latest section for the knot
+   in `tie-offs/<rig>/tie-offs.log` and verify it contains the expected
+   output — grep, never whole-file read:
    ```bash
-   mkdir -p tie-offs/<rig>/{consumer-loom-id}/{EventId}
-   cat > tie-offs/<rig>/{consumer-loom-id}/{EventId}/event-manual.md << 'EOF'
-   ---
-   event-id: {EventId}
-   target-knot: manual-trigger
-   timestamp: 2026-07-24T12:00:00Z
-   ---
+   grep -n "knot={knot-name} " tie-offs/<rig>/tie-offs.log | tail
+   # then read just the section at the reported line, or follow the
+   run's git commit (the commit body carries the full tie-off content)
+   ```
 
-   ## Event: {EventId} from manual-trigger
+### Trigger an Event Consumer Knot (Manual Event Delivery)
 
-   Manual trigger for testing.
+A knot whose `strand-dir` is an `event:` URI (e.g.
+`event:quality-reviewer:ReviewCompleted`) is triggered by an
+`Event`-kind queue entry that carries the delivery payload. There is
+**no dispatch directory to drop a file into** (plan 099) — the manual
+trigger is a **direct queue write** of the entry itself.
+
+1. **Identify the consumer and the emission you want to simulate**:
+   Read the consumer knot's definition file at
+   `rig/{loom-id}/{knot-name}.md`. The `strand-dir` event URI gives
+   the producer knot and `EventId` (the producer's knot name must
+   match what you put in `delivery.producer_knot`).
+
+2. **Write an `Event`-kind entry** straight into the queue
+   (`tie-offs/<rig>/events/`) — the shape Knot's own dispatcher
+   writes:
+   ```bash
+   id="$(date +%s%3N)-hand"
+   cat > "tie-offs/<rig>/events/${id}.json" << EOF
+   {
+     "id": "${id}",
+     "kind": "Event",
+     "loom_id": "{consumer-loom-id}",
+     "knot_id": "{consumer-knot}",
+     "strand_path": "event:{producer-knot}/{EventId}",
+     "queued_at": "$(date -Iseconds)",
+     "delivery": {
+       "event_id": "{EventId}",
+       "producer_knot": "{producer-knot}",
+       "producer_loom": "{producer-loom-id}",
+       "original_strand": "path/to/producer-strand.md",
+       "body": "Manual trigger for testing.",
+       "payload": { "description": "hand-written manual event" }
+     }
+   }
    EOF
    ```
+   Field notes: `loom_id` / `knot_id` are the **consumer's** (the
+   entry names who runs); `strand_path` is the synthetic
+   `event:<producer-knot>/<event-id>` descriptor, not a path;
+   `original_strand` and `body` are optional (omit them and the
+   fields are absent from the rendered delivery); `payload` is a
+   `key: value` map — include `description` plus any fields the
+   consumer expects. Filename stem = entry id; FIFO order is filename
+   sort, so the `{unix_timestamp_ms}` prefix controls ordering.
 
-   The file must have YAML frontmatter with at least `event-id` to be
-   recognised. The frontmatter fields `event-id`, `target-knot`, and
-   `timestamp` are standard — add any additional payload fields as
-   needed.
-
-3. **Wait for processing** — the consumer knot should pick up the new
-   event file as a strand event.
-
-4. **Verify via the service log**: Check
-   `tie-offs/<rig>/knot-service.log` for `KnotProcessing` and
-   `KnotCompleted` entries with `loom={consumer-loom-id}`.
-
-5. **Clean up** (optional): Remove the manual event file after
-   processing if it was a one-off test:
-   ```bash
-   rm tie-offs/<rig>/{consumer-loom-id}/{EventId}/event-manual.md
-   ```
+3. **Wait for processing** — a running service picks the entry up from
+   the queue; or step it explicitly (`knot step --event ${id}` — see
+   [Stepping](#stepping-knot-step--one-event-then-stop)). The entry is
+   removed from `events/` once the run completes (late removal). No
+   cleanup step is needed — the queue is transient.
 
 ### Trigger a Producer Knot (Which Emits Events to Consumers)
 
@@ -270,11 +309,10 @@ full producer→consumer chain:
 
 3. **Check for event dispatch**: Look for `EventsDispatched` entries
    in the service log (filter with `grep 'loom={producer-loom-id}'`).
-   These show which events were emitted
-   and which consumer looms received them. If the producer
-   acknowledged every subscriber event with `occurred: false`, there
-   will be no `EventsDispatched` entry — that is expected, not a
-   failure.
+   These show which events were emitted and which consumer looms
+   received their queue entries. If the producer acknowledged every
+   subscriber event with `occurred: false`, there will be no
+   `EventsDispatched` entry — that is expected, not a failure.
 
 4. **Verify consumer activation**: Read each consumer loom's log for
    `KnotProcessing` entries that follow the dispatch.
@@ -297,25 +335,32 @@ After triggering any knot:
 2. **Check the service log**: Tail `tie-offs/<rig>/knot-service.log`
    and look for:
    ```
-   [KNOT][EVENT] KnotProcessing loom=... knot=... strand=...
-   [KNOT][EVENT] KnotCompleted loom=... knot=... strand=... tie-off=...
+   [KNOT][EVENT] KnotProcessing loom=… knot=… strand=… [session=… event=… source=… original-strand=…]
+   [KNOT][EVENT] KnotCompleted loom=… knot=… strand=… tie-off=… [session=… event=… source=… original-strand=…]
    ```
+   The run-trace fields (`session=`, `event=`, `source=`,
+   `original-strand=`) ride the run-lifecycle lines when present (Knot
+   0.63.0+, plan 099). For a consumer run triggered by a delivered
+   emission, `strand=` is the synthetic descriptor
+   `event:<producer-knot>/<event-id>` and `tie-off=` points at
+   `tie-offs.log`.
 
-3. **Check the tie-off**: Read
-   `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`. A new section
-   should appear at the end of the file with a header like:
+3. **Check the tie-off**: The new section at the end of
+   `tie-offs/<rig>/tie-offs.log` opens with a structured header line
+   (grep — never whole-file read):
    ```
-   ## {knot-name} triggered by Created {strand-filename}
-   Timestamp: 2026-07-24T12:00:00Z
-   session: 1f2e3d4c-...   ← present when the pi session ID was captured
-   ---
-   Agent output here...
+   ## knot={knot-name} event={Modified|…} [event-id={EventId}] strand={strand} timestamp=… [session=…] [source={producer-knot}] [original-strand=…]
    ```
-
-   The optional `session:` line (Knot 0.39.0+) carries the pi session
-   ID that produced this section — open it with `pi --session-id <id>`
-   to see the exact conversation. It is omitted when no session ID was
-   captured (e.g. the stdio adapter).
+   `None` fields are omitted, never written empty. The
+   `session=` value is the pi session ID that produced this section —
+   open it with `pi --session-id <id>` to see the exact conversation.
+   The same fields ride the matching **git commit trailers**
+   (`session:` / `event:` / `source:` / `original_strand:`), which
+   stay atomic with the work — query the durable side with
+   `git log --grep` / `git interpret-trailers`. Inside the section,
+   emitted event blocks are slimmed to one audit line each:
+   `- event-audit id=… occurred=… reason=… timestamp=…` — the full
+   event bodies live in the commit, not the log.
 
 ---
 
@@ -388,16 +433,18 @@ strand file created before `knot step` begins is **not** picked up
 automatically. Two ways to have work queued:
 
 1. **The natural flow** — let the service queue it: run the service,
-   create/touch a strand (or drop an event file in a dispatch
-   directory), stop the service before or after the event is queued.
-   Whatever is still in `tie-offs/<rig>/events/` survives the stop and
-   is what the steps will process.
+   create/touch a strand (or let a producer's emissions queue their
+   `Event`-kind entries), stop the service before or after the event is
+   queued. Whatever is still in `tie-offs/<rig>/events/` survives the
+   stop and is what the steps will process.
 2. **Direct queue write** (deterministic, watcher-free) — write the
    pending event's JSON file straight into `tie-offs/<rig>/events/`.
    The disk *is* the queue: the step's startup scan
    (`load_persisted`) picks it up. The filename is the event id
    (`{id}.json`); FIFO order is filename sort, so the
-   `{unix_timestamp_ms}` prefix controls ordering:
+   `{unix_timestamp_ms}` prefix controls ordering.
+
+   A filesystem entry:
    ```bash
    id="$(date +%s%3N)-0001"
    cat > "tie-offs/rig/events/${id}.json" << EOF
@@ -411,10 +458,15 @@ automatically. Two ways to have work queued:
    }
    EOF
    ```
-   `kind` is `Created`, `Modified`, or `Deleted`; `strand_path` is the
-   strand file's absolute path. For `Created`/`Modified` the strand
-   file must exist (a missing file is `StrandSkipped`); for `Deleted`
-   the file is expected to be gone.
+   `kind` is `Created`, `Modified`, `Deleted` (file pointers —
+   `strand_path` is the strand file's absolute path; for
+   `Created`/`Modified` the strand file must exist, a missing file is
+   `StrandSkipped`; for `Deleted` the file is expected to be gone), or
+   **`Event`** (a payload-bearing delivery — the shape is in
+   [Trigger an Event Consumer Knot](#trigger-an-event-consumer-knot-manual-event-delivery);
+   it is the sole manual event dispatch, plan 099 D8). `knot step
+   --event <id>` addresses entries of either kind by id (exact /
+   prefix / strand-filename resolution unchanged).
 
 ### Agent Workflow — Step Through the Queue
 
@@ -451,11 +503,12 @@ When asked to step, process one event, or observe a single cycle:
    - service log (stderr): `KnotProcessing` → `KnotCompleted` (or
      `KnotFailed`), `StrandProcessed`, and `EventsDispatched` if the
      knot emitted events.
-   - tie-off: the new section at the end of
-     `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`.
+   - tie-off: the new section at the end of `tie-offs/<rig>/tie-offs.log`
+     (grep by `knot=…` — never whole-file read).
    - queue: the processed event's file is gone from
-     `tie-offs/<rig>/events/`; anything dispatched *during* the step
-     now has a new file there (captured, not executed).
+     `tie-offs/<rig>/events/`; anything queued *during* the step (new
+     filesystem entries, or `Event`-kind deliveries the stepped knot
+     emitted) now has a new file there (captured, not executed).
    - `state.json`: reflects the post-step queue.
 6. **Repeat** to step through the rest of the queue. When it prints
    `queue empty` (exit 0), the queue is drained — start the service
@@ -473,8 +526,8 @@ When asked to step, process one event, or observe a single cycle:
 | `KnotProcessing` but no `KnotCompleted` | Agent may have timed out. Check the service log for `TimeoutExceeded`. Increase profile `timeout`. |
 | `KnotFailed` in the service log | Read the `error=` field of the line. Common causes: missing profile, parse errors, agent crash. |
 | File created but no event at all | The strand directory may not be watched. Check `tie-offs/<rig>/state.json` — is the loom and knot registered? Knot may need a restart to pick up new watches. |
-| `StrandSkipped` in the service log | See the table below. The strand event was queued but the file was not available when processing reached it. |
-| Event file created but consumer did not fire | Verify the event file has valid YAML frontmatter with `event-id`. Check the dispatch directory path matches the consumer's `strand-dir` event URI. |
+| `StrandSkipped` in the service log | See the table below. The strand event was queued but the file was not available when processing reached it (filesystem entries only — `Event`-kind entries carry their payload and never skip on a missing file). |
+| Manual `Event`-kind entry written but consumer did not fire | Verify the JSON is valid and the entry loaded (`[startup] loaded N persisted event(s)` or the step's `processing event <id>` line), `kind` is `Event` with a `delivery` object, and `loom_id` / `knot_id` name the **consumer**. An unknown/ambiguous `knot step --event` lists the queued ids on stderr. |
 
 ### StrandSkipped — File Vanished Before Processing
 
@@ -512,44 +565,52 @@ If the same strand keeps re-triggering the same knot:
 | Symptom | Check |
 |---------|-------|
 | Producer emitted event but consumer idle | Check `EventsDispatched` in the producer's service-log lines — does it list the consumer's loom? If not, the consumer's `strand-dir` event URI may not match the producer's knot name. |
-| Event file exists in dispatch dir but consumer idle | Consumer's dispatch directory may not be watched. Restart Knot (see `knot-start`) or check the service log for `KnotRegistered` for the consumer. |
-| `occurred: false` in tie-off but expected event | The producer explicitly acknowledged the event but determined it did not occur. Read the `description` field in the event block — it states **why** the event wasn't triggered. If the reasoning is wrong, re-trigger the producer. |
+| `EventsDispatched` logged but no consumer run | The consumer's queue entry should exist until the run completes — if `events/` is empty and no `KnotProcessing` for the consumer, check the service log around the dispatch for a `KnotFailed` / `StrandSkipped` (a failed delivery removes its entry at the point of failure). |
+| `occurred: false` in tie-off but expected event | The producer explicitly acknowledged the event but determined it did not occur. Read the `description` field in the event block (commit body / session) — it states **why** the event wasn't triggered. If the reasoning is wrong, re-trigger the producer. |
 | `KnotEventsMissing` in the service log | The producer completed with **zero** event blocks. The entry lists `expected_events`. Knot already attempted one follow-up re-entry (a second `KnotEventsMissing` means the follow-up also produced nothing). Re-trigger the knot if the events are still missing. |
-| Multiple consumers, only some fired | Each consumer matches independently. Check each consumer's `strand-dir` event URI against the producer's knot ID. |
+| Multiple consumers, only some fired | Each subscriber gets its own queue entry — fan-out is per-entry, so one failing run does not hold back the others. Check each consumer's `strand-dir` event URI against the producer's knot ID, and each consumer's `KnotProcessing` line. |
 
 ---
 
-## Event File Format
+## Manual Event Queue Entry Format
 
-When creating event files manually (for testing or external triggers),
-use the standard event file format that matches what Knot generates:
+The manual event trigger is the **direct queue write** (Knot 0.63.0+,
+plan 099): a hand-written `Event`-kind entry in
+`tie-offs/<rig>/events/`. There are no dispatched event *files* any
+more — the entry **is** the message. The full field-by-field shape and
+field notes are in
+[Trigger an Event Consumer Knot](#trigger-an-event-consumer-knot-manual-event-delivery);
+the canonical example:
 
-```markdown
----
-event-id: PlanCreated
-target-knot: plan-creator
-timestamp: 2026-07-24T12:00:00Z
-plan: PLAN-001
-description: New implementation plan
----
-
-## Event: PlanCreated from plan-creator
-
-A new plan was created covering three phases.
+```json
+{
+  "id": "9000000000001-hand",
+  "kind": "Event",
+  "loom_id": "review-loom",
+  "knot_id": "review",
+  "strand_path": "event:plan-creator/PlanCreated",
+  "queued_at": "2026-01-01T00:00:00",
+  "delivery": {
+    "event_id": "PlanCreated",
+    "producer_knot": "plan-creator",
+    "producer_loom": "plan-loom",
+    "original_strand": "project/plans/plan-001.md",
+    "body": "A new plan was created covering three phases.",
+    "payload": {
+      "description": "Hand-written plan created",
+      "plan": "PLAN-001"
+    }
+  }
+}
 ```
 
-**Required frontmatter fields:**
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `event-id` | **Yes** | Event identifier (must match consumer's subscription) |
-| `target-knot` | **Yes** | Name of the producing knot (or `manual-trigger` for external events) |
-| `timestamp` | **Yes** | ISO 8601 UTC timestamp |
-
-**Optional frontmatter fields:**
-
-Any additional `key: value` pairs become the event payload. The
-consumer knot receives these as part of the strand file it reads.
+The consumer's prompt receives the rendered delivery —
+`## Event: PlanCreated from plan-creator (loom plan-loom)`, the
+`original_strand:` line, the payload fields as `- **key**: value`, and
+the body — everything the consumer used to read from a dispatched
+file, delivered from the queue entry instead. The entry is removed
+from `events/` once the run completes; `knot step --event
+9000000000001-hand` steps it by id (service stopped).
 
 ---
 
@@ -676,12 +737,16 @@ subscribers, Knot does not silently accept the tie-off:
 An `occurred: false` block is a valid event block — its presence
 satisfies enforcement.
 
-### Dispatch
+### Dispatch (Direct Queueing)
 
-Knot parses the producer's tie-off for event blocks and dispatches
-only `occurred: true` events to matching consumer knots.
-`occurred: false` events are filtered out before dispatch. Multiple
-events in one tie-off are each dispatched independently.
+Knot parses the producer's tie-off for event blocks and queues only
+`occurred: true` events **directly** — one payload-bearing `Event`-
+kind entry per subscriber (plan 099). `occurred: false` events are
+filtered out before queueing. Multiple events in one tie-off each
+produce their own fan-out. The payload is embedded in the entry — no
+dispatched file, no watched directory; the durable copies are the
+producer's git commit (full event block + trailers) and the slim
+`- event-audit …` line in `tie-offs.log`.
 
 The producer does **not** need to declare its events — Knot discovers
 them from consumer subscriptions.
@@ -703,18 +768,24 @@ them from consumer subscriptions.
 # Trigger a normal knot (filesystem strand-dir)
 echo "work item" > project/prds/new-feature.md
 
-# Trigger an event consumer (manual event file)
-mkdir -p tie-offs/rig/planning-loom/ReviewCompleted
-cat > tie-offs/rig/planning-loom/ReviewCompleted/event-manual.md << 'EOF'
----
-event-id: ReviewCompleted
-target-knot: quality-reviewer
-timestamp: 2026-07-24T12:00:00Z
----
-
-## Event: ReviewCompleted from quality-reviewer
-
-Manual review trigger.
+# Trigger an event consumer (manual event delivery — direct queue write)
+id="$(date +%s%3N)-hand"
+cat > "tie-offs/rig/events/${id}.json" << EOF
+{
+  "id": "${id}",
+  "kind": "Event",
+  "loom_id": "planning-loom",
+  "knot_id": "refactor-planner",
+  "strand_path": "event:quality-reviewer/ReviewCompleted",
+  "queued_at": "$(date -Iseconds)",
+  "delivery": {
+    "event_id": "ReviewCompleted",
+    "producer_knot": "quality-reviewer",
+    "producer_loom": "review-loom",
+    "body": "Manual review trigger.",
+    "payload": { "description": "hand-written manual event" }
+  }
+}
 EOF
 
 # Verify trigger worked — check the service log
@@ -728,10 +799,8 @@ for loom in state['looms']:
   for knot in loom['knots']:
     print(f\"{loom['id']}/{knot['id']}: {knot['status']} (last: {knot.get('last_event_at', 'never')})\")"
 
-# Check tie-off output
-cat tie-offs/rig/planning-loom/tie-off-refactor-planner.md | tail -20
-
-# Check event dispatch in the producer's service-log lines
+# Check tie-off output (the unified log — grep, never whole-file read)
+grep -n "knot=refactor-planner " tie-offs/rig/tie-offs.log | tail -3
 grep EventsDispatched tie-offs/rig/knot-service.log
 
 # Step one queued event (service must NOT be running)
@@ -751,8 +820,9 @@ knot step --event my-feature.md        # or strand filename
 ## Cross-Reference
 
 **Before using this skill:** Read the `knot-abstractions` skill for the
-layered architecture overview. Understanding how strands, events, dispatch
-directories, and ties work together is essential for triggering knots correctly.
+layered architecture overview. Understanding how strands, events, the
+queue, and ties work together is essential for triggering knots
+correctly.
 
 Related skills:
 

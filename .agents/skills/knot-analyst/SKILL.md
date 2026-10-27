@@ -4,8 +4,8 @@ description: "Analyse rig productivity and project progress at runtime. Read the
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.8.0"
-  compatibility: "Knot 0.41.0+"
+  version: "1.9.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Analyst Skill
@@ -23,6 +23,9 @@ activity is in-memory per process since Knot 0.41.0; the retired
 `.rig-log` / `.loom-log` JSONL files are gone)
 **State file:** `tie-offs/<rig>/state.json` (current rig snapshot, written
 on state change — an unchanged mtime means the rig is idle)
+**Tie-off output:** `tie-offs/<rig>/tie-offs.log` — one accumulating
+log (every knot's every run appends a section); a log, not a state
+file — query it (grep by `^## knot=<knot> `), never whole-file read it
 
 ---
 
@@ -63,8 +66,8 @@ acceptance specifications, completion criteria.
    If the file does not exist, report: "Knot is not running or rig is
    not initialised. Use `knot-start` (start) or `knot-init` (first-time
    rig setup)." Analysis can still **proceed on the durable record** —
-   the service log, tie-off files, and git history survive a stop; state
-   which parts are stale.
+   the service log, the unified tie-off log, and git history survive a
+   stop; state which parts are stale.
 
 ---
 
@@ -89,7 +92,8 @@ event (`[KNOT][EVENT]`) and one line per actual `state.json` write
 (`[KNOT][STATE]`), appended across runs. Run activity itself is
 in-memory per process, so events of an earlier process run survive only
 if the run was captured in this file (start Knot with `knot-start`;
-the tie-off files hold the durable audit history either way). Tail the
+the unified `tie-offs.log` and the git commits hold the durable audit
+history either way). Tail the
 last 50 lines (or the full file if smaller); filter per loom with
 `grep 'loom=<id>'`.
 
@@ -274,8 +278,17 @@ forward progress.
 
 **Check for repeated processing without changes:**
 
-Read the tie-off files (`tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`)
-for the last 5 entries. If multiple consecutive entries say "no changes
+Read the knot's last 5 sections from the unified tie-off log (Knot
+0.63.0+ — the per-knot `tie-off-{knot-name}.md` files retired; the
+sections open with a structured header line `## knot=… event=…
+strand=… timestamp=…`):
+
+```bash
+grep -n "^## knot={knot-name} " tie-offs/<rig>/tie-offs.log | tail -5
+```
+
+then read just those sections (or follow their `session=` / commits for
+the full output). If multiple consecutive sections say "no changes
 needed" or similar language for the **same strand**, the strand may be
 stale — it is triggering the knot but the knot has already done its
 work.
@@ -322,7 +335,7 @@ Synthesise findings across all dimensions to identify specific blockers.
 | **Loop oscillation** | Stagnation (alternating tie-offs) + Operational (high processing count) | Check knot authority boundaries. One knot may be overwriting the other's output |
 | **Missing profile** | Operational (`ProfileNotFound` errors) + State (knot references missing profile) | Create the referenced profile in `rig/profiles/` |
 | **Parse warnings** | Operational (`KnotParseWarning` events) | Fix knot frontmatter — unknown YAML fields will cause silent degradation |
-| **Event dead-letter** | Operational (no consumer processing) + State (event dispatch dirs with files but consumer idle) | Consumer knot may have wrong `strand-dir` event URI. Verify subscription matches producer |
+| **Event dead-letter** | Operational (`EventsDispatched` names the consumer but no `KnotProcessing … strand=event:<producer>/<event-id>` follows, or no `EventsDispatched` at all) + State (consumer knot idle, queue drained) | Consumer knot may have wrong `strand-dir` event URI — verify the subscription matches the producer's knot ID and event id (plan 099: deliveries are queue entries, there are no dispatch directories to inspect) |
 | **Plan stall** | Project docs (active plan > 7 days with no phase progress) + Git (low commit count) | The plan may have blockers. Check phase documents for "stuck" notes |
 | **Provider fatigue** | Operational (increasing timeout rate over time) + Git (declining commit quality/count) | Provider rate limits or model degradation. Check provider status or switch profile |
 

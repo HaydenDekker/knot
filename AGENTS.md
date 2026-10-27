@@ -10,7 +10,8 @@ Knot is a **Rust** application that runs as a **local service** on a developer's
 - **File system access** — Knot reads and writes project files directly to manage agent profiles, prompt templates, and workflow state.
 - **File interface** — Control and observation are files: strands in a
   knot's `strand-dir` trigger work, and `tie-offs/<rig>/` holds the
-  event queue, tie-offs, logs, and `state.json`. There is no network
+  event queue, the unified tie-off log (`tie-offs.log`), the service
+  log, and `state.json`. There is no network
   listener in the 0.3x service.
 
 ## Building
@@ -137,7 +138,7 @@ production location (see Skill Installation above).
 - **knot-abstractions** — Understand the layered architecture (rig, profiles, skills, application)
 - **knot-analyst** — Analyse rig productivity and project progress at runtime
 - **knot-design** — Design looms and knots (idempotency, naming, loops, responsibility)
-- **knot-dispatch** — Trigger knots into action (strand files, event dispatch)
+- **knot-dispatch** — Trigger knots into action (strand files, manual event deliveries via direct queue writes, `knot step`)
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
