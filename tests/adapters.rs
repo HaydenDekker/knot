@@ -516,6 +516,7 @@ mod state_writer_adapter {
     fn build_state(rig_path: &str) -> RigState {
         RigState {
             rig_path: rig_path.to_string(),
+            external_rig: None,
             looms: vec![RigStateLoom {
                 id: "test-loom".to_string(),
                 knots: vec![RigStateKnot {
@@ -592,6 +593,7 @@ mod state_writer_adapter {
             let handle = std::thread::spawn(move || {
                 let state = RigState {
                     rig_path: "/concurrent".to_string(),
+                    external_rig: None,
                     looms: vec![],
                     profiles: vec![RigStateProfile {
                         name: format!("profile-{i}"),
