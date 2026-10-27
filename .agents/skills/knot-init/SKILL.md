@@ -4,8 +4,8 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.10.0"
-  compatibility: "Knot 0.41.1+"
+  version: "4.11.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Init Skill
@@ -29,6 +29,14 @@ rig (e.g. `dev-rig`) it is `tie-offs/dev-rig/state.json`.
 
 This skill writes configuration files directly to disk. Knot discovers
 these files through its file watcher — no registration is needed.
+
+### Shim Rig (Knot 0.64.0)
+
+This skill initialises a **plain local rig** — the bespoke-workflow
+path. To convert an initialised rig into a **shim rig** (workflow
+served from a shared external rig), add `external-rig: <path>` to
+`rig/.workspace-agent-config.yaml` — see the `knot-update` changelog
+(0.64.0) and the glossary term **Shim Rig** for the contract.
 
 ### Idempotent
 

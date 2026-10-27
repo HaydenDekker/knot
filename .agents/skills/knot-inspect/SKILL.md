@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.8.0"
-  compatibility: "Knot 0.41.0+"
+  version: "3.9.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Inspect Skill
@@ -21,6 +21,10 @@ ticks never rewrite it; default rig: `tie-offs/rig/state.json`)
 **Service log:** `tie-offs/<rig>/knot-service.log` (the service's
 single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records, appended across
 runs by the `knot-start` skill — the only log that survives a restart)
+**Tie-off output:** `tie-offs/<rig>/tie-offs.log` (one accumulating
+log — every knot's every run appends one section with a structured
+header line; query it, never whole-file read it; the per-knot
+tie-off files retired in Knot 0.63.0, plan 099)
 
 Since Knot 0.41.0 there are **no per-run log files** (the retired
 `.loom-log` / `.rig-log` JSONL files are gone): run activity is
@@ -42,6 +46,16 @@ All state is in files. Read `tie-offs/<rig>/state.json` for current rig
 state.
 Read the service log (`tie-offs/<rig>/knot-service.log`) for activity.
 No HTTP calls needed.
+
+### Shim Rig (Knot 0.64.0)
+
+A rig may be a **shim** — its workflow (looms, knots, profiles) is
+served from an external rig directory named by `external-rig` in
+`rig/.workspace-agent-config.yaml`. The runtime tree and `state.json`
+stay project-local; a shim's `state.json` carries an `external_rig`
+field with the resolved external path (absent for plain rigs). The
+`rig_path` in state is always the local rig directory — identity is
+local even when the workflow is external.
 
 ### Progressive Disclosure
 
@@ -73,7 +87,7 @@ knot) based on user requests.
           "id": "goals-review",
           "status": "completed",
           "last_strand_path": "project/prds/goals.md",
-          "last_tie_off_path": "tie-offs/rig/prd-review-loom/tie-off-goals-review.md",
+          "last_tie_off_path": "tie-offs/rig/tie-offs.log",
           "last_error": null,
           "last_event_at": "2026-06-10T12:00:03Z"
         }
@@ -101,7 +115,11 @@ knot) based on user requests.
 }
 ```
 
-The state file is written atomically **when the state actually changes**
+`last_tie_off_path` is the **unified tie-off log**
+(`tie-offs/<rig>/tie-offs.log`) since Knot 0.63.0 (plan 099) — all
+knots share the one file, so this field no longer names a per-knot
+file. The knot's sections inside it are greppable by
+`^## knot=<knot-name> `. The state file is written atomically **when the state actually changes**
 (a background writer ticks every 5 seconds; identical snapshots — the
 only thing that would differ is `updated_at` — are never rewritten).
 Staleness is at most 5 seconds behind reality; an unchanged mtime means
@@ -259,8 +277,8 @@ The service log (`tie-offs/<rig>/knot-service.log`) holds one line per
 record — the service's stderr, appended by the `knot-start` skill. Each
 line is timestamped and tagged:
 
-```
-[2026-06-10T12:00:01+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/prd-review-loom/tie-off-goals-review.md
+```text
+[2026-06-10T12:00:01+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/tie-offs.log session=1f2e3d4c-... event=PlanCreated source=prd-planner original-strand=project/plans/plan-001.md
 [2026-06-10T12:00:03+10:00] [KNOT][STATE] change knot prd-review-loom/goals-review: status idle→completed strand=project/prds/goals.md
 ```
 
@@ -268,9 +286,18 @@ line is timestamped and tagged:
   The field names mirror the event's fields (`loom=`, `knot=`,
   `strand=`, `tie-off=`, `error=`, `attempt=`, `silent=`, `window=`,
   `blocked-call=`, `reason=`, `directory=`, `file=`, `message=`,
-  `expected=`, and one `dispatch=` per dispatched event). Optional
-  fields are omitted when absent. There is no separate `timestamp=`
-  field — the line's leading timestamp is the emit time.
+  `expected=`, and one `dispatch=` per dispatched event — on
+  `EventsDispatched`, each `dispatch=` names the emission, the consumer
+  loom/knot, and the queue-entry file that carries the delivery).
+  **Run-trace fields** (`session=`, `event=`, `source=`,
+  `original-strand=`) ride the run-lifecycle lines (`KnotProcessing`,
+  `KnotCompleted`, `KnotFailed`, and friends) when present — Knot
+  0.63.0+, plan 099; they mirror the `tie-offs.log` section header and
+  the git commit trailers of the same run. Optional fields are omitted
+  when absent. There is no separate `timestamp=` field — the line's
+  leading timestamp is the emit time. `tie-off=` points at the unified
+  `tie-offs.log`; for a run triggered by a delivered emission, `strand=`
+  is the synthetic descriptor `event:<producer-knot>/<event-id>`.
 - **`[KNOT][STATE] initial snapshot …` / `change …`** — one line per
   actual `state.json` write: the startup baseline, then deltas naming
   exactly what moved (loom/knot/profile add/remove, field changes,
@@ -278,8 +305,9 @@ line is timestamped and tagged:
 
 Run activity is **in-memory per process** — the log holds whatever the
 service has emitted since it started (plus whatever earlier runs
-appended, since the skill appends, never overwrites). The tie-off files
-remain the durable audit record of completed work.
+appended, since the skill appends, never overwrites). The unified
+`tie-offs.log` plus the git commits remain the durable audit record of
+completed work.
 
 ### Event Types
 
@@ -293,6 +321,7 @@ remain the durable audit record of completed work.
 | `KnotProcessing` | A knot started processing a strand |
 | `KnotCompleted` | A knot finished successfully |
 | `KnotFailed` | A knot failed with an error |
+| `EventsDispatched` | A producer's emitted events were queued for delivery — one `dispatch=<EventId>→<loom>/<knot>: <queue-entry-file>` per delivery |
 | `StrandProcessed` | A strand was processed (success or failure) |
 | `SessionResumed` | Agent session resumed after a failed invocation |
 | `TimeoutExceeded` | An agent session exceeded its deadline (operational event) |
@@ -301,9 +330,10 @@ remain the durable audit record of completed work.
 
 ### Example Lines
 
-```
-[2026-06-10T12:00:03+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/prd-review-loom/tie-off-goals-review.md
+```text
+[2026-06-10T12:00:03+10:00] [KNOT][EVENT] KnotCompleted loom=prd-review-loom knot=goals-review strand=project/prds/goals.md tie-off=tie-offs/rig/tie-offs.log session=1f2e3d4c-...
 [2026-06-10T12:00:04+10:00] [KNOT][EVENT] TimeoutExceeded loom=prd-review-loom knot=goals-review strand=project/prds/goals.md error=agent execution timed out after 600s
+[2026-06-10T12:00:05+10:00] [KNOT][EVENT] EventsDispatched loom=prd-review-loom knot=goals-review strand=project/prds/goals.md dispatch=PlanCreated→planning-loom/prd-planner: /abs/tie-offs/rig/events/1750000000000-ab12.json
 ```
 
 Filtering: `grep 'loom=<id>'` for one loom, `grep 'knot=<id>'` within a

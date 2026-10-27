@@ -1,6 +1,6 @@
 # Knot Glossary
 
-> **Last Updated:** 2026-08-26
+> **Last Updated:** 2026-10-25
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -11,6 +11,23 @@ Living glossary of domain terms for Knot. Terms are added when they emerge from 
 ### Rig
 
 The top-level container — an aggregation of one or more looms. A **rig** is the ship's complete interconnected system of ropes, lines, and running rigging; the place where looms live and knots are defined.
+
+---
+
+### Shim Rig
+
+A project-local rig whose **workflow** (looms, knot files, agent profiles) is served from an **external rig** — a directory named by the `external-rig` key in the local rig's `.workspace-agent-config.yaml` (Knot 0.64.0, plan 100). The shim keeps what is genuinely project-side: the config file itself, `models.yml`, instruction links, and (via the project root) the runtime tree.
+
+Properties:
+
+- **Whole-rig import, disjoint sides** — the workflow comes from the external rig *or* the local rig, never merged. Local looms/profiles in a shim rig are **ignored**, each listed in a `[KNOT][CONFIG]` startup warning. No overriding; a local knot cannot join an external loom.
+- **Local path only** — the external rig is a local directory (absolute, `~/...`, or project-root-relative). The service never fetches; a git checkout is a valid target, but updating it is a user/script concern.
+- **Hard fail** — an unresolvable `external-rig` path is a startup error: nothing starts, the diagnostic names the path and the config file, exit is non-zero.
+- **Identity stays local** — the runtime tree is `tie-offs/<local-rig-basename>/` under the consuming project; `state.json` records the resolved path in its `external_rig` provenance field (absent for plain rigs). Relative `strand-dir` paths resolve against the consuming project root, so strands belong to the project, not the external rig's neighbourhood.
+- **Live hot-reload** — the rig watch follows the external directory; edits and new looms are picked up by every consuming project without a restart.
+- **`knot share`** on a shim packs the external rig's contents under the local rig's name.
+
+A rig **without** the `external-rig` key is a plain local rig — the bespoke-workflow path, unchanged.
 
 ---
 
@@ -46,7 +63,7 @@ A configured artifact that brings everything together, ready for processing. Com
 
 1. **Agent Profile** — determines *which agent* runs.
 2. **Markdown Body** — task-specific instructions that supplement the profile's system prompt.
-3. **Strand Source** — a single input direction declared as `strand-dir` in the frontmatter. This can be a filesystem path (normal knots) or an `event:` URI (event consumer knots). The tie-off output path is **statically derived** as `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` (under the runtime tree — see **Runtime Tree**) — no `tie-off-dir` configuration is needed.
+3. **Strand Source** — a single input direction declared as `strand-dir` in the frontmatter. This can be a filesystem path (normal knots) or an `event:` URI (event consumer knots — the URI is a **subscription descriptor**, not a watched path). Tie-off output is appended to the unified tie-off log `tie-offs/<rig>/tie-offs.log` (under the runtime tree — see **Runtime Tree**) — no `tie-off-dir` configuration is needed.
 
 A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`, and optionally `event-description`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.
 
@@ -110,7 +127,7 @@ An individual attempt within the session resume loop. The first invocation is no
 
 The directory that a knot watches for strand file events. Configured per-knot as `strand-dir` in the knot's YAML frontmatter. This is the directory where raw input files (**strands**) live.
 
-For normal knots this is a filesystem path (e.g. `"project/prds"`). For event consumer knots this is an `event:` URI (e.g. `"event:quality-reviewer:ReviewCompleted"`), which Knot resolves to the dispatch subdirectory `tie-offs/<rig>/{loom-id}/{event-id}/`. In both cases the value is represented internally as a `StrandSource` (see below).
+For normal knots this is a filesystem path (e.g. `"project/prds"`). For event consumer knots this is an `event:` URI (e.g. `"event:quality-reviewer:ReviewCompleted"`) — a **subscription descriptor**: Knot matches emissions from the named producer against it and queues the delivery as a queue entry (Knot 0.63.0+, plan 099); it is **not** resolved to a watched directory (the per-`{event-id}/` dispatch subdirectories retired). In both cases the value is represented internally as a `StrandSource` (see below).
 
 > **Note:** The strand directory is the *knot-level* watch target. It is not the same as the loom directory. The loom directory holds knot definition files; the strand directory holds the files being processed.
 
@@ -130,55 +147,61 @@ A file in a knot's strand directory. When a strand is created, modified, or dele
 
 ---
 
-### Tie-off Directory
+### Unified Tie-Off Log
 
-Statically derived path under `tie-offs/<rig>/{loom-id}/` (in the runtime tree). No longer configurable per-knot (the `tie-off-dir` YAML field has been removed). Each knot writes a single `tie-off-{knot-name}.md` file flat in the loom's tie-off directory that appends all processing events; the event metadata in each section identifies which strand was processed. The directory may also contain **typed subdirectories** for tie-off events (see below).
+One accumulating log at `tie-offs/<rig>/tie-offs.log` (in the runtime tree) holds **every knot's** tie-off sections — the service is the sole writer, appends serialised (Knot 0.63.0+, plan 099; the per-knot `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` files and their `{event-id}/` dispatch subdirectories retired — if an older rig still has them, startup logs `[KNOT][CONFIG]` deprecation diagnostics and the service never reads or writes them again). Each section opens with one structured, greppable header line (`## knot=… event=… [event-id=…] strand=… timestamp=… [session=…] [source=…] [original-strand=…]`); emitted event blocks are slimmed in the log to one `- event-audit id=… occurred=… reason=… timestamp=…` line each (no payload bodies). Read norm: **query, never whole-file read** — grep for the knot's header line, then read just that section. The git commit (body + `session:` / `event:` / `source:` / `original_strand:` trailers) stays the fidelity source; `pi --session-id` gives the full narrative. Git is the rotation.
 
 ---
 
 ### Tie-off Events
 
-The event dispatch pipeline has **two distinct artifacts** that are easy to confuse:
+The event delivery pipeline has **three distinct artifacts** that are easy to confuse (Knot 0.63.0+, plan 099):
 
-1. **Event blocks in the producer's tie-off body** — ```markdown fenced code blocks that the producer agent writes inside its own `tie-off-{knot-name}.md`. These are the producer's *declaration* that an event occurred. The producer writes these because Knot injected event-emission instructions into its prompt.
+1. **Event blocks in the producer's tie-off (commit body)** — ```markdown fenced code blocks that the producer agent writes in its final response. These are the producer's *declaration* that an event occurred. The producer writes these because Knot injected event-emission instructions into its prompt. The full blocks persist in the producer's **git commit body** (the fidelity source).
 
-2. **Dispatched event strand files** — separate `.md` files that Knot *creates automatically* in the consumer's dispatch directory (`tie-offs/<rig>/{consumer-loom-id}/{event-id}/`). These are created by Knot's event parser reading the producer's tie-off, not written by the producer agent itself.
+2. **Queue entries** (`tie-offs/<rig>/events/*.json`, `kind: "Event"`) — the deliveries, one **per subscriber**, with the payload embedded in a `delivery` object (`event_id`, `producer_knot`, `producer_loom`, `original_strand?`, `body?`, `payload`). The entry's `strand_path` is the synthetic descriptor `event:<producer-knot>/<event-id>`, not a file path. These are **transient**: removed once the consumer's run completes. The consumer's prompt receives the rendered delivery in place of a file to read.
 
-The producer **never writes to the dispatch directory directly**. The producer writes event blocks in its tie-off; Knot reads those blocks and creates the dispatched strand files that the consumer watches.
+3. **Slim audit lines** (`- event-audit id=… occurred=… reason=… timestamp=…`) — the producer-side record in `tie-offs.log`; no payload. Fast acknowledgement checks (`grep 'event-audit id=SomeEvent'`).
+
+The producer **never queues anything itself**. The flow is:
 
 ```text
-Producer agent writes event block in tie-off:
-  tie-offs/<rig>/producer-loom/tie-off-producer.md
-    └── (body contains) ```markdown block with event: SomeEvent
+Producer agent writes event block in its tie-off (final response):
+    (full ```markdown block with event: SomeEvent)
 
-          ↓  Knot parses tie-off after agent completes
+          ↓  Knot commits the run (commit body carries the block +
+             session:/event:/source:/original_strand: trailers)
+          ↓  and appends the section to tie-offs.log
+             (event blocks slimmed to `- event-audit …` lines)
 
-Knot creates dispatched strand file:
-  tie-offs/<rig>/consumer-loom/SomeEvent/event-1750000000.md
-    └── (standalone file — consumer watches this directory)
+Knot parses the blocks and queues directly — one payload-bearing
+  Event-kind entry per subscriber (EventsDispatched log line):
+  tie-offs/<rig>/events/{timestamp}-{rand}.json
 
-          ↓  File watcher fires
+          ↓  queue entry processed
 
-Consumer agent processes the strand file.
+Consumer agent runs from the queue entry — the delivery is rendered
+  into its prompt (no dispatched file is written or read).
 ```
 
-**Dynamic routing (current):** A consumer knot declares its subscription using an `event:` URI in its `strand-dir` (e.g. `event:quality-reviewer:ReviewCompleted`). Knot resolves this to `tie-offs/<rig>/{loom-id}/{event-id}/`, creates the directory, and watches it. When the producer emits a matching event, Knot creates an event file in that directory, triggering the consumer.
+**Dynamic routing (current):** A consumer knot declares its subscription using an `event:` URI in its `strand-dir` (e.g. `event:quality-reviewer:ReviewCompleted`). The URI is a subscription descriptor — nothing is created or watched on disk for it. When the producer emits a matching event, Knot queues one `Event`-kind entry for the subscriber.
 
-**Multi-event emission:** A single producer knot can emit **multiple events** in one tie-off — one indented event block per event type (e.g. `PlanCreated`, `ScopeChanged`, `GoalsApproved`). Each event block is independently parsed and dispatched to its matching consumers. If no events occurred, the producer emits `event: None`.
+**Multi-event emission:** A single producer knot can emit **multiple events** in one tie-off — one indented event block per event type (e.g. `PlanCreated`, `ScopeChanged`, `GoalsApproved`). Each event block is independently parsed and queued to its matching subscribers (one entry per subscriber per emission). If no events occurred, the producer acknowledges each subscriber event with `occurred: false`.
 
-**Static routing (legacy):** A producing knot writes event files directly into a typed subdirectory. A consuming knot points its `strand-dir` at that subdirectory using a filesystem path. This pattern still works but is superseded by dynamic routing.
+**Static routing (legacy, retired by plan 099):** A producing knot wrote event files directly into a typed subdirectory that a consuming knot's `strand-dir` pointed at via a filesystem path. Pre-0.63.0 rigs may still contain these artefacts; the service deprecates-and-warns at startup but neither reads nor writes them.
 
 **Layout:**
 
 ```
-tie-offs/<rig>/<loom-id>/
-├── tie-off-<knot-name>.md    ← append-only log (always present)
-├── tie-off-<another-knot>.md  ← another knot's tie-off (flat)
-└── <event-id>/                ← event dispatch subdirectory (created by Knot)
-      └── <event-file>.md      ← dispatched event strand for consumers
+tie-offs/<rig>/
+├── state.json               ← runtime state snapshot
+├── knot-service.log         ← service log (appended across runs)
+├── tie-offs.log             ← unified tie-off log (every knot's sections)
+└── events/                  ← transient queue
+      └── {timestamp}-{rand}.json   ← filesystem entries + Event-kind deliveries
 ```
 
-**Why tie-off directories?** The PRDs define a clean separation: the rig directory holds workflow definitions; the runtime tree holds derived state. Placing events in the runtime tree keeps the rig directory pure (only loom definitions and profiles) and places events in the correct output namespace.
+**Why the runtime tree?** The PRDs define a clean separation: the rig directory holds workflow definitions; the runtime tree holds derived state. Placing runtime artefacts in the runtime tree keeps the rig directory pure (only loom definitions and profiles) and places runtime data in the correct output namespace.
 
 ---
 
@@ -192,13 +215,13 @@ Knot enforces that a knot which was asked to emit subscriber events actually **a
 
 The service's single consolidated log (Knot 0.41.0+): one line per record on the service's stderr — `[KNOT][EVENT]` lines (one per domain event: loom lifecycle, strand processing, timeouts, queue idle) and `[KNOT][STATE]` lines (one per actual `state.json` write). The `knot-start` skill appends the service stderr to `tie-offs/<rig>/knot-service.log` in the runtime tree, making it the durable operational record across restarts. Run activity is in-memory per process — the pre-0.41.0 per-run JSONL files (`.loom-log` per loom, `.rig-log` at the rig level, both cleared at startup) are gone; nothing is cleared at startup anymore, and legacy files left by a 0.31.0 migration are inert.
 
-The tie-off files remain the durable audit record of completed work; the service log is the durable record of *operations*.
+The unified tie-off log (`tie-offs.log`) plus the per-run git commits remain the durable audit record of completed work; the service log is the durable record of *operations*.
 
 ---
 
 ### Knot-state
 
-A per-knot file that records processing events and status for that knot. Contains event type, strand path, tie-off path, and any errors. Knot status is readable from this file and is also included in `tie-offs/<rig>/state.json`.
+The per-knot entry inside `tie-offs/<rig>/state.json` (`looms[].knots[]`) that records processing status for that knot: status, last strand path, last tie-off path (the unified `tie-offs.log` since Knot 0.63.0), last error, and last event time. Knot status is readable from `state.json` alone — there are no per-knot state files.
 
 ---
 
@@ -233,7 +256,7 @@ A background task that periodically derives the rig's state and writes it to `ti
 
 ### Runtime Tree
 
-The rig's project-side runtime tree at `tie-offs/<rig-basename>/` in the project root (default rig: `tie-offs/rig/`). Holds **all runtime data** the rig produces or consumes: tie-off directories per loom, the appended service log (`knot-service.log`), the disk-backed event queue (`events/`), and the state snapshot (`state.json`). The runtime root is derived as `<project-root>/tie-offs/<rig-basename>/`, so multiple named rigs in one project are namespaced and collision-free.
+The rig's project-side runtime tree at `tie-offs/<rig-basename>/` in the project root (default rig: `tie-offs/rig/`). Holds **all runtime data** the rig produces or consumes: the unified tie-off log (`tie-offs.log`), the appended service log (`knot-service.log`), the disk-backed event queue (`events/`), and the state snapshot (`state.json`) — and nothing else since Knot 0.63.0 (plan 099; the per-loom tie-off directories retired). The runtime root is derived as `<project-root>/tie-offs/<rig-basename>/`, so multiple named rigs in one project are namespaced and collision-free.
 
 The runtime tree is **project output and audit data** — it is committed with the project's git history (Knot folds it into its per-knot-run commits). It is deliberately **not** inside the rig directory: the rig holds only reusable source (looms, knots, profiles, config) and is versioned in its own git repository.
 
@@ -242,6 +265,11 @@ The runtime tree is **project output and audit data** — it is committed with t
 ### Events Directory
 
 The disk-backed event queue at `tie-offs/<rig>/events/` (in the runtime tree). Each pending strand event is stored as a single JSON file named `{unix_timestamp_ms}-{4-hex-chars}.json`. The directory is flat (no subdirectories) and files are ordered by filename sort (FIFO). The disk **is** the queue — there is no separate in-memory index.
+
+Entries come in **two kinds** (Knot 0.63.0+, plan 099):
+
+- **Filesystem entries** — `kind` is `Created`, `Modified`, or `Deleted`; `strand_path` points at a real strand file (the entry is a pointer, the file holds the message).
+- **Event entries** — `kind` is `Event`; the entry **is** the message. It carries the emitted payload in a `delivery` object and its `strand_path` is the synthetic descriptor `event:<producer-knot>/<event-id>` (never a filesystem path — nothing is stat-ed at it).
 
 **Lifecycle:**
 - A file is created when an event is pushed (atomic: write to `.json.tmp`, then rename to `.json`)
@@ -265,6 +293,31 @@ The disk-backed event queue at `tie-offs/<rig>/events/` (in the runtime tree). E
 }
 ```
 
+An `Event`-kind entry additionally carries `delivery` (absent for the
+filesystem kinds):
+
+```json
+{
+  "id": "1750000000001-b2c3",
+  "kind": "Event",
+  "loom_id": "planning-loom",
+  "knot_id": "prd-planner",
+  "strand_path": "event:goals-review/GoalsApproved",
+  "queued_at": "2026-07-21T10:31:00+01:00",
+  "delivery": {
+    "event_id": "GoalsApproved",
+    "producer_knot": "goals-review",
+    "producer_loom": "review-loom",
+    "original_strand": "project/prds/goals.md",
+    "body": "Goals approved after the second review pass.",
+    "payload": { "description": "Goals approved", "plan": "PLAN-001" }
+  }
+}
+```
+
+(`loom_id` / `knot_id` name the **consumer** — who the entry will run;
+`original_strand` and `body` are optional.)
+
 ---
 
 ### StrandSource
@@ -274,7 +327,7 @@ The single input-direction primitive for a knot. Replaces the previous dual-inpu
 Two variants:
 
 - **Filesystem** — a plain directory path (e.g. `"project/prds"`). The knot watches that directory for strand files. This is the common case.
-- **EventUri** — an `event:` URI of the form `event:<target>:<EventId>`. The target can be either a **knot ID** (knot-level subscription) or a **loom ID** (loom-level subscription, target ends with `-loom`). Knot resolves this to the dispatch subdirectory `tie-offs/<rig>/{loom-id}/{event-id}/` and watches it.
+- **EventUri** — an `event:` URI of the form `event:<target>:<EventId>`. The target can be either a **knot ID** (knot-level subscription) or a **loom ID** (loom-level subscription, target ends with `-loom`). The URI is a **subscription descriptor**: Knot matches the producer's emissions against it and queues one `Event`-kind entry per subscriber when the event occurs (Knot 0.63.0+; the old resolution to a watched `tie-offs/<rig>/{loom-id}/{event-id}/` dispatch subdirectory retired).
 
   - **Knot-level** — `event:<producer-knot-id>:<EventId>` (e.g. `event:plan-creator:PlanCreated`). Only events emitted by the specific named knot match. Only that knot receives event injection in its prompt.
   - **Loom-level** — `event:<producer-loom-id>:<EventId>` (e.g. `event:planning-loom:PlanCreated`). Events emitted by **any knot** in the named loom match. **Every knot** in the loom receives event injection in its prompt, so any of them can emit the event.
@@ -293,14 +346,14 @@ Project root
  │     ├── profiles/ (shared agent profile definitions)
  │     └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
  │           └── Knot definition files (first-level `.md` files)
+ ├── Shim Rig (`./rig/` + `external-rig:` key) — workflow served from an
+ │     external rig directory; local rig keeps config (models.yml,
+ │     .workspace-agent-config.yaml) and the runtime tree only
  └── Runtime tree (`./tie-offs/<rig>/`) — project output, committed with project git
        ├── state.json (complete state snapshot — written on state change)
        ├── knot-service.log (consolidated service log — `[KNOT][EVENT]` / `[KNOT][STATE]`, appended across runs by knot-start)
-       ├── events/ (disk-backed event queue — `{timestamp-ms}-{hex}.json` files)
-       └── <loom-id>/
-             ├── tie-off-<knot-name>.md (tie-off output, appended per event)
-             └── <event-id>/ (event dispatch subdirectory — dynamic a2a comms)
-                   └── <event-file>.md (dispatched event strand for consumers)
+       ├── tie-offs.log (unified tie-off log — every knot's sections)
+       └── events/ (disk-backed event queue — `{timestamp-ms}-{hex}.json` files, filesystem + Event-kind entries)
 ```
             ├── Agent Profile
             │     ├── LLM Provider
@@ -310,6 +363,6 @@ Project root
             ├── Markdown Body (task-specific instructions)
             └── StrandSource (required — single input direction)
                   ├── Filesystem (plain path — e.g. "project/prds")
-                  └── EventUri (event:<producer>:<EventId> — resolved to runtime-tree dispatch dir)
+                  └── EventUri (event:<producer>:<EventId> — subscription descriptor; deliveries are queue entries)
             └── event-description (optional — semantic description injected into producer prompt)
 ```

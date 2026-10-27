@@ -4,8 +4,8 @@ description: "Start, stop, restart, and supervise the Knot service the way an ag
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.0.0"
-  compatibility: "Knot 0.39.0+"
+  version: "1.1.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Start Skill
@@ -117,6 +117,25 @@ the wrong place (or create a stray `rig/`).
 
 ---
 
+## Shim Rig Startup (Knot 0.64.0)
+
+If the rig's `.workspace-agent-config.yaml` sets `external-rig: <path>`,
+the service resolves the **effective rig** at startup before anything is
+wired:
+
+- **Valid shim** — the startup log carries
+  `[KNOT][CONFIG] shim rig active — workflow served from external rig '<path>'`;
+  any local looms/profiles the shim ignores are listed with
+  `[KNOT][CONFIG] WARNING: shim rig ignores …` lines. The rig watch
+  follows the external directory, so external edits hot-reload live.
+- **Broken shim** — a missing / non-directory / unreadable / empty path
+  is a **hard error**: nothing starts, `[KNOT][CONFIG] ERROR …` names
+  the path and the config file, and the exit is non-zero. Check the
+  `external-rig` value and the external directory before restarting.
+
+The runtime tree (`tie-offs/<rig>/`) and the service log stay
+project-local either way.
+
 ## What the Service Writes
 
 | Path | Written by | Content | Lifetime |
@@ -124,7 +143,8 @@ the wrong place (or create a stray `rig/`).
 | `tie-offs/<rig>/knot-service.log` | the launcher (**this skill**) | the service's stderr/stdout — single-line `[KNOT][EVENT]` / `[KNOT][STATE]` records plus startup/shutdown traces | **append across runs** |
 | `tie-offs/<rig>/knot-service.pid` | this skill | background PID | until stopped |
 | `tie-offs/<rig>/state.json` | Knot (on state change) | rig snapshot (looms, knots, profiles) | rewritten only when the state actually changes |
-| `tie-offs/<rig>/events/*.json` | Knot | pending event queue | survives restarts |
+| `tie-offs/<rig>/tie-offs.log` | Knot (on each tie-off) | the unified tie-off log — every knot's sections appended (the per-knot tie-off files retired in 0.63.0) | **append across runs** |
+| `tie-offs/<rig>/events/*.json` | Knot | pending event queue (filesystem entries + payload-bearing `Event` deliveries) | survives restarts |
 
 (Pre-0.41.0 Knots also wrote `tie-offs/<rig>/.rig-log` and
 `tie-offs/<rig>/{loom-id}/.loom-log` JSONL files; since plan 083 those

@@ -59,6 +59,56 @@ date, and migration instructions for affected document types.
 
 ---
 
+### Shim Rig — Externalised Workflow Rig (Knot 0.64.0, 2026-10-27)
+
+**What changed:** a rig can now be a **shim** — a thin project-side rig
+whose workflow is served from an **external rig** directory. One new
+optional key in `rig/.workspace-agent-config.yaml`:
+
+```yaml
+external-rig: shared/factory-rig   # absolute, ~/..., or relative to the project root
+```
+
+When the key is set:
+
+1. **Whole-rig import** — looms, knot files, and agent profiles are
+   loaded from the external rig. There is no per-loom/per-profile
+   selection and **no overriding**: local looms and profiles in the
+   shim rig are **ignored**, each listed in a `[KNOT][CONFIG]`
+   startup warning.
+2. **Project-side config stays local** — `models.yml`, the
+   `agent-adapter` / instruction-file keys, and `knot-template/`
+   overrides always come from the local rig. The external rig's own
+   `models.yml` / `.workspace-agent-config.yaml` are never loaded.
+   External profiles' `model-ref` aliases resolve against the
+   consuming project's registry.
+3. **Hard fail** — a missing / non-directory / unreadable / empty
+   `external-rig` value is a startup error: nothing starts, the
+   `[KNOT][CONFIG] ERROR` diagnostic names the path and the config
+   file, exit is non-zero. No silent fallback to the local rig.
+4. **Identity and runtime tree stay local** — `tie-offs/<rig-basename>/`
+   is keyed by the local rig directory; `state.json` gains an
+   `external_rig` provenance field (absent for plain rigs).
+5. **Hot-reload follows the external rig** — edits, new looms, and
+   knot changes in the external rig are picked up live, as with a
+   local rig. Relative `strand-dir` paths still resolve against the
+   consuming project root.
+6. **`knot share` on a shim** packs the external rig's contents
+   under the local rig's name (with a CLI note); a broken shim
+   reference fails the share.
+
+**Affected documents:** `rig/.workspace-agent-config.yaml` only (new
+optional key). Knots, looms, and profiles are unchanged — a workflow
+that was a local rig can be moved to an external directory verbatim.
+
+**Migration:** none required. Rigs without the key behave exactly as
+before. To adopt: move (or clone) the shared workflow rig to its
+shared location, add `external-rig: <path>` to each consuming
+project's rig config, and remove or accept-the-warning any local
+looms/profiles the shim now ignores.
+
+---
+
 ### Unified Tie-Off Log + Direct Event Queueing (Knot 0.63.0, 2026-10-24)
 
 **What changed:** a hard cutover of the rig's *runtime* tree (no config flag —

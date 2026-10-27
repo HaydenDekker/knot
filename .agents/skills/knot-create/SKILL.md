@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.9.0"
-  compatibility: "Knot 0.41.0+"
+  version: "5.10.0"
+  compatibility: "Knot 0.63.0+"
 ---
 
 # Knot Create Skill
@@ -42,6 +42,18 @@ No registration needed.
 - Profiles: any `.md` file in `rig/profiles/` is parsed as a profile.
   Profiles are read fresh from disk at processing time.
 
+### Shim Rig (Knot 0.64.0)
+
+If `rig/.workspace-agent-config.yaml` sets `external-rig: <path>`, the
+rig is a **shim**: looms, knot files, and profiles are served from the
+external rig directory. Create and edit workflow files in the **external**
+rig — local `*-loom/` dirs and `profiles/*.md` in the shim are **ignored**
+(each listed in a `[KNOT][CONFIG]` startup warning). Project-side config
+(`models.yml`, adapter keys, instruction links) stays in the local rig;
+external profiles' `model-ref` aliases resolve against the local
+`models.yml`. There is no overriding — the two sides are disjoint. See
+the `knot-update` changelog (0.64.0) for the full contract.
+
 ### Git-Friendly
 
 All configuration is plain files tracked by git. Changes are visible
@@ -75,10 +87,8 @@ Project root
  └── Runtime tree (`./tie-offs/<rig>/`) — project output, committed with project git
        ├── state.json              ← runtime state snapshot (auto-generated)
        ├── knot-service.log        ← service log (appended by the launcher)
-       └── {loom-id}/
-             ├── tie-off-{knot-name}.md  ← append-only log
-             └── {event-id}/               ← dispatch subdirectory
-                   └── {event}.md          ← dispatched event strand
+       ├── tie-offs.log            ← unified tie-off log (every knot's sections)
+       └── events/                 ← transient event queue (`*.json` entries)
 ```
 
 - A **rig** is the top-level container for all looms and profiles. It
@@ -98,10 +108,14 @@ Project root
   (name, provider, model, tools, timeout) and the markdown body contains
   the agent's system prompt (persona instructions). Multiple knots can
   reference the same profile.
-- **Event dispatch** subdirectories are created automatically by Knot
-  inside `tie-offs/<rig>/{loom-id}/{EventId}/` when a consumer knot uses
-  an `event:` URI in its `strand-dir`. These carry dispatched event
-  files that trigger consumer knots.
+- **Event delivery** (Knot 0.63.0+, plan 099): when a consumer knot
+  uses an `event:` URI in its `strand-dir`, the URI is a **subscription
+  descriptor** — it is not a watched path. When the producer emits the
+  event, Knot queues a payload-bearing `Event`-kind entry per subscriber
+  in `tie-offs/<rig>/events/`; the consumer runs from that entry. The
+  per-`{EventId}/` dispatch subdirectories (and the per-knot
+  `tie-off-{knot-name}.md` files) retired — `tie-offs.log` is the one
+  tie-off log for every knot.
 
 ---
 
@@ -242,9 +256,10 @@ A loom is created by making a directory (ending in `-loom`) and writing
    (e.g. `event:planning-loom:PlanCreated`) — or does it read from a
    normal filesystem directory?"
    If the knot consumes events, set `strand-dir` to the `event:` URI
-   and optionally add `event-description`. Knot will create and watch
-   the dispatch directory automatically. For loom-level subscriptions,
-   the target must end in `-loom`.
+   and optionally add `event-description`. The URI is a subscription
+   descriptor — nothing is created or watched on disk for it; the
+   consumer runs from its queue entry when the producer emits. For
+   loom-level subscriptions, the target must end in `-loom`.
 
 6. **Write knot definition files** inside the loom directory.
    For a single knot named `goals-review`:
@@ -280,8 +295,9 @@ When asked to add a knot to an existing loom:
    loom?"
    If so, set `strand-dir` to the `event:` URI and optionally add
    `event-description`. For loom-level subscriptions, the target must
-   end in `-loom`. Knot will create and watch the dispatch directory
-   automatically.
+   end in `-loom`. The URI is a subscription descriptor — the consumer
+   runs from its queue entry when the producer emits (no dispatch
+   directory is created).
 
 4. **Write the knot file** as `{knot-name}.md` inside the loom
    directory (e.g. `rig/prd-review-loom/non-goals-review.md`):
@@ -398,15 +414,16 @@ will reject such files with a `KnotParseWarning`.
 - `strand-dir` is **relative to the project root**
   (the directory containing the `rig/` folder).
 - Absolute paths are used as-is.
-- Tie-off paths are statically derived:
-  `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md`
+- Tie-off sections are appended to the unified log:
+  `tie-offs/<rig>/tie-offs.log` (Knot 0.63.0+, plan 099 — the per-knot
+  `tie-offs/<rig>/{loom-id}/tie-off-{knot-name}.md` files retired).
 
 ### Event Routing
 
 Knots that consume events from other knots use an `event:` URI in their
 `strand-dir` field. This is the single input-direction primitive —
 each knot has exactly **one** `strand-dir`, whether it reads from the
-filesystem or from event dispatch.
+filesystem or subscribes to events.
 
 **Event URI format:**
 
@@ -518,28 +535,28 @@ event: None
 ```
 
 The producer writes the event block in its tie-off. Knot parses it,
-matches to consumer `event:` URIs, and creates event files in each
-consumer's dispatch directory (`tie-offs/<rig>/{loom-id}/{event-id}/`).
+matches it to consumer `event:` URIs, and queues one payload-bearing
+`Event`-kind entry per matching subscriber in `tie-offs/<rig>/events/`
+(Knot 0.63.0+; the per-consumer dispatch directories retired).
 
 **How it works:**
 
 1. Consumer sets `strand-dir` to an `event:` URI
    (`event:<producer-target>:<EventId>`), where `<producer-target>`
    is either a knot name (knot-level) or a loom name ending in
-   `-loom` (loom-level).
+   `-loom` (loom-level). The URI is a subscription descriptor — nothing
+   is created or watched on disk for it.
 2. Consumer optionally provides `event-description` for the semantic
    contract injected into the producer's prompt.
-3. Knot creates and watches the dispatch directory:
-   `tie-offs/<rig>/{loom-id}/{event-id}/`.
-4. Before a producer knot runs, Knot injects event instructions into
+3. Before a producer knot runs, Knot injects event instructions into
    its prompt (grouped by `event-id`, deduplicated across consumers):
    - For **knot-level** subscriptions: instructions are injected only
      into the named producer knot's prompt.
    - For **loom-level** subscriptions: instructions are injected into
      **every knot** within the subscribed-to loom.
-5. Producer emits a structured event block in its tie-off
+4. Producer emits a structured event block in its tie-off
    (`event: EventId` or `event: None`).
-6. Knot parses the tie-off and matches events:
+5. Knot parses the tie-off and matches events:
    - **Knot-level**: `target == producer_knot_id` → match.
    - **Loom-level**: `target == producer_loom_id` (target ends in
      `-loom`) → match. If the target matches both a knot name and
@@ -547,26 +564,29 @@ consumer's dispatch directory (`tie-offs/<rig>/{loom-id}/{event-id}/`).
    - **Wildcard**: `target == *` → match any producer.
    - **Rig-level** (system events): `target == rig_id` → match a
      rig-scoped event such as `QueueIdle`.
-7. Matching events create files in each consumer's dispatch directory.
+6. Matching events queue one `Event`-kind entry per consumer in
+   `tie-offs/<rig>/events/` with the payload embedded in the entry's
+   `delivery` object; the consumer's run receives the rendered
+   delivery in its prompt.
 
 **Layout:**
 
 ```
-tie-offs/<rig>/<loom-id>/
-├── tie-off-<knot-name>.md      ← append-only log (always present)
-├── tie-off-<another-knot>.md   ← another knot's tie-off (flat)
-└── <EventId>/                ← dispatch subdirectory (created by Knot)
-      └── <event-file>.md      ← dispatched event strand for consumers
+tie-offs/<rig>/
+├── state.json
+├── tie-offs.log             ← unified tie-off log (every knot's sections)
+└── events/                  ← transient queue
+      └── {timestamp}-{rand}.json   ← filesystem + Event-kind entries
 ```
 
 Multiple consumers can subscribe to the same producer event — each gets
-its own dispatch directory in its loom's tie-off directory.
+its own queue entry.
 
 **Loom-level vs knot-level — dispatch behaviour:**
 
-Both subscription levels write event files to the *same* dispatch
-directory (`tie-offs/<rig>/{consumer-loom-id}/{event-id}/`). The only
-difference is *which producers match*:
+Both subscription levels queue into the *same* events queue
+(`tie-offs/<rig>/events/`). The only difference is *which producers
+match*:
 
 - **Knot-level**: only the named knot's events match.
 - **Loom-level**: events from *any* knot in the named loom match.
@@ -577,8 +597,9 @@ receives the event once regardless of how many subscriptions matched.
 
 ### System Events (subscribable, 0.41.0+)
 
-Every system event Knot writes to the loom-log / rig-log is also
-dispatched to subscriber knots — not just the agent-emitted events
+Every system event Knot records to the service log is also
+queued as a delivery to subscriber knots — not just the agent-emitted
+events
 above. A system event is a terminal or lifecycle fact about a run
 (recorded whether or not the agent chose to emit it). Subscribe to one
 with the same `event:` URI grammar; the producer token is the emitting
@@ -597,7 +618,7 @@ noted, a `session-id`). Config/lifecycle events carry no `strand-path`
 | `KnotFailed` | The run failed (config error, agent failure, non-timeout) | `error` |
 | `KnotCompleted` | The run succeeded | — |
 | `KnotEventsMissing` | The run produced no expected events | `expected-events` |
-| `TimeoutExceeded` | The run exceeded its timeout (knot-scoped despite living in the rig-log) | `error`, `session-id` |
+| `TimeoutExceeded` | The run exceeded its timeout (knot-scoped despite living in the service log) | `error`, `session-id` |
 
 **Run outcome — loom-scoped** (producer = loom ID):
 
@@ -676,9 +697,9 @@ Investigate and record a knot failure.
 ```
 
 `EventsDispatched` is **not** dispatchable — it records the act of
-dispatching, and dispatching it to subscribers would require recording
-its own dispatch. Subscribers who need "a dispatch happened" can watch
-the loom-log instead.
+queueing deliveries, and dispatching it to subscribers would require
+recording its own dispatch. Subscribers who need "a dispatch happened"
+can watch the service log instead.
 
 ### Example Project Layout
 
@@ -695,12 +716,8 @@ project_root/              ← strand-dir resolves from here
 │       └── refactor-planner.md  ← strand-dir: "event:quality-reviewer:ReviewCompleted"
 └── tie-offs/rig/          ← runtime tree (committed with project git)
     ├── state.json
-    ├── prd-review-loom/
-    │   └── tie-off-prd-goals-review.md
-    └── planning-loom/
-        ├── tie-off-refactor-planner.md
-        └── ReviewCompleted/  ← dispatch dir (auto-created by Knot)
-            └── event-2026-07-10T12-00-00.md
+    ├── tie-offs.log       ← unified tie-off log (every knot's sections)
+    └── events/            ← transient queue (filesystem + Event-kind entries)
 ```
 
 ---
