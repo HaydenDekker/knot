@@ -333,6 +333,21 @@ pub struct RigAgentConfig {
         default = "default_none_string"
     )]
     pub deprecated_event_content_instruction_file: Option<String>,
+    /// Shim rig — externalised workflow rig (plan 100). A local path
+    /// (absolute, `~/...`, or relative to the project root — the
+    /// parent of the local rig directory) whose directory becomes the
+    /// **effective rig**: looms, knot files, and agent profiles are
+    /// served from it. The local rig keeps only project-side config
+    /// (`models.yml`, this file, instruction links) and the runtime
+    /// tree. Local looms/profiles in a shim rig are ignored (with a
+    /// startup warning each); an unresolvable path is a hard startup
+    /// error — the service never silently falls back to the local rig.
+    /// `None` (key absent) → plain local rig, unchanged behaviour.
+    #[serde(
+        rename = "external-rig",
+        default = "default_none_string"
+    )]
+    pub external_rig: Option<String>,
 }
 
 fn default_agent_adapter() -> AgentAdapter {
@@ -357,6 +372,7 @@ impl RigAgentConfig {
             tie_off_content_instruction_file: None,
             deprecated_tie_off_instruction_file: None,
             deprecated_event_content_instruction_file: None,
+            external_rig: None,
         }
     }
 
@@ -1710,6 +1726,7 @@ mod tests {
             tie_off_content_instruction_file: None,
             deprecated_tie_off_instruction_file: None,
             deprecated_event_content_instruction_file: None,
+            external_rig: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
@@ -1771,6 +1788,7 @@ mod tests {
             tie_off_content_instruction_file: None,
             deprecated_tie_off_instruction_file: None,
             deprecated_event_content_instruction_file: None,
+            external_rig: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("inactivity-timeout-seconds: 45"));
@@ -1786,6 +1804,7 @@ mod tests {
             tie_off_content_instruction_file: None,
             deprecated_tie_off_instruction_file: None,
             deprecated_event_content_instruction_file: None,
+            external_rig: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"inactivity-timeout-seconds\":0"));
@@ -3076,6 +3095,7 @@ mod tests {
             tie_off_content_instruction_file: None,
             deprecated_tie_off_instruction_file: None,
             deprecated_event_content_instruction_file: None,
+            external_rig: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();
