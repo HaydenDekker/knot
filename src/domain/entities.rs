@@ -1010,6 +1010,7 @@ mod tests {
     fn rig_state_construction() {
         let state = RigState {
             rig_path: "/path/to/rig".to_string(),
+            external_rig: None,
             looms: vec![RigStateLoom {
                 id: "my-loom".to_string(),
                 knots: vec![RigStateKnot {
@@ -1048,6 +1049,7 @@ mod tests {
     fn rig_state_serialization_roundtrip() {
         let state = RigState {
             rig_path: "/path/to/rig".to_string(),
+            external_rig: None,
             looms: vec![RigStateLoom {
                 id: "prds-loom".to_string(),
                 knots: vec![RigStateKnot {
@@ -1080,6 +1082,7 @@ mod tests {
     fn rig_state_serialization_omits_null_fields() {
         let state = RigState {
             rig_path: "/rig".to_string(),
+            external_rig: None,
             looms: vec![RigStateLoom {
                 id: "loom".to_string(),
                 knots: vec![RigStateKnot {
@@ -1105,6 +1108,7 @@ mod tests {
     fn rig_state_empty() {
         let state = RigState {
             rig_path: "/empty/rig".to_string(),
+            external_rig: None,
             looms: vec![],
             profiles: vec![],
             strand_queue: vec![],
@@ -1214,6 +1218,7 @@ mod tests {
 
         let state = RigState {
             rig_path: "/rig".to_string(),
+            external_rig: None,
             looms: vec![],
             profiles: vec![],
             strand_queue: queue.clone(),
@@ -1232,6 +1237,7 @@ mod tests {
     fn rig_state_empty_queue_serialises_as_empty_array() {
         let state = RigState {
             rig_path: "/rig".to_string(),
+            external_rig: None,
             looms: vec![],
             profiles: vec![],
             strand_queue: vec![],
@@ -1250,6 +1256,7 @@ mod tests {
     fn rig_state_multiple_looms_and_knots() {
         let state = RigState {
             rig_path: "/multi".to_string(),
+            external_rig: None,
             looms: vec![
                 RigStateLoom {
                     id: "loom-a".to_string(),
