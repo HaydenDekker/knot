@@ -60,6 +60,11 @@ pub struct AppContext {
     /// Rig directory path — used by discover and config endpoints.
     /// Holds reusable rig source only (no runtime data).
     pub rig_dir: PathBuf,
+    /// Effective rig directory (shim rig — plan 100) — the
+    /// directory the workflow (looms, knot files, profiles) is
+    /// served from. Equals `rig_dir` for a plain local rig; the
+    /// resolved `external-rig` path for a shim rig.
+    pub effective_rig_dir: PathBuf,
     /// Project-side runtime root — `tie-offs/<rig-basename>/` under the
     /// project root. Holds all runtime artifacts (tie-offs, dispatch
     /// dirs, loom-logs, state.json, .rig-log, events/).
@@ -94,6 +99,14 @@ pub struct AppContext {
 pub struct AppConfig {
     /// Rig directory for filesystem adapters.
     pub rig_dir: PathBuf,
+    /// Effective rig directory — the directory the workflow (looms,
+    /// knot files, profiles) is actually served from. Equals
+    /// `rig_dir` for a plain local rig; for a **shim rig** (plan
+    /// 100) it is the resolved `external-rig` path. Resolved at
+    /// startup by [`resolve_shim_rig_dir`]; the local `rig_dir`
+    /// keeps identity, project-side config (`models.yml`, the
+    /// config file, instruction links) and the runtime tree.
+    pub effective_rig_dir: PathBuf,
     /// Rig-level agent configuration.
     pub rig_config: RigAgentConfig,
     /// Timeout for subprocess agent runner.
@@ -113,7 +126,8 @@ impl AppConfig {
             .map(|cwd| cwd.join("rig"))
             .unwrap_or_else(|_| PathBuf::from("./rig"));
         Self {
-            rig_dir,
+            rig_dir: rig_dir.clone(),
+            effective_rig_dir: rig_dir,
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
             cli_path: None,
@@ -126,7 +140,8 @@ impl AppConfig {
     /// (default rig config, 300s agent timeout).
     pub fn with_rig_dir(rig_dir: PathBuf) -> Self {
         Self {
-            rig_dir,
+            rig_dir: rig_dir.clone(),
+            effective_rig_dir: rig_dir,
             rig_config: RigAgentConfig::default_config(),
             agent_timeout: Duration::from_secs(300),
             cli_path: None,
@@ -142,6 +157,36 @@ impl AppConfig {
         self.cli_path = Some(cli_path);
         self
     }
+
+    /// Set the effective rig directory (shim rig — plan 100).
+    ///
+    /// Normally set by the startup resolution in `start_knot`/
+    /// `step_knot`; exposed for tests that want to pin the
+    /// effective directory explicitly.
+    pub fn with_effective_rig_dir(mut self, effective_rig_dir: PathBuf) -> Self {
+        self.effective_rig_dir = effective_rig_dir;
+        self
+    }
+}
+
+/// Resolve the effective rig directory for a local rig directory
+/// (shim rig — plan 100).
+///
+/// Reads the local rig's `.workspace-agent-config.yaml` (falling
+/// back to `fallback`) and resolves the `external-rig` key against
+/// the project root (parent of the local rig dir). `Ok(local)` for
+/// a plain rig; `Ok(external)` for a shim rig; `Err` when the key
+/// is present but unresolvable — the caller must treat that as a
+/// hard startup failure (never a silent fallback to the local rig).
+pub fn resolve_shim_rig_dir(
+    local_rig_dir: &StdPath,
+    fallback: &RigAgentConfig,
+) -> Result<PathBuf, domain::shim_rig::ExternalRigError> {
+    let cfg = load_rig_config(local_rig_dir, fallback.clone());
+    domain::shim_rig::resolve_effective_rig_dir(
+        local_rig_dir,
+        cfg.external_rig.as_deref(),
+    )
 }
 
 /// Load the rig agent configuration from `.workspace-agent-config.yaml`
@@ -279,7 +324,9 @@ pub fn build_app_context(
     let profile_repo: Arc<dyn application::ports::AgentProfileRepository> =
         Arc::new(
             crate::adapters::outbound::FileSystemAgentProfileRepository::new(
-                config.rig_dir.join("profiles"),
+                // Shim rig (plan 100): profiles are workflow source,
+                // served from the effective rig directory.
+                config.effective_rig_dir.join("profiles"),
             ),
         );
 
@@ -403,6 +450,7 @@ pub fn build_app_context(
             rig_config,
             loom_ids: Vec::new(),
             rig_dir: config.rig_dir.clone(),
+            effective_rig_dir: config.effective_rig_dir.clone(),
             runtime_root,
             state_writer,
             git_versioning,
@@ -1216,8 +1264,51 @@ agent-adapter: pi-json
     )
     .with_system_emitter(Arc::clone(&ctx.system_emitter));
 
+    // Shim rig (plan 100): the workflow (looms, knot files,
+    // profiles) is served from the effective (external) rig
+    // directory. Local looms and profiles are ignored — each is
+    // listed at startup so the operator sees exactly what the shim
+    // is not running.
+    let is_shim = ctx.effective_rig_dir != rig_dir;
+    if is_shim {
+        eprintln!(
+            "[KNOT][CONFIG] shim rig active — workflow served from external rig '{}'",
+            ctx.effective_rig_dir.display()
+        );
+        if let Ok(entries) = std::fs::read_dir(rig_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if path.is_dir() && name.ends_with("-loom") {
+                    eprintln!(
+                        "[KNOT][CONFIG] WARNING: shim rig ignores local loom '{name}' (external rig is active)"
+                    );
+                }
+            }
+        }
+        let local_profiles = rig_dir.join("profiles");
+        if local_profiles.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&local_profiles)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().and_then(|e| e.to_str()) == Some("md")
+                {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    eprintln!(
+                        "[KNOT][CONFIG] WARNING: shim rig ignores local profile '{name}' (external rig is active)"
+                    );
+                }
+            }
+        }
+    }
+
     let looms = discover
-        .execute(rig_dir)
+        .execute(&ctx.effective_rig_dir)
         .map_err(|e| {
             std::io::Error::other(e.to_string())
         })?;
@@ -1225,10 +1316,11 @@ agent-adapter: pi-json
     // Register rig directory watch — auto-discover new `*-loom` directories
     // and knot changes within existing looms. Also present in step mode
     // so in-cycle writes (dispatched events, tie-offs) are captured into
-    // the queue.
+    // the queue. Shim rig: the watch follows the effective (external)
+    // rig directory, so external edits hot-reload live.
     ctx.event_source
-        .register_watch(rig_dir.to_path_buf(), WatchType::Rig);
-    if let Err(e) = ctx.event_source.watch(rig_dir) {
+        .register_watch(ctx.effective_rig_dir.clone(), WatchType::Rig);
+    if let Err(e) = ctx.event_source.watch(&ctx.effective_rig_dir) {
         eprintln!("WARNING: failed to watch rig dir: {e}");
     }
 
@@ -1359,7 +1451,27 @@ pub fn start_state_writer(
 /// 2. Drains pipeline tasks with timeout safety net
 /// 3. Writes `LoomStopped` to each loom's activity log
 /// 4. Returns
-pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
+pub async fn start_knot(mut config: AppConfig) -> std::io::Result<()> {
+    // Shim rig (plan 100): resolve the effective rig directory
+    // before anything is wired. An unresolvable `external-rig` is a
+    // hard startup error — nothing starts, the diagnostic names the
+    // path and the declaring config file, and the exit is non-zero.
+    config.effective_rig_dir = match resolve_shim_rig_dir(
+        &config.rig_dir,
+        &config.rig_config,
+    ) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!(
+                "[KNOT][CONFIG] ERROR: {e} — declared in 'external-rig' in '{}'",
+                config.rig_dir
+                    .join(".workspace-agent-config.yaml")
+                    .display()
+            );
+            return Err(std::io::Error::other(e.to_string()));
+        }
+    };
+
     let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
 
     // JoinSet ties the pipeline task lifetimes to the server task.
@@ -1512,9 +1624,27 @@ pub async fn start_knot(config: AppConfig) -> std::io::Result<()> {
 /// sentinel), the `JoinSet` is drained with the 5-second timeout, and
 /// `LoomStopped` is written to each loom-log.
 pub async fn step_knot(
-    config: AppConfig,
+    mut config: AppConfig,
     event_spec: Option<String>,
 ) -> std::io::Result<()> {
+    // Shim rig (plan 100): same hard-fail resolution as the
+    // service — `knot step` runs against the effective rig.
+    config.effective_rig_dir = match resolve_shim_rig_dir(
+        &config.rig_dir,
+        &config.rig_config,
+    ) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!(
+                "[KNOT][CONFIG] ERROR: {e} — declared in 'external-rig' in '{}'",
+                config.rig_dir
+                    .join(".workspace-agent-config.yaml")
+                    .display()
+            );
+            return Err(std::io::Error::other(e.to_string()));
+        }
+    };
+
     let (mut ctx, strand_rx, config_rx) = build_app_context(&config);
     let mut join_set = tokio::task::JoinSet::new();
 
