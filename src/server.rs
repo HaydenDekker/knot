@@ -255,8 +255,27 @@ pub fn build_app_context(
         load_rig_config(&config.rig_dir, config.rig_config.clone());
 
     // Outbound adapters (ports implemented with filesystem / subprocess IO)
+    // Shim rig (plan 100): when the workflow is served from an
+    // external rig, relative knot paths must still resolve against
+    // the consuming project (parent of the LOCAL rig dir) — the
+    // strands belong to the project, not to the external rig's
+    // neighbourhood. Non-shim rigs keep the default (parent of the
+    // scanned rig, canonicalised).
     let loom_repo: Arc<dyn application::ports::LoomRepository> =
-        Arc::new(crate::adapters::outbound::FileSystemLoomRepository::new());
+        if config.effective_rig_dir != config.rig_dir {
+            let local_project_root = config
+                .rig_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| config.rig_dir.clone());
+            Arc::new(
+                crate::adapters::outbound::FileSystemLoomRepository::with_project_root(
+                    local_project_root,
+                ),
+            )
+        } else {
+            Arc::new(crate::adapters::outbound::FileSystemLoomRepository::new())
+        };
 
     // Plan 083: the current run's activity lives in memory — one shared
     // RunActivity behind the loom-log and rig-log ports. Append logs the

@@ -22,12 +22,20 @@ use crate::domain::knot_file as knot_file_parser;
 pub struct FileSystemLoomRepository {
     /// In-memory registry of looms (populated by scan and save).
     looms: Arc<Mutex<HashMap<LoomId, Loom>>>,
+    /// Resolution base for relative `strand-dir` paths (shim rig —
+    /// plan 100). When set, relative knot paths resolve against this
+    /// directory instead of the scanned rig's parent — so a shim rig
+    /// scanning an **external** rig still resolves strands inside the
+    /// consuming project. `None` keeps the default: parent of the
+    /// scanned rig directory.
+    project_root: Option<PathBuf>,
 }
 
 impl Default for FileSystemLoomRepository {
     fn default() -> Self {
         Self {
             looms: Arc::new(Mutex::new(HashMap::new())),
+            project_root: None,
         }
     }
 }
@@ -36,6 +44,17 @@ impl FileSystemLoomRepository {
     /// Create a new empty repository.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a repository with an explicit resolution base for
+    /// relative knot paths (shim rig — plan 100). The base is the
+    /// **consuming project's** root; the scanned rig may be an
+    /// external directory.
+    pub fn with_project_root(project_root: PathBuf) -> Self {
+        Self {
+            looms: Arc::new(Mutex::new(HashMap::new())),
+            project_root: Some(project_root),
+        }
     }
 
     /// Register a single loom in the internal map.
@@ -55,7 +74,10 @@ impl LoomRepository for FileSystemLoomRepository {
 
     fn scan(&self, rig: &Path) -> Result<(Vec<Loom>, Vec<String>), PortError> {
         // Canonicalise the rig directory, then use its parent as the
-        // base for resolving per-knot paths (project root).
+        // base for resolving per-knot paths (project root) — unless
+        // an explicit resolution base was supplied at construction
+        // (shim rig, plan 100: the scanned rig is external, the
+        // strands belong to the consuming project).
         let canonical_rig = fs::canonicalize(rig)
             .map_err(|e| {
                 PortError::RigScanFailed(format!(
@@ -64,9 +86,11 @@ impl LoomRepository for FileSystemLoomRepository {
                     e
                 ))
             })?;
-        let project_root = canonical_rig
+        let default_root = canonical_rig
             .parent()
             .unwrap_or(&canonical_rig);
+        let project_root: &Path =
+            self.project_root.as_deref().unwrap_or(default_root);
 
         let entries =
             fs::read_dir(rig)
