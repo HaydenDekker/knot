@@ -720,6 +720,7 @@ mod tests {
         use crate::domain::entities::{RigStateLoom, RigStateProfile};
         RigState {
             rig_path: "/tmp/rig".into(),
+            external_rig: None,
             looms: Vec::<RigStateLoom>::new(),
             profiles: Vec::<RigStateProfile>::new(),
             strand_queue: Vec::new(),

@@ -1548,6 +1548,7 @@ mod tests {
         // Verify write_state compiles and is callable
         let state = RigState {
             rig_path: "/tmp/rig".to_string(),
+            external_rig: None,
             looms: vec![],
             profiles: vec![],
             strand_queue: vec![],

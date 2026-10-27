@@ -272,6 +272,14 @@ fn shim_discovers_looms_from_external_rig() {
         "rig_path must stay the local shim dir, got: {rig_path}"
     );
 
+    // Provenance (plan 100 phase 4): state.json records the
+    // resolved external rig path.
+    let external_rig = state["external_rig"].as_str().unwrap_or_default();
+    assert!(
+        external_rig.ends_with("shared/factory-rig"),
+        "state.json must record the external rig provenance, got: {state}"
+    );
+
     // Runtime tree is project-local.
     assert!(project.join("tie-offs").join("rig").join("state.json").exists());
 }
@@ -337,5 +345,10 @@ fn plain_rig_without_external_key_is_unaffected() {
     assert!(
         !stderr.contains("shim rig active"),
         "plain rig must not log shim lines, got: {stderr}"
+    );
+    // A plain rig's state.json carries no external_rig field.
+    assert!(
+        state.get("external_rig").is_none(),
+        "plain rig state.json must not carry external_rig: {state}"
     );
 }

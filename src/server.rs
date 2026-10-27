@@ -1414,6 +1414,13 @@ pub fn start_state_writer(
     let model_registry = Arc::clone(&ctx.model_registry);
     let state_writer = Arc::clone(&ctx.state_writer);
     let rig_dir = ctx.rig_dir.clone();
+    // Shim rig provenance (plan 100): Some(external) when the
+    // effective rig differs from the local rig dir.
+    let external_rig = if ctx.effective_rig_dir != ctx.rig_dir {
+        Some(ctx.effective_rig_dir.clone())
+    } else {
+        None
+    };
     let strand_queue = Arc::clone(&ctx.strand_queue);
 
     join_set.spawn(async move {
@@ -1425,7 +1432,8 @@ pub fn start_state_writer(
             state_writer,
             rig_dir,
             strand_queue,
-        );
+        )
+        .with_external_rig(external_rig);
 
         // Write immediately on start so state.json exists right away
         if let Err(e) = use_case.execute() {

@@ -43,6 +43,11 @@ pub struct WriteState {
     model_registry: Arc<dyn ModelRegistryPort>,
     state_writer: Arc<dyn StateWriterPort>,
     rig_dir: PathBuf,
+    /// Shim rig provenance (plan 100): the resolved external rig
+    /// path, `Some` when the rig is a shim. Recorded in
+    /// `state.json`'s `external_rig` field; `None` for a plain
+    /// local rig (field not serialised).
+    external_rig: Option<String>,
     strand_queue: Option<StrandQueueRef>,
     /// The last state actually written to disk (`None` before the first
     /// write of this run). Change-driven writes (plan 083): a tick whose
@@ -74,9 +79,19 @@ impl WriteState {
             model_registry,
             state_writer,
             rig_dir,
+            external_rig: None,
             strand_queue: Some(strand_queue),
             last_written: None,
         }
+    }
+
+    /// Set the shim rig provenance (plan 100) — the resolved
+    /// external rig directory this rig's workflow is served from.
+    /// Builder form so existing constructors stay unchanged.
+    pub fn with_external_rig(mut self, external_rig: Option<PathBuf>) -> Self {
+        self.external_rig =
+            external_rig.map(|p| p.to_string_lossy().to_string());
+        self
     }
 
     /// Build a `RigState` snapshot from current in-memory state.
@@ -155,6 +170,7 @@ impl WriteState {
 
         Ok(RigState {
             rig_path,
+            external_rig: self.external_rig.clone(),
             looms: rig_state_looms,
             profiles: rig_state_profiles,
             strand_queue: strand_queue_entries,

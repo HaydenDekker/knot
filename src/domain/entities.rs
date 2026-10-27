@@ -292,6 +292,12 @@ pub struct TieOff {
 pub struct RigState {
     /// Absolute path to the rig directory.
     pub rig_path: String,
+    /// Shim rig provenance (plan 100): the resolved **external rig**
+    /// path this project's workflow is served from. Absent (`None`,
+    /// not serialised) for a plain local rig — existing consumers
+    /// see an unchanged `state.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_rig: Option<String>,
     /// All registered looms and their knots.
     pub looms: Vec<RigStateLoom>,
     /// All registered agent profiles.

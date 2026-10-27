@@ -313,6 +313,7 @@ mod tests {
     fn base_state() -> RigState {
         RigState {
             rig_path: "/project/rig".into(),
+            external_rig: None,
             updated_at: "2026-09-07T00:00:00Z".into(),
             looms: vec![RigStateLoom {
                 id: "review-loom".into(),
