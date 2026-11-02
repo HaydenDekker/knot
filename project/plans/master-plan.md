@@ -1,6 +1,8 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-10-27 (plan 100 complete — Shim Rig shipped in v0.64.0; section removed per Section Lifetime)
+> **Last Updated:** 2026-11-02 (plan 103 drafted — System-Prompt Appending: standing instructions move from the user prompt to `--append-system-prompt`; frozen per-session prompt artifact; resume re-supply with drift detection)
+> **Prior:** 2026-11-01 (plan 102 complete — Split Tie-Off and Event-Content Instructions shipped in v0.65.0: the two instruction documents with fixed injection scope, the `# Tie-Off` block for every knot)
+> **Prior:** 2026-10-27 (plan 100 complete — Shim Rig shipped in v0.64.0; section removed per Section Lifetime)
 > **Prior:** 2026-10-23 (plan 099 activated — phases 1–5 file sets firmed against the Phase 0 decisions, phase documents 0–5 initialized)
 > **Prior:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
 > **Prior:** 2026-10-16 (plans 094–095 complete — the event-enforcement follow-up tie-off is now appended (bugfix) + the `knot-template` skill and per-rig instruction links (hard-coded default + config links); released in v0.59.0)
@@ -55,6 +57,9 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | ⬜ Planned (2026-11-02) | 2026-11-02 |
+| 102 | [Split Tie-Off and Event-Content Instructions — the Two Instruction Documents with Fixed Injection Scope](102-split-tie-off-event-instructions/split-tie-off-event-instructions-plan.md) | ✅ Complete (2026-11-01) — released in v0.65.0 | 2026-11-01 |
+| 101 | [Rig-declared init tasks — the `rig/init/` interface for `knot-init`](101-rig-init-tasks/rig-init-tasks-plan.md) | ⬜ Planned (2026-10-29) | 2026-10-29 |
 | 100 | [Shim Rig — Externalised Workflow Rig with Local Project Shim](100-shim-rig/shim-rig-plan.md) | ✅ Complete (2026-10-27) — released in v0.64.0 | 2026-10-27 |
 | 99 | [Unified Tie-Off Log and Direct Event Queueing](099-tie-offs-log-and-direct-queue/tie-offs-log-and-direct-queue-plan.md) | ✅ Complete (2026-10-24) — released in v0.63.0 | 2026-10-23 |
 | 98 | [Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule](098-knot-lint/knot-lint-plan.md) | ⬜ Planned | 2026-10-22 |
@@ -76,6 +81,13 @@ Rationale: Once a plan has been complete for a significant period, its status in
 ---
 
 _Overview sections for active and recently completed plans go here._
+
+### 103. System-Prompt Appending — Standing Instructions Move Out of the User Prompt
+
+- **Status:** ⬜ Planned — since 2026-11-02
+- **Where it is:** Draft — awaiting activation
+- **Where it's going:** tie-off + event instructions and the profile prompt delivered via `--append-system-prompt` (all three adapters), user space carries only task/trigger/pending-events, the frozen prompt artifact at `tie-offs/<rig>/prompts/<session-id>.md`, resume re-supply with drift warning, old no-flag invariants retired + changelog — all phases green → ✅ Complete
+- **Plan:** [103-system-prompt-appending/system-prompt-appending-plan.md](103-system-prompt-appending/system-prompt-appending-plan.md)
 
 ### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
