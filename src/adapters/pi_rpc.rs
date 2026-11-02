@@ -376,7 +376,17 @@ impl PiRpcAgentRunner {
         ctx: ExecutionContext,
         observer: Option<Arc<dyn Fn(&CompactionObservation) + Send + Sync>>,
     ) -> Result<AgentOutput, PortError> {
-        let cli_args = Self::build_rpc_cli_args(&ctx.agent_config);
+        let mut cli_args = Self::build_rpc_cli_args(&ctx.agent_config);
+
+        // Plan 103: standing instructions + persona ride the SYSTEM
+        // prompt (the flag is a spawn-time CLI arg; the RPC `prompt`
+        // command carries only the user-space payload).
+        let composed_system_prompt =
+            PiJsonAgentRunner::compose_system_prompt(&ctx);
+        if !composed_system_prompt.is_empty() {
+            cli_args.push("--append-system-prompt".to_string());
+            cli_args.push(composed_system_prompt);
+        }
         let cli_path = self.cli_path.clone();
 
         // The optional wrap-up limit (plan 084). `None` → no sampling or
@@ -2345,5 +2355,48 @@ echo '{"type":"agent_settled"}'
             "one continuation reported: {observations:?}"
         );
         assert_eq!(prompt_lines(&sent), 2, "one continuation sent: {sent}");
+    }
+
+    // ── Plan 103 Phase 2: system-prompt flag delivery ───────────────
+
+    /// The rpc adapter delivers the composed system prompt via the
+    /// spawn-time `--append-system-prompt` flag (the RPC `prompt`
+    /// command carries only the user-space payload).
+    #[test]
+    fn rpc_runner_delivers_system_prompt_via_append_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        // A mock that records argv and then exits promptly; the RPC
+        // driver's commands are irrelevant to the argv assertion.
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            argv_path.display()
+        );
+        let path = dir.path().join("mock-pi-rpc-sys");
+        std::fs::write(&path, &script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).ok();
+        }
+        let runner =
+            PiRpcAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let mut ctx = ctx("TASK-ONLY", None);
+        ctx.system_prompt = "# Tie-Off\n\nTIEOFF-BLOCK".to_string();
+        ctx.profile_prompt = "PROFILE-PERSONA".to_string();
+
+        let _ = runner.execute(ctx);
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+
+        let flag_at = argv
+            .find("--append-system-prompt")
+            .expect("rpc runner must pass --append-system-prompt");
+        let flag_value = &argv[flag_at..];
+        assert!(
+            flag_value.find("TIEOFF-BLOCK").unwrap()
+                < flag_value.find("PROFILE-PERSONA").unwrap(),
+            "contract order: instruction blocks before the profile"
+        );
     }
 }

@@ -267,26 +267,31 @@ impl PiJsonAgentRunner {
         args
     }
 
-    /// Build the prompt with profile prompt, trigger line, and knot
-    /// instructions.
+    /// Plan 103: compose the full system prompt from the standing
+    /// instruction blocks and the profile persona (blocks first,
+    /// profile last). Shared with `pi-rpc`, which builds its prompt
+    /// through the same contract.
+    pub(crate) fn compose_system_prompt(ctx: &ExecutionContext) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if !ctx.system_prompt.trim().is_empty() {
+            parts.push(ctx.system_prompt.as_str());
+        }
+        if !ctx.profile_prompt.trim().is_empty() {
+            parts.push(ctx.profile_prompt.as_str());
+        }
+        parts.join("\n\n")
+    }
+
+    /// Build the user-space prompt: knot instructions + trigger line.
+    ///
+    /// Plan 103: the profile persona and the standing instruction
+    /// blocks are delivered via `--append-system-prompt` (see
+    /// `execute_inner`), never in the user message.
     pub(crate) fn build_prompt_with_context(
         ctx: &ExecutionContext,
-        profile_prompt: &str,
+        _profile_prompt: &str,
     ) -> String {
         let mut full_prompt = String::new();
-
-        if !profile_prompt.is_empty() {
-            full_prompt.push_str(profile_prompt);
-            full_prompt.push_str("\n\n");
-        }
-
-        // Plan 103 Phase 0: instruction blocks still ride the user
-        // prompt (wire unchanged); Phase 2 moves them to the
-        // `--append-system-prompt` flag.
-        if !ctx.system_prompt.is_empty() {
-            full_prompt.push_str(&ctx.system_prompt);
-            full_prompt.push_str("\n\n");
-        }
 
         full_prompt.push_str(&ctx.prompt);
 
@@ -863,7 +868,16 @@ impl PiJsonAgentRunner {
     ) -> Result<AgentOutput, PortError> {
         // Build CLI args from agent_config, then append --mode json.
         let base_args = ctx.agent_config.build_cli_args();
-        let cli_args = Self::build_json_cli_args(&base_args);
+        let mut cli_args = Self::build_json_cli_args(&base_args);
+
+        // Plan 103: standing instructions + persona ride the SYSTEM
+        // prompt (survive compaction); the user message carries only
+        // the task, the trigger line, and runtime data.
+        let composed_system_prompt = Self::compose_system_prompt(&ctx);
+        if !composed_system_prompt.is_empty() {
+            cli_args.push("--append-system-prompt".to_string());
+            cli_args.push(composed_system_prompt);
+        }
 
         // CLI path resolved once at construction time.
         let cli_path = self.cli_path.clone();
@@ -2817,6 +2831,62 @@ sleep 300
         assert!(
             matches!(err, PortError::Timeout { .. }),
             "expected Timeout, got: {err:?}"
+        );
+    }
+
+    // ── Plan 103 Phase 2: system-prompt flag delivery ───────────────
+
+    /// The json adapter delivers the composed system prompt (blocks
+    /// first, profile last) via `--append-system-prompt`; stdin
+    /// carries only the user-space payload.
+    #[test]
+    fn json_runner_delivers_system_prompt_via_append_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let stdin_path = dir.path().join("stdin.txt");
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> {}\ncat > {}\necho '{}'
+",
+            argv_path.display(),
+            stdin_path.display(),
+            r#"{{"type":"agent_end","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"stopReason":"stop"}}}}"#
+        );
+        let path = dir.path().join("mock-pi-json-sys");
+        std::fs::write(&path, &script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).ok();
+        }
+        let runner =
+            PiJsonAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let mut ctx = make_context(&[]);
+        ctx.system_prompt = "# Tie-Off\n\nTIEOFF-BLOCK".to_string();
+        ctx.profile_prompt = "PROFILE-PERSONA".to_string();
+        ctx.prompt = "TASK-ONLY".to_string();
+
+        let _ = runner.execute(ctx);
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+        let stdin_written = std::fs::read_to_string(&stdin_path).unwrap();
+
+        let flag_at = argv
+            .find("--append-system-prompt")
+            .expect("json runner must pass --append-system-prompt");
+        let flag_value = &argv[flag_at..];
+        assert!(
+            flag_value.find("TIEOFF-BLOCK").unwrap()
+                < flag_value.find("PROFILE-PERSONA").unwrap(),
+            "contract order: instruction blocks before the profile"
+        );
+        assert!(stdin_written.contains("TASK-ONLY"));
+        assert!(
+            !stdin_written.contains("TIEOFF-BLOCK"),
+            "instructions must NOT ride stdin: {stdin_written}"
+        );
+        assert!(
+            !stdin_written.contains("PROFILE-PERSONA"),
+            "profile must NOT ride stdin: {stdin_written}"
         );
     }
 }
