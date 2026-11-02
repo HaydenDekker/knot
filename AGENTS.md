@@ -72,10 +72,11 @@ for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
   mkdir -p ~/.agents/skills-library/$skill
   cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
-# (knot-template's whole-dir copy carries its two companion template
-#  files — knot-tie-off.md (the hard-coded contract, reference only) /
-#  knot-tie-off-content.md (the default tie-off content section) — the
-#  source of the binary's hard-coded instruction defaults)
+# (knot-template's whole-dir copy carries its four companion files —
+#  knot-tie-off-contract.md / knot-event-contract.md (the hard-coded
+#  core references, source of the binary's compiled-in cores) +
+#  knot-tie-off-content.md / knot-event-content.md (the two default
+#  overridable documents))
 # Copy non-SKILL.md files (e.g. glossary)
 if [ -f .agents/skills/knot-init/knot-glossary.md ]; then
   cp .agents/skills/knot-init/knot-glossary.md \
@@ -96,9 +97,10 @@ for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
        ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"
 done
-# knot-template's companion template files (the source of the binary's
-# hard-coded instruction defaults — verify them too)
-for f in knot-tie-off.md knot-tie-off-content.md; do
+# knot-template's companion files (the source of the binary's
+# hard-coded instruction defaults — verify them all)
+for f in knot-tie-off-contract.md knot-event-contract.md \
+         knot-tie-off-content.md knot-event-content.md; do
   diff .agents/skills/knot-template/$f ~/.agents/skills-library/knot-template/$f \
     > /dev/null 2>&1 && echo "knot-template/$f: OK" || echo "knot-template/$f: FAILED"
 done
@@ -142,14 +144,16 @@ production location (see Skill Installation above).
 - **knot-init** — Initialise a Knot rig in a directory
 - **knot-inspect** — Inspect rig state (looms, knots, profiles, activity)
 - **knot-manage** — Review rig work via git and tie-offs, assess interaction quality
-- **knot-template** — Customise the tie-off content section (the
-  producer's header/content + the event-content guide — the contract,
-  event format, and rules are hard-coded): ships the content template
-  (the source of the binary's hard-coded default content section) + the
-  shipped contract for reference, and the procedure to add a
-  per-project override (`rig/knot-template/` + the
-  `tie-off-content-instruction-file` link in
-  `rig/.workspace-agent-config.yaml`)
+- **knot-template** — Customise the two instruction documents Knot
+  injects into agent prompts (the tie-off instruction — every knot,
+  unconditional — and the event-content guide — only when the knot has
+  subscriber events; the hard-coded cores are the universal contract
+  sentence and the event acknowledgement/format/rules): ships the two
+  default documents (the source of the binary's embedded default
+  sections) + the two hard-coded core references, and the procedure to
+  add a per-project override (`rig/knot-template/` + the
+  `tie-off-instruction-file` / `event-content-instruction-file` links
+  in `rig/.workspace-agent-config.yaml`)
 - **knot-visualise** — Render the whole-rig producer→consumer topology (knots + event/strand edges) as a self-contained D3 HTML file at a user-specified `--out` path
 - **knot-start** — Start/stop/restart the service; append and read `tie-offs/<rig>/knot-service.log`
 - **knot-create** — Create, modify, delete looms, knots, and agent profiles

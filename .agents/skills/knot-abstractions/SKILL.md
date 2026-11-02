@@ -4,7 +4,7 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.4.0"
+  version: "1.5.0"
   compatibility: "Knot 0.63.0+"
 ---
 
@@ -68,6 +68,11 @@ Located at `borrow-my-stuff-rig/`, the rig is the "dumb" plumbing that:
 - Routes **events** between knots without the agents knowing it exists
 - Maintains the runtime tree `tie-offs/<rig>/`: **state.json**,
   tie-offs, the appended service log, and the event queue
+- May declare **rig init tasks** in `<rig>/init/*.md` —
+  project-side initialisation acts executed by `knot-init` (see the
+  glossary term). Like all rig content this is **source surface**:
+  tracked in the rig's own git, never runtime. The Knot binary does
+  not read `init/`; the folder is inert to the service.
 
 The rig directory is generic and **source-only** — it contains no
 project-specific logic and no runtime data. It is versioned in its own

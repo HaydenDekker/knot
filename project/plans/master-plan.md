@@ -57,7 +57,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | ⬜ Planned (2026-11-02) | 2026-11-02 |
+| 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | 🟡 In Progress (2026-11-02) | 2026-11-02 |
 | 102 | [Split Tie-Off and Event-Content Instructions — the Two Instruction Documents with Fixed Injection Scope](102-split-tie-off-event-instructions/split-tie-off-event-instructions-plan.md) | ✅ Complete (2026-11-01) — released in v0.65.0 | 2026-11-01 |
 | 101 | [Rig-declared init tasks — the `rig/init/` interface for `knot-init`](101-rig-init-tasks/rig-init-tasks-plan.md) | ⬜ Planned (2026-10-29) | 2026-10-29 |
 | 100 | [Shim Rig — Externalised Workflow Rig with Local Project Shim](100-shim-rig/shim-rig-plan.md) | ✅ Complete (2026-10-27) — released in v0.64.0 | 2026-10-27 |
@@ -84,8 +84,8 @@ _Overview sections for active and recently completed plans go here._
 
 ### 103. System-Prompt Appending — Standing Instructions Move Out of the User Prompt
 
-- **Status:** ⬜ Planned — since 2026-11-02
-- **Where it is:** Draft — awaiting activation
+- **Status:** 🟡 In Progress — since 2026-11-02 (branch `refactor/system-prompt-appending`)
+- **Where it is:** Phase 0 (payload split); next: Phase 1 (pi-stdio flag)
 - **Where it's going:** tie-off + event instructions and the profile prompt delivered via `--append-system-prompt` (all three adapters), user space carries only task/trigger/pending-events, the frozen prompt artifact at `tie-offs/<rig>/prompts/<session-id>.md`, resume re-supply with drift warning, old no-flag invariants retired + changelog — all phases green → ✅ Complete
 - **Plan:** [103-system-prompt-appending/system-prompt-appending-plan.md](103-system-prompt-appending/system-prompt-appending-plan.md)
 

@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.30.0"
-  compatibility: "Knot 0.41.0+ (changelog through 0.64.0)"
+  version: "1.32.0"
+  compatibility: "Knot 0.41.0+ (changelog through 0.65.0; skill-convention entries noted as such)"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,94 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Split the Tie-Off and Event-Content Instructions (Knot 0.65.0, 2026-11-01)
+
+**What changed:** the one overridable content section (Knot 0.60.0+) is
+**split into two instruction documents with fixed injection scopes**:
+
+- **`# Tie-Off` block — every knot, every new session, unconditional.**
+  The universal contract sentence is hard-coded (from
+  `knot-tie-off-contract.md`); the overridable document is the
+  **tie-off instruction** (`## Tie-Off Content` — the tie-off's
+  header/narrative content). A **leaf knot** (no consumers, no
+  self-continuation) — which previously got **no** tie-off
+  instructions at all — now receives the `# Tie-Off` block.
+- **`# Subscriber Events` block — only when the knot has subscriber
+  events** (or a self-continuation entry). The event acknowledgement /
+  format / rules stay hard-coded (from `knot-event-contract.md`);
+  the overridable document is the **event-content guide**
+  (`## Event Content Guide`).
+- **Two config keys** in `rig/.workspace-agent-config.yaml`, each
+  replacing **its section only**, pulled fresh per new session (two
+  pulls), with **per-section fallback**:
+
+  ```yaml
+  tie-off-instruction-file: knot-template/knot-tie-off-content.md
+event-content-instruction-file: knot-template/knot-event-content.md
+  ```
+
+- **Retired 0.60.0–0.64.x key** — the combined
+  `tie-off-content-instruction-file` is **parsed but not honoured**
+  (a leftover key no longer errors the config shape; it produces a
+  `[KNOT][EVENT] type=CONFIG` warning per session).
+
+**Affected documents:** `rig/.workspace-agent-config.yaml` only — a
+key rename/split. Knots, looms, and profiles are unchanged; the
+`knot-template/` directory gains a second file if you adopt the
+split.
+
+**Migration:** agent/user-driven — the binary makes **no** rig
+changes.
+
+1. **Split the linked file at the `## Event Content Guide` heading** —
+   the top half (the `## Tie-Off Content` section) stays
+   `knot-template/knot-tie-off-content.md`; the bottom half becomes
+   `knot-template/knot-event-content.md`.
+2. **Replace the key** — in the rig's
+   `.workspace-agent-config.yaml` (for a **shim rig**: the shim's
+   local config *and* the external rig's config, both of which may
+   carry it) — set the two keys above and remove
+   `tie-off-content-instruction-file`.
+3. **Legacy 0.59.0 links** — a `tie-off-instruction-file` linked to a
+   0.59.0-era **full-contract** file is honoured again (the 0.60.0
+   deprecation warning is gone), but its content now replaces only
+   the tie-off **content** section. Point it at a content-only file
+   (or the default template) so the agent is not shown the old full
+   contract as content.
+
+**How to tell if the rig needs migrating:** a
+`[KNOT][EVENT] type=CONFIG` warning naming
+`tie-off-content-instruction-file` per new session, or the key
+present in the rig's config file(s).
+
+---
+
+### Rig-Declared Init Tasks (skill convention, knot-init 4.13.0, 2026-10-29 — no binary change)
+
+**What changed:** a rig may declare **init tasks** — project-side
+initialisation acts in `<rig>/init/*.md`, executed by the `knot-init`
+skill on every init invocation (sorted filename order; per-task
+idempotency report `WRITTEN` / `VERIFIED UNCHANGED` / `SKIPPED` /
+`CONFLICT — left in place` / `FAILED`). The Knot binary does not read
+`init/` — there is **no document migration** in this entry.
+
+**Migration:** none required.
+
+- **Rigs without `init/`** — unaffected; absent = no-op.
+- **Plain rigs** — `knot-init` runs `rig/init/*.md` against the
+  project root if present.
+- **Shim rigs** — resolution prefers the **external rig's**
+  `init/` (the durable source, from `state.json`'s `external_rig`
+  field — not `rig_path`, which is the local rig dir per ADR-013);
+  the local `rig/init/` is a fallback used only when the external
+  rig declares none. If both exist, the external wins and the local
+  folder is flagged (`OVERRIDE NOTICE: rig/init/ not executed —
+  shadowed by <external_rig>/init/`), never merged.
+
+See the glossary term **Rig Init Task** and plan 101.
 
 ---
 

@@ -1,5 +1,43 @@
 # Release Notes
 
+## v0.65.0 — 2026-11-01
+
+### Changed — Split the tie-off and event-content instructions (Plan 102)
+
+The single overridable content section (Knot 0.60.0+, one file, one key)
+is split into **two instruction documents with fixed injection scopes**:
+
+- **`# Tie-Off` block — every knot, every new session, unconditional** —
+  the universal contract sentence is hard-coded (from
+  `knot-tie-off-contract.md`) and the **tie-off instruction**
+  (`## Tie-Off Content`) is the overridable document. A leaf knot
+  (no consumers, no self-continuation) — which previously got **no**
+  tie-off instructions at all — now receives the `# Tie-Off` block.
+- **`# Subscriber Events` block — only when the knot has subscriber
+  events** — the event acknowledgement / format / rules stay
+  hard-coded (from `knot-event-contract.md`) and the **event-content
+  guide** (`## Event Content Guide`) is the overridable document.
+- **Two config keys** — `tie-off-instruction-file` and
+  `event-content-instruction-file` (each replaces its section only;
+  pulled fresh per new session — two pulls; **per-section fallback**).
+- **Retired key** — the 0.60.0–0.64.x combined
+  `tie-off-content-instruction-file` is parsed (no more config-shape
+  error) but **not honoured**, with a `[KNOT][EVENT] type=CONFIG`
+  warning per session.
+- **Skills + docs** — `knot-template` v3 (two templates + two core
+  references + migration procedure), `knot` master routing line, and
+  the instruction sections in the docs.
+
+**Migration:** agent/user-driven, binary makes no rig changes. Split
+the linked file at the `## Event Content Guide` heading into
+`knot-tie-off-content.md` / `knot-event-content.md`, replace the key
+with the two above (shim rig: both the shim's and the external rig's
+config), and — for a legacy 0.59.0-era `tie-off-instruction-file`
+linked to a **full-contract** file — point it at a content-only file
+(the key is honoured again; the old full-contract content now
+replaces only the content section). See the `knot-update` skill
+(Knot 0.65.0 entry).
+
 ## v0.63.0 — 2026-10-24
 
 ### Breaking — Unified Tie-Off Log + Direct Event Queueing (Plan 099)

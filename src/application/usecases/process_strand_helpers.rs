@@ -366,10 +366,14 @@ pub fn resolve_config_and_build(
         knot.prompt_template.instructions.clone()
     };
 
-    // Build listener context (per-invocation, not cached).
-    // Scans all knots' strand_source entries and injects event
-    // instructions at the beginning of the prompt, including
-    // pending events from the dispatch directory.
+    // Plan 103: split the context by delivery destination — ONE
+    // build (the per-session instruction-fetch budget stays two pulls,
+    // not four). The standing instructions (tie-off + subscriber-event
+    // blocks) go to the system prompt via
+    // `ExecutionContext.system_prompt`; the pending-events section is
+    // runtime data and stays in the user prompt ahead of the knot's
+    // task instructions. `listener_context` (the composed whole) is
+    // kept for the event-enforcement follow-up repeat.
     let all_knots = ProcessStrand::collect_all_knots(&ps.store);
     // Plan 086: the `TasksIncomplete` self-continuation contract is NOT
     // placed in the base prompt. It is delivered at the water-mark trigger
@@ -386,13 +390,18 @@ pub fn resolve_config_and_build(
         self_continuation_desc,
         instruction_source: ps.instruction_source.clone(),
     };
-    let listener_context =
-        AgentEventsContextProvider.build_context(&build_ctx);
+    let split = AgentEventsContextProvider.build_split_context(&build_ctx);
+    let listener_context = if split.runtime.is_empty() {
+        split.instructions.clone()
+    } else {
+        format!("{}\n\n{}", split.instructions, split.runtime)
+    };
+    let system_prompt = split.instructions.clone();
 
-    let prompt = if listener_context.is_empty() {
+    let prompt = if split.runtime.is_empty() {
         base_prompt
     } else {
-        format!("{}\n\n{}", listener_context, base_prompt)
+        format!("{}\n\n{}", split.runtime, base_prompt)
     };
 
     // Plan 099: a delivered emission carries its message in the queue
@@ -420,6 +429,7 @@ pub fn resolve_config_and_build(
         &mut session_id,
         agent_config,
         prompt,
+        system_prompt,
         strand_file_ref,
         profile.profile_prompt,
         event_label,

@@ -481,7 +481,7 @@ fn create_rig(cwd: &Path, consumer_subscription: &str) -> std::path::PathBuf {
     fs::write(
         &pi,
         format!(
-            "#!/usr/bin/env bash\nprompt=\"$(cat)\"\necho \"run ${{prompt:0:300}}\" >> {}/agent-runs.log\necho \"ok\"\nexit 0\n",
+            "#!/usr/bin/env bash\nprompt=\"$(cat)\"\necho \"run ${{prompt:0:4000}}\" >> {}/agent-runs.log\necho \"ok\"\nexit 0\n",
             cwd.display()
         ),
     )

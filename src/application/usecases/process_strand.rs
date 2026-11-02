@@ -4082,10 +4082,28 @@ mod session_title_tests {
         let contexts = captured_contexts.lock().unwrap();
         let ctx = &contexts[0];
 
-        // Profile prompt is in profile_prompt field (delivered via stdin)
+        // Profile prompt is in profile_prompt field (delivered via the
+        // system prompt, plan 103).
         assert_eq!(ctx.profile_prompt, "You are a reviewer.");
-        // Knot instructions are in prompt field
-        assert_eq!(ctx.prompt, "Review this file.");
+        // Knot instructions are in the prompt field; the unconditional
+        // `# Tie-Off` block (plan 102: every knot, including this leaf
+        // knot) now rides the SYSTEM prompt (plan 103), not the user
+        // prompt.
+        assert!(
+            ctx.system_prompt.starts_with("# Tie-Off\n"),
+            "system prompt should start with the tie-off block: {}",
+            ctx.system_prompt
+        );
+        assert!(
+            !ctx.prompt.starts_with("# Tie-Off\n"),
+            "the tie-off block must NOT ride the user prompt: {}",
+            ctx.prompt
+        );
+        assert!(
+            ctx.prompt.ends_with("Review this file."),
+            "the knot's instructions must be present: {}",
+            ctx.prompt
+        );
         // Event metadata is present
         assert_eq!(ctx.event_type, "Modified");
         assert_eq!(ctx.knot_name.as_deref(), Some("reviewer"));
@@ -5430,9 +5448,17 @@ mod event_dispatch_tests {
         // Inspect captured context for listener context
         let contexts = runner.get_captured_contexts();
         assert!(!contexts.is_empty(), "agent should have been called");
-        let prompt = &contexts[0].prompt;
+        // Plan 103: the agent's view = system prompt (standing
+        // instructions) + user prompt (runtime + task).
+        let prompt = format!("{}\n\n{}", contexts[0].system_prompt, contexts[0].prompt);
 
-        // Prompt should contain listener context heading
+        // Prompt should contain the tie-off block (unconditional) and
+        // the listener context heading
+        assert!(
+            prompt.contains("# Tie-Off"),
+            "prompt should contain the tie-off block: {}",
+            prompt
+        );
         assert!(
             prompt.contains("# Subscriber Events"),
             "prompt should contain Agent Events heading: {}",
@@ -5455,15 +5481,18 @@ mod event_dispatch_tests {
         );
         // Listener context is at the beginning, before the knot's instructions
         assert!(
-            prompt.starts_with("# Subscriber Events"),
-            "listener context should be at the start of the prompt: {}",
+            prompt.starts_with("# Tie-Off"),
+            "prompt context should start with the tie-off block: {}",
             prompt
         );
     }
 
-    /// When no consumers listen for a knot's events, no context is injected.
+    /// Plan 102: when no consumers listen for a knot's events, the
+    /// consumer-gated `# Subscriber Events` block is absent — but the
+    /// unconditional `# Tie-Off` block is injected (the leaf-kot fix:
+    /// the tie-off contract reaches terminal knots too).
     #[test]
-    fn no_listeners_no_context_injection() {
+    fn no_listeners_tie_off_block_still_injected() {
         let dir = TempDir::new().unwrap();
         let strand_path = dir.path().join("strand.md");
         std::fs::write(&strand_path, "test content").unwrap();
@@ -5495,16 +5524,37 @@ mod event_dispatch_tests {
         assert!(result.is_ok());
 
         let contexts = runner.get_captured_contexts();
-        let prompt = &contexts[0].prompt;
+        // Plan 103: agent's view = system + user payload.
+        let prompt = format!("{}\n\n{}", contexts[0].system_prompt, contexts[0].prompt);
 
-        // Prompt should NOT contain listener context
+        // Prompt should NOT contain the consumer-gated listener context
         assert!(
-            !prompt.contains("Before undertaking your task"),
-            "prompt should NOT contain listener context when no listeners: {}",
+            !prompt.contains("# Subscriber Events"),
+            "prompt should NOT contain the subscriber events block when no listeners: {}",
             prompt
         );
-        // Prompt should just be the knot's instructions
-        assert_eq!(prompt, "check it");
+        // But the unconditional `# Tie-Off` block IS injected, followed
+        // by the knot's instructions.
+        assert!(
+            prompt.starts_with("# Tie-Off\n"),
+            "prompt should start with the tie-off block: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("## Tie-Off Contract"),
+            "universal contract must reach leaf knots: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("## Tie-Off Content"),
+            "default tie-off content must be present: {}",
+            prompt
+        );
+        assert!(
+            prompt.ends_with("check it"),
+            "the knot's instructions must still be present: {}",
+            prompt
+        );
     }
 
     /// `occurred: false` — no dispatch occurs.
@@ -6186,7 +6236,7 @@ mod event_dispatch_tests {
         // Inspect the captured prompt
         let contexts = runner.get_captured_contexts();
         assert!(!contexts.is_empty(), "agent should have been called");
-        let prompt = &contexts[0].prompt;
+        let prompt = format!("{}\n\n{}", contexts[0].system_prompt, contexts[0].prompt);
 
         // Should contain emission instructions
         assert!(
@@ -6263,7 +6313,7 @@ mod event_dispatch_tests {
 
         let contexts = runner.get_captured_contexts();
         assert!(!contexts.is_empty(), "agent should have been called");
-        let prompt = &contexts[0].prompt;
+        let prompt = format!("{}\n\n{}", contexts[0].system_prompt, contexts[0].prompt);
 
         // Should contain emission instructions
         assert!(
@@ -7585,6 +7635,93 @@ mod event_enforcement_tests {
         assert_eq!(
             missing_count, 1,
             "only one KnotEventsMissing when follow-up succeeds"
+        );
+    }
+
+    /// Plan 102: the event-enforcement follow-up re-injects the run's
+    /// listener context — the new two-block shape (`# Tie-Off` first,
+    /// then `# Subscriber Events`) reaches the follow-up prompt.
+    #[test]
+    fn process_strand_enforcement_followup_carries_two_block_shape() {
+        let dir = TempDir::new().unwrap();
+        let strand_path = dir.path().join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_producer_knot("plan-creator")],
+        );
+        let consumer_loom = build_loom(
+            "consumer-loom",
+            vec![build_consumer_knot(
+                "plan-watcher",
+                "plan-creator",
+                "PlanCreated",
+                "When a plan is created.",
+            )],
+        );
+
+        // First call: normal output with no events (triggers
+        // enforcement); second call (follow-up): produces the event.
+        let runner = Arc::new(MockAgentRunner::new_sequence(vec![
+            Ok(ok_output_with_sid("Just normal output, no events.", "sess-test")),
+            Ok(ok_output_with_sid(&event_block("PlanCreated"), "sess-test")),
+        ]));
+
+        let (use_case, _log_events, dispatches, _store, _tie_off_appends) =
+            build_enforcement_strand(
+                vec![producer_loom, consumer_loom],
+                runner.clone(),
+            );
+
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path.clone()),
+        };
+
+        let result = use_case.execute(event);
+        assert!(result.is_ok());
+
+        // The follow-up event was dispatched — the follow-up ran.
+        let dispatched = dispatches.lock().unwrap();
+        assert_eq!(dispatched.len(), 1, "follow-up event should be dispatched");
+
+        // Two executions: the first turn and the enforcement follow-up.
+        let contexts = runner.get_captured_contexts();
+        assert!(
+            contexts.len() >= 2,
+            "the follow-up must be a second execution"
+        );
+        let followup_prompt = &contexts[1].prompt;
+        // The follow-up prompt carries the new two-block shape: the
+        // unconditional `# Tie-Off` block first, then the consumer-gated
+        // `# Subscriber Events` block.
+        assert!(
+            followup_prompt.contains("# Tie-Off"),
+            "follow-up prompt should carry the tie-off block: {}",
+            followup_prompt
+        );
+        assert!(
+            followup_prompt.contains("## Tie-Off Contract"),
+            "follow-up prompt should carry the universal contract: {}",
+            followup_prompt
+        );
+        assert!(
+            followup_prompt.contains("# Subscriber Events"),
+            "follow-up prompt should carry the subscriber events block: {}",
+            followup_prompt
+        );
+        let tie_off_pos = followup_prompt.find("# Tie-Off").unwrap();
+        let listener_pos = followup_prompt.find("# Subscriber Events").unwrap();
+        assert!(
+            tie_off_pos < listener_pos,
+            "# Tie-Off must precede # Subscriber Events in the follow-up"
+        );
+        assert!(
+            followup_prompt.contains("PlanCreated"),
+            "follow-up prompt should name the missing event: {}",
+            followup_prompt
         );
     }
 
@@ -9386,6 +9523,290 @@ mod tieoff_session_id_tests {
             appends[0].session_id,
             Some("sess-abc".to_string()),
             "resumed run must record the single session ID"
+        );
+    }
+}
+
+// ── Plan 102: Two instruction documents, two fetches per session ──────
+
+#[cfg(test)]
+mod plan_102_instruction_fetch_tests {
+    use super::*;
+    use crate::adapters::outbound::prompt_instruction_source::
+        FileSystemPromptInstructionSource;
+    use crate::application::ports::AgentOutput;
+    use crate::domain::events::PromptInstructionSource;
+    use crate::domain::entities::{Knot, KnotId, LoomId, PromptTemplate};
+    use crate::domain::value_objects::StrandSource;
+    use crate::application::usecases::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
+    };
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use tempfile::TempDir;
+
+    /// A knot that listens for events from another knot.
+    fn build_consumer_knot(
+        id: &str,
+        target_knot: &str,
+        event_id: &str,
+        event_desc: &str,
+    ) -> Knot {
+        Knot {
+            id: KnotId(id.to_string()),
+            agent_profile_ref: "fast".to_string(),
+            prompt_template: PromptTemplate {
+                instructions: "React to events.".to_string(),
+            },
+            git_versioned: true,
+            strand_source: StrandSource::EventUri {
+                producer_knot: target_knot.to_string(),
+                event_id: event_id.to_string(),
+            },
+            event_description: Some(event_desc.to_string()),
+        }
+    }
+
+    /// Test double: counts each per-session fetch (one read per new
+    /// session per document — two fetches per session).
+    #[derive(Debug, Default)]
+    struct CountingInstructions {
+        tie_off_reads: AtomicU32,
+        event_content_reads: AtomicU32,
+    }
+
+    impl PromptInstructionSource for CountingInstructions {
+        fn read_tie_off_instruction(&self) -> Option<String> {
+            self.tie_off_reads.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+
+        fn read_event_content_instruction(&self) -> Option<String> {
+            self.event_content_reads.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    }
+
+    /// Build the use case (all mocks) with the producer + consumer
+    /// looms and the given instruction source (when `Some`).
+    fn build_use_case(
+        leaf: bool,
+        runner: Arc<MockAgentRunner>,
+        source: Option<Arc<dyn PromptInstructionSource>>,
+    ) -> (ProcessStrand, Arc<MockAgentRunner>) {
+        let store = LoomStore::new();
+        let producer_loom = build_loom(
+            "producer-loom",
+            vec![build_knot("plan-creator")],
+        );
+        store.register(producer_loom);
+        if !leaf {
+            let consumer_loom = build_loom(
+                "consumer-loom",
+                vec![build_consumer_knot(
+                    "plan-watcher",
+                    "plan-creator",
+                    "PlanCreated",
+                    "When a plan is created.",
+                )],
+            );
+            store.register(consumer_loom);
+        }
+
+        let (log_port, _log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, _tie_off_appends, _content) =
+            TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::from_iter([(
+                    "fast".to_string(),
+                    default_profile(),
+                )]),
+            )),
+        });
+
+        let mut use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            runner.clone() as Arc<dyn crate::application::ports::AgentRunner>,
+            Arc::new(tie_off_sink),
+            crate::domain::value_objects::RigAgentConfig::default_config(),
+            std::path::PathBuf::from("/tmp/nonexistent-rig"),
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+        if let Some(source) = source {
+            use_case = use_case.with_instruction_source(source);
+        }
+        (use_case, runner)
+    }
+
+    fn execute_once(use_case: &ProcessStrand, dir: &std::path::Path) {
+        let strand_path = dir.join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path),
+        };
+        use_case.execute(event).unwrap();
+    }
+
+    /// Plan 102: a **consumer knot** session performs **two** fetches —
+    /// one per document. Two consecutive `process_strand` executions →
+    /// four reads (two per session; nothing is cached).
+    #[test]
+    fn consumer_knot_performs_two_fetches_per_session() {
+        let dir = TempDir::new().unwrap();
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+        let counter = Arc::new(CountingInstructions::default());
+        let source: Arc<dyn PromptInstructionSource> = counter.clone();
+        let (use_case, runner) = build_use_case(false, runner, Some(source));
+
+        execute_once(&use_case, dir.path());
+        assert_eq!(
+            counter.tie_off_reads.load(Ordering::SeqCst),
+            1,
+            "first session must fetch the tie-off instruction exactly once"
+        );
+        assert_eq!(
+            counter.event_content_reads.load(Ordering::SeqCst),
+            1,
+            "first session must fetch the event-content instruction exactly once"
+        );
+
+        execute_once(&use_case, dir.path());
+        assert_eq!(
+            counter.tie_off_reads.load(Ordering::SeqCst),
+            2,
+            "second session must re-fetch the tie-off instruction (never cached)"
+        );
+        assert_eq!(
+            counter.event_content_reads.load(Ordering::SeqCst),
+            2,
+            "second session must re-fetch the event-content instruction (never cached)"
+        );
+        let contexts = runner.get_captured_contexts();
+        assert_eq!(contexts.len(), 2, "two executions captured");
+    }
+
+    /// Plan 102: a **leaf knot** session also performs **two** fetches —
+    /// the tie-off instruction is unconditional; the event-content
+    /// fetch is attempted even though the consumer-gated block is not
+    /// built (per-section reads, independent of each other).
+    #[test]
+    fn leaf_knot_performs_two_fetches_per_session() {
+        let dir = TempDir::new().unwrap();
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+        let counter = Arc::new(CountingInstructions::default());
+        let source: Arc<dyn PromptInstructionSource> = counter.clone();
+        let (use_case, runner) = build_use_case(true, runner, Some(source));
+
+        execute_once(&use_case, dir.path());
+        assert_eq!(
+            counter.tie_off_reads.load(Ordering::SeqCst),
+            1,
+            "leaf session must fetch the tie-off instruction"
+        );
+        assert_eq!(
+            counter.event_content_reads.load(Ordering::SeqCst),
+            1,
+            "leaf session must still attempt the event-content fetch"
+        );
+
+        // The leaf knot's prompt: the `# Tie-Off` block, no
+        // `# Subscriber Events` block.
+        let contexts = runner.get_captured_contexts();
+        // Plan 103: the standing blocks ride the system prompt.
+        let prompt = &contexts[0].system_prompt;
+        assert!(prompt.starts_with("# Tie-Off\n"));
+        assert!(!prompt.contains("# Subscriber Events"));
+    }
+
+    /// Plan 102: a file edit between executions changes the second
+    /// prompt's **affected section only** — the other section and both
+    /// hard-coded cores are byte-identical.
+    #[test]
+    fn file_edit_changes_only_the_affected_section() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(rig_dir.join("knot-template")).unwrap();
+
+        // The rig links a per-rig tie-off instruction (doc 1) only; the
+        // event-content guide (doc 2) stays the embedded default.
+        let tie_off_link = rig_dir
+            .join("knot-template")
+            .join("knot-tie-off-content.md");
+        std::fs::write(&tie_off_link, "## Tie-Off Content\n\nTIE-OFF V1").unwrap();
+        std::fs::write(
+            rig_dir.join(".workspace-agent-config.yaml"),
+            "tie-off-instruction-file: knot-template/knot-tie-off-content.md\n",
+        )
+        .unwrap();
+
+        let output = Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        });
+        let runner = Arc::new(MockAgentRunner::new(output));
+        let source: Arc<dyn PromptInstructionSource> =
+            Arc::new(FileSystemPromptInstructionSource::new(rig_dir));
+        let (use_case, runner) = build_use_case(false, runner, Some(source));
+
+        execute_once(&use_case, dir.path());
+        let prompt1 = runner.get_captured_contexts()[0].system_prompt.clone();
+        assert!(
+            prompt1.contains("TIE-OFF V1"),
+            "first prompt must carry the linked tie-off content: {}",
+            prompt1
+        );
+
+        // The user edits the linked tie-off file (doc 1 only) — the next
+        // session (next call) must see the new content, with the other
+        // section and both hard-coded cores byte-identical.
+        std::fs::write(&tie_off_link, "## Tie-Off Content\n\nTIE-OFF V2").unwrap();
+        execute_once(&use_case, dir.path());
+        let prompt2 = runner.get_captured_contexts()[1].system_prompt.clone();
+
+        assert!(
+            prompt2.contains("TIE-OFF V2"),
+            "second prompt must carry the updated tie-off content: {}",
+            prompt2
+        );
+        assert!(
+            !prompt2.contains("TIE-OFF V1"),
+            "the old tie-off content must be gone: {}",
+            prompt2
+        );
+        // The whole prompt differs by the edited section only: the first
+        // prompt with the tie-off text swapped is byte-identical to the
+        // second (event guide + both hard-coded cores unchanged).
+        assert_eq!(
+            prompt1.replace("TIE-OFF V1", "TIE-OFF V2"),
+            prompt2,
+            "only the affected section may change between sessions"
         );
     }
 }

@@ -680,6 +680,7 @@ exit 1
             ctx_wrap_up_limit: None,
         },
         prompt: "test prompt".to_string(),
+        system_prompt: String::new(),
         profile_prompt: String::new(),
         strand_path: StrandPath(PathBuf::from("test.md")),
         event_type: "Created".to_string(),

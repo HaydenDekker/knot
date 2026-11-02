@@ -4,7 +4,7 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.12.0"
+  version: "4.13.0"
   compatibility: "Knot 0.64.0+"
 ---
 
@@ -105,7 +105,7 @@ When asked to initialise a Knot rig:
       ```bash
       for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
                     knot-manage knot-design knot-analyst knot-update
-                    knot-abstractions; do
+                    knot-abstractions knot-visualise knot-template knot-software-factory knot-lint; do
         mkdir -p ~/.agents/skills-library/$skill
         cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
       done
@@ -123,7 +123,7 @@ When asked to initialise a Knot rig:
       ```bash
       for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
                     knot-manage knot-design knot-analyst knot-update
-                    knot-abstractions; do
+                    knot-abstractions knot-visualise knot-template knot-software-factory knot-lint; do
         diff .agents/skills/$skill/SKILL.md \
              ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
           echo "$skill: OK" || echo "$skill: FAILED"
@@ -229,6 +229,10 @@ When asked to initialise a Knot rig:
       - **knot-design** — Design looms and knots (idempotency, naming, loops)
       - **knot-analyst** — Analyse rig productivity and project progress
       - **knot-update** — Migrate project documents between Knot versions
+      - **knot-visualise** — Render the rig topology as an interactive HTML graph
+      - **knot-template** — Customise the tie-off content section
+      - **knot-software-factory** — Design and build a software-factory rig
+      - **knot-lint** — Static consistency audit of the rig directory
       ```
     - Read the Knot glossary from this skill's directory at
       `knot-glossary.md`. It covers the full set of Knot domain terms
@@ -424,11 +428,62 @@ When asked to initialise a Knot rig:
    - If the array contains looms, report the existing loom IDs and
      suggest using the `knot-inspect` skill to examine them.
 
+9a. **Execute the rig's declared init tasks** (idempotent; runs on
+    **every** init invocation — the "report instead of recreate" flow
+    above does not short-circuit this step):
+    - **Resolve the task directory** from `tie-offs/<rig>/state.json`:
+      - **Plain rig** (no `external_rig` field): the task directory
+        is the local `rig/init/`.
+      - **Shim rig** (`external_rig` field present, Knot 0.64.0+):
+        the **external rig is the durable task source**. Note that
+        `rig_path` in `state.json` is the **local** rig directory
+        (ADR-013 Decision 5) — do **not** resolve `init/` from it
+        for a shim. If `<external_rig>/init/` exists, use it. If
+        the external rig declares no `init/`, **fall back** to the
+        local `rig/init/`.
+      - **Shadow flag (shim only):** if **both** `<external_rig>/init/`
+        and the local `rig/init/` exist, the external wins — run the
+        external tasks and **flag** the local folder in the summary:
+        `OVERRIDE NOTICE: rig/init/ not executed — shadowed by
+        <external_rig>/init/`. Leave the local folder in place;
+        never merge the two (same never-merge posture as the shim's
+        warn-and-ignore rule for local looms/profiles).
+      - Resolved directory absent, or contains no `*.md` files →
+        **no-op**: report `init tasks: none declared` and move on.
+    - **Execution:** list `*.md` in the resolved directory and
+      execute them **in sorted filename order** (deterministic;
+      task authors prefix `00-`, `10-` where order matters). Each
+      task file is a **self-contained instruction for the init
+      agent** — follow it as written. Tasks act on the **project
+      root**, never on the rig itself.
+    - **Per-task report** — each task's outcome is reported with the
+      standard vocabulary:
+      - `WRITTEN: <task>` — the task created or changed something.
+      - `VERIFIED UNCHANGED: <task>` — already in the desired
+        state; nothing was written.
+      - `SKIPPED: <task> — <reason>` — the task's own skip
+        condition was met.
+      - `CONFLICT — left in place: <task> — <detail>` — the
+        project side disagrees with the task's expectation. Never
+        auto-resolve; report loudly and continue.
+      - `FAILED: <task> — <reason>` — the task errored.
+    - **Error posture:** a failed or conflicting task does **not**
+      abort init. Continue with the remaining tasks; every failure
+      appears in the final report (step 10). Init must stay usable;
+      the failure must be visible.
+    - **Trust model:** init tasks are rig-declared instruction text
+      the user chose to point the rig at — the same trust model as
+      the external-rig prompt-text contract (ADR-013). The
+      interface carries no domain knowledge; all semantics live in
+      the task files.
+
 10. **Report success**: Summarise the rig state including:
    - Knot service status (running)
    - Rig path (from `tie-offs/<rig>/state.json`)
    - Profiles available (from `tie-offs/<rig>/state.json`)
    - Number of registered looms
+   - Init task results (from step 9a — per-task report lines,
+     including any `CONFLICT` / `FAILED` / `OVERRIDE NOTICE`)
    - Next steps (create looms with `knot-create` skill)
 
 ---
@@ -579,7 +634,7 @@ level):
 # Sub-skills -> production library
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
-              knot-abstractions; do
+              knot-abstractions knot-visualise knot-template knot-software-factory knot-lint; do
   mkdir -p ~/.agents/skills-library/$skill
   cp -r .agents/skills/$skill/. ~/.agents/skills-library/$skill/
 done
@@ -598,7 +653,7 @@ Always verify after copying — `cp` can silently fail:
 ```bash
 for skill in knot-init knot-start knot-create knot-dispatch knot-inspect
               knot-manage knot-design knot-analyst knot-update
-              knot-abstractions; do
+              knot-abstractions knot-visualise knot-template knot-software-factory knot-lint; do
   diff .agents/skills/$skill/SKILL.md \
        ~/.agents/skills-library/$skill/SKILL.md > /dev/null 2>&1 && \
     echo "$skill: OK" || echo "$skill: FAILED"

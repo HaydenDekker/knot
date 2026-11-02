@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use crate::domain::entities::Knot;
 use crate::domain::events::{
-    build_listener_context_with_instructions, BuildContext,
-    StrandQueueAccessor,
+    build_listener_context_with_instructions, build_tie_off_context,
+    BuildContext, StrandQueueAccessor,
 };
 use crate::domain::knot_file::derive_runtime_root;
 use crate::domain::pending_event::{
@@ -21,38 +21,95 @@ pub use crate::domain::events::ContextProvider;
 
 // ── AgentEventsContextProvider ──────────────────────────────────────────
 
-/// Context provider that injects agent event instructions and pending
-/// event visibility into a producer knot's prompt.
+/// Context provider that injects the tie-off instructions, the
+/// subscriber event instructions, and pending event visibility into a
+/// knot's prompt.
 ///
-/// Combines two concerns:
+/// Combines three concerns:
 ///
-/// 1. **Event emission instructions** — what events the knot may emit and
-///    the required format (delegates to `build_listener_context`).
-/// 2. **Pending event visibility** — scans the event dispatch directories
-///    for files already emitted by this producer, giving the agent
-///    visibility to avoid emitting duplicative events.
+/// 1. **Tie-off instructions** — the unconditional `# Tie-Off` block
+///    (the hard-coded universal contract + the overridable tie-off
+///    content section; every knot, every new session).
+/// 2. **Event emission instructions** — what events the knot may emit
+///    and the required format (delegates to
+///    `build_listener_context_with_instructions`; consumer-gated — the
+///    `# Subscriber Events` block only when the knot has subscribers or
+///    a self-continuation entry).
+/// 3. **Pending event visibility** — scans the event dispatch
+///    directories for events already emitted by this producer, giving
+///    the agent visibility to avoid emitting duplicative events.
 ///
 /// Stateless — uses [`BuildContext`] for all data.
 #[derive(Debug, Clone, Default)]
 pub struct AgentEventsContextProvider;
 
+/// Plan 103: the context split by delivery destination.
+///
+/// The standing **instructions** (the `# Tie-Off` block and the
+/// consumer-gated `# Subscriber Events` block) are delivered in the
+/// **system prompt** — they survive compaction because they are never
+/// part of the transcript. The **runtime** data (the pending-events
+/// section — what is already queued right now) is per-invocation and
+/// stays in the user prompt.
+#[derive(Debug, Clone, Default)]
+pub struct SplitPromptContext {
+    /// Standing instructions → system prompt (tie-off + event blocks).
+    pub instructions: String,
+    /// Runtime data → user prompt (pending events section).
+    pub runtime: String,
+}
+
 impl AgentEventsContextProvider {
-    /// Build the full context: emission instructions + pending events section.
+    /// Build the full context: the unconditional `# Tie-Off` block +
+    /// the consumer-gated `# Subscriber Events` block + the pending
+    /// events section.
     ///
-    /// When no listeners exist, returns an empty string. When listeners
-    /// exist but no pending events are found, returns only the emission
-    /// instructions.
+    /// When no listeners exist, returns only the `# Tie-Off` block
+    /// (the tie-off concern is not scoped to producer status). When
+    /// listeners exist but no pending events are found, returns the
+    /// `# Tie-Off` block and the emission instructions.
     fn build_full_context(&self, input: &BuildContext) -> String {
-        // Pull the per-session instruction fresh here (never cached):
-        // the content section is re-read on every new session, so user
-        // edits to the configured override take effect immediately.
+        let split = self.build_split_context(input);
+        if split.runtime.is_empty() {
+            split.instructions
+        } else if split.instructions.is_empty() {
+            split.runtime
+        } else {
+            format!("{}\n\n{}", split.instructions, split.runtime)
+        }
+    }
+
+    /// Plan 103: build the context split by delivery destination —
+    /// standing instructions for the system prompt, runtime data for
+    /// the user prompt.
+    ///
+    /// Same construction as [`Self::build_full_context`]: the
+    /// `# Tie-Off` block is always built (every knot, every new
+    /// session); the `# Subscriber Events` block is consumer-gated;
+    /// the pending-events section anchors on the listener block's
+    /// marker line. Only the *routing* differs: instructions and
+    /// runtime are returned separately instead of concatenated.
+    pub fn build_split_context(&self, input: &BuildContext) -> SplitPromptContext {
+        // Pull the per-session instructions fresh here (never cached, two
+        // pulls): each section is re-read on every new session, so user
+        // edits to the configured overrides take effect immediately.
         // `None` (source not wired, or the source found nothing) → the
-        // embedded default content section. The hard-coded core (the
-        // tie-off contract, event format, rules) is never sourced.
-        let tie_off_content_instruction = input
+        // embedded default for **that section** — the other section is
+        // unaffected. The hard-coded cores (the universal tie-off
+        // contract sentence; the event acknowledgement / format / rules)
+        // are never sourced.
+        let tie_off_instruction = input
             .instruction_source
             .as_ref()
-            .and_then(|s| s.read_tie_off_content_instruction());
+            .and_then(|s| s.read_tie_off_instruction());
+        let event_content_instruction = input
+            .instruction_source
+            .as_ref()
+            .and_then(|s| s.read_event_content_instruction());
+
+        // The `# Tie-Off` block is always built — every knot, every new
+        // session (leaf knots included).
+        let mut instructions = build_tie_off_context(tie_off_instruction.as_deref());
 
         let emission_instructions =
             build_listener_context_with_instructions(
@@ -60,14 +117,23 @@ impl AgentEventsContextProvider {
                 &input.loom_id,
                 &input.all_knots,
                 input.self_continuation_desc.as_deref(),
-                tie_off_content_instruction.as_deref(),
+                event_content_instruction.as_deref(),
             );
 
-        // No listeners — no injection needed at all.
+        // Consumer-gated: no listeners and no self-continuation — only
+        // the `# Tie-Off` block is injected.
         if emission_instructions.is_empty() {
-            return String::new();
+            return SplitPromptContext {
+                instructions,
+                runtime: String::new(),
+            };
         }
 
+        instructions.push('\n');
+        instructions.push_str(&emission_instructions);
+
+        // The pending events scan anchors on the marker line of the
+        // listener block — it runs only when that block was built.
         let pending = self.scan_pending_events(
             &input.knot,
             &emission_instructions,
@@ -76,13 +142,18 @@ impl AgentEventsContextProvider {
         );
 
         if pending.is_empty() {
-            return emission_instructions;
+            return SplitPromptContext {
+                instructions,
+                runtime: String::new(),
+            };
         }
 
-        // Append the queued events section after the emission instructions.
-        // The agent sees what it can emit first, then what is already queued.
-        let pending_section = format_queued_events_section(&pending);
-        format!("{}\n\n{}", emission_instructions, pending_section)
+        // The agent sees what it can emit first (system prompt), then
+        // what is already queued (user prompt, runtime data).
+        SplitPromptContext {
+            instructions,
+            runtime: format_queued_events_section(&pending),
+        }
     }
 
     /// Build the producer's queued-events index (plan 097) from the
@@ -398,21 +469,27 @@ mod tests {
     }
 
     /// Test double for the per-session instruction source: fixed
-    /// content, `None` to emulate "linked file missing → default".
+    /// content per section, `None` to emulate "linked file missing →
+    /// embedded default for that section".
     #[derive(Debug, Default)]
     struct FixedInstructions {
-        content: Option<String>,
+        tie_off: Option<String>,
+        event_content: Option<String>,
     }
 
     impl crate::domain::events::PromptInstructionSource for FixedInstructions {
-        fn read_tie_off_content_instruction(&self) -> Option<String> {
-            self.content.clone()
+        fn read_tie_off_instruction(&self) -> Option<String> {
+            self.tie_off.clone()
+        }
+
+        fn read_event_content_instruction(&self) -> Option<String> {
+            self.event_content.clone()
         }
     }
 
-    /// A wired instruction source replaces **only the content section**
-    /// in the built context; the hard-coded core stays present. A `None`
-    /// source keeps the embedded default content section.
+    /// A wired instruction source replaces **only the linked section**
+    /// in the built context; the hard-coded cores stay present. A
+    /// `None` source keeps the embedded default for each section.
     #[test]
     fn provider_pulls_instructions_from_source_per_session() {
         let provider = AgentEventsContextProvider;
@@ -430,18 +507,24 @@ mod tests {
             PathBuf::from("/tmp/nonexistent"),
         );
         ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
-            content: Some("SKILL-SOURCED CONTENT TEXT".to_string()),
+            tie_off: Some("SKILL-SOURCED TIE-OFF TEXT".to_string()),
+            event_content: Some("SKILL-SOURCED EVENT GUIDE".to_string()),
         }));
 
         let result = provider.build_context(&ctx);
         assert!(
-            result.contains("SKILL-SOURCED CONTENT TEXT"),
-            "skill-sourced content text must appear: {}",
+            result.contains("SKILL-SOURCED TIE-OFF TEXT"),
+            "skill-sourced tie-off text must appear: {}",
+            result
+        );
+        assert!(
+            result.contains("SKILL-SOURCED EVENT GUIDE"),
+            "skill-sourced event guide must appear: {}",
             result
         );
         assert!(
             !result.contains("## Tie-Off Content"),
-            "the default content section must be replaced: {}",
+            "the default tie-off content section must be replaced: {}",
             result
         );
         assert!(
@@ -449,11 +532,11 @@ mod tests {
             "the default event-content guide must be replaced: {}",
             result
         );
-        // The hard-coded core is always present — never replaced by an
+        // The hard-coded cores are always present — never replaced by an
         // override:
         assert!(
             result.contains("## Tie-Off Contract"),
-            "the hard-coded contract must stay: {}",
+            "the hard-coded universal contract must stay: {}",
             result
         );
         assert!(
@@ -467,15 +550,20 @@ mod tests {
             result
         );
 
-        // "Pulled per session": a second build with a different source
-        // content reflects the new content (nothing is cached).
+        // "Pulled per session": a second build with different source
+        // content reflects the new content (nothing is cached) — and
+        // only the changed section.
         ctx.instruction_source = Some(std::sync::Arc::new(FixedInstructions {
-            content: Some("UPDATED CONTENT TEXT".to_string()),
+            tie_off: Some("UPDATED TIE-OFF TEXT".to_string()),
+            event_content: Some("SKILL-SOURCED EVENT GUIDE".to_string()),
         }));
         let again = provider.build_context(&ctx);
-        assert!(again.contains("UPDATED CONTENT TEXT"));
-        assert!(!again.contains("SKILL-SOURCED CONTENT TEXT"));
-        // The hard-coded core survives the content change untouched.
+        assert!(again.contains("UPDATED TIE-OFF TEXT"));
+        assert!(!again.contains("SKILL-SOURCED TIE-OFF TEXT"));
+        // The other section is unaffected — the event guide is
+        // byte-identical between the two builds.
+        assert!(again.contains("SKILL-SOURCED EVENT GUIDE"));
+        // The hard-coded cores survive the content change untouched.
         assert!(again.contains("## Tie-Off Contract"));
         assert!(again.contains("## Event Format"));
         assert!(again.contains("## Rules"));
@@ -546,9 +634,11 @@ mod tests {
         std::fs::write(event_dir.join(filename), content).unwrap();
     }
 
-    /// No listeners → returns empty string.
+    /// Plan 102: a **leaf knot** (no listeners) still receives the
+    /// unconditional `# Tie-Off` block — and no `# Subscriber Events`
+    /// block.
     #[test]
-    fn no_listeners_returns_empty() {
+    fn leaf_knot_receives_tie_off_block_only() {
         let provider = AgentEventsContextProvider;
         let knot = make_producer_knot("plan-creator");
         let ctx = make_build_context(
@@ -560,14 +650,34 @@ mod tests {
 
         let result = provider.build_context(&ctx);
         assert!(
-            result.is_empty(),
-            "no listeners should produce empty context: '{}'",
+            result.starts_with("# Tie-Off\n"),
+            "leaf knot: tie-off block must lead the prompt: '{}'",
+            result
+        );
+        assert!(
+            result.contains("## Tie-Off Contract"),
+            "leaf knot: hard-coded universal contract must be present: {}",
+            result
+        );
+        assert!(
+            result.contains("## Tie-Off Content"),
+            "leaf knot: default tie-off content must be present: {}",
+            result
+        );
+        assert!(
+            !result.contains("# Subscriber Events"),
+            "leaf knot: no subscriber events block: {}",
+            result
+        );
+        assert!(
+            !result.contains("## Queued Events"),
+            "leaf knot: no pending events section: {}",
             result
         );
     }
 
-    /// Listeners exist but no pending events → returns only emission
-    /// instructions (no pending events section).
+    /// Listeners exist but no pending events → returns the `# Tie-Off`
+    /// block and the emission instructions (no pending events section).
     #[test]
     fn listeners_no_pending_events_returns_only_instructions() {
         let provider = AgentEventsContextProvider;
@@ -587,10 +697,19 @@ mod tests {
 
         let result = provider.build_context(&ctx);
         assert!(
+            result.contains("# Tie-Off"),
+            "should contain the tie-off block: {}",
+            result
+        );
+        assert!(
             result.contains("# Subscriber Events"),
             "should contain emission instructions: {}",
             result
         );
+        // `# Tie-Off` precedes `# Subscriber Events`.
+        let tie_off_pos = result.find("# Tie-Off").unwrap();
+        let listener_pos = result.find("# Subscriber Events").unwrap();
+        assert!(tie_off_pos < listener_pos);
         assert!(
             !result.contains("## Queued Events"),
             "should NOT contain queued events section: {}",
@@ -1152,6 +1271,166 @@ mod tests {
             !result.contains("## Queued Events"),
             "non-emittable types must be scoped out: {}",
             result
+        );
+    }
+
+    // ── Plan 103 Phase 0: the split by delivery destination ─────────
+
+    /// A leaf knot (no subscribers): the `# Tie-Off` block is the
+    /// whole instruction payload; the runtime payload is empty.
+    #[test]
+    fn split_leaf_knot_carries_tie_off_in_instructions_only() {
+        let leaf = make_producer_knot("lonely-knot");
+        let ctx = make_build_context(
+            leaf,
+            default_loom_id(),
+            vec![],
+            PathBuf::from("/tmp/nonexistent"),
+        );
+
+        let split = AgentEventsContextProvider.build_split_context(&ctx);
+
+        assert!(
+            split.instructions.starts_with("# Tie-Off\n"),
+            "the tie-off block must lead the instructions: {}",
+            split.instructions
+        );
+        assert!(
+            split.runtime.is_empty(),
+            "a leaf knot has no runtime payload: {}",
+            split.runtime
+        );
+    }
+
+    /// A producer with a subscriber: both standing blocks (tie-off +
+    /// subscriber events) are in the instructions; with nothing queued
+    /// the runtime payload stays empty.
+    #[test]
+    fn split_producer_blocks_both_live_in_instructions() {
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_build_context(
+            producer,
+            default_loom_id(),
+            vec![consumer],
+            PathBuf::from("/tmp/nonexistent"),
+        );
+
+        let split = AgentEventsContextProvider.build_split_context(&ctx);
+
+        assert!(
+            split.instructions.starts_with("# Tie-Off\n"),
+            "tie-off must lead: {}",
+            split.instructions
+        );
+        assert!(
+            split.instructions.contains("# Subscriber Events"),
+            "event block must be in the instructions: {}",
+            split.instructions
+        );
+        assert!(
+            split.runtime.is_empty(),
+            "nothing queued → empty runtime: {}",
+            split.runtime
+        );
+    }
+
+    /// The pending-events section is RUNTIME data: it lands in the
+    /// runtime payload, never in the standing instructions.
+    #[test]
+    fn split_pending_events_land_in_runtime_not_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+
+        let path = seed_queued_event(
+            &rig_dir,
+            "review-loom",
+            "PlanCreated",
+            "plan-creator",
+            "event-2026-07-14T10-00-00Z.md",
+        );
+        let queue = FakeQueue {
+            entries: vec![crate::domain::pending_event::QueueEntryView {
+                strand_path: path,
+                queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+                event_id: None,
+                producer: None,
+            }],
+        };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir, queue);
+
+        let split = AgentEventsContextProvider.build_split_context(&ctx);
+
+        assert!(
+            split.runtime.contains("## Queued Events"),
+            "queued events must be in the runtime payload: {}",
+            split.runtime
+        );
+        assert!(
+            !split.instructions.contains("## Queued Events"),
+            "queued events must NOT be in the standing instructions: {}",
+            split.instructions
+        );
+        assert!(
+            split.instructions.contains("# Tie-Off")
+                && split.instructions.contains("# Subscriber Events"),
+            "both standing blocks stay in the instructions: {}",
+            split.instructions
+        );
+    }
+
+    /// Wire-compat: the composed full context (instructions + runtime)
+    /// equals what `build_context` produced pre-split — the Phase 0
+    /// guarantee that nothing changed on the wire.
+    #[test]
+    fn split_composes_back_to_the_full_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir(&rig_dir).unwrap();
+        let path = seed_queued_event(
+            &rig_dir,
+            "review-loom",
+            "PlanCreated",
+            "plan-creator",
+            "event-2026-07-14T10-00-00Z.md",
+        );
+        let queue = FakeQueue {
+            entries: vec![crate::domain::pending_event::QueueEntryView {
+                strand_path: path,
+                queued_at: "2026-10-18T15:30:00+02:00".to_string(),
+                event_id: None,
+                producer: None,
+            }],
+        };
+        let producer = make_producer_knot("plan-creator");
+        let consumer = make_consumer_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let ctx = make_ctx_with_queue(producer, consumer, rig_dir, queue);
+
+        let split = AgentEventsContextProvider.build_split_context(&ctx);
+        let full = AgentEventsContextProvider.build_context(&ctx);
+
+        assert_eq!(
+            full,
+            format!("{}\n\n{}", split.instructions, split.runtime),
+            "the split must compose back to the full context"
         );
     }
 }

@@ -103,25 +103,45 @@ pub trait StrandQueueAccessor: Send + Sync + std::fmt::Debug {
     fn delete(&self, id: &crate::domain::pending_event::PendingEventId) -> bool;
 }
 
-/// Trait for reading per-session prompt instruction content (the
-/// tie-off **content section** — the `knot-template` skill's content
-/// template).
+/// Trait for reading per-session prompt instruction content (the two
+/// overridable instruction **documents** — the `knot-template` skill's
+/// two content templates).
 ///
-/// The tie-off contract, event format, and rules
-/// ([`DEFAULT_TIE_OFF_INSTRUCTION`]) are hard-coded and never
-/// overridable; this source only ever supplies the content section
-/// (the tie-off header/narrative content + the event-content guide).
+/// The two documents, each with a fixed injection scope:
 ///
-/// Every call is a fresh read — the instruction is pulled each new
+/// - **Doc 1 — the tie-off instruction** (`read_tie_off_instruction`,
+///   the `## Tie-Off Content` section — the tie-off's header/narrative
+///   content). Injected into **every** knot, every new session —
+///   unconditional (the `# Tie-Off` block).
+/// - **Doc 2 — the event-content instruction**
+///   (`read_event_content_instruction`, the `## Event Content Guide`
+///   section — how to fill in the event blocks). Injected **only when
+///   the knot has subscriber events** (the `# Subscriber Events`
+///   block).
+///
+/// The hard-coded cores — the universal tie-off contract sentence
+/// ([`DEFAULT_TIE_OFF_CONTRACT`]) and the event acknowledgement / format
+/// / rules ([`DEFAULT_EVENT_CONTRACT`]) — are never overridable; this
+/// source supplies the two content sections only.
+///
+/// Every call is a fresh read — each instruction is pulled each new
 /// session (never cached from startup or a previous run). A `None`
 /// result means "no per-rig link available": the caller falls back to
-/// the hard-coded embedded default
-/// ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]).
+/// the hard-coded embedded default for **that section**
+/// ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`] / [`DEFAULT_EVENT_CONTENT_INSTRUCTION`])
+/// — the other section is unaffected.
 pub trait PromptInstructionSource: Send + Sync + std::fmt::Debug {
-    /// The tie-off content-section instruction for a new session (the
-    /// file linked in the rig config, or `None` for the hard-coded
-    /// default).
-    fn read_tie_off_content_instruction(&self) -> Option<String>;
+    /// The tie-off instruction (doc 1 — the `## Tie-Off Content`
+    /// section) for a new session: the file linked in the rig config
+    /// (`tie-off-instruction-file`), or `None` for the hard-coded
+    /// default tie-off content section.
+    fn read_tie_off_instruction(&self) -> Option<String>;
+
+    /// The event-content instruction (doc 2 — the `## Event Content
+    /// Guide` section) for a new session: the file linked in the rig
+    /// config (`event-content-instruction-file`), or `None` for the
+    /// hard-coded default event-content guide.
+    fn read_event_content_instruction(&self) -> Option<String>;
 }
 
 /// Data required to build dynamic prompt context segments.
@@ -151,12 +171,14 @@ pub struct BuildContext {
     /// note can fire, so the format must be known before it can).
     /// `None` for non-water-marked aliases (the block is unchanged).
     pub self_continuation_desc: Option<String>,
-    /// Per-session instruction source (the tie-off **content section**
-    /// — the `knot-template` skill's content template). The hard-coded
-    /// core (contract / event format / rules) is never sourced. `None`
-    /// when not wired (unit tests) — the hard-coded embedded default
-    /// content section is used. Fetched fresh on every build: pulled
-    /// each new session, never cached.
+    /// Per-session instruction source (the two overridable instruction
+    /// **documents** — the `knot-template` skill's two content
+    /// templates: the tie-off content section and the event-content
+    /// guide). The hard-coded cores ([`DEFAULT_TIE_OFF_CONTRACT`] / [`DEFAULT_EVENT_CONTRACT`])
+    /// are never sourced. `None` when not wired (unit tests) — the
+    /// hard-coded embedded defaults for both sections are used. Fetched
+    /// fresh on every build (two pulls): each is pulled each new
+    /// session, never cached.
     pub instruction_source: Option<Arc<dyn PromptInstructionSource>>,
 }
 
@@ -176,46 +198,72 @@ pub trait ContextProvider {
 
 // ── Context Injection ──────────────────────────────────────────────────────
 
-/// The hard-coded tie-off contract (the `knot-tie-off` template).
+/// The hard-coded universal tie-off contract (the
+/// `knot-tie-off-contract` template) — the `## Tie-Off Contract`
+/// section of the `# Tie-Off` block.
 ///
-/// The core of the `# Subscriber Events` block injected into every
-/// producer knot's prompt: the tie-off contract (the final response
-/// *is* the tie-off), the event format (the fixed `event:` / `occurred:`
-/// / `timestamp:` block), and the rules (one structured block per
-/// subscriber event — always, even when `occurred: false`). This text
-/// is **never overridable per rig**: the per-rig link
-/// (`tie-off-content-instruction-file`) reaches only the content
-/// section ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]).
+/// The universal sentence: the final response *is* the tie-off, and
+/// `tie-offs/` files are never written or read directly. Injected
+/// **unconditionally** into every knot's prompt, every new session
+/// (leaf knots included) — the tie-off concern is not scoped to
+/// producer status. This text is **never overridable per rig**: the
+/// per-rig link (`tie-off-instruction-file`) reaches only the
+/// tie-off content section ([`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]).
 ///
 /// The text lives in this repository at
-/// `.agents/skills/knot-template/knot-tie-off.md` — the `knot-template`
-/// skill's contract reference, deployed alongside it to
-/// `~/.agents/skills-library/knot-template/` — and is compiled in here:
-/// this constant is the single source of truth.
+/// `.agents/skills/knot-template/knot-tie-off-contract.md` — the
+/// `knot-template` skill's contract reference (reference only, never
+/// copied into the project), deployed alongside it to
+/// `~/.agents/skills-library/knot-template/` — and is compiled in
+/// here: this constant is the single source of truth.
 ///
 /// User-facing agent text — keep it greppable. The template file is the
 /// source of truth; edit it there.
-pub const DEFAULT_TIE_OFF_INSTRUCTION: &str =
-    include_str!("../../.agents/skills/knot-template/knot-tie-off.md");
+pub const DEFAULT_TIE_OFF_CONTRACT: &str =
+    include_str!("../../.agents/skills/knot-template/knot-tie-off-contract.md");
 
-/// The default tie-off content section (the `knot-tie-off-content`
-/// template).
+/// The hard-coded event contract (the `knot-event-contract` template)
+/// — the core of the `# Subscriber Events` block.
 ///
-/// The one overridable part of the `# Subscriber Events` block: the
-/// tie-off's header/narrative content (`## Tie-Off Content`) and how to
-/// fill in each event block's content — the `description` field, the
-/// narrative body, and the extra fields a subscriber declares in its
-/// `event_description` (`## Event Content Guide`).
+/// The subscriber acknowledgement ("you have a number of subscribers…"
+/// — each event must be acknowledged in the tie-off), the event format
+/// (the fixed `event:` / `occurred:` / `timestamp:` block), and the
+/// rules (one structured block per subscriber event — always, even
+/// when `occurred: false`). Injected **only when the knot has
+/// subscriber events** (or a self-continuation entry) — the format and
+/// rules only make sense for knots that emit. This text is **never
+/// overridable per rig**: the per-rig link
+/// (`event-content-instruction-file`) reaches only the event-content
+/// guide ([`DEFAULT_EVENT_CONTENT_INSTRUCTION`]).
+///
+/// The text lives in this repository at
+/// `.agents/skills/knot-template/knot-event-contract.md` — the
+/// `knot-template` skill's contract reference (reference only, never
+/// copied into the project), deployed alongside it to
+/// `~/.agents/skills-library/knot-template/` — and is compiled in
+/// here: this constant is the single source of truth.
+///
+/// User-facing agent text — keep it greppable. The template file is the
+/// source of truth; edit it there.
+pub const DEFAULT_EVENT_CONTRACT: &str =
+    include_str!("../../.agents/skills/knot-template/knot-event-contract.md");
+
+/// The default tie-off instruction (doc 1 — the `knot-tie-off-content`
+/// template: the `## Tie-Off Content` section only).
+///
+/// The overridable part of the `# Tie-Off` block: the tie-off's
+/// header/narrative content — how to write the agent's final response.
+/// Injected into **every** knot, every new session (unconditional).
 ///
 /// Single source of truth: the text lives in this repository at
 /// `.agents/skills/knot-template/knot-tie-off-content.md` (the
-/// `knot-template` skill's content template, deployed alongside it to
-/// `~/.agents/skills-library/knot-template/`) and is compiled in here.
-/// `FileSystemPromptInstructionSource` resolves the per-session text
-/// fresh (never cached; the service never writes into the rig): a
-/// per-rig link named in `.workspace-agent-config.yaml`
-/// (`tie-off-content-instruction-file`) wins if readable, otherwise
-/// this embedded default content section is injected. The
+/// `knot-template` skill's tie-off content template, deployed
+/// alongside it to `~/.agents/skills-library/knot-template/`) and is
+/// compiled in here. `FileSystemPromptInstructionSource` resolves the
+/// per-session text fresh (never cached; the service never writes into
+/// the rig): a per-rig link named in
+/// `.workspace-agent-config.yaml` (`tie-off-instruction-file`) wins if
+/// readable, otherwise this embedded default section is injected. The
 /// `knot-template` skill is the agent-readable procedure for creating
 /// that per-rig override.
 ///
@@ -224,11 +272,74 @@ pub const DEFAULT_TIE_OFF_INSTRUCTION: &str =
 pub const DEFAULT_TIE_OFF_CONTENT_INSTRUCTION: &str =
     include_str!("../../.agents/skills/knot-template/knot-tie-off-content.md");
 
+/// The default event-content instruction (doc 2 — the
+/// `knot-event-content` template: the `## Event Content Guide` section
+/// only).
+///
+/// The overridable part of the `# Subscriber Events` block: how to fill
+/// in each event block's content — the `description` field, the
+/// narrative body, and the extra fields a subscriber declares in its
+/// `event_description`. Injected **only when the knot has subscriber
+/// events** (or a self-continuation entry).
+///
+/// Single source of truth: the text lives in this repository at
+/// `.agents/skills/knot-template/knot-event-content.md` (the
+/// `knot-template` skill's event-content template, deployed alongside
+/// it to `~/.agents/skills-library/knot-template/`) and is compiled in
+/// here. `FileSystemPromptInstructionSource` resolves the per-session
+/// text fresh (never cached; the service never writes into the rig):
+/// a per-rig link named in `.workspace-agent-config.yaml`
+/// (`event-content-instruction-file`) wins if readable, otherwise this
+/// embedded default guide is injected. A failure of this link never
+/// affects the tie-off instruction (per-section fallback).
+///
+/// User-facing agent text — keep it greppable. The template file is the
+/// source of truth; edit it there.
+pub const DEFAULT_EVENT_CONTENT_INSTRUCTION: &str =
+    include_str!("../../.agents/skills/knot-template/knot-event-content.md");
+
+/// Build the **unconditional** `# Tie-Off` block injected at the start
+/// of **every** knot's prompt, every new session — leaf knots included.
+///
+/// Shape: the `# Tie-Off` header, the hard-coded universal contract
+/// ([`DEFAULT_TIE_OFF_CONTRACT`], the `## Tie-Off Contract` section —
+/// never replaced), the tie-off content section (doc 1 —
+/// `tie_off_content_instruction` when `Some` — pulled fresh for this
+/// session — else the embedded default
+/// [`DEFAULT_TIE_OFF_CONTENT_INSTRUCTION`]), and a closing `---`.
+///
+/// **Never empty** — the tie-off concern is not scoped to producer
+/// status: even a knot with no subscribers receives the contract and
+/// the (possibly per-rig-overridden) tie-off content.
+pub fn build_tie_off_context(tie_off_content_instruction: Option<&str>) -> String {
+    let mut output = String::from("# Tie-Off\n\n");
+
+    // The hard-coded universal contract — never overridable per rig.
+    output.push_str(DEFAULT_TIE_OFF_CONTRACT);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    // The overridable tie-off content section (doc 1) — pulled fresh
+    // per session by the application layer and passed in.
+    // `None` → the embedded default section.
+    let content_section = tie_off_content_instruction
+        .unwrap_or(DEFAULT_TIE_OFF_CONTENT_INSTRUCTION);
+    output.push('\n');
+    output.push_str(content_section);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str("---\n\n");
+
+    output
+}
+
 /// Build the listener context block to inject at the start of a target
 /// knot's prompt.
 ///
 /// Delegates to [`build_listener_context_with_instructions`] with the
-/// embedded default content section (no per-session source).
+/// embedded default event-content guide (no per-session source).
 pub fn build_listener_context(
     knot: &Knot,
     loom_id: &LoomId,
@@ -244,12 +355,12 @@ pub fn build_listener_context(
     )
 }
 
-/// Same as [`build_listener_context`], but the tie-off **content
-/// section** is taken from `tie_off_content_instruction` when `Some` —
+/// Same as [`build_listener_context`], but the **event-content guide**
+/// (doc 2) is taken from `event_content_instruction` when `Some` —
 /// content pulled fresh for this session — with the embedded default
-/// as the `None` fallback. The hard-coded core
-/// ([`DEFAULT_TIE_OFF_INSTRUCTION`]: contract, event format, rules) is
-/// always injected — never replaced.
+/// as the `None` fallback. The hard-coded event core
+/// ([`DEFAULT_EVENT_CONTRACT`]: acknowledgement, event format, rules)
+/// is always injected when the block is built — never replaced.
 ///
 /// Scans all knots' `strand_source` entries for `EventUri` subscriptions
 /// where the current knot is the producer. Groups by `event-id` — if
@@ -261,7 +372,8 @@ pub fn build_listener_context(
 /// is injected.
 ///
 /// Returns an empty string when no consumers are listening (no injection
-/// needed).
+/// needed — the `# Subscriber Events` block is consumer-gated; the
+/// `# Tie-Off` block is built separately and unconditionally).
 ///
 /// The returned markdown is designed to be prepended to the knot's
 /// instructions before execution.
@@ -270,7 +382,7 @@ pub fn build_listener_context_with_instructions(
     loom_id: &LoomId,
     all_knots: &[Knot],
     self_continuation_desc: Option<&str>,
-    tie_off_content_instruction: Option<&str>,
+    event_content_instruction: Option<&str>,
 ) -> String {
     use crate::domain::value_objects::StrandSource;
 
@@ -300,19 +412,24 @@ pub fn build_listener_context_with_instructions(
 
     // Group by event-id, preserving insertion order (first seen wins for
     // the description). Map event_id -> description.
-    let mut seen_ids: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    //
+    // Plan 103 fix: this was a HashMap iterated directly — HashMap
+    // iteration order is randomized per process, so the bullet run in
+    // the emitted block was non-deterministic (the plan 102
+    // byte-identical test flaked ~1-in-4 runs). A Vec keeps the
+    // documented insertion-order contract.
+    let mut seen_ids: Vec<(String, String)> = Vec::new();
     for consumer in &matching_knots {
         if let StrandSource::EventUri {
             producer_knot: _,
             event_id,
         } = &consumer.strand_source
         {
-            if !seen_ids.contains_key(event_id) {
+            if !seen_ids.iter().any(|(id, _)| id == event_id) {
                 let desc = consumer.event_description.as_deref().unwrap_or(
                     "If this event occurs, emit a structured event block in your final response.",
                 );
-                seen_ids.insert(event_id.clone(), desc.to_string());
+                seen_ids.push((event_id.clone(), desc.to_string()));
             }
         }
     }
@@ -321,10 +438,9 @@ pub fn build_listener_context_with_instructions(
     // water-marked aliases. The knot self-consumes this event; the
     // description is the handoff contract (TASKS_INCOMPLETE_DESCRIPTION).
     if let Some(desc) = self_continuation_desc {
-        seen_ids.insert(
-            "TasksIncomplete".to_string(),
-            desc.to_string(),
-        );
+        if !seen_ids.iter().any(|(id, _)| id == "TasksIncomplete") {
+            seen_ids.push(("TasksIncomplete".to_string(), desc.to_string()));
+        }
     }
 
     let mut output = String::from(
@@ -339,23 +455,23 @@ pub fn build_listener_context_with_instructions(
         ));
     }
 
-    // The hard-coded core — the tie-off contract, the event format, and
-    // the rules — is always injected: it is the Knot agent's contract
-    // and is never overridable per rig.
+    // The hard-coded event core — the subscriber acknowledgement, the
+    // event format, and the rules — is always injected when the block
+    // is built: it is the Knot agent's contract and is never
+    // overridable per rig.
     output.push('\n');
-    output.push_str(DEFAULT_TIE_OFF_INSTRUCTION);
+    output.push_str(DEFAULT_EVENT_CONTRACT);
     if !output.ends_with('\n') {
         output.push('\n');
     }
 
-    // The one overridable part — the tie-off content section — pulled
-    // fresh per session by the application layer and passed in.
-    // `None` → the embedded default content section.
-    let content_section = tie_off_content_instruction
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.to_string());
+    // The overridable event-content guide (doc 2) — pulled fresh per
+    // session by the application layer and passed in. `None` → the
+    // embedded default guide.
+    let event_content_section = event_content_instruction
+        .unwrap_or(DEFAULT_EVENT_CONTENT_INSTRUCTION);
     output.push('\n');
-    output.push_str(&content_section);
+    output.push_str(event_content_section);
     if !output.ends_with('\n') {
         output.push('\n');
     }
@@ -1300,38 +1416,92 @@ mod tests {
         );
     }
 
-    /// The injected tie-off directions tell the agent never to access
-    /// tie-off files directly — they are owned by the infrastructure.
+    /// The injected universal tie-off contract (the unconditional
+    /// `# Tie-Off` block) tells the agent never to access tie-off files
+    /// directly — they are owned by the infrastructure.
     #[test]
-    fn build_listener_context_forbids_direct_tieoff_access() {
-        let producer = make_test_knot("plan-creator");
-        let consumer = make_event_knot(
-            "plan-validator",
-            "plan-creator",
-            "PlanCreated",
-            Some("When a plan is created".to_string()),
-        );
-        let context = build_listener_context(&producer, &default_loom_id(), &[consumer], None);
+    fn tie_off_context_forbids_direct_tieoff_access() {
+        let context = build_tie_off_context(None);
         assert!(
-            context.contains(
-                "never write or read directly from `tie-offs/` files"
-            ),
+            context.contains("never write or read directly from"),
             "tie-off directions should forbid direct tie-offs/ access: {}",
             context
         );
         assert!(
-            context.contains("managed by the infrastructure service"),
+            context.contains("`tie-offs/`"),
+            "tie-off directions must name the tie-offs/ dir: {}",
+            context
+        );
+        assert!(
+            context.contains("infrastructure service"),
             "tie-off directions should state tie-offs are infrastructure-managed: {}",
             context
         );
     }
 
-    /// A skill-sourced content section (pulled per session) replaces
-    /// **only the content section**: the hard-coded core (contract,
-    /// event format, rules) stays present; `None` keeps the default
-    /// content section.
+    /// Plan 102: **leaf knot** (no consumers, no self-continuation) —
+    /// the `# Subscriber Events` block is consumer-gated (empty), but
+    /// the `# Tie-Off` block is unconditional: the full block with both
+    /// default sections (the universal contract + the default
+    /// tie-off content).
     #[test]
-    fn listener_context_with_instructions_content_replaces_only_content_section() {
+    fn tie_off_block_is_unconditional_for_leaf_knots() {
+        let leaf = make_test_knot("orchestrator");
+        let all_knots: [Knot; 0] = [];
+        let listener = build_listener_context(&leaf, &default_loom_id(), &all_knots, None);
+        assert!(
+            listener.is_empty(),
+            "leaf knot: no subscriber events block: '{}'",
+            listener
+        );
+        let tie_off = build_tie_off_context(None);
+        assert!(
+            tie_off.starts_with("# Tie-Off\n\n"),
+            "tie-off block must start with the # Tie-Off header: {}",
+            tie_off
+        );
+        assert!(
+            tie_off.contains("## Tie-Off Contract"),
+            "hard-coded universal contract must be present: {}",
+            tie_off
+        );
+        assert!(
+            tie_off.contains("never write or read directly from"),
+            "universal contract sentence must reach leaf knots: {}",
+            tie_off
+        );
+        assert!(
+            tie_off.contains("`tie-offs/`"),
+            "universal contract must name the tie-offs/ dir: {}",
+            tie_off
+        );
+        assert!(
+            tie_off.contains("## Tie-Off Content"),
+            "default tie-off content section must be present: {}",
+            tie_off
+        );
+        assert!(
+            !tie_off.contains("# Subscriber Events"),
+            "leaf knot: no subscriber events block in the tie-off: {}",
+            tie_off
+        );
+        assert!(
+            !tie_off.contains("## Event Content Guide"),
+            "leaf knot: no event-content guide: {}",
+            tie_off
+        );
+        assert!(
+            tie_off.trim_end().ends_with("---"),
+            "tie-off block must close with ---: {}",
+            tie_off
+        );
+    }
+
+    /// Plan 102: **consumer knot** — both blocks are present, the
+    /// `# Tie-Off` block first, then `# Subscriber Events`; the
+    /// `## Tie-Off Contract` heading appears exactly once per prompt.
+    #[test]
+    fn consumer_knot_prompt_has_both_blocks_in_order() {
         let producer = make_test_knot("plan-creator");
         let consumer = make_event_knot(
             "plan-validator",
@@ -1339,70 +1509,202 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context_with_instructions(
+        let tie_off = build_tie_off_context(None);
+        let listener = build_listener_context(
             &producer,
             &default_loom_id(),
             &[consumer],
             None,
-            Some("CUSTOM CONTENT SECTION"),
+        );
+        assert!(!listener.is_empty());
+        let prompt = format!("{}{}", tie_off, listener);
+        let tie_off_pos = prompt.find("# Tie-Off").unwrap();
+        let listener_pos = prompt.find("# Subscriber Events").unwrap();
+        assert!(
+            tie_off_pos < listener_pos,
+            "# Tie-Off must precede # Subscriber Events: {}",
+            prompt
+        );
+        assert_eq!(
+            prompt.matches("## Tie-Off Contract").count(),
+            1,
+            "the ## Tie-Off Contract heading must appear exactly once: {}",
+            prompt
+        );
+    }
+
+    /// Plan 102: the marker line and the contiguous `- \`EventId\``
+    /// bullet run are byte-identical to the pre-split shape (protects
+    /// `extract_emitted_event_ids`, which anchors on them).
+    #[test]
+    fn listener_block_marker_and_bullets_are_byte_identical() {
+        let producer = make_test_knot("plan-creator");
+        let consumer1 = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let consumer2 = make_event_knot(
+            "plan-fixer",
+            "plan-creator",
+            "ValidationFailed",
+            Some("When validation fails".to_string()),
+        );
+        let listener = build_listener_context(
+            &producer,
+            &default_loom_id(),
+            &[consumer1, consumer2],
+            None,
         );
         assert!(
-            context.contains("CUSTOM CONTENT SECTION"),
-            "custom content section must be injected: {}",
-            context
+            listener.starts_with(
+                "# Subscriber Events\n\n\
+                 The following event/s have been declared by subscribers:\n\n\
+                 - `PlanCreated` — When a plan is created\n\
+                 - `ValidationFailed` — When validation fails\n"
+            ),
+            "marker line + bullet run must be byte-identical: {}",
+            listener
+        );
+    }
+
+    /// Plan 102: a `Some` doc-1 override replaces **only the
+    /// tie-off content** — the default `## Event Content Guide` text
+    /// stays in the (consumer knot's) listener block; the `## Tie-Off
+    /// Contract` and the event format/rules cores are present.
+    #[test]
+    fn doc1_override_replaces_only_tie_off_content() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let tie_off = build_tie_off_context(Some("CUSTOM TIE-OFF CONTENT"));
+        let listener = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &[consumer],
+            None,
+            None,
+        );
+        let prompt = format!("{}{}", tie_off, listener);
+        assert!(
+            prompt.contains("CUSTOM TIE-OFF CONTENT"),
+            "doc-1 override must be injected: {}",
+            prompt
         );
         assert!(
-            !context.contains("## Tie-Off Content"),
-            "default content section must be replaced, not appended: {}",
-            context
+            !prompt.contains("## Tie-Off Content"),
+            "default tie-off content must be replaced, not appended: {}",
+            prompt
+        );
+        // The other section is unaffected — the default event-content
+        // guide is still present:
+        assert!(
+            prompt.contains("## Event Content Guide"),
+            "default event-content guide must stay: {}",
+            prompt
+        );
+        // The hard-coded cores are always present — never replaced:
+        assert!(
+            prompt.contains("## Tie-Off Contract"),
+            "hard-coded universal contract must stay: {}",
+            prompt
         );
         assert!(
-            !context.contains("## Event Content Guide"),
-            "default event-content guide must be replaced, not appended: {}",
-            context
-        );
-        // The hard-coded core is always present — never replaced by an
-        // override:
-        assert!(
-            context.contains("## Tie-Off Contract"),
-            "hard-coded contract must stay: {}",
-            context
-        );
-        assert!(
-            context.contains("## Event Format"),
+            prompt.contains("## Event Format"),
             "hard-coded event format must stay: {}",
-            context
+            prompt
         );
         assert!(
-            context.contains("## Rules"),
+            prompt.contains("## Rules"),
             "hard-coded rules must stay: {}",
-            context
+            prompt
+        );
+    }
+
+    /// Plan 102: a `Some` doc-2 override replaces **only the
+    /// event-content guide** — the default `## Tie-Off Content` section
+    /// stays in the `# Tie-Off` block; the event cores are present.
+    #[test]
+    fn doc2_override_replaces_only_event_content_guide() {
+        let producer = make_test_knot("plan-creator");
+        let consumer = make_event_knot(
+            "plan-validator",
+            "plan-creator",
+            "PlanCreated",
+            Some("When a plan is created".to_string()),
+        );
+        let listener = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &[consumer],
+            None,
+            Some("CUSTOM EVENT CONTENT GUIDE"),
+        );
+        let tie_off = build_tie_off_context(None);
+        let prompt = format!("{}{}", tie_off, listener);
+        assert!(
+            prompt.contains("CUSTOM EVENT CONTENT GUIDE"),
+            "doc-2 override must be injected: {}",
+            prompt
         );
         assert!(
-            context.contains("event: EventId"),
+            !prompt.contains("## Event Content Guide"),
+            "default event-content guide must be replaced, not appended: {}",
+            prompt
+        );
+        // The other section is unaffected — the default tie-off content
+        // is still present:
+        assert!(
+            prompt.contains("## Tie-Off Content"),
+            "default tie-off content must stay: {}",
+            prompt
+        );
+        // The hard-coded event core is always present — never replaced:
+        assert!(
+            prompt.contains("## Event Acknowledgement"),
+            "hard-coded event acknowledgement must stay: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("## Event Format"),
+            "hard-coded event format must stay: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("## Rules"),
+            "hard-coded rules must stay: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("event: EventId"),
             "hard-coded event properties must stay: {}",
-            context
+            prompt
         );
         assert!(
-            context.contains("occurred: true"),
+            prompt.contains("occurred: true"),
             "hard-coded event properties must stay: {}",
-            context
+            prompt
         );
         assert!(
-            context.contains("Emit exactly one event block per subscriber event"),
+            prompt.contains("Emit exactly one event block per subscriber event"),
             "hard-coded emit-always rule must stay: {}",
-            context
+            prompt
         );
         // The subscriber bullets are untouched.
-        assert!(context.contains("# Subscriber Events"));
-        assert!(context.contains("`PlanCreated`"));
+        assert!(prompt.contains("# Subscriber Events"));
+        assert!(prompt.contains("`PlanCreated`"));
     }
 
-    /// `None` falls back to the embedded defaults — the hard-coded core
-    /// and the default content section (typos fixed relative to the old
-    /// hard-coded text).
+    /// Plan 102: both `None` → full defaults — the `# Tie-Off` block
+    /// with both default sections, then the `# Subscriber Events` block
+    /// with the event cores and the default event-content guide.
     #[test]
-    fn listener_context_with_instructions_none_uses_defaults() {
+    fn both_sections_default_when_no_instructions() {
         let producer = make_test_knot("plan-creator");
         let consumer = make_event_knot(
             "plan-validator",
@@ -1410,36 +1712,67 @@ mod tests {
             "PlanCreated",
             Some("When a plan is created".to_string()),
         );
-        let context = build_listener_context_with_instructions(
+        let tie_off = build_tie_off_context(None);
+        let listener = build_listener_context_with_instructions(
             &producer,
             &default_loom_id(),
             &[consumer],
             None,
             None,
         );
-        assert!(context.contains("## Tie-Off Contract"));
-        assert!(context.contains("## Event Format"));
-        assert!(context.contains("## Rules"));
-        assert!(context.contains("## Tie-Off Content"));
-        assert!(context.contains("## Event Content Guide"));
-        assert!(context.contains("acknowledge each event"));
-        assert!(!context.contains("acknolowedge"));
+        let prompt = format!("{}{}", tie_off, listener);
+        assert!(prompt.contains("## Tie-Off Contract"));
+        assert!(prompt.contains("## Tie-Off Content"));
+        assert!(prompt.contains("## Event Acknowledgement"));
+        assert!(prompt.contains("## Event Format"));
+        assert!(prompt.contains("## Rules"));
+        assert!(prompt.contains("## Event Content Guide"));
+        assert!(prompt.contains("You must acknowledge each"));
+        assert!(!prompt.contains("acknolowedge"));
     }
 
-    /// Plan 097: the default content section carries the dedup norm — the
-    /// per-rig instruction surface is where the queued-events dedup rule
-    /// lives (the injected `## Queued Events` section points at it). The
-    /// shipped template is the source of the embedded default
-    /// (`include_str!`), so this conformance test pins both the norm and
-    /// the pointer target.
+    /// Plan 102: the self-continuation (`TasksIncomplete`) entry still
+    /// yields the `# Subscriber Events` block with its implicit
+    /// consumer, even for a knot with no external subscribers.
+    #[test]
+    fn self_continuation_entry_yields_listener_block() {
+        let producer = make_test_knot("plan-creator");
+        let all_knots: [Knot; 0] = [];
+        let listener = build_listener_context_with_instructions(
+            &producer,
+            &default_loom_id(),
+            &all_knots,
+            Some("handoff contract"),
+            None,
+        );
+        assert!(
+            !listener.is_empty(),
+            "self-continuation must yield the listener block: {}",
+            listener
+        );
+        assert!(
+            listener.contains("- `TasksIncomplete` — handoff contract"),
+            "the implicit self-continuation consumer must be listed: {}",
+            listener
+        );
+        assert!(listener.contains("## Event Format"));
+        assert!(listener.contains("## Event Content Guide"));
+    }
+
+    /// Plan 097: the default event-content guide carries the dedup norm
+    /// — the per-rig instruction surface is where the queued-events
+    /// dedup rule lives (the injected `## Queued Events` section points
+    /// at it). The shipped template is the source of the embedded
+    /// default (`include_str!`), so this conformance test pins both the
+    /// norm and the pointer target.
     #[test]
     fn default_content_instruction_carries_dedup_norm() {
         assert!(
-            DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.contains("Deduplication"),
-            "the dedup norm must live in the content section (rig wording)"
+            DEFAULT_EVENT_CONTENT_INSTRUCTION.contains("Deduplication"),
+            "the dedup norm must live in the event-content guide (rig wording)"
         );
         assert!(
-            DEFAULT_TIE_OFF_CONTENT_INSTRUCTION.contains("Queued Events"),
+            DEFAULT_EVENT_CONTENT_INSTRUCTION.contains("Queued Events"),
             "the norm must reference the section by its prompt heading"
         );
         // And it reaches the built prompt via the default path.

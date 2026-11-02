@@ -444,12 +444,16 @@ pub fn inject_event_request(
     agent_config.extra_args.push(sid.clone());
 
     // Execute the follow-up with no profile prompt — session already
-    // contains persona and instructions from the first turn.
+    // contains persona and instructions from the first turn. Plan 103:
+    // the standing instructions live in the session's system prompt
+    // already; the follow-up repeats the listener context in the
+    // message itself, so no system-prompt payload here.
     let output = agent_runner.execute_with_config(
         &agent_config,
         strand_path.clone(),
         None, // no strand file ref for follow-up
         prompt,
+        String::new(),
         String::new(),
         event_type,
         knot_name,
@@ -483,6 +487,7 @@ pub fn execute_with_resume(
     session_id: &mut Option<String>,
     agent_config: AgentConfig,
     prompt: String,
+    system_prompt: String,
     strand_file_ref: Option<StrandPath>,
     profile_prompt: String,
     event_type: String,
@@ -506,6 +511,7 @@ pub fn execute_with_resume(
         session_id,
         agent_config,
         prompt,
+        system_prompt,
         strand_file_ref,
         profile_prompt,
         event_type,
@@ -528,6 +534,7 @@ fn execute_with_resume_internal(
     session_id: &mut Option<String>,
     mut agent_config: AgentConfig,
     mut prompt: String,
+    system_prompt: String,
     strand_file_ref: Option<StrandPath>,
     profile_prompt: String,
     event_type: String,
@@ -567,6 +574,7 @@ fn execute_with_resume_internal(
         strand_path.clone(),
         strand_file_ref.clone(),
         prompt.clone(),
+        system_prompt.clone(),
         profile_prompt.clone(),
         event_type.clone(),
         knot_name.clone(),
@@ -867,6 +875,7 @@ fn execute_with_resume_internal(
                 let compact_ctx = ExecutionContext {
                     agent_config: compact_config,
                     prompt: prompt.clone(),
+                    system_prompt: system_prompt.clone(),
                     profile_prompt: profile_prompt.clone(),
                     strand_path: strand_path.clone(),
                     event_type: event_type.clone(),
@@ -1049,6 +1058,7 @@ fn execute_with_resume_internal(
             strand_path.clone(),
             strand_file_ref.clone(),
             retry_prompt,
+            system_prompt.clone(),
             retry_profile_prompt,
             event_type.clone(),
             knot_name.clone(),
@@ -1394,6 +1404,7 @@ mod tests {
             strand_path: StrandPath,
             strand_file_ref: Option<StrandPath>,
             prompt: String,
+            system_prompt: String,
             profile_prompt: String,
             event_type: String,
             knot_name: Option<String>,
@@ -1416,6 +1427,7 @@ mod tests {
                 strand_path,
                 strand_file_ref,
                 prompt,
+                system_prompt,
                 profile_prompt,
                 event_type,
                 knot_name,
@@ -1780,6 +1792,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),
@@ -1814,6 +1827,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),
@@ -1916,6 +1930,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),
@@ -1972,6 +1987,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),
@@ -2240,6 +2256,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),
@@ -2286,6 +2303,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             "Review this document".to_string(),
+            String::new(), // plan 103: system_prompt (empty in these retry-loop tests)
             Some(make_strand_path()),
             "You are a reviewer.".to_string(),
             "Created".to_string(),

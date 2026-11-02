@@ -226,9 +226,15 @@ fn queued_entry_appears_in_reentry_prompt_and_ack_dispatches_nothing() {
 
     // 4. The re-entry prompt carried the **queued** entry — the queue's
     //    path with the queue's own timestamp — plus the dedup norm.
+    //    Plan 103: the agent's view = system prompt (standing
+    //    instructions, incl. the dedup norm) + user prompt (the
+    //    queued-events section + task); assert over the combined view.
     let ctxs = runner.get_captured_contexts();
     assert_eq!(ctxs.len(), 2, "two sessions were run");
-    let prompt = &ctxs[1].prompt;
+    let prompt = format!(
+        "{}\n\n{}",
+        ctxs[1].system_prompt, ctxs[1].prompt
+    );
     assert!(
         prompt.contains("## Queued Events"),
         "the re-entry prompt must carry the queued-events section:\n{prompt}"

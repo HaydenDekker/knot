@@ -30,7 +30,7 @@ guess a sub-skill's workflow from this index.
 | Design looms and knots: idempotency, naming, loops | `/home/hayden/.agents/skills-library/knot-design/SKILL.md` |
 | Build/design a software-factory rig: GProc layer, interfaces | `/home/hayden/.agents/skills-library/knot-software-factory/SKILL.md` |
 | Understand Knot's layered architecture and abstractions | `/home/hayden/.agents/skills-library/knot-abstractions/SKILL.md` |
-| Customise the tie-off content section (the producer's header/content + the event-content guide; the contract/format/rules are hard-coded) | `/home/hayden/.agents/skills-library/knot-template/SKILL.md` |
+| Customise the two instruction documents (the two hard-coded core references + the two overridable documents: the tie-off instruction — every knot, unconditional; the event-content guide — only when the knot has subscriber events) | `/home/hayden/.agents/skills-library/knot-template/SKILL.md` |
 | Migrate project documents across Knot binary versions | `/home/hayden/.agents/skills-library/knot-update/SKILL.md` |
 
 ## Typical flows

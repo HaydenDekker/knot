@@ -379,10 +379,25 @@ pub struct ExecutionContext {
     /// `extra_args` may contain `--session-id` from a retry attempt.
     pub agent_config: AgentConfig,
     /// Prompt to send to the agent (knot instructions).
+    ///
+    /// Plan 103: user-space only — the knot's task direction, the
+    /// trigger line, and runtime data (delivery render, pending
+    /// events). Standing instructions never live here.
     pub prompt: String,
+    /// Standing instructions destined for the **system prompt**
+    /// (plan 103): the `# Tie-Off` block + the consumer-gated
+    /// `# Subscriber Events` block.
+    ///
+    /// Adapters deliver this via `pi --append-system-prompt` (never
+    /// in the user message), so it survives compaction. Ordered
+    /// before the profile prompt in the composed system prompt.
+    /// Empty when no instruction context was built.
+    pub system_prompt: String,
     /// Profile-level prompt segment (agent persona).
     ///
-    /// Prepend to stdin before knot instructions and trigger line.
+    /// Plan 103: delivered as the **last** section of the system
+    /// prompt (the persona speaks under the standing contract), via
+    /// `--append-system-prompt` — not prepended to the user message.
     pub profile_prompt: String,
     /// Path to the strand being processed.
     pub strand_path: StrandPath,
@@ -679,6 +694,7 @@ pub trait AgentRunner: Send + Sync {
         strand_path: StrandPath,
         strand_file_ref: Option<StrandPath>,
         prompt: String,
+        system_prompt: String,
         profile_prompt: String,
         event_type: String,
         knot_name: Option<String>,
@@ -687,6 +703,7 @@ pub trait AgentRunner: Send + Sync {
         let ctx = ExecutionContext {
             agent_config: agent_config.clone(),
             prompt,
+            system_prompt,
             profile_prompt,
             strand_path,
             event_type,
@@ -726,6 +743,7 @@ pub trait AgentRunner: Send + Sync {
         strand_path: StrandPath,
         strand_file_ref: Option<StrandPath>,
         prompt: String,
+        system_prompt: String,
         profile_prompt: String,
         event_type: String,
         knot_name: Option<String>,
@@ -738,6 +756,7 @@ pub trait AgentRunner: Send + Sync {
             strand_path,
             strand_file_ref,
             prompt,
+            system_prompt,
             profile_prompt,
             event_type,
             knot_name,
@@ -1341,6 +1360,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             prompt: "Review this document".to_string(),
+            system_prompt: String::new(),
             profile_prompt: "You are a reviewer.".to_string(),
             strand_path: StrandPath(PathBuf::from("doc.md")),
             event_type: "Created".to_string(),
@@ -1601,6 +1621,7 @@ mod tests {
                 ctx_wrap_up_limit: None,
             },
             prompt: "Process this file".to_string(),
+            system_prompt: String::new(),
             profile_prompt: "You are an agent.".to_string(),
             strand_path: StrandPath(PathBuf::from("src/main.rs")),
             event_type: "Created".to_string(),

@@ -1174,22 +1174,37 @@ pub fn run_startup(
 #              session context and can steer mid-session (required for the
 #              per-model `ctx-wrap-up-limit` wrap-up feature)
 #
-# Instruction link (optional): full replacement for the tie-off
-# content section injected into producer knots' prompts (the tie-off
-# header/narrative content + the event-content guide). The tie-off
-# contract, event format, and rules are hard-coded into the Knot
+# Instruction links (optional): full replacement for the two
+# overridable instruction documents injected into knot prompts. The
+# hard-coded cores (the universal tie-off contract sentence; the event
+# acknowledgement, format, and rules) are compiled into the Knot
 # binary and cannot be overridden per rig.
-# The key names a file (absolute path, relative to this rig directory,
+#
+# tie-off-instruction-file: full replacement for the default tie-off
+#   instruction (the `## Tie-Off Content` section — the tie-off's
+#   header/narrative content). Injected into EVERY knot, every new
+#   session.
+#   e.g. tie-off-instruction-file: knot-template/knot-tie-off-content.md
+#
+# event-content-instruction-file: full replacement for the default
+#   event-content guide (the `## Event Content Guide` section — how to
+#   fill in the event blocks). Injected only when the knot has
+#   subscriber events.
+#   e.g. event-content-instruction-file: knot-template/knot-event-content.md
+#
+# Each key names a file (absolute path, relative to this rig directory,
 # ~/..., or a file:// URL — http(s) is refused) whose full content
-# replaces the default content section, pulled fresh on every new
-# session. The `knot-template` skill (the Knot skills library) is the
-# procedure for creating this file from the shipped template.
+# replaces the default section, pulled fresh on every new session.
+# A missing/unreadable link falls back to the embedded default for
+# that section only. The `knot-template` skill (the Knot skills
+# library) is the procedure for creating these files from the shipped
+# templates.
 #
-# tie-off-content-instruction-file: knot-template/knot-tie-off-content.md
-#
-# (0.59.0 keys `tie-off-instruction-file` / `event-content-instruction-file`
-# are retired: they are no longer honoured and produce a service-log
-# warning — see the `knot-update` skill, Knot 0.60.0.)
+# (tie-off-content-instruction-file: the 0.60.0–0.64.x combined key —
+# retired in Knot 0.65.0. Existing files keep parsing; the key is no
+# longer honoured and produces a service-log warning. Split the linked
+# file at the `## Event Content Guide` heading and re-link the halves
+# under the two keys above — see the `knot-update` skill.)
 #
 agent-adapter: pi-json
 "#;
@@ -2194,6 +2209,7 @@ mod composition_tests {
                 ctx_wrap_up_limit: None,
             },
             prompt: "do nothing".to_string(),
+            system_prompt: String::new(),
             profile_prompt: String::new(),
             strand_path: domain::entities::StrandPath(PathBuf::from("strand.md")),
             event_type: "Created".to_string(),

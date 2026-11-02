@@ -1,6 +1,6 @@
 # Knot Glossary
 
-> **Last Updated:** 2026-10-25
+> **Last Updated:** 2026-10-29
 
 Living glossary of domain terms for Knot. Terms are added when they emerge from PRDs, ADRs, or design discussions. Definitions are refined as understanding deepens.
 
@@ -28,6 +28,22 @@ Properties:
 - **`knot share`** on a shim packs the external rig's contents under the local rig's name.
 
 A rig **without** the `external-rig` key is a plain local rig — the bespoke-workflow path, unchanged.
+
+---
+
+### Rig Init Task
+
+A rig-declared, self-contained, idempotent **project-side** initialisation instruction in `<rig>/init/*.md`, executed by the `knot-init` skill (knot-init 4.13.0+, plan 101). It lets a rig declare "when you initialise me, also do X in the project" without knot core knowing anything about X.
+
+Properties:
+
+- **Source surface** — `init/` lives in the rig, tracked in the rig's own git repository; the Knot binary never reads it and the service is inert to it. Execution belongs to the init agent, not the runtime.
+- **Ordering** — tasks execute in sorted filename order; order-dependent tasks encode order in filenames (`00-`, `10-`). Cross-task dependencies beyond ordering are out of contract (merge the tasks).
+- **Idempotency is the task's own contract** — knot-init re-runs all tasks on **every** init invocation (drift self-heal). Each task reports its outcome with the standard vocabulary: `WRITTEN` / `VERIFIED UNCHANGED` / `SKIPPED: <reason>` / `CONFLICT — left in place: <detail>` / `FAILED: <reason>`.
+- **Never auto-resolve** — a `CONFLICT` is reported loudly and left in place; a `FAILED` task does not abort init (the failure stays visible, init stays usable).
+- **Shim resolution (external-first)** — for a shim rig, `<external_rig>/init/` (from `state.json`'s `external_rig` field — **not** `rig_path`, which is the local rig dir per ADR-013) is the durable task source and is preferred; the local `rig/init/` is a fallback used only when the external rig declares no `init/`. If both exist, the external wins and the local folder is flagged: `OVERRIDE NOTICE: rig/init/ not executed — shadowed by <external_rig>/init/` — never merged.
+- **Trust model** — tasks are rig-declared instruction text the user chose to point the rig at (same model as the external-rig prompt-text contract). The interface carries zero domain knowledge; all semantics live in the task files.
+- **Absent = no-op** — rigs without an `init/` folder behave exactly as before.
 
 ---
 
@@ -344,6 +360,7 @@ An optional `event-description` frontmatter field on consumer knots provides the
 Project root
  ├── Rig (`./rig/`) — reusable source, its own git repo (user commits manually)
  │     ├── profiles/ (shared agent profile definitions)
+ │     ├── init/ (rig init tasks — `*.md` executed by knot-init; source only, inert to the service)
  │     └── Loom (`<rig>/<name>-loom/`, by `-loom` naming convention)
  │           └── Knot definition files (first-level `.md` files)
  ├── Shim Rig (`./rig/` + `external-rig:` key) — workflow served from an

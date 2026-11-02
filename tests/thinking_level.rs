@@ -86,6 +86,7 @@ fn assert_thinking_in_spawned_argv<F>(
     let ctx = ExecutionContext {
         agent_config: config.clone(),
         prompt: "Analyze the strand.".to_string(),
+        system_prompt: String::new(),
         profile_prompt: "You are a deep analyst.".to_string(),
         strand_path: StrandPath(PathBuf::from("strand.md")),
         event_type: "Created".to_string(),

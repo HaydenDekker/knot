@@ -280,6 +280,14 @@ impl PiJsonAgentRunner {
             full_prompt.push_str("\n\n");
         }
 
+        // Plan 103 Phase 0: instruction blocks still ride the user
+        // prompt (wire unchanged); Phase 2 moves them to the
+        // `--append-system-prompt` flag.
+        if !ctx.system_prompt.is_empty() {
+            full_prompt.push_str(&ctx.system_prompt);
+            full_prompt.push_str("\n\n");
+        }
+
         full_prompt.push_str(&ctx.prompt);
 
         if !ctx.event_type.is_empty() {
@@ -1406,6 +1414,7 @@ impl AgentRunner for PiJsonAgentRunner {
         strand_path: StrandPath,
         strand_file_ref: Option<StrandPath>,
         prompt: String,
+        system_prompt: String,
         profile_prompt: String,
         event_type: String,
         knot_name: Option<String>,
@@ -1437,6 +1446,7 @@ impl AgentRunner for PiJsonAgentRunner {
         let ctx = ExecutionContext {
             agent_config: config,
             prompt,
+            system_prompt,
             profile_prompt,
             strand_path,
             event_type,
@@ -1455,6 +1465,7 @@ impl AgentRunner for PiJsonAgentRunner {
         strand_path: StrandPath,
         strand_file_ref: Option<StrandPath>,
         prompt: String,
+        system_prompt: String,
         profile_prompt: String,
         event_type: String,
         knot_name: Option<String>,
@@ -1482,6 +1493,7 @@ impl AgentRunner for PiJsonAgentRunner {
         let ctx = ExecutionContext {
             agent_config: config,
             prompt,
+            system_prompt,
             profile_prompt,
             strand_path,
             event_type,
@@ -1614,6 +1626,7 @@ sleep 300
                 ctx_wrap_up_limit: None,
             },
             prompt: "test prompt".to_string(),
+            system_prompt: String::new(),
             profile_prompt: "You are a test agent.".to_string(),
             strand_path: crate::domain::entities::StrandPath(
                 PathBuf::from("test.md"),

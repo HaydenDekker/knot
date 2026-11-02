@@ -1,9 +1,8 @@
-## Tie-Off Contract
-You have a number of subscribers that have requested to be notified if certain events occur during this session. You
-must acknowledge each event in your tie-off (final response). Subscribers can't begin their work until your events are delivered to
-them via your tie-off.
-
-Your final response **is** your tie-off: tie-offs are managed by the infrastructure service, so never write or read directly from `tie-offs/` files — deliver your output as your final response and emit event blocks there.
+## Event Acknowledgement
+You have a number of subscribers that have requested to be notified if
+certain events occur during this session. You must acknowledge each
+event in your tie-off (final response). Subscribers can't begin their
+work until your events are delivered to them via your tie-off.
 
 ## Event Format
 

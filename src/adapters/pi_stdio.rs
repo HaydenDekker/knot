@@ -148,6 +148,14 @@ impl PiStdioAgentRunner {
             full_prompt.push_str("\n\n");
         }
 
+        // Plan 103 Phase 0: the standing instruction blocks (tie-off +
+        // subscriber events) still ride the user prompt here — wire
+        // unchanged. Phase 1 moves them to `--append-system-prompt`.
+        if !ctx.system_prompt.is_empty() {
+            full_prompt.push_str(&ctx.system_prompt);
+            full_prompt.push_str("\n\n");
+        }
+
         // Knot instructions (task-specific direction)
         full_prompt.push_str(&ctx.prompt);
 
@@ -405,6 +413,7 @@ impl AgentRunner for PiStdioAgentRunner {
         strand_path: StrandPath,
         strand_file_ref: Option<StrandPath>,
         prompt: String,
+        system_prompt: String,
         profile_prompt: String,
         event_type: String,
         knot_name: Option<String>,
@@ -435,6 +444,7 @@ impl AgentRunner for PiStdioAgentRunner {
         let ctx = ExecutionContext {
             agent_config: config,
             prompt,
+            system_prompt,
             profile_prompt,
             strand_path,
             event_type,
@@ -557,6 +567,7 @@ sleep 300
                 ctx_wrap_up_limit: None,
             },
             prompt: "test prompt".to_string(),
+            system_prompt: String::new(),
             profile_prompt: "You are a test agent.".to_string(),
             strand_path: crate::domain::entities::StrandPath(PathBuf::from("test.md")),
             event_type: String::new(),
