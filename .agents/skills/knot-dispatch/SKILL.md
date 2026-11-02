@@ -4,8 +4,8 @@ description: "Trigger knots into action by creating or touching strand files, di
 license: MIT
 metadata:
   author: Knot Team
-  version: "2.0.0"
-  compatibility: "Knot 0.63.0+"
+  version: "2.1.0"
+  compatibility: "Knot 0.66.0+"
 ---
 
 # Knot Dispatch Skill
@@ -617,7 +617,9 @@ from `events/` once the run completes; `knot step --event
 ## Producer Event Emission
 
 When a knot has consumers listening for its events, Knot injects
-subscriber event instructions at the **beginning** of its prompt. The
+subscriber event instructions into the agent's **system prompt**
+(via `--append-system-prompt`, Knot 0.66.0+ — so they survive
+compaction). The
 injected block lists each declared event and requires the producer to
 **acknowledge every subscriber event** in its tie-off — whether or not
 the event occurred:

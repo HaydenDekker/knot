@@ -66,7 +66,7 @@ The configuration that determines *which agent* runs. Contains:
 - The LLM provider to use.
 - The skills available to the agent (driving the prompt).
 - The tools available to the agent (executing the prompt).
-- The system prompt (markdown body) — persona instructions delivered via stdin.
+- The system prompt (markdown body) — persona instructions, delivered into the agent's **system prompt** via `--append-system-prompt` (Knot 0.66.0+; composed after the standing instruction blocks, so the persona speaks under the contract). Before 0.66.0 this rode the user message via stdin.
 - The session timeout (optional, in seconds; defaults to 300s / 5 min).
 
 Part of a **knot**.
@@ -78,7 +78,7 @@ Part of a **knot**.
 A configured artifact that brings everything together, ready for processing. Composed of three parts:
 
 1. **Agent Profile** — determines *which agent* runs.
-2. **Markdown Body** — task-specific instructions that supplement the profile's system prompt.
+2. **Markdown Body** — task-specific instructions; at processing time this body rides the **user message** (runtime data), not the system prompt (the system prompt carries the standing instruction blocks and the profile persona).
 3. **Strand Source** — a single input direction declared as `strand-dir` in the frontmatter. This can be a filesystem path (normal knots) or an `event:` URI (event consumer knots — the URI is a **subscription descriptor**, not a watched path). Tie-off output is appended to the unified tie-off log `tie-offs/<rig>/tie-offs.log` (under the runtime tree — see **Runtime Tree**) — no `tie-off-dir` configuration is needed.
 
 A knot is defined in a `.md` file with YAML frontmatter. The frontmatter holds structural metadata (`name`, `agent-profile-ref`, `strand-dir`, and optionally `event-description`); the markdown body contains the knot's task-specific instructions. One loom can contain one or more knot files.

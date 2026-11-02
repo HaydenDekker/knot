@@ -1,19 +1,21 @@
 ---
 name: knot-template
-description: "Customise the two instruction documents Knot injects into agent prompts: the tie-off instruction (the tie-off's header/narrative content — injected into EVERY knot, every new session, unconditional) and the event-content guide (how to fill in event blocks — injected only when the knot has subscriber events). The hard-coded cores (the universal tie-off contract sentence; the event acknowledgement, format, and rules) are compiled into the Knot binary and cannot be customised. Explains the mechanism (hard-coded core split + two per-rig instruction links, pulled fresh every new session, per-section fallback) and provides the two default documents (knot-tie-off-content.md, knot-event-content.md) plus the two shipped core references (knot-tie-off-contract.md, knot-event-contract.md). Invoked to add a per-project override: copies both templates into the project's rig and links the two keys in rig/.workspace-agent-config.yaml. Covers the migration from the 0.60.0–0.64.x combined key (tie-off-content-instruction-file — retired in Knot 0.65.0)."
+description: "Customise the two instruction documents Knot injects into the agent's SYSTEM prompt (via `--append-system-prompt`, Knot 0.66.0+ — so they survive compaction): the tie-off instruction (the tie-off's header/narrative content — injected into EVERY knot, every new session, unconditional) and the event-content guide (how to fill in event blocks — injected only when the knot has subscriber events). The hard-coded cores (the universal tie-off contract sentence; the event acknowledgement, format, and rules) are compiled into the Knot binary and cannot be customised. Explains the mechanism (hard-coded core split + two per-rig instruction links, pulled fresh every new session, per-section fallback; the frozen per-session prompt artifact) and provides the two default documents (knot-tie-off-content.md, knot-event-content.md) plus the two shipped core references (knot-tie-off-contract.md, knot-event-contract.md). Invoked to add a per-project override: copies both templates into the project's rig and links the two keys in rig/.workspace-agent-config.yaml. Covers the migration from the 0.60.0–0.64.x combined key (tie-off-content-instruction-file — retired in Knot 0.65.0)."
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.0.0"
-  compatibility: "Knot 0.65.0+"
+  version: "3.1.0"
+  compatibility: "Knot 0.66.0+"
 ---
 
 # Knot template (the two instruction documents)
 
-Knot injects up to **two** blocks at the start of every knot's prompt.
-Each block has a **hard-coded core** (compiled into the binary, never
-overridable per rig) and **one overridable document** with a **fixed
-injection scope**:
+Knot injects up to **two** standing instruction blocks into the agent's
+**system prompt** (via `--append-system-prompt`, Knot 0.66.0+ — the
+system prompt is rebuilt untouched on every request, so these blocks
+**survive pi's compaction**, unlike the user message). Each block has a
+**hard-coded core** (compiled into the binary, never overridable per
+rig) and **one overridable document** with a **fixed injection scope**:
 
 | Block | Hard-coded core (reference file) | Overridable document (template file) | Injection scope | Config key |
 |---|---|---|---|---|
@@ -62,6 +64,26 @@ injection scope**:
 - **The service writes nothing into the rig** — it only reads the
   links. The files below are created by *you* (the agent), per the
   procedure.
+- **System-prompt placement (Knot 0.66.0+)** — the two blocks, together
+  with the profile persona, are composed into the **system prompt** and
+  delivered via `--append-system-prompt` at spawn, not in the user
+  message. The composition order is **contractual**: the instruction
+  blocks come **first**, the profile persona **last** — the persona
+  speaks *under* the standing contract. Only **runtime data** (the
+  knot's task instructions, the trigger line, the delivery render, the
+  pending-events section) stays in the user message. Because the system
+  prompt is never summarized away, the tie-off contract and event guide
+  stay in force for the whole session.
+- **Frozen per-session artifact** — each run mints a session id and
+  freezes the composed system prompt to
+  `tie-offs/<rig>/system-prompts/<session-id>.md`; the artifact rides
+  the spawn args, so a session-resume retry **re-supplies it verbatim**
+  (the session runs under the prompt it was born with). If the
+  instruction documents change between the freeze and a retry, the
+  retry records a `PROMPT-DRIFT` service line — the frozen prompt
+  stands, the new render applies to the **next** session. Editing a
+  linked file therefore takes effect on the next **new** session, never
+  mid-session.
 
 ## Procedure: add a project override
 

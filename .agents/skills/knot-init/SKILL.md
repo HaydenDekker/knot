@@ -4,8 +4,8 @@ description: "Initialise a Knot rig in the current directory. Detects if a rig e
 license: MIT
 metadata:
   author: Knot Team
-  version: "4.13.0"
-  compatibility: "Knot 0.64.0+"
+  version: "4.14.0"
+  compatibility: "Knot 0.66.0+"
 ---
 
 # Knot Init Skill

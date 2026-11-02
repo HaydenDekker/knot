@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.11.0"
-  compatibility: "Knot 0.64.0+"
+  version: "5.12.0"
+  compatibility: "Knot 0.66.0+"
 ---
 
 # Knot Create Skill
@@ -403,8 +403,12 @@ Review the goals section of this PRD. Check that:
 ### Markdown Body
 
 The text after the closing `---` is the knot's task-specific
-instructions. This content is appended to the profile's system prompt
-at processing time to form the full prompt sent to the agent.
+instructions. At processing time this body rides the **user message**
+(runtime data — the task the agent is asked to do), **not** the system
+prompt. The system prompt carries the standing instructions (the
+`# Tie-Off` and `# Subscriber Events` blocks) and the profile persona
+(see the `knot-template` skill and **How Profiles Are Used at
+Processing Time**).
 
 The body must not be empty or contain only whitespace — the parser
 will reject such files with a `KnotParseWarning`.
@@ -867,17 +871,30 @@ When a strand event triggers a knot:
    when both are present) — and the effective `thinking-level` (the
    profile's own value, else the alias default; direct-spec profiles use
    their own value only).
-3. The profile's markdown body is merged with the knot's markdown
-   body to form the full system prompt:
+3. The prompt is split by delivery destination (Knot 0.66.0+):
+   - **System prompt** (`--append-system-prompt`) — the standing
+     instruction blocks (`# Tie-Off`, and `# Subscriber Events` when
+     the knot has subscriber events) composed **first**, then the
+     profile's markdown body (persona) **last** — the persona speaks
+     under the standing contract. This survives compaction.
+   - **User message** (stdin) — the knot's markdown body (task
+     instructions) plus the trigger line and any runtime data (delivery
+     render, pending events).
    ```
-   {profile body}
+   system prompt:  {tie-off block}
+                   {subscriber-events block}
+                   {profile body (persona)}
 
-   {knot body}
+   user message:   {knot body (task)}
+                   {trigger line}
    ```
-4. This merged prompt is delivered via stdin to the agent runner (not via `--system-prompt`).
+4. The system prompt is delivered via `--append-system-prompt` (as a
+   frozen per-session artifact); the user message is delivered via
+   stdin. Neither uses the replacing `--system-prompt` flag.
 
-Edits to a profile file are picked up on the next strand event —
-no restart needed.
+Edits to a profile file are picked up on the next **new** session —
+no restart needed (a session already running keeps the prompt it was
+frozen with; see the `knot-template` skill's frozen-artifact note).
 
 ---
 
