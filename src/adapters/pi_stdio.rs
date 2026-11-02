@@ -130,31 +130,35 @@ impl PiStdioAgentRunner {
         std::env::var("KNOT_TEST_CLI_PATH").unwrap_or_else(|_| "pi".to_string())
     }
 
-    /// Build the prompt with profile prompt, trigger line, and knot
-    /// instructions.
+    /// Plan 103: compose the full system prompt from the standing
+    /// instruction blocks and the profile persona.
     ///
-    /// Ordering: profile prompt (persona) → knot instructions (task)
-    /// → trigger line (event context). The strand file is referenced via
+    /// Contract order: tie-off / subscriber-event blocks FIRST, the
+    /// profile prompt LAST — the persona speaks under the standing
+    /// contract. Empty parts are skipped.
+    fn compose_system_prompt(ctx: &ExecutionContext) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if !ctx.system_prompt.trim().is_empty() {
+            parts.push(ctx.system_prompt.as_str());
+        }
+        if !ctx.profile_prompt.trim().is_empty() {
+            parts.push(ctx.profile_prompt.as_str());
+        }
+        parts.join("\n\n")
+    }
+
+    /// Build the user-space prompt: knot instructions + trigger line.
+    ///
+    /// Plan 103: the profile persona and the standing instruction
+    /// blocks are NO LONGER part of the user message — they are
+    /// delivered via `--append-system-prompt` (see `execute`), so
+    /// they survive compaction. The strand file is referenced via
     /// `@{path}` in CLI args — not injected into the prompt body.
     fn build_prompt_with_context(
         ctx: &ExecutionContext,
-        profile_prompt: &str,
+        _profile_prompt: &str,
     ) -> String {
         let mut full_prompt = String::new();
-
-        // Profile prompt (agent persona/instructions)
-        if !profile_prompt.is_empty() {
-            full_prompt.push_str(profile_prompt);
-            full_prompt.push_str("\n\n");
-        }
-
-        // Plan 103 Phase 0: the standing instruction blocks (tie-off +
-        // subscriber events) still ride the user prompt here — wire
-        // unchanged. Phase 1 moves them to `--append-system-prompt`.
-        if !ctx.system_prompt.is_empty() {
-            full_prompt.push_str(&ctx.system_prompt);
-            full_prompt.push_str("\n\n");
-        }
 
         // Knot instructions (task-specific direction)
         full_prompt.push_str(&ctx.prompt);
@@ -177,7 +181,19 @@ impl PiStdioAgentRunner {
 impl AgentRunner for PiStdioAgentRunner {
     fn execute(&self, ctx: ExecutionContext) -> Result<AgentOutput, PortError> {
         // Build CLI args from agent_config.
-        let cli_args = ctx.agent_config.build_cli_args();
+        let mut cli_args = ctx.agent_config.build_cli_args();
+
+        // Plan 103: the standing instructions (tie-off + subscriber
+        // event blocks) and the profile persona ride the SYSTEM
+        // prompt — never the user message — so they survive pi's
+        // compaction. pi reads the flag value as file contents when
+        // the path exists, as literal text otherwise (Phase 3 switches
+        // to passing the frozen-artifact path).
+        let composed_system_prompt = Self::compose_system_prompt(&ctx);
+        if !composed_system_prompt.is_empty() {
+            cli_args.push("--append-system-prompt".to_string());
+            cli_args.push(composed_system_prompt);
+        }
 
         // CLI path resolved once at construction time.
         let cli_path = self.cli_path.clone();
@@ -600,8 +616,9 @@ sleep 300
         assert!(result.is_ok(), "should succeed: {result:?}");
 
         let output = result.unwrap();
-        // Stdout contains the prompt content written to stdin.
-        assert!(output.stdout.contains("You are a test agent."));
+        // Stdout contains the user-space prompt written to stdin
+        // (plan 103: the profile no longer rides stdin).
+        assert!(output.stdout.contains("test prompt"));
     }
 
     #[test]
@@ -708,9 +725,9 @@ sleep 300
         );
     }
 
-    /// Verify that `PiStdioAgentRunner` includes profile prompt,
-    /// knot instructions, and trigger line in the correct order.
-    /// The mock echoes stdin, so the full prompt chain should appear.
+    /// Plan 103: the user-space prompt carries the knot instructions
+    /// and the trigger line ONLY — the profile prompt rides the system
+    /// prompt flag, not stdin.
     #[test]
     fn runner_passes_event_metadata() {
         let (runner, _dir) = make_mock_runner();
@@ -725,12 +742,7 @@ sleep 300
         assert!(result.is_ok(), "should succeed: {result:?}");
 
         let output = result.unwrap();
-        // The mock echoes stdin, which contains the full prompt chain.
-        assert!(
-            output.stdout.contains("You are a reviewer."),
-            "output should contain profile prompt: {}",
-            output.stdout
-        );
+        // The mock echoes stdin: knot instructions + trigger line.
         assert!(
             output.stdout.contains("Review this file."),
             "output should contain knot instructions: {}",
@@ -740,6 +752,113 @@ sleep 300
             output.stdout.contains("**review** triggered by **Modified** on **doc.md**"),
             "output should contain trigger line: {}",
             output.stdout
+        );
+        // Plan 103: the profile persona must NOT ride the user message.
+        assert!(
+            !output.stdout.contains("You are a reviewer."),
+            "profile prompt must NOT be in the user-space stdin: {}",
+            output.stdout
+        );
+    }
+
+    /// Plan 103 Phase 1: the composed system prompt (instruction
+    /// blocks first, profile last) is delivered via
+    /// `--append-system-prompt`; the stdin prompt carries neither.
+    #[test]
+    fn runner_delivers_system_prompt_via_append_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> {}\ncat\n",
+            argv_path.display()
+        );
+        let path = dir.path().join("mock-pi-sysprompt");
+        write_script_atomic(&path, &script);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        let runner =
+            PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let mut ctx = make_context(&[]);
+        ctx.system_prompt = "# Tie-Off\n\nTIEOFF-BLOCK".to_string();
+        ctx.profile_prompt = "PROFILE-PERSONA".to_string();
+        ctx.prompt = "TASK-ONLY".to_string();
+        ctx.event_type = "Created".to_string();
+        ctx.knot_name = Some("k1".to_string());
+
+        let output = runner.execute(ctx).unwrap();
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+
+        let flag_at = argv
+            .find("--append-system-prompt")
+            .expect("--append-system-prompt must be passed");
+        let flag_value = &argv[flag_at..];
+        let tie_off_at = flag_value
+            .find("TIEOFF-BLOCK")
+            .expect("instruction blocks must be in the flag value");
+        let profile_at = flag_value
+            .find("PROFILE-PERSONA")
+            .expect("profile must be in the flag value");
+        assert!(
+            tie_off_at < profile_at,
+            "contract order: instruction blocks before the profile"
+        );
+
+        // stdin carries neither the instructions nor the profile.
+        assert!(output.stdout.contains("TASK-ONLY"));
+        assert!(output.stdout.contains("triggered by"));
+        assert!(
+            !output.stdout.contains("TIEOFF-BLOCK"),
+            "instruction blocks must NOT ride stdin: {}",
+            output.stdout
+        );
+        assert!(
+            !output.stdout.contains("PROFILE-PERSONA"),
+            "profile must NOT ride stdin: {}",
+            output.stdout
+        );
+    }
+
+    /// Plan 103: with no standing instructions and no profile, the
+    /// flag is not passed at all.
+    #[test]
+    fn runner_omits_append_flag_when_system_prompt_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> {}\ncat\n",
+            argv_path.display()
+        );
+        let path = dir.path().join("mock-pi-nosys");
+        write_script_atomic(&path, &script);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        let runner =
+            PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let mut ctx = make_context(&[]);
+        ctx.system_prompt = String::new();
+        ctx.profile_prompt = String::new();
+
+        runner.execute(ctx).unwrap();
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+        assert!(
+            !argv.contains("--append-system-prompt"),
+            "no composed system prompt → no flag: {argv}"
         );
     }
 
