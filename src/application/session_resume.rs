@@ -463,6 +463,14 @@ pub fn inject_event_request(
     Ok(output.stdout)
 }
 
+/// Plan 103: a re-render of the standing instruction blocks, supplied
+/// by the usecase so the retry loop can detect drift between the
+/// frozen system prompt of the running session and the current state
+/// of the instruction documents. Returns the CURRENT instruction
+/// blocks (fetched fresh); the loop compares against the frozen
+/// `system_prompt` and records `PromptDriftDetected` on divergence.
+pub type DriftCheck = Arc<dyn Fn() -> String + Send + Sync>;
+
 /// Attempt agent execution with automatic session-resume retry.
 ///
 /// Returns [`Ok(AgentOutput)`] on success (first attempt or after N retries).
@@ -494,6 +502,7 @@ pub fn execute_with_resume(
     knot_name: Option<String>,
     profile_timeout: Option<Duration>,
     emitter: Option<&SystemEventEmitter>,
+    drift_check: Option<DriftCheck>,
 ) -> Result<AgentOutput, PortError> {
     // Allow test code to override the delay via env var.
     let retry_delay = std::env::var("KNOT_RETRY_DELAY_MS")
@@ -519,6 +528,7 @@ pub fn execute_with_resume(
         profile_timeout,
         retry_delay,
         emitter,
+        drift_check,
     )
 }
 
@@ -542,6 +552,7 @@ fn execute_with_resume_internal(
     profile_timeout: Option<Duration>,
     retry_delay: Duration,
     emitter: Option<&SystemEventEmitter>,
+    drift_check: Option<DriftCheck>,
 ) -> Result<AgentOutput, PortError> {
     let start = Instant::now();
 
@@ -994,6 +1005,24 @@ fn execute_with_resume_internal(
         if let Some(sid) = session_id {
             agent_config.extra_args.push("--session-id".to_string());
             agent_config.extra_args.push(sid.clone());
+        }
+        // Plan 103 Phase 4: drift check. The session runs under the
+        // FROZEN system prompt (the frozen artifact rides the retry
+        // args verbatim); if the instruction documents changed since
+        // the freeze, surface it as a warning — the frozen prompt
+        // stands for this session's lifetime, the new render applies
+        // to the NEXT session. Never silently re-applied mid-session.
+        if let Some(check) = &drift_check {
+            if check() != system_prompt {
+                loom_log.append(LoomEvent::PromptDriftDetected {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot_id.clone(),
+                    strand_path: strand_path.clone(),
+                    session_id: session_id.clone().unwrap_or_default(),
+                    attempt,
+                    timestamp: format_timestamp(),
+                })?;
+            }
         }
         let note = pending_note
             .take()
@@ -1800,6 +1829,7 @@ mod tests {
             Some(Duration::from_secs(timeout_secs)),
             Duration::from_millis(0),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         )
     }
 
@@ -1835,6 +1865,7 @@ mod tests {
             None, // no profile timeout budget
             Duration::from_millis(0),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         )
     }
 
@@ -1862,6 +1893,127 @@ mod tests {
             }
             _ => panic!("Expected SessionResumed, got {:?}", events[0]),
         }
+    }
+
+    /// Plan 103 Phase 4: a drift-check variant of `execute` that
+    /// supplies a non-empty frozen `system_prompt` and a `drift_check`
+    /// closure. The closure returns the CURRENT instruction render;
+    /// the loop compares it against the frozen prompt on each retry.
+    fn execute_with_drift(
+        runner: &dyn AgentRunner,
+        log: &Arc<TestLoomLog>,
+        frozen: &str,
+        drift: Option<DriftCheck>,
+    ) -> Result<AgentOutput, PortError> {
+        let dyn_log: Arc<dyn LoomLogPort> = log.clone() as Arc<dyn LoomLogPort>;
+        execute_with_resume_internal(
+            runner,
+            &dyn_log,
+            &make_loom_id(),
+            &make_knot_id(),
+            &make_strand_path(),
+            &mut None,
+            AgentConfig {
+                goal: "review".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
+                tools: vec![],
+                extra_args: vec![],
+                thinking_level: None,
+                ctx_wrap_up_limit: None,
+            },
+            "Review this document".to_string(),
+            frozen.to_string(),
+            Some(make_strand_path()),
+            "You are a reviewer.".to_string(),
+            "Created".to_string(),
+            Some("k1".to_string()),
+            Some(Duration::from_secs(120)),
+            Duration::from_millis(0),
+            None,
+            drift,
+        )
+    }
+
+    /// Plan 103 Phase 4: when the instruction documents change between
+    /// the freeze and a retry, the retry records `PromptDriftDetected`
+    /// (the frozen prompt still stands — the drift is only surfaced).
+    #[test]
+    fn drift_between_freeze_and_retry_is_recorded() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("success after retry")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+        // The current render differs from the frozen prompt.
+        let drift: DriftCheck =
+            Arc::new(|| "# Tie-Off\n\nEDITED-BLOCK".to_string());
+
+        let result =
+            execute_with_drift(&runner, &log, "# Tie-Off\n\nOLD-BLOCK", Some(drift));
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let events = log.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::PromptDriftDetected { .. })),
+            "drift must be recorded: {events:?}"
+        );
+        // The frozen prompt is NOT replaced — the retry still ran under
+        // the original (the SessionResumed event is present alongside).
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::SessionResumed { .. })),
+            "retry still resumed the session: {events:?}"
+        );
+    }
+
+    /// Plan 103 Phase 4: when the instruction documents are unchanged,
+    /// no drift event is recorded.
+    #[test]
+    fn no_drift_when_render_matches_frozen() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("success after retry")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+        let frozen = "# Tie-Off\n\nSAME-BLOCK";
+        let frozen_c = frozen.to_string();
+        let drift: DriftCheck = Arc::new(move || frozen_c.clone());
+
+        let result = execute_with_drift(&runner, &log, frozen, Some(drift));
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let events = log.events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::PromptDriftDetected { .. })),
+            "no drift expected: {events:?}"
+        );
+    }
+
+    /// Plan 103 Phase 4: with no drift check wired, the retry loop is
+    /// unchanged (no drift event, no panic).
+    #[test]
+    fn no_drift_check_wired_is_inert() {
+        let runner = TestAgentRunner::new(vec![
+            Err(err_timeout("sess-abc")),
+            Ok(ok_output("success after retry")),
+        ]);
+        let log = Arc::new(TestLoomLog::default());
+
+        let result = execute_with_drift(&runner, &log, "# Tie-Off", None);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let events = log.events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LoomEvent::PromptDriftDetected { .. })),
+            "no drift check → no drift event: {events:?}"
+        );
     }
 
     #[test]
@@ -1938,6 +2090,7 @@ mod tests {
             Some(Duration::from_secs(4)), // budget < MIN_REMAINING_SECS (5)
             Duration::from_millis(0),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         );
 
         assert!(result.is_err());
@@ -1995,6 +2148,7 @@ mod tests {
             Some(Duration::from_secs(3)),
             Duration::from_millis(0),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         );
 
         assert!(result.is_err());
@@ -2264,6 +2418,7 @@ mod tests {
             Some(Duration::from_secs(120)),
             Duration::from_millis(100),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         );
 
         assert!(result.is_ok());
@@ -2311,6 +2466,7 @@ mod tests {
             Some(Duration::from_secs(120)),
             Duration::from_millis(0),
             None,
+            None, // plan 103: drift_check (loop tests run without a re-render)
         );
 
         assert!(result.is_ok());

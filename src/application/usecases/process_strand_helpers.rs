@@ -487,6 +487,25 @@ pub fn resolve_config_and_build(
         Some(strand_path.clone())
     };
     let mut session_id: Option<String> = None;
+    // Plan 103 Phase 4: drift check — re-render the standing
+    // instruction blocks fresh at retry time and compare against the
+    // frozen system prompt this session was born with. Divergence is
+    // surfaced as `PromptDriftDetected`; the frozen prompt stands for
+    // the session's lifetime (the new render applies to the next
+    // session). Only wired when the session actually has standing
+    // instructions to drift from.
+    let frozen_instructions = system_prompt.clone();
+    let drift_check: Option<session_resume::DriftCheck> =
+        if frozen_instructions.trim().is_empty() {
+            None
+        } else {
+            let render_ctx = build_ctx.clone();
+            Some(std::sync::Arc::new(move || {
+                AgentEventsContextProvider
+                    .build_split_context(&render_ctx)
+                    .instructions
+            }))
+        };
     let result = session_resume::execute_with_resume(
         &*ps.agent_runner,
         &ps.log_port,
@@ -503,6 +522,7 @@ pub fn resolve_config_and_build(
         Some(knot.id.0.clone()),
         effective_timeout.clone(),
         ps.system_emitter.as_deref(),
+        drift_check,
     );
 
     // Plan 086: whether the water-mark note was delivered this session.

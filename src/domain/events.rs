@@ -780,6 +780,20 @@ pub enum LoomEvent {
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },
+    /// Plan 103: the standing instruction documents changed between
+    /// the freeze of a run's system prompt and a retry of that run.
+    /// The session keeps running under the FROZEN prompt (the artifact
+    /// rides the retry args verbatim) — the drift is surfaced as a
+    /// warning, never silently applied mid-session.
+    PromptDriftDetected {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        session_id: String,
+        attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
     /// The agent completed within its timeout but produced no response.
     ///
     /// Recorded each time an invocation returns exit-code 0 with empty

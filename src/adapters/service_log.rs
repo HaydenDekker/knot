@@ -213,6 +213,20 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             session_id,
             artifact
         ),
+        LoomEvent::PromptDriftDetected {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            attempt,
+            ..
+        } => format!(
+            "PROMPT-DRIFT loom={} knot={} strand={} session={} attempt={attempt} detail=instruction documents changed since the freeze — the session keeps the frozen prompt",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id
+        ),
         LoomEvent::KnotEmptyResponse {
             loom_id,
             knot_id,
