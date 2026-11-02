@@ -1,5 +1,26 @@
 # Plan: System-Prompt Appending — Standing Instructions Move Out of the User Prompt
 
+## Implementation Status: ✅ Complete (2026-11-02)
+
+All six phases landed on `refactor/system-prompt-appending`, released in
+**v0.66.0**. Full suite green (1561 tests, 0 failures), `cargo clippy
+--all-targets` clean (0 errors).
+
+**What shipped:** the `# Tie-Off` block, `# Subscriber Events` block,
+and profile persona are delivered via `--append-system-prompt` (all
+three adapters) so they survive compaction; the user message carries
+only runtime data. Each run mints a session id and freezes the composed
+system prompt to `tie-offs/<rig>/system-prompts/<session-id>.md`; the
+artifact rides the spawn args so retries re-supply it verbatim. Drift is
+surfaced (`PROMPT-DRIFT`), never silently applied mid-session. New
+service records: `PromptFrozen`, `PROMPT-DRIFT`.
+
+**Skill ripple (done post-landing):** `knot-template` 3.1.0,
+`knot-create` 5.12.0, `knot-dispatch` 2.1.0, `knot-init` 4.14.0 +
+glossary, and the `knot-update` 0.66.0 changelog entry — all deployed to
+`~/.agents`. The pirate-probe test skill was intentionally **not**
+created (per instruction).
+
 ## Problem
 
 The standing instructions are delivered in **user space**. Today every agent
@@ -152,10 +173,11 @@ clippy green. Pane: the whole already-green suite.
 - `--append-system-prompt` is repeatable; the hard-coded cores stay
   non-overridable — only the assembly location moves. Plan 102's
   two-document split is the input shape this plan consumes.
-- **Skill/doc ripple deferred by instruction** (this plan covers the
-  engine): `knot-template`/`knot-dispatch` skill wording, the
-  pirate-probe test skill, and AGENTS.md notes follow after the change
-  lands.
+- **Skill/doc ripple (COMPLETED post-landing):** `knot-template`,
+  `knot-create`, `knot-dispatch`, `knot-init` + glossary, and the
+  `knot-update` changelog were updated for the system-prompt placement
+  and deployed to `~/.agents`. The pirate-probe test skill was
+  intentionally not created.
 - Open question: artifact retention/rotation alongside `tie-offs.log`
   rotation — same policy, separate act; not in scope.
 - Risk: providers with small argv limits — mitigated by the

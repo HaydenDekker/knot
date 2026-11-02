@@ -82,14 +82,6 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 _Overview sections for active and recently completed plans go here._
 
-### 103. System-Prompt Appending — Standing Instructions Move Out of the User Prompt
-
-- **Status:** ✅ Complete — 2026-11-02, released in v0.66.0 (branch `refactor/system-prompt-appending`)
-- **What landed:** the `# Tie-Off` block, the `# Subscriber Events` block, and the profile persona are delivered via `--append-system-prompt` (all three adapters: stdio, json, rpc) so they survive pi's compaction; the user message carries only runtime data (task, trigger line, delivery render, pending events). Composition order is contractual — instruction blocks first, persona last. Each run mints a session id and freezes the composed prompt to `tie-offs/<rig>/system-prompts/<session-id>.md`; the artifact rides the spawn args so a retry re-supplies it verbatim. Drift is surfaced (`PROMPT-DRIFT`), never silently applied mid-session.
-- **New service records:** `PromptFrozen` (one per run) and `PROMPT-DRIFT` (on retry drift).
-- **Rig impact:** none — no document-format change; the two overridable instruction documents (0.65.0) are unchanged, only the injection location moved.
-- **Plan:** [103-system-prompt-appending/system-prompt-appending-plan.md](103-system-prompt-appending/system-prompt-appending-plan.md)
-
 ### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
 
 **Status:** ⬜ Planned (2026-10-22)
