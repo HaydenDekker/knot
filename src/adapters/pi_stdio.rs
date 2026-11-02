@@ -131,20 +131,14 @@ impl PiStdioAgentRunner {
     }
 
     /// Plan 103: compose the full system prompt from the standing
-    /// instruction blocks and the profile persona.
-    ///
-    /// Contract order: tie-off / subscriber-event blocks FIRST, the
-    /// profile prompt LAST — the persona speaks under the standing
-    /// contract. Empty parts are skipped.
+    /// instruction blocks and the profile persona (blocks first,
+    /// profile last — the persona speaks under the standing
+    /// contract). Delegates to the single domain rule.
     fn compose_system_prompt(ctx: &ExecutionContext) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        if !ctx.system_prompt.trim().is_empty() {
-            parts.push(ctx.system_prompt.as_str());
-        }
-        if !ctx.profile_prompt.trim().is_empty() {
-            parts.push(ctx.profile_prompt.as_str());
-        }
-        parts.join("\n\n")
+        crate::domain::events::compose_system_prompt(
+            &ctx.system_prompt,
+            &ctx.profile_prompt,
+        )
     }
 
     /// Build the user-space prompt: knot instructions + trigger line.
@@ -186,11 +180,18 @@ impl AgentRunner for PiStdioAgentRunner {
         // Plan 103: the standing instructions (tie-off + subscriber
         // event blocks) and the profile persona ride the SYSTEM
         // prompt — never the user message — so they survive pi's
-        // compaction. pi reads the flag value as file contents when
-        // the path exists, as literal text otherwise (Phase 3 switches
-        // to passing the frozen-artifact path).
+        // compaction. Plan 103 Phase 3: when the usecase has already
+        // frozen the composed prompt and pushed
+        // `--append-system-prompt <artifact>` into extra_args, the
+        // adapter must NOT add a second copy — the frozen artifact
+        // wins.
         let composed_system_prompt = Self::compose_system_prompt(&ctx);
-        if !composed_system_prompt.is_empty() {
+        let frozen_supplied = ctx
+            .agent_config
+            .extra_args
+            .iter()
+            .any(|a| a == "--append-system-prompt");
+        if !composed_system_prompt.is_empty() && !frozen_supplied {
             cli_args.push("--append-system-prompt".to_string());
             cli_args.push(composed_system_prompt);
         }
@@ -823,6 +824,55 @@ sleep 300
             !output.stdout.contains("PROFILE-PERSONA"),
             "profile must NOT ride stdin: {}",
             output.stdout
+        );
+    }
+
+    /// Plan 103 Phase 3: when the usecase has already frozen the
+    /// composed prompt and pushed `--append-system-prompt <artifact>`
+    /// into extra_args, the adapter must NOT add a second copy.
+    #[test]
+    fn runner_does_not_duplicate_a_frozen_append_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> {}\ncat\n",
+            argv_path.display()
+        );
+        let path = dir.path().join("mock-pi-frozen");
+        write_script_atomic(&path, &script);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .ok();
+        }
+        let runner =
+            PiStdioAgentRunner::with_cli_path(path.to_string_lossy().to_string());
+
+        let mut ctx = make_context(&[]);
+        ctx.system_prompt = "# Tie-Off\n\nTIEOFF-BLOCK".to_string();
+        ctx.agent_config.extra_args.push(
+            "--append-system-prompt".to_string(),
+        );
+        ctx.agent_config.extra_args.push(
+            "/frozen/artifact.md".to_string(),
+        );
+
+        runner.execute(ctx).unwrap();
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+        let count =
+            argv.matches("--append-system-prompt").count();
+        assert_eq!(
+            count, 1,
+            "frozen artifact flag must not be duplicated: {argv}"
+        );
+        assert!(argv.contains("/frozen/artifact.md"));
+        assert!(
+            !argv.contains("TIEOFF-BLOCK"),
+            "inline composition must be skipped when frozen: {argv}"
         );
     }
 

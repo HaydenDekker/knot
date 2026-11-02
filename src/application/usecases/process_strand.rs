@@ -9810,3 +9810,187 @@ mod plan_102_instruction_fetch_tests {
         );
     }
 }
+
+// ── Plan 103: Frozen system-prompt artifact + minted session id ────────
+
+#[cfg(test)]
+mod plan_103_prompt_freeze_tests {
+    use super::*;
+    use crate::application::ports::AgentOutput;
+    use crate::application::usecases::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
+    };
+    use crate::domain::events::LoomEvent;
+    use tempfile::TempDir;
+
+    fn build_use_case_with_rig(
+        rig_dir: std::path::PathBuf,
+        runner: Arc<MockAgentRunner>,
+    ) -> (ProcessStrand, Arc<std::sync::Mutex<Vec<LoomEvent>>>) {
+        let store = LoomStore::new();
+        store.register(build_loom(
+            "producer-loom",
+            vec![build_knot("plan-creator")],
+        ));
+        let (log_port, log_events) = MockLoomLogPort::new();
+        let (tie_off_sink, _appends, _content) = TrackingTieOffSink::new();
+        let (rig_log, _rig_events) = MockRigLogPort::new();
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::from_iter([(
+                    "fast".to_string(),
+                    default_profile(),
+                )]),
+            )),
+        });
+        let use_case = ProcessStrand::new(
+            store,
+            Arc::new(log_port),
+            runner as Arc<dyn crate::application::ports::AgentRunner>,
+            Arc::new(tie_off_sink),
+            crate::domain::value_objects::RigAgentConfig::default_config(),
+            rig_dir,
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(rig_log),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        );
+        (use_case, log_events)
+    }
+
+    fn ok_output() -> Result<AgentOutput, PortError> {
+        Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })
+    }
+
+    fn run_once(
+        use_case: &ProcessStrand,
+        dir: &std::path::Path,
+        name: &str,
+    ) {
+        let strand_path = dir.join(name);
+        std::fs::write(&strand_path, "test content").unwrap();
+        use_case
+            .execute(StrandEvent::Created {
+                loom_id: LoomId("producer-loom".to_string()),
+                knot_id: KnotId("plan-creator".to_string()),
+                strand_path: StrandPath(strand_path),
+            })
+            .unwrap();
+    }
+
+    /// Plan 103: a run freezes the composed system prompt (instruction
+    /// blocks + persona) into an artifact under the rig's runtime root,
+    /// keyed by a Knot-minted session id, and hands both to the runner
+    /// through `extra_args`.
+    #[test]
+    fn run_freezes_system_prompt_and_mints_session_id() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let runner = Arc::new(MockAgentRunner::new(ok_output()));
+        let (use_case, log_events) =
+            build_use_case_with_rig(rig_dir.clone(), runner.clone());
+
+        run_once(&use_case, dir.path(), "strand.md");
+
+        let ctx = runner.get_captured_ctx().expect("runner invoked");
+        let extra = &ctx.agent_config.extra_args;
+
+        let sid_at = extra
+            .iter()
+            .position(|a| a == "--session-id")
+            .expect("minted --session-id must be pushed");
+        let sid = extra[sid_at + 1].clone();
+        assert!(sid.starts_with("knot-"), "minted id shape: {sid}");
+
+        let flag_at = extra
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("--append-system-prompt must carry the artifact path");
+        let artifact = std::path::Path::new(&extra[flag_at + 1]);
+        assert_eq!(
+            artifact.file_name().unwrap().to_string_lossy(),
+            format!("{sid}.md"),
+            "artifact is named after the minted session id"
+        );
+
+        let runtime_root =
+            crate::domain::knot_file::derive_runtime_root(&rig_dir);
+        assert!(
+            artifact.starts_with(runtime_root.join("system-prompts")),
+            "artifact lives under the rig runtime root: {}",
+            artifact.display()
+        );
+
+        // Artifact content: composed — instruction blocks before the
+        // persona (the persona speaks under the standing contract).
+        let content = std::fs::read_to_string(artifact).unwrap();
+        let tie_off_at =
+            content.find("# Tie-Off").expect("tie-off block frozen");
+        let persona_at =
+            content.find("You are fast.").expect("persona frozen");
+        assert!(
+            tie_off_at < persona_at,
+            "contract order: instruction blocks before the persona"
+        );
+        // The user-space prompt is NOT part of the frozen artifact.
+        assert!(
+            !content.contains("React to"),
+            "task instructions must not ride the system prompt"
+        );
+
+        // The PromptFrozen service record names the same session and
+        // artifact.
+        let events = log_events.lock().unwrap();
+        let frozen = events
+            .iter()
+            .find_map(|e| match e {
+                LoomEvent::PromptFrozen {
+                    session_id,
+                    artifact,
+                    ..
+                } => Some((session_id.clone(), artifact.clone())),
+                _ => None,
+            })
+            .expect("PromptFrozen recorded");
+        assert_eq!(frozen.0, sid);
+        assert_eq!(frozen.1, artifact.display().to_string());
+    }
+
+    /// Plan 103: every run mints its own session id — the artifact of
+    /// one run never aliases another's.
+    #[test]
+    fn two_runs_mint_distinct_session_ids() {
+        let dir = TempDir::new().unwrap();
+        let rig_dir = dir.path().join("rig");
+        std::fs::create_dir_all(&rig_dir).unwrap();
+        let runner = Arc::new(MockAgentRunner::new(ok_output()));
+        let (use_case, _events) =
+            build_use_case_with_rig(rig_dir.clone(), runner.clone());
+
+        run_once(&use_case, dir.path(), "a.md");
+        run_once(&use_case, dir.path(), "b.md");
+
+        let ctxs = runner.get_captured_contexts();
+        assert_eq!(ctxs.len(), 2);
+        let sid = |c: &crate::application::ports::ExecutionContext| {
+            let extra = &c.agent_config.extra_args;
+            let at = extra.iter().position(|a| a == "--session-id").unwrap();
+            extra[at + 1].clone()
+        };
+        let sid1 = sid(&ctxs[0]);
+        let sid2 = sid(&ctxs[1]);
+        assert_ne!(sid1, sid2, "each run gets a fresh minted id");
+    }
+}

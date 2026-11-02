@@ -239,6 +239,24 @@ fn warn_once_steer_unsupported(runner_type: &str) {
     }
 }
 
+/// Plan 103: mint a session id for a Knot run.
+///
+/// pi accepts any string as an exact session id (`--session-id`), so
+/// Knot mints one per run to make run ↔ frozen-artifact ↔ session
+/// deterministic — the artifact is named after the id the session is
+/// actually born with. Format: `knot-<utc-compact>-<pid>-<counter>`;
+/// unique per run without pulling in a UUID crate.
+pub fn mint_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    format!(
+        "knot-{now}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Resolve agent config, build prompt, execute agent, derive outcome.
 ///
 /// Covers: profile resolution, deleted-event history, prompt building,
@@ -257,7 +275,7 @@ pub fn resolve_config_and_build(
     delivery: Option<&crate::domain::pending_event::EventDelivery>,
 ) -> Result<ResolvedExecution, PortError> {
     // Resolve effective agent config (profile).
-    let (agent_config, mut effective_timeout, profile) =
+    let (mut agent_config, mut effective_timeout, profile) =
         ps.resolve_agent_config(knot)?;
 
     // Plan 087: continuation file detection — read the strand file's
@@ -412,6 +430,55 @@ pub fn resolve_config_and_build(
         Some(d) => format!("{}\n{}", d.render_for_consumer(), prompt),
         None => prompt,
     };
+
+    // Plan 103 Phase 3: freeze the composed system prompt (standing
+    // instruction blocks + profile persona) into an artifact keyed by
+    // a Knot-minted session id, and hand it to the session through the
+    // spawn args. The artifact is the durable record of what the
+    // session was told: it rides `agent_config.extra_args` into every
+    // retry (resume re-supplies it verbatim), and drift is measured
+    // against it. A write failure is non-fatal — the adapters fall back
+    // to inline composition of the same string.
+    use crate::application::usecases::types::format_timestamp;
+    use crate::domain::events::{compose_system_prompt, LoomEvent};
+    use crate::domain::knot_file::derive_runtime_root;
+    let minted_session_id = mint_session_id();
+    let full_system_prompt =
+        compose_system_prompt(&system_prompt, &profile.profile_prompt);
+    if !full_system_prompt.trim().is_empty() {
+        let dir = derive_runtime_root(&ps.rig_dir).join("system-prompts");
+        let artifact = dir.join(format!("{minted_session_id}.md"));
+        match std::fs::create_dir_all(&dir).and_then(|()| {
+            std::fs::write(&artifact, &full_system_prompt)
+        }) {
+            Ok(()) => {
+                agent_config
+                    .extra_args
+                    .push("--session-id".to_string());
+                agent_config
+                    .extra_args
+                    .push(minted_session_id.clone());
+                agent_config
+                    .extra_args
+                    .push("--append-system-prompt".to_string());
+                agent_config
+                    .extra_args
+                    .push(artifact.display().to_string());
+                let _ = ps.log_port.append(LoomEvent::PromptFrozen {
+                    loom_id: loom_id.clone(),
+                    knot_id: knot.id.clone(),
+                    strand_path: strand_path.clone(),
+                    session_id: minted_session_id.clone(),
+                    artifact: artifact.display().to_string(),
+                    timestamp: format_timestamp(),
+                });
+            }
+            Err(e) => eprintln!(
+                "[KNOT][EVENT] type=CONFIG source=prompt-freeze detail=failed to write {} ({e}) — falling back to inline composition",
+                artifact.display()
+            ),
+        }
+    }
 
     // Execute agent with session-resume retry logic.
     let strand_file_ref = if is_deleted || delivery.is_some() {

@@ -88,6 +88,7 @@ fn loom_id_of(event: &LoomEvent) -> &LoomId {
         | LoomEvent::StrandSkipped { loom_id, .. }
         | LoomEvent::AgentInactivity { loom_id, .. }
         | LoomEvent::SessionResumed { loom_id, .. }
+        | LoomEvent::PromptFrozen { loom_id, .. }
         | LoomEvent::KnotEmptyResponse { loom_id, .. }
         | LoomEvent::CompactionStarted { loom_id, .. }
         | LoomEvent::ContextCompacted { loom_id, .. }

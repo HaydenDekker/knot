@@ -248,6 +248,27 @@ pub const DEFAULT_TIE_OFF_CONTRACT: &str =
 pub const DEFAULT_EVENT_CONTRACT: &str =
     include_str!("../../.agents/skills/knot-template/knot-event-contract.md");
 
+/// Plan 103: compose the full system prompt from the standing
+/// instruction blocks (tie-off contract + subscriber-event guide)
+/// and the profile persona.
+///
+/// Contractual ordering: the instruction blocks come FIRST, the
+/// persona LAST — the persona speaks *under* the standing contract.
+/// Empty parts are skipped. This is the single source of the
+/// composition rule: the usecase freezes exactly this string into the
+/// per-session artifact and the adapters deliver exactly this string
+/// when no artifact is supplied.
+pub fn compose_system_prompt(blocks: &str, profile: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if !blocks.trim().is_empty() {
+        parts.push(blocks);
+    }
+    if !profile.trim().is_empty() {
+        parts.push(profile);
+    }
+    parts.join("\n\n")
+}
+
 /// The default tie-off instruction (doc 1 — the `knot-tie-off-content`
 /// template: the `## Tie-Off Content` section only).
 ///
@@ -740,6 +761,22 @@ pub enum LoomEvent {
         strand_path: StrandPath,
         session_id: String,
         attempt: u32,
+        /// ISO 8601 timestamp (local time).
+        timestamp: String,
+    },
+    /// Plan 103: the composed system prompt (standing instruction blocks
+    /// + profile persona) was frozen to an artifact and handed to the
+    /// session via `--append-system-prompt`, keyed by the Knot-minted
+    /// session id. The artifact is the durable record of what the
+    /// session was told; resume re-supplies it verbatim.
+    PromptFrozen {
+        loom_id: LoomId,
+        knot_id: KnotId,
+        strand_path: StrandPath,
+        /// The Knot-minted session id (also the artifact stem).
+        session_id: String,
+        /// Path of the frozen artifact.
+        artifact: String,
         /// ISO 8601 timestamp (local time).
         timestamp: String,
     },

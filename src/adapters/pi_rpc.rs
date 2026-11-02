@@ -380,10 +380,18 @@ impl PiRpcAgentRunner {
 
         // Plan 103: standing instructions + persona ride the SYSTEM
         // prompt (the flag is a spawn-time CLI arg; the RPC `prompt`
-        // command carries only the user-space payload).
+        // command carries only the user-space payload). When the
+        // usecase has already frozen the composed prompt and pushed
+        // `--append-system-prompt <artifact>` into extra_args (plan
+        // 103 Phase 3), the adapter must NOT add a second copy.
         let composed_system_prompt =
             PiJsonAgentRunner::compose_system_prompt(&ctx);
-        if !composed_system_prompt.is_empty() {
+        let frozen_supplied = ctx
+            .agent_config
+            .extra_args
+            .iter()
+            .any(|a| a == "--append-system-prompt");
+        if !composed_system_prompt.is_empty() && !frozen_supplied {
             cli_args.push("--append-system-prompt".to_string());
             cli_args.push(composed_system_prompt);
         }

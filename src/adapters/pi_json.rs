@@ -269,17 +269,14 @@ impl PiJsonAgentRunner {
 
     /// Plan 103: compose the full system prompt from the standing
     /// instruction blocks and the profile persona (blocks first,
-    /// profile last). Shared with `pi-rpc`, which builds its prompt
-    /// through the same contract.
+    /// profile last). Delegates to the single domain rule. Shared
+    /// with `pi-rpc`, which builds its prompt through the same
+    /// contract.
     pub(crate) fn compose_system_prompt(ctx: &ExecutionContext) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        if !ctx.system_prompt.trim().is_empty() {
-            parts.push(ctx.system_prompt.as_str());
-        }
-        if !ctx.profile_prompt.trim().is_empty() {
-            parts.push(ctx.profile_prompt.as_str());
-        }
-        parts.join("\n\n")
+        crate::domain::events::compose_system_prompt(
+            &ctx.system_prompt,
+            &ctx.profile_prompt,
+        )
     }
 
     /// Build the user-space prompt: knot instructions + trigger line.
@@ -872,9 +869,17 @@ impl PiJsonAgentRunner {
 
         // Plan 103: standing instructions + persona ride the SYSTEM
         // prompt (survive compaction); the user message carries only
-        // the task, the trigger line, and runtime data.
+        // the task, the trigger line, and runtime data. When the
+        // usecase has already frozen the composed prompt and pushed
+        // `--append-system-prompt <artifact>` into extra_args (plan
+        // 103 Phase 3), the adapter must NOT add a second copy.
         let composed_system_prompt = Self::compose_system_prompt(&ctx);
-        if !composed_system_prompt.is_empty() {
+        let frozen_supplied = ctx
+            .agent_config
+            .extra_args
+            .iter()
+            .any(|a| a == "--append-system-prompt");
+        if !composed_system_prompt.is_empty() && !frozen_supplied {
             cli_args.push("--append-system-prompt".to_string());
             cli_args.push(composed_system_prompt);
         }

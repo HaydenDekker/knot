@@ -198,6 +198,21 @@ pub fn render_loom_event_line(event: &LoomEvent) -> String {
             strand_path.0.display(),
             session_id
         ),
+        LoomEvent::PromptFrozen {
+            loom_id,
+            knot_id,
+            strand_path,
+            session_id,
+            artifact,
+            ..
+        } => format!(
+            "PromptFrozen loom={} knot={} strand={} session={} artifact={}",
+            loom_id.0,
+            knot_id.0,
+            strand_path.0.display(),
+            session_id,
+            artifact
+        ),
         LoomEvent::KnotEmptyResponse {
             loom_id,
             knot_id,
