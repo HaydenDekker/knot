@@ -59,6 +59,46 @@ date, and migration instructions for affected document types.
 
 ---
 
+### Standing Instructions Move to the System Prompt (Knot 0.66.0, 2026-11-02)
+
+**What changed:** the **delivery location** of the standing
+instructions moves from the user message to the **system prompt**. The
+`# Tie-Off` block, the `# Subscriber Events` block, and the profile
+persona are now passed to the agent via
+`--append-system-prompt <frozen-artifact>` at spawn, so they **survive
+pi's compaction** (the user message is summarized away; the system
+prompt is not). Only **runtime data** stays in the user message: the
+knot's task instructions, the trigger line, the delivery render, and
+the pending-events section.
+
+- **Composition order is contractual:** instruction blocks first, the
+  profile persona **last** — the persona speaks *under* the standing
+  contract.
+- **Frozen artifact:** each run mints a session id
+  (`knot-<utc>-<pid>-<n>`) and freezes the composed system prompt to
+  `tie-offs/<rig>/system-prompts/<session-id>.md`. The artifact rides
+  the spawn args, so a **retry re-supplies it verbatim** — the session
+  runs under the prompt it was born with for its whole lifetime.
+- **Drift is surfaced, never silently applied:** if the instruction
+  documents change between the freeze and a retry, the retry records a
+  `PROMPT-DRIFT` service line; the frozen prompt stands, the new
+  render applies to the **next** session.
+- **New service-log records:** `PromptFrozen` (one per run, names the
+  session id and artifact) and `PROMPT-DRIFT` (on retry drift).
+
+**Affected documents:** **none** — no knot, loom, profile, or rig
+config change. The two overridable instruction documents (0.65.0) are
+unchanged; only where Knot injects them moved. The new
+`tie-offs/<rig>/system-prompts/` directory is runtime output (git-ignore
+it alongside the rest of the tie-offs runtime tree).
+
+**Migration:** none required. The change is transparent to rigs. To
+observe it: `grep PromptFrozen tie-offs/<rig>/knot-service.log` (every
+run) and `grep PROMPT-DRIFT` (a mid-run instruction edit that landed
+after a session froze its prompt).
+
+---
+
 ### Split the Tie-Off and Event-Content Instructions (Knot 0.65.0, 2026-11-01)
 
 **What changed:** the one overridable content section (Knot 0.60.0+) is

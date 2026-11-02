@@ -1658,8 +1658,13 @@ mod tests {
 
     #[test]
     fn agent_config_build_cli_args_no_system_prompt_flag() {
-        // build_cli_args no longer emits --system-prompt.
-        // Prompt content is delivered via stdin instead.
+        // Plan 103 INVERTED CONTRACT: the standing prompt (tie-off,
+        // event guide, persona) is delivered via
+        // `--append-system-prompt` — added by the ADAPTER at spawn
+        // (see the adapter flag-delivery tests), never by
+        // `build_cli_args`. `build_cli_args` still never emits the
+        // REPLACING `--system-prompt` flag: that would clobber pi's
+        // own base system prompt. Only runtime data rides stdin.
         let config = AgentConfig::new(
             "goal".to_string(),
             "openai".to_string(),

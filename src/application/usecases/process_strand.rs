@@ -1241,11 +1241,16 @@ mod profile_resolution_tests {
         assert_eq!(config.tools, vec!["fs"]);
     }
 
-/// Profile prompt does NOT flow into CLI args (delivered via stdin).
+/// Profile persona does NOT flow into `build_cli_args`.
     ///
-    /// Verifies that when a profile-ref knot is resolved, the resulting
-    /// CLI args contain --model but NOT --system-prompt. Profile prompt
-    /// and knot instructions are delivered via stdin instead.
+    /// Plan 103 INVERTED CONTRACT: the profile persona is a standing
+    /// instruction — it rides the SYSTEM prompt
+    /// (`--append-system-prompt`, composed with the instruction blocks
+    /// by the adapter at spawn; see the adapter flag-delivery tests),
+    /// never the user-space stdin. `build_cli_args` itself carries
+    /// neither the persona nor the replacing `--system-prompt` flag —
+    /// the profile prompt is a separate `ExecutionContext` field
+    /// resolved here, not CLI wiring.
     #[test]
     fn profile_ref_cli_args_no_system_prompt_flag() {
         let store = LoomStore::new();
@@ -1284,10 +1289,16 @@ mod profile_resolution_tests {
             use_case.resolve_agent_config(&profile_knot).unwrap();
         let args = config.build_cli_args();
 
-        // CLI args should NOT contain --system-prompt
+        // CLI args carry neither the replacing --system-prompt flag nor
+        // the persona text itself (the persona is composed into the
+        // system prompt by the adapter, plan 103).
         assert!(
             !args.contains(&"--system-prompt".to_string()),
             "CLI args should NOT contain --system-prompt"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("careful reviewer")),
+            "persona text must not ride build_cli_args"
         );
         // Should have the model arg
         let model_index = args.iter().position(|a| a == "--model").expect("--model flag missing");
