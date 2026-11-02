@@ -1,6 +1,6 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-11-02 (plan 103 drafted — System-Prompt Appending: standing instructions move from the user prompt to `--append-system-prompt`; frozen per-session prompt artifact; resume re-supply with drift detection)
+> **Last Updated:** 2026-11-02 (plan 103 complete — System-Prompt Appending: standing instructions delivered via `--append-system-prompt`; frozen per-session prompt artifact; resume re-supply with drift detection; released in v0.66.0)
 > **Prior:** 2026-11-01 (plan 102 complete — Split Tie-Off and Event-Content Instructions shipped in v0.65.0: the two instruction documents with fixed injection scope, the `# Tie-Off` block for every knot)
 > **Prior:** 2026-10-27 (plan 100 complete — Shim Rig shipped in v0.64.0; section removed per Section Lifetime)
 > **Prior:** 2026-10-23 (plan 099 activated — phases 1–5 file sets firmed against the Phase 0 decisions, phase documents 0–5 initialized)
@@ -57,7 +57,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
-| 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | 🟡 In Progress (2026-11-02) | 2026-11-02 |
+| 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | ✅ Complete (2026-11-02) — released in v0.66.0 | 2026-11-02 |
 | 102 | [Split Tie-Off and Event-Content Instructions — the Two Instruction Documents with Fixed Injection Scope](102-split-tie-off-event-instructions/split-tie-off-event-instructions-plan.md) | ✅ Complete (2026-11-01) — released in v0.65.0 | 2026-11-01 |
 | 101 | [Rig-declared init tasks — the `rig/init/` interface for `knot-init`](101-rig-init-tasks/rig-init-tasks-plan.md) | ⬜ Planned (2026-10-29) | 2026-10-29 |
 | 100 | [Shim Rig — Externalised Workflow Rig with Local Project Shim](100-shim-rig/shim-rig-plan.md) | ✅ Complete (2026-10-27) — released in v0.64.0 | 2026-10-27 |
@@ -84,9 +84,10 @@ _Overview sections for active and recently completed plans go here._
 
 ### 103. System-Prompt Appending — Standing Instructions Move Out of the User Prompt
 
-- **Status:** 🟡 In Progress — since 2026-11-02 (branch `refactor/system-prompt-appending`)
-- **Where it is:** Phase 0 (payload split); next: Phase 1 (pi-stdio flag)
-- **Where it's going:** tie-off + event instructions and the profile prompt delivered via `--append-system-prompt` (all three adapters), user space carries only task/trigger/pending-events, the frozen prompt artifact at `tie-offs/<rig>/prompts/<session-id>.md`, resume re-supply with drift warning, old no-flag invariants retired + changelog — all phases green → ✅ Complete
+- **Status:** ✅ Complete — 2026-11-02, released in v0.66.0 (branch `refactor/system-prompt-appending`)
+- **What landed:** the `# Tie-Off` block, the `# Subscriber Events` block, and the profile persona are delivered via `--append-system-prompt` (all three adapters: stdio, json, rpc) so they survive pi's compaction; the user message carries only runtime data (task, trigger line, delivery render, pending events). Composition order is contractual — instruction blocks first, persona last. Each run mints a session id and freezes the composed prompt to `tie-offs/<rig>/system-prompts/<session-id>.md`; the artifact rides the spawn args so a retry re-supplies it verbatim. Drift is surfaced (`PROMPT-DRIFT`), never silently applied mid-session.
+- **New service records:** `PromptFrozen` (one per run) and `PROMPT-DRIFT` (on retry drift).
+- **Rig impact:** none — no document-format change; the two overridable instruction documents (0.65.0) are unchanged, only the injection location moved.
 - **Plan:** [103-system-prompt-appending/system-prompt-appending-plan.md](103-system-prompt-appending/system-prompt-appending-plan.md)
 
 ### 98. Knot Lint — Static Rig Consistency Audit, with the Behaviour-in-Skill Rule
