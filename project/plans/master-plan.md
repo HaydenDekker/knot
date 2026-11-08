@@ -1,7 +1,7 @@
 # Master Plan — Project Index
 
-> **Last Updated:** 2026-11-02 (plan 103 complete — System-Prompt Appending: standing instructions delivered via `--append-system-prompt`; frozen per-session prompt artifact; resume re-supply with drift detection; released in v0.66.0)
-> **Prior:** 2026-11-01 (plan 102 complete — Split Tie-Off and Event-Content Instructions shipped in v0.65.0: the two instruction documents with fixed injection scope, the `# Tie-Off` block for every knot)
+> **Last Updated:** 2026-11-08 (plan 104 drafted — `knot-standards`: a new self-contained skill as the knot project's normative home for the two face-standards (bounded-context vocabulary + content placement, ported in-bounds from the agents-repo face-standards, which stay the agents side's own home), plus a compliance hook in the four knot-authoring skills — `knot-design`, `knot-create`, `knot-software-factory`, `knot-template`; docs-only, for owner review)
+> **Prior:** 2026-11-02 (plan 103 complete — System-Prompt Appending: standing instructions delivered via `--append-system-prompt`; frozen per-session prompt artifact; resume re-supply with drift detection; released in v0.66.0)
 > **Prior:** 2026-10-27 (plan 100 complete — Shim Rig shipped in v0.64.0; section removed per Section Lifetime)
 > **Prior:** 2026-10-23 (plan 099 activated — phases 1–5 file sets firmed against the Phase 0 decisions, phase documents 0–5 initialized)
 > **Prior:** 2026-10-18 (plan 097 phases 4–5 complete — `queue-busy` dispatch observation + e2e acceptance; released as 0.62.0; phase 6 remains gated on field evidence)
@@ -57,6 +57,7 @@ Rationale: Once a plan has been complete for a significant period, its status in
 
 | # | Plan | Status | Created |
 |---|------|--------|---------|
+| 104 | [`knot-standards` — the Self-Contained Home for the Two Face-Standards on Rig-Authoring](104-skill-face-standard-compliance/skill-face-standard-compliance-plan.md) | ⬜ Planned (2026-11-08) — drafted for owner review; docs-only (one new self-contained skill + four hooks + version bumps; standalone-boundary: no normative pointer out of the knot project) | 2026-11-08 |
 | 103 | [System-Prompt Appending — Standing Instructions Move Out of the User Prompt](103-system-prompt-appending/system-prompt-appending-plan.md) | ✅ Complete (2026-11-02) — released in v0.66.0 | 2026-11-02 |
 | 102 | [Split Tie-Off and Event-Content Instructions — the Two Instruction Documents with Fixed Injection Scope](102-split-tie-off-event-instructions/split-tie-off-event-instructions-plan.md) | ✅ Complete (2026-11-01) — released in v0.65.0 | 2026-11-01 |
 | 101 | [Rig-declared init tasks — the `rig/init/` interface for `knot-init`](101-rig-init-tasks/rig-init-tasks-plan.md) | ⬜ Planned (2026-10-29) | 2026-10-29 |
