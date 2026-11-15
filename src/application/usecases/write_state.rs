@@ -496,6 +496,7 @@ mod write_state_tests {
                     git_versioned: true,
                     strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
                     event_description: None,
+                    skills: Vec::new(),
                 },
             ],
         }

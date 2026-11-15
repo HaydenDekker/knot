@@ -365,6 +365,36 @@ pub struct RigAgentConfig {
         default = "default_none_string"
     )]
     pub external_rig: Option<String>,
+    /// Explicit **skill imports** for this project's sessions
+    /// (plan 105 — the skill-supply seam): a list of skill
+    /// file/directory references (absolute path, relative to the
+    /// **local** rig directory, `~/...`, or a `file://` URL;
+    /// `http(s)://` is refused — local-first). Rig-global: every knot
+    /// session in this rig receives them, unioned (de-duplicated on the
+    /// resolved path) with the `skills` frontmatter of the serving
+    /// profile and knot. This is the **project-side** surface: in a
+    /// shim rig this file is local while the workflow is served from
+    /// the external rig, so project-specific behaviour skills are
+    /// declared here and the served rig stays architecture-neutral.
+    /// Additive by default — the declared set *extends* pi's discovery
+    /// set; an empty/absent list changes nothing (full discovery,
+    /// zero migration). Read **fresh per new session** (plan-102
+    /// precedent) — edits land on the next session, no restart.
+    /// See [`crate::domain::skill_assignment`].
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Skill-assignment **mode** (plan 105): `additive` (default —
+    /// the declared set extends pi's discovery set) or `exclusive`
+    /// (narrowing: the engine adds `--no-skills`, so a session
+    /// receives only the declared set). Kept as a raw string so an
+    /// invalid value never fails the whole config parse — it warns
+    /// and falls back to `additive`. Absent → `additive` (today's
+    /// behaviour for unmodified rigs).
+    #[serde(
+        rename = "skills-mode",
+        default = "default_none_string"
+    )]
+    pub skills_mode: Option<String>,
 }
 
 fn default_agent_adapter() -> AgentAdapter {
@@ -390,6 +420,8 @@ impl RigAgentConfig {
             event_content_instruction_file: None,
             tie_off_content_instruction_file: None,
             external_rig: None,
+            skills: Vec::new(),
+            skills_mode: None,
         }
     }
 
@@ -781,6 +813,16 @@ pub struct AgentProfile {
     /// Session timeout in seconds. `None` means use the runner's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// Explicit skill links for every knot served by this profile
+    /// (plan 105).
+    ///
+    /// Parsed from `skills` frontmatter. Resolved **relative to the
+    /// effective rig directory** at dispatch; the union with the knot
+    /// and rig-config lists is de-duplicated on the resolved path and
+    /// delivered as explicit `--skill` spawn args (additive by
+    /// default). See [`crate::domain::skill_assignment`].
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 impl AgentProfile {
@@ -824,6 +866,7 @@ impl AgentProfile {
             tools: Vec::new(),
             profile_prompt,
             timeout: None,
+            skills: Vec::new(),
         })
     }
 
@@ -857,6 +900,7 @@ impl AgentProfile {
             tools,
             profile_prompt,
             timeout: None,
+            skills: Vec::new(),
         })
     }
 
@@ -903,6 +947,7 @@ impl AgentProfile {
             tools,
             profile_prompt,
             timeout: None,
+            skills: Vec::new(),
         })
     }
 
@@ -912,6 +957,12 @@ impl AgentProfile {
     /// (`DEFAULT_TIMEOUT_SECS`).
     pub fn with_timeout(mut self, timeout: Option<u64>) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the profile-level explicit skill links (plan 105).
+    pub fn with_skills(mut self, skills: Vec<String>) -> Self {
+        self.skills = skills;
         self
     }
 
@@ -1749,6 +1800,8 @@ mod tests {
             event_content_instruction_file: None,
             tie_off_content_instruction_file: None,
             external_rig: None,
+            skills: Vec::new(),
+            skills_mode: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_json::from_str(&json).unwrap();
@@ -1811,6 +1864,8 @@ mod tests {
             event_content_instruction_file: None,
             tie_off_content_instruction_file: None,
             external_rig: None,
+            skills: Vec::new(),
+            skills_mode: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("inactivity-timeout-seconds: 45"));
@@ -1827,6 +1882,8 @@ mod tests {
             event_content_instruction_file: None,
             tie_off_content_instruction_file: None,
             external_rig: None,
+            skills: Vec::new(),
+            skills_mode: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"inactivity-timeout-seconds\":0"));
@@ -3118,6 +3175,8 @@ mod tests {
             event_content_instruction_file: None,
             tie_off_content_instruction_file: None,
             external_rig: None,
+            skills: Vec::new(),
+            skills_mode: None,
         };
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: RigAgentConfig = serde_yaml::from_str(&yaml).unwrap();

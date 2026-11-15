@@ -84,6 +84,17 @@ pub struct ProcessStrand {
     /// every context build: the content section is pulled each new
     /// session, never cached.
     pub(crate) instruction_source: Option<Arc<dyn PromptInstructionSource>>,
+    /// Per-session skill-assignment source (plan 105 — the rig-config
+    /// `skills` list + `skills-mode`). `None` in unit tests — no
+    /// rig-level skill imports (knot/profile frontmatter lists still
+    /// compose when an effective rig root is set). Set in production
+    /// via [`ProcessStrand::with_skill_source`]. Read fresh on every
+    /// session build — never cached.
+    pub(crate) skill_source: Option<Arc<dyn crate::domain::skill_assignment::SkillAssignmentSource>>,
+    /// Effective rig directory (shim rig — plan 100): the resolution
+    /// root for knot/profile frontmatter `skills` links (plan 105).
+    /// Equals `rig_dir` for a plain local rig.
+    pub(crate) effective_rig_dir: PathBuf,
 }
 
 impl ProcessStrand {
@@ -109,7 +120,7 @@ impl ProcessStrand {
             agent_runner,
             tie_off_sink,
             rig_config,
-            rig_dir,
+            rig_dir: rig_dir.clone(),
             profile_repo,
             model_registry,
             rig_log,
@@ -119,6 +130,8 @@ impl ProcessStrand {
             strand_queue,
             system_emitter: None,
             instruction_source: None,
+            skill_source: None,
+            effective_rig_dir: rig_dir,
         }
     }
 
@@ -144,6 +157,27 @@ impl ProcessStrand {
         source: Arc<dyn PromptInstructionSource>,
     ) -> Self {
         self.instruction_source = Some(source);
+        self
+    }
+
+    /// Attach the per-session skill-assignment source (plan 105).
+    /// Returns `self` for chaining. When unset, no rig-level skill
+    /// imports apply (the knot/profile frontmatter lists still
+    /// compose; the mode stays additive). Read fresh on every session
+    /// build — never cached.
+    pub fn with_skill_source(
+        mut self,
+        source: Arc<dyn crate::domain::skill_assignment::SkillAssignmentSource>,
+    ) -> Self {
+        self.skill_source = Some(source);
+        self
+    }
+
+    /// Set the effective rig directory (shim rig — plan 100): the
+    /// resolution root for knot/profile frontmatter `skills` links
+    /// (plan 105). Defaults to the local `rig_dir`.
+    pub fn with_effective_rig_dir(mut self, effective_rig_dir: PathBuf) -> Self {
+        self.effective_rig_dir = effective_rig_dir;
         self
     }
 
@@ -3315,6 +3349,7 @@ mod suppression_ordering_tests {
                 event_id: "SomeEvent".to_string(),
             },
             event_description: Some("When SomeEvent occurs.".to_string()),
+            skills: Vec::new(),
         };
         let (use_case, log_events) =
             build_use_case(budgeted_profile(1800), knot, rig_dir.clone());
@@ -3512,6 +3547,7 @@ mod commit_capture_tests {
                 strands_dir.clone(),
             ),
             event_description: Some("When a strand changes.".to_string()),
+            skills: Vec::new(),
         };
 
         let profile = crate::domain::value_objects::AgentProfile::new(
@@ -4060,6 +4096,7 @@ mod session_title_tests {
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
+            skills: Vec::new(),
         };
         let loom = build_loom("test-loom", vec![knot]);
         store.register(loom);
@@ -4846,6 +4883,7 @@ mod event_dispatch_tests {
                 event_id: event_id.to_string(),
             },
             event_description: Some(event_desc.to_string()),
+            skills: Vec::new(),
         }
     }
 
@@ -6836,6 +6874,7 @@ mod phase6_integration_tests {
                 event_id: event_id.to_string(),
             },
             event_description: Some(format!("When {event_id} occurs.")),
+            skills: Vec::new(),
         }
     }
 
@@ -7224,6 +7263,7 @@ mod event_enforcement_tests {
                 event_id: event_id.to_string(),
             },
             event_description: Some(event_desc.to_string()),
+            skills: Vec::new(),
         }
     }
 
@@ -8659,6 +8699,7 @@ mod phase4_integration_tests {
                 event_id: event_id.to_string(),
             },
             event_description: Some(event_desc.to_string()),
+            skills: Vec::new(),
         }
     }
 
@@ -9577,6 +9618,7 @@ mod plan_102_instruction_fetch_tests {
                 event_id: event_id.to_string(),
             },
             event_description: Some(event_desc.to_string()),
+            skills: Vec::new(),
         }
     }
 
@@ -10003,5 +10045,317 @@ mod plan_103_prompt_freeze_tests {
         let sid1 = sid(&ctxs[0]);
         let sid2 = sid(&ctxs[1]);
         assert_ne!(sid1, sid2, "each run gets a fresh minted id");
+    }
+}
+
+// ── Plan 105: Explicit per-session skill assignment ───────────────────
+
+#[cfg(test)]
+mod plan_105_skill_assignment_tests {
+    use super::*;
+    use crate::adapters::outbound::skill_assignment_source::
+        FileSystemSkillAssignmentSource;
+    use crate::application::ports::AgentOutput;
+    use crate::application::usecases::test_fixtures::{
+        build_knot, build_loom, default_profile, MockAgentRunner,
+        MockEventDispatcher, MockGitVersioningPort, MockLoomLogPort,
+        MockModelRegistry, MockProfileRepository, MockRigLogPort,
+        MockStrandFileChecker, TrackingTieOffSink,
+    };
+    use crate::domain::skill_assignment::SkillAssignmentSource;
+    use tempfile::TempDir;
+
+    /// The value after the n-th `--skill` occurrence (0-based).
+    fn skill_value(args: &[String], n: usize) -> Option<&String> {
+        args.iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--skill")
+            .nth(n)
+            .and_then(|(i, _)| args.get(i + 1))
+    }
+
+    fn skill_flag_count(args: &[String]) -> usize {
+        args.iter().filter(|a| *a == "--skill").count()
+    }
+
+    /// Build the use case over real temp dirs: `rig_dir` (local —
+    /// config root) and `effective_dir` (served side), serving the
+    /// given profile, with an optional knot-level `skills` list.
+    fn build_use_case(
+        rig_dir: &std::path::Path,
+        effective_dir: &std::path::Path,
+        profile: crate::domain::value_objects::AgentProfile,
+        knot_skills: Vec<String>,
+        skill_source: Option<Arc<dyn SkillAssignmentSource>>,
+    ) -> (ProcessStrand, Arc<MockAgentRunner>) {
+        let runner = Arc::new(MockAgentRunner::new(Ok(AgentOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            metadata: None,
+        })));
+        let store = LoomStore::new();
+        let mut knot = build_knot("plan-creator");
+        knot.skills = knot_skills;
+        store.register(build_loom("producer-loom", vec![knot]));
+
+        let profile_repo = Arc::new(MockProfileRepository {
+            profiles: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::from_iter([(
+                    "fast".to_string(),
+                    profile,
+                )]),
+            )),
+        });
+        let (tie_off_sink, _appends, _content) = TrackingTieOffSink::new();
+        let mut use_case = ProcessStrand::new(
+            store,
+            Arc::new(MockLoomLogPort::default()),
+            runner.clone() as Arc<dyn crate::application::ports::AgentRunner>,
+            Arc::new(tie_off_sink),
+            crate::domain::value_objects::RigAgentConfig::default_config(),
+            rig_dir.to_path_buf(),
+            profile_repo,
+            Arc::new(MockModelRegistry::default()),
+            Arc::new(MockRigLogPort::default()),
+            Arc::new(MockGitVersioningPort::default()),
+            Arc::new(MockStrandFileChecker::new()),
+            Arc::new(MockEventDispatcher::default()),
+            None,
+        )
+        .with_effective_rig_dir(effective_dir.to_path_buf());
+        if let Some(source) = skill_source {
+            use_case = use_case.with_skill_source(source);
+        }
+        (use_case, runner)
+    }
+
+    fn execute_once(use_case: &ProcessStrand, dir: &std::path::Path) {
+        let strand_path = dir.join("strand.md");
+        std::fs::write(&strand_path, "test content").unwrap();
+        let event = StrandEvent::Created {
+            loom_id: LoomId("producer-loom".to_string()),
+            knot_id: KnotId("plan-creator".to_string()),
+            strand_path: StrandPath(strand_path),
+        };
+        use_case.execute(event).unwrap();
+    }
+
+    fn write_skill(dir: &std::path::Path, rel: &str) -> std::path::PathBuf {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, "---\ndescription: s\n---\nbody\n").unwrap();
+        p
+    }
+
+    /// **Zero migration:** nothing declared anywhere (empty config,
+    /// empty profile, empty knot list) → neither `--skill` nor
+    /// `--no-skills` rides the spawn args — pi's full discovery set,
+    /// byte-identical to the pre-plan-105 behaviour.
+    #[test]
+    fn empty_declarations_spawn_with_no_skill_flags() {
+        let dir = TempDir::new().unwrap();
+        let rig = dir.path().join("rig");
+        std::fs::create_dir_all(&rig).unwrap();
+        let (use_case, runner) = build_use_case(
+            &rig,
+            &rig,
+            default_profile(),
+            vec![],
+            Some(Arc::new(FileSystemSkillAssignmentSource::new(
+                rig.clone(),
+            ))),
+        );
+        execute_once(&use_case, dir.path());
+        let ctx = runner.get_captured_ctx().expect("ctx captured");
+        let args = &ctx.agent_config.extra_args;
+        assert!(!args.iter().any(|a| a == "--skill"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--no-skills"), "{args:?}");
+    }
+
+    /// The three surfaces compose into one union, in rig → profile →
+    /// knot order, de-duplicated on the resolved path.
+    #[test]
+    fn three_surfaces_union_dedup_in_order() {
+        let dir = TempDir::new().unwrap();
+        let rig = dir.path().join("rig");
+        std::fs::create_dir_all(&rig).unwrap();
+        let shared = write_skill(&rig, "shared.md");
+        let profile_skill = write_skill(&rig, "profile-skill.md");
+        let knot_skill = write_skill(&rig, "knot-skill.md");
+        std::fs::write(
+            rig.join(".workspace-agent-config.yaml"),
+            "skills:\n  - shared.md\n  - shared.md\n",
+        )
+        .unwrap();
+        let profile = default_profile()
+            .with_skills(vec![profile_skill.display().to_string()]);
+        let (use_case, runner) = build_use_case(
+            &rig,
+            &rig,
+            profile,
+            vec![knot_skill.display().to_string(), shared.display().to_string()],
+            Some(Arc::new(FileSystemSkillAssignmentSource::new(
+                rig.clone(),
+            ))),
+        );
+        execute_once(&use_case, dir.path());
+        let ctx = runner.get_captured_ctx().expect("ctx captured");
+        let args = &ctx.agent_config.extra_args;
+        assert_eq!(
+            skill_flag_count(args),
+            3,
+            "4 declarations, 1 duplicate resolved path → 3 flags: {args:?}"
+        );
+        assert_eq!(skill_value(args, 0).unwrap(), &shared.display().to_string());
+        assert_eq!(
+            skill_value(args, 1).unwrap(),
+            &profile_skill.display().to_string()
+        );
+        assert_eq!(
+            skill_value(args, 2).unwrap(),
+            &knot_skill.display().to_string()
+        );
+    }
+
+    /// `skills-mode: exclusive` narrows: `--no-skills` rides the args
+    /// (first), the explicit set still loads.
+    #[test]
+    fn exclusive_mode_narrows_with_no_skills_flag() {
+        let dir = TempDir::new().unwrap();
+        let rig = dir.path().join("rig");
+        std::fs::create_dir_all(&rig).unwrap();
+        let a = write_skill(&rig, "a.md");
+        std::fs::write(
+            rig.join(".workspace-agent-config.yaml"),
+            "skills:\n  - a.md\nskills-mode: exclusive\n",
+        )
+        .unwrap();
+        let (use_case, runner) = build_use_case(
+            &rig,
+            &rig,
+            default_profile(),
+            vec![],
+            Some(Arc::new(FileSystemSkillAssignmentSource::new(
+                rig.clone(),
+            ))),
+        );
+        execute_once(&use_case, dir.path());
+        let ctx = runner.get_captured_ctx().expect("ctx captured");
+        let args = &ctx.agent_config.extra_args;
+        let no_skills_at = args
+            .iter()
+            .position(|a| a == "--no-skills")
+            .expect("--no-skills must ride the args");
+        let skill_at = args.iter().position(|a| a == "--skill").unwrap();
+        assert!(no_skills_at < skill_at, "--no-skills comes first: {args:?}");
+        assert_eq!(skill_value(args, 0).unwrap(), &a.display().to_string());
+    }
+
+    /// **Dynamic supply:** a config edit between runs lands on the
+    /// next session — no restart (the list itself is re-read fresh).
+    #[test]
+    fn config_edit_lands_on_next_session_no_restart() {
+        let dir = TempDir::new().unwrap();
+        let rig = dir.path().join("rig");
+        std::fs::create_dir_all(&rig).unwrap();
+        let a = write_skill(&rig, "a.md");
+        let b = write_skill(&rig, "b.md");
+        std::fs::write(
+            rig.join(".workspace-agent-config.yaml"),
+            "skills:\n  - a.md\n",
+        )
+        .unwrap();
+        let source: Arc<dyn SkillAssignmentSource> =
+            Arc::new(FileSystemSkillAssignmentSource::new(rig.clone()));
+        let (use_case, runner) =
+            build_use_case(&rig, &rig, default_profile(), vec![], Some(source));
+        execute_once(&use_case, dir.path());
+        // Project edit: re-point the import.
+        std::fs::write(
+            rig.join(".workspace-agent-config.yaml"),
+            "skills:\n  - b.md\n",
+        )
+        .unwrap();
+        execute_once(&use_case, dir.path());
+        let contexts = runner.get_captured_contexts();
+        assert_eq!(contexts.len(), 2);
+        let first = &contexts[0].agent_config.extra_args;
+        let second = &contexts[1].agent_config.extra_args;
+        assert!(first.contains(&a.display().to_string()), "{first:?}");
+        assert!(second.contains(&b.display().to_string()), "{second:?}");
+        assert!(!second.contains(&a.display().to_string()));
+    }
+
+    /// Frontmatter links resolve against the **effective** rig (plan
+    /// 100 shim split), rig-config links against the **local** rig.
+    #[test]
+    fn frontmatter_resolves_against_effective_rig_config_against_local() {
+        let dir = TempDir::new().unwrap();
+        let local = dir.path().join("local-rig");
+        let served = dir.path().join("served-rig");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::create_dir_all(&served).unwrap();
+        let in_local = write_skill(&local, "proj-skill.md");
+        let in_served = write_skill(&served, "wf-skill.md");
+        std::fs::write(
+            local.join(".workspace-agent-config.yaml"),
+            "skills:\n  - proj-skill.md\n",
+        )
+        .unwrap();
+        let profile =
+            default_profile().with_skills(vec!["wf-skill.md".to_string()]);
+        let (use_case, runner) = build_use_case(
+            &local,
+            &served,
+            profile,
+            vec![],
+            Some(Arc::new(FileSystemSkillAssignmentSource::new(
+                local.clone(),
+            ))),
+        );
+        execute_once(&use_case, dir.path());
+        let ctx = runner.get_captured_ctx().expect("ctx captured");
+        let args = &ctx.agent_config.extra_args;
+        assert!(
+            args.contains(&in_local.display().to_string()),
+            "rig-config relative → local rig dir: {args:?}"
+        );
+        assert!(
+            args.contains(&in_served.display().to_string()),
+            "profile relative → effective rig dir: {args:?}"
+        );
+    }
+
+    /// A declared-but-missing skill never removes the resolvable
+    /// remainder (visible, never vacuous).
+    #[test]
+    fn missing_declaration_skipped_rest_still_loads() {
+        let dir = TempDir::new().unwrap();
+        let rig = dir.path().join("rig");
+        std::fs::create_dir_all(&rig).unwrap();
+        let good = write_skill(&rig, "good.md");
+        std::fs::write(
+            rig.join(".workspace-agent-config.yaml"),
+            "skills:\n  - gone.md\n",
+        )
+        .unwrap();
+        let (use_case, runner) = build_use_case(
+            &rig,
+            &rig,
+            default_profile(),
+            vec![good.display().to_string()],
+            Some(Arc::new(FileSystemSkillAssignmentSource::new(
+                rig.clone(),
+            ))),
+        );
+        execute_once(&use_case, dir.path());
+        let ctx = runner.get_captured_ctx().expect("ctx captured");
+        let args = &ctx.agent_config.extra_args;
+        assert_eq!(skill_flag_count(args), 1, "{args:?}");
+        assert!(args.contains(&good.display().to_string()));
+        assert!(!args.iter().any(|a| a.contains("gone.md")));
     }
 }

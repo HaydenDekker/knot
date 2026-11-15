@@ -683,6 +683,7 @@ pub fn build_knot(id: impl Into<String>) -> Knot {
         git_versioned: true,
         strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
         event_description: None,
+        skills: Vec::new(),
     }
 }
 
@@ -812,6 +813,7 @@ impl KnotBuilder {
             git_versioned: self.git_versioned,
             strand_source: self.strand_source,
             event_description: self.event_description,
+            skills: Vec::new(),
         }
     }
 }

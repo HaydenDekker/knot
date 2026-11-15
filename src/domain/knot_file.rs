@@ -97,6 +97,15 @@ pub struct KnotFile {
     #[serde(rename = "event-description")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_description: Option<String>,
+    /// Explicit skill links for this knot's sessions (plan 105).
+    ///
+    /// Populated from `skills` frontmatter — a list of file/directory
+    /// references resolved **relative to the effective rig directory**
+    /// at dispatch (plan 100). Additive to the rig-config and profile
+    /// lists; the union is de-duplicated on the resolved path and
+    /// delivered as explicit `--skill` spawn args.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 /// Internal YAML structure for frontmatter parsing.
@@ -114,6 +123,9 @@ struct RawFrontmatter {
     /// Populated from `event-description` frontmatter key.
     #[serde(rename = "event-description")]
     event_description: Option<String>,
+    /// Explicit skill links (plan 105) — `skills` frontmatter key.
+    #[serde(default)]
+    skills: Option<Vec<String>>,
     /// Captures any unknown YAML keys for warning emission.
     #[allow(dead_code)]
     #[serde(flatten)]
@@ -198,6 +210,7 @@ pub fn parse(
             git_versioned,
             strand_source,
             event_description: raw.event_description,
+            skills: raw.skills.unwrap_or_default(),
         },
         warnings,
     ))
@@ -293,6 +306,12 @@ struct RawProfileFrontmatter {
     /// value produces a precise error naming the bad token.
     #[serde(default, rename = "thinking-level")]
     thinking_level: Option<String>,
+    /// Explicit skill links for every knot served by this profile
+    /// (plan 105) — `skills` frontmatter key: a list of file/directory
+    /// references resolved **relative to the effective rig directory**
+    /// at dispatch.
+    #[serde(default)]
+    skills: Option<Vec<String>>,
 }
 
 /// Parse an agent profile file from its string content.
@@ -307,7 +326,10 @@ struct RawProfileFrontmatter {
 /// Body (after closing `---`) must contain non-empty prompt text.
 /// Optional frontmatter fields: `tools`, `timeout`, `thinking-level`
 /// (one of `off | minimal | low | medium | high | xhigh` — any other
-/// value is `AgentProfileError::InvalidThinkingLevel`).
+/// value is `AgentProfileError::InvalidThinkingLevel`), `skills`
+/// (plan 105 — explicit skill links for every knot served by this
+/// profile; file/directory references resolved relative to the
+/// effective rig directory at dispatch).
 pub fn parse_agent_profile(
     content: &str,
 ) -> Result<AgentProfile, AgentProfileError> {
@@ -389,7 +411,10 @@ pub fn parse_agent_profile(
         return Err(AgentProfileError::EmptyModel);
     };
 
-    Ok(profile.with_timeout(raw.timeout).with_thinking_level(thinking_level))
+    Ok(profile
+        .with_timeout(raw.timeout)
+        .with_thinking_level(thinking_level)
+        .with_skills(raw.skills.unwrap_or_default()))
 }
 
 
@@ -528,6 +553,80 @@ Review the document
             warnings.iter().any(|w| w.contains("baz")),
             "warning should mention 'baz'"
         );
+    }
+
+    // ── Plan 105: skills frontmatter ─────────────────────────────────
+
+    #[test]
+    fn knot_skills_frontmatter_parses_without_warning() {
+        let content = "---
+name: skilled-knot
+agent-profile-ref: fast
+strand-dir: \"strands\"
+skills:
+  - skills/theme-contract.md
+  - ../shared/review-skill
+---
+
+Do the work
+";
+        let (file, warnings) = parse(content).unwrap();
+        assert!(warnings.is_empty(), "skills is a known key: {warnings:?}");
+        assert_eq!(
+            file.skills,
+            vec![
+                "skills/theme-contract.md".to_string(),
+                "../shared/review-skill".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn knot_without_skills_frontmatter_defaults_empty() {
+        let content = "---
+name: plain-knot
+agent-profile-ref: fast
+strand-dir: \"strands\"
+---
+
+Do the work
+";
+        let (file, warnings) = parse(content).unwrap();
+        assert!(warnings.is_empty());
+        assert!(file.skills.is_empty(), "absent → empty (full discovery)");
+    }
+
+    #[test]
+    fn profile_skills_frontmatter_parses() {
+        let content = "---
+name: coder
+provider: openai
+model: gpt-4o
+skills:
+  - skills/coding-standards.md
+---
+
+You code.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert_eq!(
+            profile.skills,
+            vec!["skills/coding-standards.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn profile_without_skills_frontmatter_defaults_empty() {
+        let content = "---
+name: plain
+provider: openai
+model: gpt-4o
+---
+
+You do things.
+";
+        let profile = parse_agent_profile(content).unwrap();
+        assert!(profile.skills.is_empty());
     }
 
     #[test]
@@ -703,6 +802,7 @@ Do something
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands/test")),
             event_description: None,
+            skills: Vec::new(),
         };
 
         let json = serde_json::to_string(&file).unwrap();
@@ -1378,6 +1478,7 @@ Review the PRD.
             git_versioned: file.git_versioned,
             strand_source: file.strand_source.clone(),
             event_description: file.event_description.clone(),
+            skills: Vec::new(),
         };
 
         // They should be identical.

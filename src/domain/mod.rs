@@ -4,6 +4,7 @@ pub mod knot_file;
 pub mod pending_event;
 pub mod rig_discovery;
 pub mod shim_rig;
+pub mod skill_assignment;
 pub mod state_change;
 pub mod temp_file;
 pub mod tieoff_parser;

@@ -431,6 +431,42 @@ pub fn resolve_config_and_build(
         None => prompt,
     };
 
+    // Plan 105: explicit per-session skill assignment. Compose the
+    // session's `--skill` list from the three declaration surfaces —
+    // rig-config `skills` (fresh read, project-side seam), profile
+    // frontmatter, and knot frontmatter — de-duplicated on the resolved
+    // path, delivered as spawn args (they ride `agent_config.extra_args`
+    // into every retry, exactly like the frozen-prompt flags). Additive
+    // by default: an empty declaration passes neither `--skill` nor
+    // `--no-skills` — pi's full discovery set, unchanged. Exclusive
+    // mode (`skills-mode: exclusive`) adds `--no-skills`: narrowing to
+    // the declared set. Unresolvable entries warn per read
+    // (`type=CONFIG source=skill-assignment`) and are skipped — visible,
+    // never vacuous.
+    {
+        use crate::domain::skill_assignment::{
+            compose_skill_cli_args, SkillDeclarations,
+        };
+        let declarations = match &ps.skill_source {
+            Some(src) => src.read_skill_declarations(),
+            None => SkillDeclarations::default(),
+        };
+        let (skill_args, skill_warnings) = compose_skill_cli_args(
+            &declarations,
+            &profile.skills,
+            &knot.skills,
+            &ps.rig_dir,
+            &ps.effective_rig_dir,
+            std::env::var("HOME").ok().as_deref().map(std::path::Path::new),
+        );
+        for warning in skill_warnings {
+            eprintln!(
+                "[KNOT][EVENT] type=CONFIG source=skill-assignment detail={warning}"
+            );
+        }
+        agent_config.extra_args.extend(skill_args);
+    }
+
     // Plan 103 Phase 3: freeze the composed system prompt (standing
     // instruction blocks + profile persona) into an artifact keyed by
     // a Knot-minted session id, and hand it to the session through the
@@ -1759,6 +1795,7 @@ mod tests {
                 event_id: "SomeEvent".to_string(),
             },
             event_description: Some("When SomeEvent occurs.".to_string()),
+            skills: Vec::new(),
         };
         let loom_id = LoomId("test-loom".to_string());
         let strand_path = StrandPath(write_file(
@@ -1901,6 +1938,7 @@ mod tests {
                 event_id: "SomeEvent".to_string(),
             },
             event_description: Some("When SomeEvent occurs.".to_string()),
+            skills: Vec::new(),
         };
         let loom_id = LoomId("test-loom".to_string());
         let t0 = now_secs() - 120;
@@ -2036,6 +2074,7 @@ mod tests {
                 event_id: "SomeEvent".to_string(),
             },
             event_description: Some("When SomeEvent occurs.".to_string()),
+            skills: Vec::new(),
         };
         let loom_id = LoomId("test-loom".to_string());
         let trigger = StrandPath(write_file(

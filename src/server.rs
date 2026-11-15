@@ -90,6 +90,11 @@ pub struct AppContext {
     /// default. Resolved fresh on every new session, never cached.
     /// Shared with `ProcessStrand`.
     pub instruction_source: Arc<dyn PromptInstructionSource>,
+    /// Per-session skill-assignment source (plan 105 — the rig-config
+    /// `skills` list + `skills-mode`, the project-side skill-supply
+    /// seam). Read fresh on every new session, never cached. Shared
+    /// with `ProcessStrand`.
+    pub skill_source: Arc<dyn domain::skill_assignment::SkillAssignmentSource>,
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -452,10 +457,21 @@ pub fn build_app_context(
         FileSystemPromptInstructionSource::new(config.rig_dir.clone()),
     );
 
+    // Per-session skill-assignment source (plan 105): the rig-config
+    // `skills` list + `skills-mode`, read fresh on every new session so
+    // a project can add, re-point, or remove a skill import without a
+    // restart. Rooted at the **local** rig directory (project-side
+    // config, even for a shim rig).
+    let skill_source: Arc<dyn domain::skill_assignment::SkillAssignmentSource> =
+        Arc::new(crate::adapters::outbound::FileSystemSkillAssignmentSource::new(
+            config.rig_dir.clone(),
+        ));
+
     (
         AppContext {
             system_emitter,
             instruction_source,
+            skill_source,
             store,
             loom_repo,
             loom_log_port,
@@ -593,7 +609,11 @@ pub fn build_process_strand(
             Some(Arc::clone(debounce_queue) as Arc<dyn domain::events::StrandQueueAccessor>),
         )
         .with_system_emitter(Arc::clone(&ctx.system_emitter))
-        .with_instruction_source(Arc::clone(&ctx.instruction_source)),
+        .with_instruction_source(Arc::clone(&ctx.instruction_source))
+        .with_skill_source(Arc::clone(&ctx.skill_source))
+        // Plan 105: knot/profile frontmatter `skills` links resolve
+        // against the effective rig (plan 100) — the served side.
+        .with_effective_rig_dir(ctx.effective_rig_dir.clone()),
     )
 }
 

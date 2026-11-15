@@ -189,6 +189,15 @@ pub struct Knot {
     #[serde(rename = "event-description")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_description: Option<String>,
+    /// Explicit skill links for this knot's sessions (plan 105).
+    ///
+    /// Populated from `skills` frontmatter. Resolved **relative to the
+    /// effective rig directory** at dispatch; the union with the
+    /// profile and rig-config lists is de-duplicated on the resolved
+    /// path and delivered as explicit `--skill` spawn args (additive
+    /// by default). See [`crate::domain::skill_assignment`].
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 /// A Loom orchestrates a collection of Knots.
@@ -506,6 +515,7 @@ impl Knot {
             git_versioned: file.git_versioned,
             strand_source: file.strand_source,
             event_description: file.event_description,
+            skills: file.skills,
         }
     }
 
@@ -1751,6 +1761,7 @@ mod tests {
             git_versioned: true,
             strand_source: StrandSource::Filesystem(PathBuf::from("strands")),
             event_description: None,
+            skills: Vec::new(),
         };
 
         let resolved = knot.with_strand_dir(PathBuf::from("/absolute/strands"));
@@ -1778,6 +1789,7 @@ mod tests {
                 event_id: "PlanCreated".to_string(),
             },
             event_description: Some("When a plan is created".to_string()),
+            skills: Vec::new(),
         };
 
         let resolved = knot.with_strand_dir(PathBuf::from("/ignored"));
