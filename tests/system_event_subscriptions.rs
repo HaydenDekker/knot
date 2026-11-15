@@ -41,6 +41,7 @@ fn producer_knot(id: &str, profile: &str) -> Knot {
         git_versioned: true,
         strand_source: StrandSource::Filesystem(PathBuf::from("/s")),
         event_description: None,
+        skills: Vec::new(),
     }
 }
 
@@ -58,6 +59,7 @@ fn consumer_knot(id: &str, producer: &str, event_id: &str) -> Knot {
             event_id: event_id.to_string(),
         },
         event_description: Some("React to a system event.".to_string()),
+        skills: Vec::new(),
     }
 }
 
@@ -284,6 +286,7 @@ fn self_exclusion_does_not_retrigger_producer() {
             event_id: "KnotCompleted".to_string(),
         },
         event_description: None,
+        skills: Vec::new(),
     };
     // Replace the producer with the self-subscribing variant.
     let producer_loom_self = Loom {

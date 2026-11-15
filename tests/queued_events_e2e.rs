@@ -44,6 +44,7 @@ fn build_consumer_knot(id: &str, producer: &str, event_id: &str) -> Knot {
             event_id: event_id.to_string(),
         },
         event_description: Some("When a plan is created.".to_string()),
+        skills: Vec::new(),
     }
 }
 

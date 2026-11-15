@@ -1,11 +1,23 @@
 # Plan 105: Explicit Per-Session Skill Assignment — the skill-supply seam
 
-**Implementation Status:** ⬜ Planned (2026-11-13 drafted; 2026-11-13 extended
-from the role-binding seam to explicit per-session skill assignment) —
-drafted for owner review. Engine: config + frontmatter parsing, dispatch-time
-resolution, CLI-flag delivery; tests + docs; released in a Knot version.
-**No rig-content changes** — the served rig's prompts are another project's
+**Implementation Status:** ✅ Complete (2026-11-13 drafted and extended;
+2026-11-16 implemented, released in **v0.67.0**). Engine: config +
+frontmatter parsing, per-session resolution, explicit `--skill` spawn-
+arg composition; 32 new tests; docs + skill updates deployed. **No
+rig-content changes** — the served rig's prompts are another project's
 files and are never touched here (engine/content split).
+
+**P0 rulings (the plan's stated recommendations, implemented on the
+owner's instruction to proceed):**
+binding by direct path at three surfaces (the `@skill:` role
+indirection superseded); key name `skills` everywhere (pi's own
+vocabulary); additive default with `skills-mode: exclusive` set at
+**rig config only** (no knot-level mode — narrowing is a project-wide
+stance); de-dup identity = resolved path; shim rule = config links →
+**local** rig dir, frontmatter links → **effective** rig dir; files
+and directories both accepted (matches pi); invalid mode values warn
+and fall back to additive (never fail the whole config parse);
+exclusive-narrows-to-nothing warns, never silent.
 
 ## Problem
 
@@ -105,7 +117,7 @@ narrow with exclusive mode).
 
 ## Phases
 
-- [ ] **P0 — design decisions (owner):** key naming (`skills` at all three
+- [x] **P0 — design decisions (owner):** key naming (`skills` at all three
       surfaces, aligning with pi's own `skills` vocabulary); mode —
       additive default + where exclusivity is set (rig-config key and/or
       knot-level override); de-dup identity (resolved path) confirmation;
@@ -113,16 +125,16 @@ narrow with exclusive mode).
       rig directory — the config side — knot/profile frontmatter `skills`
       against the **effective** rig directory — the served side); skill
       directories vs files (both accepted, matching pi).
-- [ ] **P1 — engine:** config + frontmatter parsing, per-session resolution
+- [x] **P1 — engine:** config + frontmatter parsing, per-session resolution
       (union, de-dup, per-surface resolution roots), flag composition
       (`--skill` × n, `--no-skills` when exclusive), diagnostics; unit +
       integration tests.
-- [ ] **P2 — e2e acceptance:** a probe rig declares skills at all three
+- [x] **P2 — e2e acceptance:** a probe rig declares skills at all three
       surfaces; the composed set appears in the delivered pi argv; an
       unresolvable path warns (and the rest still load); a re-pointed skill
       file is picked up fresh on the next session (no restart); exclusive
       mode delivers `--no-skills` and only the declared set.
-- [ ] **P3 — docs + skills + release:**
+- [x] **P3 — docs + skills + release:**
       - *Repo docs:* `docs/configuration/rig-structure.md` (the `skills`
         config key), `docs/concepts.md` (explicit skill assignment),
         release notes carry the seam description (this is the artifact the

@@ -1,5 +1,46 @@
 # Release Notes
 
+## v0.67.0 — 2026-11-16
+
+### Added — Explicit Per-Session Skill Assignment (Plan 105 — the skill-supply seam)
+
+Until now every knot session was spawned with pi's **full skill
+discovery set** (`~/.agents/skills/` masters + the project's
+`.agents/skills/`) — nothing narrowed, extended, or targeted it, and a
+project had **no surface** to supply its own behaviour skills. Knot
+0.67.0 composes a per-session, explicit `--skill` list from three
+declaration surfaces and hands it to the agent at spawn:
+
+- **Rig config `skills:`** — rig-global, **the project-side seam**:
+  every knot session in the rig receives the declared entries. Under
+  a shim rig (plan 100) this file is **local and project-side** while
+  the workflow is served from the external rig — so project-specific
+  behaviour skills are declared here and the served rig stays
+  architecture-neutral.
+- **Profile frontmatter `skills:`** — every knot served by that profile.
+- **Knot frontmatter `skills:`** — that knot only.
+
+**Semantics** — union, **de-duplicated on the resolved path** (rig →
+profile → knot order preserved). Entries are skill file/directory
+references (absolute, `~/...`, `file://`, or relative — rig-config
+entries resolve against the **local** rig directory, frontmatter
+entries against the **effective** rig directory). **Additive by
+default**: the declared set extends pi's discovery set; an empty
+declaration passes neither `--skill` nor `--no-skills` — the full
+discovery set, unchanged (**zero migration**). **`skills-mode:
+exclusive`** (rig config) opts into **narrowing**: `--no-skills` plus
+the declared set only. **Visible, never vacuous**: unresolvable
+entries warn (`[KNOT][EVENT] type=CONFIG source=skill-assignment`) and
+are skipped; the resolvable remainder still loads; exclusive mode that
+narrows to nothing says so. **Fully dynamic**: the lists and the skill
+files are re-read at each **new session** (no service restart; edits
+land on the next new session, never mid-session — the plan-103
+drift-rule by analogy).
+
+The engine **names no architecture**: it resolves paths and composes
+flags; it interprets no skill content — all vocabulary lives
+project-side.
+
 ## v0.65.0 — 2026-11-01
 
 ### Changed — Split the tie-off and event-content instructions (Plan 102)

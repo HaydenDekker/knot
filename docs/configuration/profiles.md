@@ -37,6 +37,7 @@ provide constructive feedback.
 | `model` | Yes | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `qwen3-27b`). |
 | `tools` | No | List of tool names (e.g. `fs`, `web`). Defaults to empty list. |
 | `timeout` | No | Session timeout in seconds. Defaults to 300 (5 minutes). Set higher for long-running tasks. |
+| `skills` | No | Explicit skill links for **every knot served by this profile** (Knot 0.67.0+): a list of skill file/directory references, resolved **relative to the effective rig directory**. Unioned (de-duplicated on the resolved path) with the knot's and the rig config's `skills` lists — see [concepts — Skill Assignment](../concepts.md#skill-assignment). Absent → nothing added at this surface. |
 
 ### Markdown Body
 

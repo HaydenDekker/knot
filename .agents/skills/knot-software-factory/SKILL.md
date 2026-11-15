@@ -4,7 +4,7 @@ description: "The blueprint for building a software-factory rig with Knot: the g
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "Knot 0.41.0+"
 ---
 
@@ -281,11 +281,16 @@ no-progress fingerprint.
 | Which stack + which application this project binds | Interfaces — `project/arch.md`, `project/sa.md` |
 | Worker roles, models, tools | Profile files in the rig (parameterised via the interfaces) |
 | Task instructions on each channel | Knot files in the rig |
+| **Project-specific behaviour skills** (e.g. an adopted-theme contract a coder must build to) | **The local rig config's `skills:` list** (Knot 0.67.0+ — explicit per-session skill assignment): the **project-side** seam. The served factory rig declares no project skill by name; each adopting project imports its own behaviour skills rig-globally (or per profile/knot where narrower). See the `knot-create` skill, **Explicit Skill Assignment** |
 
 **The leak test:** grep the rig files for concrete technology names
 (build tools, frameworks, deployment targets). Any hit outside a
 pointer line into an interface document is a leak — move that knowledge
-into the GP/GA skill or the interface documents.
+into the GP/GA skill or the interface documents. The one sanctioned
+place a project's own technology-bound **behaviour skill** attaches is
+the local rig config's `skills:` import list (Knot 0.67.0+) — that
+file is project-side, not factory-side, so the generic rig stays
+clean.
 
 ### When a process is technology-specific
 

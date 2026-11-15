@@ -4,8 +4,8 @@ description: "Record format changes between Knot binary versions. When a project
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.32.0"
-  compatibility: "Knot 0.41.0+ (changelog through 0.65.0; skill-convention entries noted as such)"
+  version: "1.33.0"
+  compatibility: "Knot 0.41.0+ (changelog through 0.67.0; skill-convention entries noted as such)"
 ---
 
 # Knot Update Skill
@@ -56,6 +56,36 @@ This skill ensures:
 
 Entries are listed newest first. Each entry specifies the Knot version,
 date, and migration instructions for affected document types.
+
+---
+
+### Explicit Per-Session Skill Assignment (Knot 0.67.0, 2026-11-16)
+
+**What changed:** a new **skill-supply seam**. Until now every knot
+session ran with pi's full skill discovery set with no way to supply
+project skills or target them at knots. Knot 0.67.0 composes a
+per-session, explicit `--skill` list from three declaration surfaces —
+`skills:` in `rig/.workspace-agent-config.yaml` (rig-global, **the
+project-side surface**), `skills:` in profile frontmatter, and
+`skills:` in knot frontmatter — unioned and de-duplicated on the
+resolved path. **Additive by default** (the declared set extends the
+discovery set); `skills-mode: exclusive` in the rig config opts into
+**narrowing** (`--no-skills` + declared set only). Everything is
+re-read per new session (no restart; edits land next session).
+Unresolvable entries warn (`[KNOT][EVENT] type=CONFIG
+source=skill-assignment`) and are skipped — never vacuous.
+
+**Affected documents:** **none required** — the new `skills` frontmatter
+key (knots, profiles) and the new `skills` / `skills-mode` config keys
+are **purely additive**; unmodified files keep today's behaviour (the
+full discovery set, byte-identical spawn args).
+
+**Migration:** none. To adopt: add a `skills:` list at the narrowest
+surface that covers the need (see the `knot-create` skill, **Explicit
+Skill Assignment**). Project-specific behaviour skills belong in the
+**local** rig config (especially under a shim rig — plan 100: the
+served workflow rig stays architecture-neutral; each project imports
+its own skills).
 
 ---
 

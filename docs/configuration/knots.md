@@ -29,6 +29,7 @@ Review the goals section of this PRD. Check that:
 | `agent-profile-ref` | Yes | Name of the agent profile to use. Must match a profile in `rig/profiles/{name}.md`. |
 | `strand-dir` | Yes | Directory to watch for strand files. Resolved relative to the project root. |
 | `git-versioned` | No | Whether to create a git commit after each tie-off write. Defaults to `true`. Set to `false` to opt out. |
+| `skills` | No | Explicit skill links for this knot's sessions (Knot 0.67.0+): a list of skill file/directory references, resolved **relative to the effective rig directory**. Unioned (de-duplicated on the resolved path) with the serving profile's and the rig config's `skills` lists and delivered as explicit `--skill` spawn args — see [concepts — Skill Assignment](../concepts.md#skill-assignment). Absent → nothing added at this surface. |
 
 ## Markdown Body
 

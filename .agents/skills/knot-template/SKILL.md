@@ -4,8 +4,8 @@ description: "Customise the two instruction documents Knot injects into the agen
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.1.0"
-  compatibility: "Knot 0.66.0+"
+  version: "3.2.0"
+  compatibility: "Knot 0.67.0+"
 ---
 
 # Knot template (the two instruction documents)
@@ -169,6 +169,14 @@ agent/user-driven.
   subscriber-bearing knots. Do not expect the event-content guide in a
   leaf knot's prompt (and do not put tie-off-only content in
   `knot-event-content.md` — it is invisible to leaf knots).
+- **Not the skill seam** — this skill customises the two *instruction
+  documents* Knot appends to the agent's system prompt. Which *skills*
+  a session loads is a separate mechanism (Knot 0.67.0+: explicit
+  per-session skill assignment — the `skills:` lists in the rig
+  config / profile / knot frontmatter; see the `knot-create` skill,
+  **Explicit Skill Assignment**). The two are orthogonal: instruction
+  documents never add skills, and skill imports never replace
+  instruction sections.
 - The shipped default texts live in the Knot repository (this skill's
   directory is their source); to change the default for *all* rigs,
   update the Knot binary — not these project files.

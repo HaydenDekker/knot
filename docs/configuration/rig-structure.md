@@ -233,6 +233,40 @@ file falls back to the hard-coded default for **that section only**
 `http(s)://` values are refused — Knot only reads local files. The
 service never writes instruction files into the rig.
 
+**Skill imports** (Knot 0.67.0+): this file is also the **project-side
+surface** for explicit per-session skill assignment — see
+[concepts — Skill Assignment](../concepts.md#skill-assignment).
+
+```yaml
+# behaviour-skill imports — every knot session in this rig receives them
+skills:
+  - skills/theme-contract.md      # relative to rig/, or absolute, ~/..., file://
+  - ~/shared/review-skill         # skill directories (with SKILL.md) work too
+
+# assignment mode — optional
+#   additive   (default) the declared set extends pi's discovery set
+#   exclusive            --no-skills + the declared set only (narrowing)
+skills-mode: additive
+```
+
+The `skills` list is **rig-global**: its entries are unioned (de-
+duplicated on the resolved path) with the `skills` frontmatter of the
+serving profile and knot and delivered as explicit `--skill` spawn
+args. Entries are skill file/directory references (absolute path,
+relative to the **local** rig directory, `~/...`, or a `file://` URL;
+`http(s)://` is refused). Under a shim rig (plan 100) this file stays
+**local and project-side** while the workflow is served from the
+external rig — so project-specific behaviour skills are declared here
+and the served rig stays architecture-neutral. Like the instruction
+links, both keys are re-read **fresh on every new session** — an add,
+re-point, or removal lands on the next session, no restart — and an
+unresolvable entry produces a `[KNOT][EVENT] type=CONFIG
+source=skill-assignment` warning and is skipped (the resolvable
+remainder still loads). An empty or absent list with the default mode
+changes nothing: the session keeps pi's full discovery set (the zero-
+migration property). An invalid `skills-mode` value warns and falls
+back to `additive`.
+
 **Retired 0.60.0–0.64.x key**: `tie-off-content-instruction-file` (the
 combined content section) is **not honoured** anymore (retired in
 Knot 0.65.0: the combined section is split into the two documents

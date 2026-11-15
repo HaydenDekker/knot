@@ -20,7 +20,7 @@ guess a sub-skill's workflow from this index.
 |------|------|
 | Initialise a rig in the current directory | `/home/hayden/.agents/skills-library/knot-init/SKILL.md` |
 | Start / stop / restart the service, read the service log | `/home/hayden/.agents/skills-library/knot-start/SKILL.md` |
-| Create / modify / delete looms, knots, profiles | `/home/hayden/.agents/skills-library/knot-create/SKILL.md` |
+| Create / modify / delete looms, knots, profiles; explicit per-session skill assignment (the `skills:` lists — rig config / profile / knot, Knot 0.67.0+) | `/home/hayden/.agents/skills-library/knot-create/SKILL.md` |
 | Trigger knots: strand files, events, `knot step` | `/home/hayden/.agents/skills-library/knot-dispatch/SKILL.md` |
 | Inspect rig state, looms, activity, profiles | `/home/hayden/.agents/skills-library/knot-inspect/SKILL.md` |
 | Visualise the rig graph (knots + event/strand edges) as HTML | `/home/hayden/.agents/skills-library/knot-visualise/SKILL.md` |

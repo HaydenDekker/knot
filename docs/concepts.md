@@ -569,6 +569,52 @@ needed. This makes them idempotent — safe to re-run on the same input.
 See the [Design Guide](design-guide.md) for details on designing
 idempotent knots.
 
+## Skill Assignment
+
+Every knot session is born with skills: pi loads its **full discovery
+set** (the global `~/.agents/skills/` masters plus the project's
+`.agents/skills/`) into the agent's system prompt. Knot 0.67.0+ adds
+an **explicit skill-supply seam** — three declaration surfaces that
+compose a per-session, explicit `--skill` list handed to the agent at
+spawn:
+
+| Surface | Scope | Where |
+|---------|-------|-------|
+| `skills:` (rig config) | **every** knot session in this rig — the **project-side** seam | `.workspace-agent-config.yaml` |
+| `skills:` (profile frontmatter) | every knot served by that profile | `rig/profiles/{name}.md` |
+| `skills:` (knot frontmatter) | that one knot | the knot definition |
+
+**Semantics** (Knot 0.67.0+):
+
+- **Union, de-duplicated on the resolved path** (rig → profile → knot
+  order preserved). Entries are skill file/directory references —
+  absolute, `~/...`, `file://`, or relative: rig-config entries resolve
+  against the **local** rig directory, frontmatter entries against the
+  **effective** rig directory (shim rig, plan 100). `http(s)://` is
+  refused (local-first).
+- **Additive by default** — the declared set *extends* pi's discovery
+  set. Nothing declared anywhere passes neither `--skill` nor
+  `--no-skills`: the full discovery set, unchanged (zero migration).
+  `skills-mode: exclusive` (rig config) **narrows** instead: the
+  session gets `--no-skills` plus the declared set only.
+- **Visible, never vacuous** — an unresolvable entry warns
+  (`[KNOT][EVENT] type=CONFIG source=skill-assignment`) and is
+  skipped; the resolvable remainder still loads.
+- **Fully dynamic** — the lists and the skill files are re-read at
+  each **new session** (the rig-config key fresh per session, the
+  frontmatter via rig-file hot reload, the skill contents by pi at
+  session start). Edits land on the next new session, never
+  mid-session; no service restart is needed.
+
+The seam is the answer to *"how does a project supply its own
+behaviour skills to the right knots?"*: declare once at rig level for
+every knot, at profile level for a role, at knot level for one knot.
+Under a shim rig the rig-config list is **local, project-side** — the
+served workflow rig keeps serving generic knots while each adopting
+project imports its own behaviour skills (the engine resolves paths
+and composes flags; it interprets no skill content and names no
+architecture).
+
 ## Agent Skills
 
 Knot ships with a set of agent skills that let your AI agent manage

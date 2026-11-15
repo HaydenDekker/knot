@@ -4,8 +4,8 @@ description: "Create looms, knots, and profiles by writing .md files directly. K
 license: MIT
 metadata:
   author: Knot Team
-  version: "5.12.0"
-  compatibility: "Knot 0.66.0+"
+  version: "5.13.0"
+  compatibility: "Knot 0.67.0+"
 ---
 
 # Knot Create Skill
@@ -399,6 +399,7 @@ Review the goals section of this PRD. Check that:
 | `strand-dir` | **Yes** | Input source — either a filesystem path (e.g. `"project/prds"`) or an `event:` URI. Event URIs support knot-level (`"event:quality-reviewer:ReviewCompleted"`), loom-level (`"event:planning-loom:PlanCreated"`), wildcard (`"event:*:KnotFailed"`), and rig-level (`"event:knot:QueueIdle"`, 0.41.0+) subscriptions. Paths are resolved relative to the project root. See **System Events** for the subscribable system-event catalog. |
 | `event-description` | No | Semantic description of the event, injected into the producer's prompt. Only meaningful when `strand-dir` is an `event:` URI. |
 | `git-versioned` | No | Whether to git-commit after each successful knot run. Defaults to `true`. Set to `false` to opt out. |
+| `skills` | No | Explicit skill links for **this knot's sessions** (Knot 0.67.0+). A list of skill file/directory references, resolved relative to the **effective rig directory**. Unioned (de-dup on resolved path) with the profile's and rig config's `skills` lists — see **Explicit Skill Assignment**. Absent → nothing added at this surface. |
 
 ### Markdown Body
 
@@ -515,6 +516,46 @@ injected block includes a `## Agent Events` heading, event descriptions,
 and instructions to always emit an event block:
 
 ```
+## Explicit Skill Assignment (Knot 0.67.0)
+
+Every knot session is born with pi's **full skill discovery set**; a
+`skills:` list adds an **explicit per-session skill-supply seam** at
+three surfaces:
+
+| Surface | Scope |
+|---------|-------|
+| `skills:` in `rig/.workspace-agent-config.yaml` | **every** knot session in the rig — the **project-side** seam |
+| `skills:` in profile frontmatter | every knot served by that profile |
+| `skills:` in knot frontmatter | that knot only |
+
+Composition: **union, de-duplicated on the resolved path** (rig →
+profile → knot order preserved), delivered as explicit `--skill`
+spawn args. Entries are skill file/directory references — absolute,
+`~/...`, `file://`, or relative (rig-config entries resolve against
+the **local** rig directory, frontmatter entries against the
+**effective** rig directory; `http(s)://` refused). **Additive by
+default** (the declared set extends the discovery set; empty = full
+discovery, zero migration); `skills-mode: exclusive` in the rig
+config **narrows** instead (`--no-skills` + the declared set only).
+Unresolvable entries warn (`[KNOT][EVENT] type=CONFIG
+source=skill-assignment`) and are skipped — never vacuous. Everything
+is re-read at each **new session** — a project can add, re-point, or
+remove a skill import with no service restart; edits land on the next
+new session, never mid-session.
+
+```yaml
+# rig/.workspace-agent-config.yaml
+skills:
+  - skills/theme-contract.md   # project behaviour skill, project-side
+skills-mode: additive          # default; exclusive = narrowing
+```
+
+When the user asks to "give this knot/profile/rig that skill", write
+the list entry at the **narrowest surface that covers the need**
+(knot > profile > rig-config) — rig-config is where **project-specific**
+skills belong, especially under a shim rig (the served workflow rig
+stays architecture-neutral; each adopting project imports its own).
+
 ## Agent Events
 
 Other knots are listening for events you may emit. If an event occurs
@@ -775,6 +816,7 @@ You are a deep analyst. Reason thoroughly before answering.
 | `thinking-level` | No | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh`. A profile-level **override** that takes precedence over the alias's `thinking-level` default in `rig/models.yml`. For a direct-spec profile only this value applies (the registry is not consulted). When set it is emitted as `--thinking <level>` on the pi invocation; **omitting** it lets pi's own settings default apply (omission is **not** the same as `off`). Any other value is a parse error. |
 | `tools` | No | List of pi tool names (e.g. `read`, `write`, `edit`, `bash`). Defaults to empty. Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. |
 | `timeout` | No | Session timeout in seconds. If omitted, the runner's default of 300 seconds (5 minutes) is used. When a session exceeds its timeout, a `TimeoutExceeded` operational event is recorded on the service log and the tie-off file is preserved unchanged. |
+| `skills` | No | Explicit skill links for **every knot served by this profile** (Knot 0.67.0+). A list of skill file/directory references, resolved relative to the **effective rig directory** — see **Explicit Skill Assignment**. Absent → nothing added at this surface. |
 
 A profile with **neither** `model-ref` **nor** `provider` + `model`
 fails to parse (`MissingModelSpec`).

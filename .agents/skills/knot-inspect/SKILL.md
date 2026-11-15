@@ -4,8 +4,8 @@ description: "Inspect the current state of a Knot rig: list looms, examine loom 
 license: MIT
 metadata:
   author: Knot Team
-  version: "3.10.0"
-  compatibility: "Knot 0.64.0+"
+  version: "3.11.0"
+  compatibility: "Knot 0.67.0+"
 ---
 
 # Knot Inspect Skill
@@ -338,6 +338,27 @@ completed work.
 
 Filtering: `grep 'loom=<id>'` for one loom, `grep 'knot=<id>'` within a
 loom, `grep '\[KNOT\]\[STATE\]'` for the state-write history.
+
+### Skill Assignment Diagnostics (Knot 0.67.0+)
+
+Explicit per-session skill assignment (the `skills:` lists in the rig
+config / profile / knot frontmatter — see the `knot-create` skill)
+reports problems as one-shot service-log lines, **per new session**:
+
+```bash
+grep 'source=skill-assignment' tie-offs/<rig>/knot-service.log
+```
+
+| Line detail | Meaning |
+|---|---|
+| `detail=rig-config skill '<value>' ignored — missing or unreadable at <path>` | A declared skill link did not resolve to an existing file/directory; the **rest still loaded** (never silently vacuous) |
+| `... uses http(s) ...` / `... uses ~/ but $HOME is not set` | Refused link form (local-first) |
+| `detail=skills-mode '<value>' is not 'additive' or 'exclusive'` | Invalid mode — **additive** applied (full discovery + declared) |
+| `skills-mode is exclusive but no resolvable skill is declared — the session runs with NO skills` | Exclusive narrowing to nothing — check the mode or the lists |
+| `detail=failed to parse .workspace-agent-config.yaml` | Malformed config — the session keeps full discovery |
+
+No line means assignment composed cleanly (or nothing was declared —
+the default: full discovery set, no `--skill`/`--no-skills` flags).
 
 ---
 
