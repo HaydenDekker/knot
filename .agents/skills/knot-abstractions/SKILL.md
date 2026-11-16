@@ -4,7 +4,7 @@ description: "Understand the layered architecture of the Knot agent orchestratio
 license: MIT
 metadata:
   author: Knot Team
-  version: "1.5.0"
+  version: "1.5.2"
   compatibility: "Knot 0.63.0+"
 ---
 
